@@ -269,7 +269,7 @@ export function createEmptyModelAdapter() {
     tooltipData: "备注",
     modelID: "",
     reasoningEffort: "medium",
-    openAIEndpoint: OPENAI_ENDPOINT_RESPONSES,
+    openAIEndpoint: OPENAI_ENDPOINT_CHAT_COMPLETIONS,
     openAIExtraParamsEnabled: false,
     openAIExtraParamsJSON: OPENAI_EXTRA_PARAMS_DEFAULT_JSON,
     customHeadersEnabled: false,
@@ -290,7 +290,7 @@ export function createEmptyModelAdapter() {
 function normalizeOpenAIEndpoint(value) {
   const text = asString(value).toLowerCase();
   if (!text) {
-    return OPENAI_ENDPOINT_RESPONSES;
+    return OPENAI_ENDPOINT_CHAT_COMPLETIONS;
   }
   return SUPPORTED_OPENAI_ENDPOINTS.has(text) ? text : "";
 }

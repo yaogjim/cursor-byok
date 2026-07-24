@@ -24,3 +24,12 @@ cmd/ads-server/data/
 cmd/ads-server/ads-server
 cmd/ads-server/ads-server-linux-amd64.tar
 cursor-tab-server/cursor-tab-server-linux-amd64.tar
+.agents/
+.specstory/
+.history/
+.task/
+.env
+.cursor-local-assistant
+bin/
+build/
+.DS_Store

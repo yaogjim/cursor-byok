@@ -107,7 +107,7 @@ watch(() => props.adapter, () => {
 
 watch(() => draft.type, (type) => {
   if (type === "openai" && !draft.openAIEndpoint) {
-    draft.openAIEndpoint = OPENAI_ENDPOINT_RESPONSES;
+    draft.openAIEndpoint = OPENAI_ENDPOINT_CHAT_COMPLETIONS;
   } else if (type === "anthropic") {
     ensureAnthropicThinkingEffort();
   }

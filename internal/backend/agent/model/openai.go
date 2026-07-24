@@ -299,7 +299,7 @@ func OpenAIEndpointURL(baseURL string, endpoint string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	normalizedEndpoint := strings.TrimSpace(endpoint)
 	if normalizedEndpoint == "" {
-		normalizedEndpoint = modelchannel.OpenAIEndpointResponses
+		normalizedEndpoint = modelchannel.OpenAIEndpointChatCompletions
 	}
 	if !strings.HasPrefix(normalizedEndpoint, "/") {
 		normalizedEndpoint = "/" + normalizedEndpoint
@@ -2017,11 +2017,6 @@ func normalizeOpenAIResponsesInput(messages []Message) (string, []map[string]any
 				if itemID := strings.TrimSpace(toolCall.OpenAIResponsesID); itemID != "" {
 					toolItem["id"] = itemID
 				}
-				if status := strings.TrimSpace(toolCall.OpenAIResponsesStatus); status != "" {
-					toolItem["status"] = status
-				} else {
-					toolItem["status"] = "completed"
-				}
 				items = append(items, toolItem)
 			}
 		}
@@ -2045,9 +2040,6 @@ func openAIResponsesReasoningItem(message Message) map[string]any {
 	}
 	if reasoningID := strings.TrimSpace(message.OpenAIResponsesReasoningID); reasoningID != "" {
 		reasoningItem["id"] = reasoningID
-	}
-	if reasoningStatus := strings.TrimSpace(message.OpenAIResponsesReasoningStatus); reasoningStatus != "" {
-		reasoningItem["status"] = reasoningStatus
 	}
 	if len(message.OpenAIResponsesReasoningSummary) > 0 {
 		reasoningItem["summary"] = json.RawMessage(append([]byte(nil), message.OpenAIResponsesReasoningSummary...))
