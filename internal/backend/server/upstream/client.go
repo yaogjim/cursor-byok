@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cursor/gen/aiserverv1"
+	"cursor/internal/audit"
 	"cursor/internal/backend/server"
 	"cursor/internal/logger"
 	"cursor/internal/netproxy"
@@ -379,9 +380,75 @@ func writeFixedStatus(reqCtx *RequestContext, statusCode int) {
 }
 
 func handleDirect(reqCtx *RequestContext, route *Route) error {
-	_ = route
-	_, err := ForwardToUpstream(reqCtx, ForwardOptions{})
+	if reqCtx == nil || route == nil {
+		return fmt.Errorf("upstream request context is unavailable")
+	}
+	if !route.Audit {
+		_, err := ForwardToUpstream(reqCtx, ForwardOptions{})
+		return err
+	}
+	observer := audit.Default()
+	if reqCtx.Deps != nil && reqCtx.Deps.Audit != nil {
+		observer = reqCtx.Deps.Audit
+	}
+	if !observer.Enabled() {
+		_, err := ForwardToUpstream(reqCtx, ForwardOptions{})
+		return err
+	}
+	startedAt := time.Now()
+	summary := observer.SummarizeProtoRequest(reqCtx.Request.URL.Path, reqCtx.ContentType, reqCtx.RequestBody)
+	canaryMatched := summary.CanaryMatched || observer.MatchCanary(reqCtx.RequestBody)
+	event := audit.Event{
+		Kind:                "rpc_request",
+		Route:               route.Name,
+		Protocol:            protocolForRPC(reqCtx.Request.URL.Path),
+		TargetHost:          targetHost(reqCtx.TargetURL),
+		RequestBytes:        len(reqCtx.RequestBody),
+		DecodeError:         summary.DecodeError,
+		FieldPresence:       summary.FieldPresence,
+		StringBytes:         summary.StringBytes,
+		BytesBytes:          summary.BytesBytes,
+		RepeatedCounts:      summary.RepeatedCounts,
+		OneofCases:          summary.OneofCases,
+		EnumPresence:        summary.EnumPresence,
+		SensitiveCategories: summary.SensitiveCategories,
+		CanaryMatched:       canaryMatched,
+		ScopeMatched:        canaryMatched,
+	}
+	observer.Record(event)
+
+	meta, err := ForwardToUpstream(reqCtx, ForwardOptions{})
+	responseEvent := audit.Event{
+		Kind:         "rpc_response",
+		Route:        route.Name,
+		Protocol:     event.Protocol,
+		TargetHost:   event.TargetHost,
+		DurationMS:   time.Since(startedAt).Milliseconds(),
+		ScopeMatched: canaryMatched,
+	}
+	if meta != nil {
+		responseEvent.Status = meta.StatusCode
+		responseEvent.ResponseBytes = meta.ResponseSize
+	}
+	if err != nil {
+		responseEvent.ErrorCategory = "transport_or_forward"
+	}
+	observer.Record(responseEvent)
 	return err
+}
+
+func protocolForRPC(path string) string {
+	if strings.Contains(strings.ToLower(path), "stream") {
+		return "connect_stream"
+	}
+	return "connect_unary"
+}
+
+func targetHost(targetURL *url.URL) string {
+	if targetURL == nil {
+		return ""
+	}
+	return audit.HostFromURL(targetURL.String())
 }
 
 func encodeMockProto(typeName string, payload map[string]any) ([]byte, error) {

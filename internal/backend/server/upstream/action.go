@@ -17,6 +17,7 @@ type CompatRouteConfig struct {
 	MockProtoType string
 	MockBuilder   func(*RequestContext) (map[string]any, error)
 	ConsoleLog    bool
+	Audit         bool
 }
 
 func DirectAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
@@ -145,6 +146,7 @@ func newCompatRouteObjects(ctx *server.Context, deps Dependencies, cfg CompatRou
 		MockProtoType:      cfg.MockProtoType,
 		MockPayloadBuilder: cfg.MockBuilder,
 		ConsoleLog:         cfg.ConsoleLog,
+		Audit:              cfg.Audit,
 	}
 	return reqCtx, route, nil
 }

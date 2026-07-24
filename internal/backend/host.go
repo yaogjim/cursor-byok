@@ -740,7 +740,7 @@ func uploadServiceProcedure(pattern string, name string, protocol server.RouteOp
 }
 
 func tabServerUpstreamProcedure(pattern string, name string, protocol server.RouteOption, deps upstream.Dependencies) server.Option {
-	direct := upstream.DirectAction(deps, upstream.CompatRouteConfig{Name: name})
+	direct := upstream.DirectAction(deps, upstream.CompatRouteConfig{Name: name, Audit: true})
 	action := func(ctx *server.Context) error {
 		if ctx != nil && ctx.Request != nil && ctx.Request.URL != nil {
 			baseURL, err := url.Parse(tabServerBaseURL)

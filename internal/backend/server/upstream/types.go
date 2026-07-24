@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"cursor/internal/audit"
 	"cursor/internal/backend/server"
 	legacyruntime "cursor/internal/runtime"
 )
@@ -27,6 +28,7 @@ type HTTPClient interface {
 type Dependencies struct {
 	SystemSettingService SystemSettingService
 	HTTPClient           HTTPClient
+	Audit                *audit.Observer
 	LogRoot              string
 	Routes               []Route
 }
@@ -84,6 +86,7 @@ type Route struct {
 	Pattern            string
 	Matcher            Matcher
 	ConsoleLog         bool
+	Audit              bool
 	StatusCode         int
 	JSONBody           map[string]any
 	MockProtoType      string
