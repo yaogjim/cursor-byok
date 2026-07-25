@@ -218,7 +218,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			if isLegacyPlainWriteReplay(strings.TrimSpace(payload.ToolName), len(payload.ToolCall) > 0) {
 				continue
 			}
-			if !hasReplayableReasoningPayload(payload.ReasoningContent, payload.ReasoningSignature, payload.ReasoningSignatureSource) {
+			if !hasReplayableReasoningPayload(payload.ReasoningContent, payload.ReasoningSignature, payload.ReasoningSignatureSource) && strings.TrimSpace(payload.ToolName) != "ForceBackgroundShell" {
 				continue
 			}
 			effectiveToolName := effectiveReplayToolName(strings.TrimSpace(payload.ToolName), strings.TrimSpace(payload.ToolName))
