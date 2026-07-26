@@ -12,6 +12,7 @@ type StatePayload struct {
 	Version      string  `json:"version,omitempty"`
 	ReleaseDate  string  `json:"releaseDate,omitempty"`
 	ReleaseNotes string  `json:"releaseNotes,omitempty"`
+	Mandatory    bool    `json:"mandatory"`
 	Downloaded   int64   `json:"downloaded,omitempty"`
 	Total        int64   `json:"total,omitempty"`
 	Percentage   float64 `json:"percentage,omitempty"`
@@ -34,6 +35,7 @@ type ReadyPayload struct {
 	Version      string `json:"version,omitempty"`
 	ReleaseDate  string `json:"releaseDate,omitempty"`
 	ReleaseNotes string `json:"releaseNotes,omitempty"`
+	Mandatory    bool   `json:"mandatory"`
 	Prompt       bool   `json:"prompt,omitempty"`
 	PromptKind   string `json:"promptKind,omitempty"`
 }

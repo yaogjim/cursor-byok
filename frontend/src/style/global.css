@@ -12,10 +12,82 @@ body,
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: #191919;
+  background: var(--color-app-bg);
   font-family: "PingFang-Medium", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  color: #F7F7F7;
+  color: var(--color-text);
   font-size: 13px;
+}
+
+:root {
+  color-scheme: light;
+  --color-app-bg: #f6f8fb;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f1f4f8;
+  --color-surface-hover: #e8edf4;
+  --color-border: #d7dee8;
+  --color-border-strong: #c3ccd8;
+  --color-text: #172033;
+  --color-text-secondary: #5d687a;
+  --color-text-muted: #7b8799;
+  --color-overlay: rgb(15 23 42 / 35%);
+  --color-primary: #0f9f5a;
+  --color-primary-hover: #0b874b;
+  --color-success-bg: #ecfdf3;
+  --color-success-border: #a7e8c3;
+  --color-success-text: #087443;
+  --color-warning-bg: #fff8e6;
+  --color-warning-border: #ebcf85;
+  --color-warning-text: #8a5a00;
+  --color-info-bg: #ecfeff;
+  --color-info-border: #a5e5ec;
+  --color-info-text: #0e6674;
+  --color-error-bg: #fff1f2;
+  --color-error-border: #f4b7bd;
+  --color-error-text: #b4232f;
+  --color-scrollbar: rgb(100 116 139 / 55%);
+  --color-scrollbar-hover: rgb(71 85 105 / 72%);
+  --color-chart-success: #4ade80;
+  --color-chart-track: #d7dee8;
+  --color-solid-error: #b4232f;
+  --color-solid-info: #0e6674;
+  --color-solid-loading: #475569;
+  --shadow-popover: 0 16px 36px rgb(15 23 42 / 18%);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-app-bg: #191919;
+  --color-surface: #292929;
+  --color-surface-muted: #232323;
+  --color-surface-hover: #303030;
+  --color-border: #343434;
+  --color-border-strong: #3f3f3f;
+  --color-text: #f7f7f7;
+  --color-text-secondary: #a3a3a3;
+  --color-text-muted: #7b7b7b;
+  --color-overlay: rgb(0 0 0 / 50%);
+  --color-primary: #10ad5d;
+  --color-primary-hover: #0f8a4c;
+  --color-success-bg: #102418;
+  --color-success-border: #14532d;
+  --color-success-text: #86efac;
+  --color-warning-bg: #2f2612;
+  --color-warning-border: #5a4314;
+  --color-warning-text: #fcd34d;
+  --color-info-bg: #0b2530;
+  --color-info-border: #164e63;
+  --color-info-text: #67e8f9;
+  --color-error-bg: #2a1313;
+  --color-error-border: #4b1d1d;
+  --color-error-text: #fca5a5;
+  --color-scrollbar: rgb(100 100 100 / 80%);
+  --color-scrollbar-hover: rgb(120 120 120 / 90%);
+  --color-chart-success: #4ade80;
+  --color-chart-track: #373737;
+  --color-solid-error: #d84c4c;
+  --color-solid-info: #f08a24;
+  --color-solid-loading: #3a3a3a;
+  --shadow-popover: 0 16px 30px rgb(0 0 0 / 55%);
 }
 
 * {
@@ -26,10 +98,7 @@ body,
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(100, 100, 100, 0.8) transparent;
-}
-:root{
-  color-scheme: dark;
+  scrollbar-color: var(--color-scrollbar) transparent;
 }
 
 /* WebKit/Blink (Chrome, Safari, Edge, Opera) */
@@ -46,12 +115,12 @@ body,
 
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(100, 100, 100, 0.8);
+  background: var(--color-scrollbar);
   background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(120, 120, 120, 0.9);
+  background: var(--color-scrollbar-hover);
 }
 
 /* macOS overlay scrollbar style */
@@ -60,6 +129,88 @@ body,
     scrollbar-width: thin;
   }
 }
+
+.text-on-primary {
+  color: #fff !important;
+}
+
+/* Theme compatibility layer for existing Tailwind arbitrary-color utilities. */
+.bg-\[\#292929\],
+.bg-\[\#242424\],
+.bg-\[\#232323\],
+.bg-\[\#202020\],
+.bg-\[\#1c1c1c\] {
+  background-color: var(--color-surface) !important;
+}
+
+.bg-\[\#272727\],
+.bg-\[\#252525\],
+.bg-\[\#1f1f1f\] {
+  background-color: var(--color-surface-muted) !important;
+}
+
+.hover\:bg-\[\#333\]:hover,
+.hover\:bg-\[\#303030\]:hover,
+.hover\:bg-\[\#2f2f2f\]:hover,
+.hover\:bg-\[\#2a2a2a\]:hover,
+.hover\:bg-\[\#1f1f1f\]:hover {
+  background-color: var(--color-surface-hover) !important;
+}
+
+.text-white,
+.text-\[\#e5e5e5\],
+.text-\[\#d4d4d4\],
+.text-\[\#cfcfcf\] {
+  color: var(--color-text) !important;
+}
+
+.text-\[\#a3a3a3\],
+.text-\[\#9d9d9d\],
+.text-\[\#8f8f8f\],
+.text-\[\#8A8A8A\] {
+  color: var(--color-text-secondary) !important;
+}
+
+.text-\[\#7f7f7f\],
+.text-\[\#7b7b7b\],
+.text-\[\#777\],
+.text-\[\#737373\],
+.text-\[\#727272\],
+.text-\[\#6f6f6f\],
+.text-\[\#666\] {
+  color: var(--color-text-muted) !important;
+}
+
+.hover\:text-\[\#ddd\]:hover,
+.hover\:text-\[\#e5e5e5\]:hover {
+  color: var(--color-text) !important;
+}
+
+.border-\[\#242424\],
+.border-\[\#343434\],
+.border-\[\#3a3a3a\],
+.border-\[\#3b3b3b\],
+.border-\[\#3f3f3f\] {
+  border-color: var(--color-border) !important;
+}
+
+.hover\:border-\[\#4a4a4a\]:hover,
+.hover\:border-\[\#4c4c4c\]:hover {
+  border-color: var(--color-border-strong) !important;
+}
+
+.border-\[\#14532d\] { border-color: var(--color-success-border) !important; }
+.bg-\[\#102418\] { background-color: var(--color-success-bg) !important; }
+.text-\[\#86efac\] { color: var(--color-success-text) !important; }
+.border-\[\#5a4314\], .border-\[\#6b5b1e\], .border-\[\#8a6d1a\] { border-color: var(--color-warning-border) !important; }
+.bg-\[\#2f2612\], .bg-\[\#2c2612\] { background-color: var(--color-warning-bg) !important; }
+.text-\[\#fcd34d\], .text-\[\#f6d77a\] { color: var(--color-warning-text) !important; }
+.border-\[\#164e63\] { border-color: var(--color-info-border) !important; }
+.bg-\[\#0b2530\] { background-color: var(--color-info-bg) !important; }
+.text-\[\#67e8f9\] { color: var(--color-info-text) !important; }
+.border-\[\#4b1d1d\] { border-color: var(--color-error-border) !important; }
+.bg-\[\#2a1313\] { background-color: var(--color-error-bg) !important; }
+.text-\[\#fca5a5\] { color: var(--color-error-text) !important; }
 
 /* Prevent layout shift when scrollbar appears */
 .overflow-auto,

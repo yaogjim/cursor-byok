@@ -261,11 +261,11 @@ onBeforeUnmount(() => {
       ref="buttonRef"
       type="button"
       :disabled="disabled"
-      class="flex h-9 items-center rounded-[6px] bg-[#232323] px-3 text-left text-sm text-[#e5e5e5] outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex h-9 items-center rounded-[6px] bg-[var(--color-surface)] px-3 text-left text-sm text-[var(--color-text)] outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60"
       :class="[
         border
-          ? 'w-full justify-between gap-2 border border-[#3f3f3f] focus:border-[#10AD5D]'
-          : 'w-auto justify-start gap-2 border border-transparent focus-visible:ring-2 focus-visible:ring-[#10AD5D]/35',
+          ? 'w-full justify-between gap-2 border border-[var(--color-border-strong)] focus:border-[var(--color-primary)]'
+          : 'w-auto justify-start gap-2 border border-transparent focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/35',
         buttonClass,
       ]"
       :aria-expanded="isOpen"
@@ -279,8 +279,8 @@ onBeforeUnmount(() => {
         :class="[
           border ? 'flex-1' : 'shrink-0',
           selectedOption
-            ? (border ? 'text-[#e5e5e5]' : 'text-current')
-            : 'text-[#7b7b7b]',
+            ? (border ? 'text-[var(--color-text)]' : 'text-current')
+            : 'text-[var(--color-text-muted)]',
         ]"
       >
         <span v-if="selectedOption?.icon" :class="[selectedOption.icon, 'text-[16px] shrink-0']" aria-hidden="true"></span>
@@ -288,7 +288,7 @@ onBeforeUnmount(() => {
       </span>
       <span
         class="pointer-events-none center-row transition-transform duration-200"
-        :class="[border ? 'text-[#8f8f8f]' : 'text-current', isOpen ? 'rotate-180' : '']"
+        :class="[border ? 'text-[var(--color-text-muted)]' : 'text-current', isOpen ? 'rotate-180' : '']"
       >
         <span class="icon-[mdi--chevron-down] text-[18px]"></span>
       </span>
@@ -307,7 +307,7 @@ onBeforeUnmount(() => {
       <div
         v-if="isOpen"
         ref="menuRef"
-        class="fixed z-[999] overflow-hidden rounded-[8px] border border-[#3f3f3f] bg-[#232323] p-1 shadow-[0_16px_30px_-12px_rgba(0,0,0,0.7)]"
+        class="fixed z-[999] overflow-hidden rounded-[8px] border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-1 shadow-[var(--shadow-popover)]"
         :class="menuClass"
         :style="menuStyle"
       >
@@ -320,9 +320,9 @@ onBeforeUnmount(() => {
               class="flex w-full items-center rounded-[6px] px-3 py-2 text-left text-sm outline-none transition-colors"
               :class="[
                 option.value === modelValue
-                  ? 'bg-[#10AD5D]/15 text-[#10d06f]'
-                  : 'text-[#e5e5e5] hover:bg-[#303030]',
-                activeIndex === index ? 'bg-[#303030]' : '',
+                  ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
+                  : 'text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]',
+                activeIndex === index ? 'bg-[var(--color-surface-hover)]' : '',
               ]"
               :aria-selected="option.value === modelValue"
               tabindex="0"

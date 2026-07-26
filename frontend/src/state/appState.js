@@ -2,8 +2,10 @@ import { computed, reactive, watchSyncEffect } from "vue";
 import { Events } from "@wailsio/runtime";
 import dayjs from "dayjs";
 import { getLocale } from "@/i18n/runtime";
+import { buildClientPreferencesFromState } from "@/state/configProjection";
 import {
   checkForUpdates,
+  downloadAvailableUpdate,
   getAppVersion,
   getHomeMetricsSummary,
   getModelAdapterTestResults,
@@ -38,6 +40,7 @@ export const CUSTOM_HEADERS_DEFAULT_JSON = `{
 }`;
 const SUPPORTED_OPENAI_ENDPOINTS = new Set([OPENAI_ENDPOINT_RESPONSES, OPENAI_ENDPOINT_CHAT_COMPLETIONS, OPENAI_ENDPOINT_CUSTOM]);
 const SUPPORTED_ROUTE_MODES = new Set(["local", "upstream"]);
+const SUPPORTED_THEMES = new Set(["light", "dark"]);
 const PROXY_STATE_EVENT = "proxy:state";
 const USER_CONFIG_CHANGED_EVENT = "user-config:changed";
 const UPDATE_STATE_EVENT = "update:state";
@@ -51,6 +54,11 @@ const HOME_METRICS_MIN_LOADING_MS = 600;
 export const ROUTE_MODE_OPTIONS = [
   { label: "本地服务模式", value: "local" },
   { label: "直连 Cursor 模式", value: "upstream" },
+];
+
+export const THEME_OPTIONS = [
+  { label: "浅色", value: "light" },
+  { label: "深色", value: "dark" },
 ];
 
 function asString(value) {
@@ -125,6 +133,11 @@ function formatReleaseDate(value) {
     return text;
   }
   return parsed.format("YYYY-MM-DD HH:mm");
+}
+
+function normalizeTheme(value, fallback = "light") {
+  const text = asString(value).toLowerCase();
+  return SUPPORTED_THEMES.has(text) ? text : fallback;
 }
 
 function normalizeRouteMode(value, fallback = "local") {
@@ -534,6 +547,9 @@ function normalizeConfig(source) {
   const raw = source && typeof source === "object" ? source : {};
   const routing = raw.routing && typeof raw.routing === "object" ? raw.routing : {};
   const homeMetrics = raw.homeMetrics && typeof raw.homeMetrics === "object" ? raw.homeMetrics : {};
+  const appearance = raw.appearance && typeof raw.appearance === "object" ? raw.appearance : {};
+  const advertising = raw.advertising && typeof raw.advertising === "object" ? raw.advertising : {};
+  const updates = raw.updates && typeof raw.updates === "object" ? raw.updates : {};
   return {
     log: asBoolean(raw.log),
     providerStreamIdleTimeout: asPositiveInteger(raw.providerStreamIdleTimeout),
@@ -545,6 +561,15 @@ function normalizeConfig(source) {
     },
     homeMetrics: {
       includeCacheWriteInHitRate: asBoolean(homeMetrics.includeCacheWriteInHitRate),
+    },
+    appearance: {
+      theme: normalizeTheme(appearance.theme),
+    },
+    advertising: {
+      enabled: asBoolean(advertising.enabled),
+    },
+    updates: {
+      checkOnStartup: asBoolean(updates.checkOnStartup),
     },
     lastAgentModelHash: asString(raw.lastAgentModelHash),
   };
@@ -577,8 +602,7 @@ function applyHomeMetrics(raw) {
   appState.homeMetricsError = "";
 }
 
-function buildConfigPayload(source = appState) {
-  const normalized = normalizeConfig(source);
+function serializeConfigPayload(normalized) {
   return {
     log: normalized.log,
     providerStreamIdleTimeout: normalized.providerStreamIdleTimeout,
@@ -587,8 +611,36 @@ function buildConfigPayload(source = appState) {
     modelAdapters: normalized.modelAdapters.map(({ id, ...adapter }) => adapter),
     routing: normalized.routing,
     homeMetrics: normalized.homeMetrics,
+    appearance: normalized.appearance,
+    advertising: normalized.advertising,
+    updates: normalized.updates,
     lastAgentModelHash: normalized.lastAgentModelHash,
   };
+}
+
+function buildConfigPayload(source) {
+  return serializeConfigPayload(normalizeConfig(source));
+}
+
+function buildConfigPayloadFromState(source = appState) {
+  const preferences = buildClientPreferencesFromState(source);
+  return serializeConfigPayload(normalizeConfig({
+    log: source.configLog,
+    providerStreamIdleTimeout: source.providerStreamIdleTimeout,
+    backendListenAddr: source.configBackendListenAddr || source.backendListenAddr,
+    proxyListenAddr: source.configProxyListenAddr || source.proxyListenAddr,
+    modelAdapters: source.modelAdapters,
+    routing: {
+      mode: source.routingMode,
+    },
+    homeMetrics: {
+      includeCacheWriteInHitRate: source.includeCacheWriteInHitRate,
+    },
+    appearance: preferences.appearance,
+    advertising: preferences.advertising,
+    updates: preferences.updates,
+    lastAgentModelHash: source.lastAgentModelHash,
+  }));
 }
 
 function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
@@ -598,10 +650,16 @@ function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
     return normalized;
   }
   appState.modelAdapters = normalized.modelAdapters;
+  appState.configLog = normalized.log;
+  appState.providerStreamIdleTimeout = normalized.providerStreamIdleTimeout;
+  appState.lastAgentModelHash = normalized.lastAgentModelHash;
   appState.configBackendListenAddr = normalized.backendListenAddr;
   appState.configProxyListenAddr = normalized.proxyListenAddr;
   appState.routingMode = normalized.routing.mode;
   appState.includeCacheWriteInHitRate = normalized.homeMetrics.includeCacheWriteInHitRate;
+  appState.appearanceTheme = normalized.appearance.theme;
+  appState.advertisingEnabled = normalized.advertising.enabled;
+  appState.updateCheckOnStartup = normalized.updates.checkOnStartup;
   return normalized;
 }
 
@@ -700,7 +758,7 @@ function handleModelAdapterTestUpdatedEvent(event) {
 
 function normalizeUpdateState(value) {
   const text = asString(value).toLowerCase();
-  if (["idle", "checking", "downloading", "ready", "installing", "error"].includes(text)) {
+  if (["idle", "checking", "available", "downloading", "ready", "installing", "error"].includes(text)) {
     return text;
   }
   return "idle";
@@ -729,6 +787,12 @@ function applyUpdateSnapshot(raw) {
     appState.updateReleaseNotes = data.releaseNotes.replace(/\r\n/g, "\n");
   } else if (nextState === "idle") {
     appState.updateReleaseNotes = "";
+  }
+
+  if (typeof data.mandatory === "boolean") {
+    appState.updateMandatory = data.mandatory;
+  } else if (nextState === "idle") {
+    appState.updateMandatory = false;
   }
 
   if (typeof data.error === "string") {
@@ -833,6 +897,9 @@ export const appState = reactive({
   configProxyListenAddr: cachedConfig.proxyListenAddr,
   routingMode: cachedConfig.routing.mode,
   includeCacheWriteInHitRate: cachedConfig.homeMetrics.includeCacheWriteInHitRate,
+  appearanceTheme: cachedConfig.appearance.theme,
+  advertisingEnabled: cachedConfig.advertising.enabled,
+  updateCheckOnStartup: cachedConfig.updates.checkOnStartup,
 
   serviceRunning: asBoolean(cachedState.serviceRunning),
   backendRunning: asBoolean(cachedState.backendRunning),
@@ -853,11 +920,15 @@ export const appState = reactive({
   netProxyDescription: asString(cachedState.netProxyDescription),
 
   configSaving: false,
+  configLog: asBoolean(cachedConfig.log),
+  providerStreamIdleTimeout: cachedConfig.providerStreamIdleTimeout,
+  lastAgentModelHash: cachedConfig.lastAgentModelHash,
   homeMetrics: createEmptyHomeMetrics(),
   homeMetricsLoading: false,
   homeMetricsError: "",
 
   updateState: "idle",
+  updateMandatory: false,
   updateVersion: "",
   updateReleaseDate: "",
   updateReleaseNotes: "",
@@ -871,6 +942,17 @@ export const appState = reactive({
   updatePromptBusy: false,
 });
 
+export function applyAppearanceTheme(value) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.dataset.theme = normalizeTheme(value);
+}
+
+watchSyncEffect(() => {
+  applyAppearanceTheme(appState.appearanceTheme);
+});
+
 watchSyncEffect(() => {
   if (!canUseLocalStorage()) {
     return;
@@ -879,7 +961,7 @@ watchSyncEffect(() => {
     window.localStorage.setItem(
       APP_STATE_STORAGE_KEY,
       JSON.stringify({
-        ...buildConfigPayload(),
+        ...buildConfigPayloadFromState(),
         serviceRunning: appState.serviceRunning,
         backendRunning: appState.backendRunning,
         proxyRunning: appState.proxyRunning,
@@ -986,7 +1068,7 @@ export const appViewState = reactive({
     return "服务未启动";
   }),
   serviceStatusClass: computed(() =>
-    appState.serviceRunning ? "text-[#22c55e]" : "text-[#f59e0b]",
+    appState.serviceRunning ? "text-[var(--color-success-text)]" : "text-[var(--color-warning-text)]",
   ),
   serviceButtonText: computed(() => {
     if (appState.serviceBusy) {
@@ -1018,11 +1100,35 @@ function localizeReadyContent() {
   const version = appState.updateVersion || appState.appVersion || "...";
   const date = formatReleaseDate(appState.updateReleaseDate);
   const notes = appState.updateReleaseNotes || "";
+  const kind = appState.updatePromptKind;
+
+  const actionHint = (() => {
+    if (locale === "en-US") {
+      if (kind === "available") return appState.updateMandatory
+        ? "This is a required update, but downloading still requires confirmation."
+        : "Confirm to start downloading. Install still requires a second confirmation.";
+      if (kind === "ready") return "Confirm to restart and install this update.";
+      return "";
+    }
+    if (locale === "ja-JP") {
+      if (kind === "available") return appState.updateMandatory
+        ? "必須アップデートですが、ダウンロードには確認が必要です。"
+        : "確認するとダウンロードを開始します。インストールは別途確認が必要です。";
+      if (kind === "ready") return "確認すると再起動してこのアップデートをインストールします。";
+      return "";
+    }
+    if (kind === "available") return appState.updateMandatory
+      ? "该版本为必要更新，但下载仍需确认。"
+      : "确认后才会开始下载；安装仍需再次确认。";
+    if (kind === "ready") return "确认后将重启并安装此更新。";
+    return "";
+  })();
 
   if (locale === "en-US") {
     return [
       `Version: v${version}`,
       `Release Date: ${date}`,
+      actionHint,
       "",
       notes || "No release notes",
     ].join("\n");
@@ -1031,6 +1137,7 @@ function localizeReadyContent() {
     return [
       `バージョン: v${version}`,
       `リリース日: ${date}`,
+      actionHint,
       "",
       notes || "リリースノートはありません",
     ].join("\n");
@@ -1038,6 +1145,7 @@ function localizeReadyContent() {
   return [
     `版本：v${version}`,
     `发布时间：${date}`,
+    actionHint,
     "",
     notes || "无更新说明",
   ].join("\n");
@@ -1054,10 +1162,19 @@ export const updateViewState = reactive({
   promptTitle: computed(() => {
     const locale = getLocale ? getLocale() : "zh-CN";
     switch (appState.updatePromptKind) {
-      case "ready":
+      case "available":
+        if (appState.updateMandatory) {
+          if (locale === "en-US") return "Required Update Available";
+          if (locale === "ja-JP") return "必須アップデートがあります";
+          return "发现必要更新";
+        }
         if (locale === "en-US") return "New Version Available";
         if (locale === "ja-JP") return "新しいバージョンがあります";
         return "发现新版本";
+      case "ready":
+        if (locale === "en-US") return "Update Ready";
+        if (locale === "ja-JP") return "アップデートの準備ができました";
+        return "更新已下载";
       case "error":
         if (locale === "en-US") return "Update Failed";
         if (locale === "ja-JP") return "アップデートに失敗しました";
@@ -1070,6 +1187,7 @@ export const updateViewState = reactive({
   }),
   promptContent: computed(() => {
     switch (appState.updatePromptKind) {
+      case "available":
       case "ready":
         return localizeReadyContent();
       case "error":
@@ -1080,6 +1198,11 @@ export const updateViewState = reactive({
   }),
   promptConfirmText: computed(() => {
     const locale = getLocale ? getLocale() : "zh-CN";
+    if (appState.updatePromptKind === "available") {
+      if (locale === "en-US") return "Download Update";
+      if (locale === "ja-JP") return "アップデートをダウンロード";
+      return "下载更新";
+    }
     if (appState.updatePromptKind === "ready") {
       if (locale === "en-US") return "Restart to Update";
       if (locale === "ja-JP") return "再起動して更新";
@@ -1091,16 +1214,16 @@ export const updateViewState = reactive({
   }),
   promptCancelText: computed(() => {
     const locale = getLocale ? getLocale() : "zh-CN";
-    if (appState.updatePromptKind === "ready") {
-      if (locale === "en-US") return "Later";
-      if (locale === "ja-JP") return "後で";
-      return "稍后";
+    if (["available", "ready"].includes(appState.updatePromptKind)) {
+      if (locale === "en-US") return appState.updatePromptKind === "available" ? "Not Now" : "Later";
+      if (locale === "ja-JP") return appState.updatePromptKind === "available" ? "今はしない" : "後で";
+      return appState.updatePromptKind === "available" ? "暂不下载" : "稍后";
     }
     if (locale === "en-US") return "Cancel";
     if (locale === "ja-JP") return "キャンセル";
     return "取消";
   }),
-  promptShowCancel: computed(() => appState.updatePromptKind === "ready"),
+  promptShowCancel: computed(() => ["available", "ready"].includes(appState.updatePromptKind)),
 });
 
 export function getModelAdapterTestResultByID(adapterID) {
@@ -1166,6 +1289,15 @@ export async function persistUserConfig() {
     homeMetrics: {
       ...currentConfig.homeMetrics,
       includeCacheWriteInHitRate: appState.includeCacheWriteInHitRate,
+    },
+    appearance: {
+      theme: normalizeTheme(appState.appearanceTheme),
+    },
+    advertising: {
+      enabled: asBoolean(appState.advertisingEnabled),
+    },
+    updates: {
+      checkOnStartup: asBoolean(appState.updateCheckOnStartup),
     },
   });
 }
@@ -1413,15 +1545,25 @@ export function dismissUpdatePrompt() {
 }
 
 export async function confirmUpdatePrompt() {
-  if (appState.updatePromptKind !== "ready") {
-    dismissUpdatePrompt();
-    return;
-  }
   if (appState.updatePromptBusy) {
     return;
   }
+
+  // idle / error：仅关闭提示
+  if (!["available", "ready"].includes(appState.updatePromptKind)) {
+    dismissUpdatePrompt();
+    return;
+  }
+
   appState.updatePromptBusy = true;
   try {
+    if (appState.updatePromptKind === "available") {
+      // 第一次确认：只下载，不安装
+      await downloadAvailableUpdate();
+      dismissUpdatePrompt();
+      return;
+    }
+    // 第二次确认：重启安装
     await installReadyUpdate();
   } catch (error) {
     appState.updatePromptBusy = false;

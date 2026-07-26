@@ -12,6 +12,7 @@ import {
 import { GetHomeMetricsSummary } from "@bindings/cursor/internal/bridge/metricsservice.js";
 import {
   CheckForUpdates,
+  DownloadAvailableUpdate,
   GetAppVersion,
   GetFooterAuthorInfo,
   InstallReadyUpdate,
@@ -104,6 +105,10 @@ export function getFooterAuthorInfo() {
 
 export function checkForUpdates() {
   return withApiLogging("CheckForUpdates", undefined, () => CheckForUpdates());
+}
+
+export function downloadAvailableUpdate() {
+  return withApiLogging("DownloadAvailableUpdate", undefined, () => DownloadAvailableUpdate());
 }
 
 export function installReadyUpdate() {

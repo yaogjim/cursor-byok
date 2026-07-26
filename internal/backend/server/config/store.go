@@ -136,10 +136,15 @@ func (store *Store) saveLocked(normalized Config) error {
 }
 
 func shouldPersistNormalizedConfig(raw []byte, current Config, normalized Config) bool {
-	if !yamlHasKey(raw, "backendListenAddr") || !yamlHasKey(raw, "proxyListenAddr") {
-		return true
+	for _, key := range []string{"backendListenAddr", "proxyListenAddr", "appearance", "advertising", "updates"} {
+		if !yamlHasKey(raw, key) {
+			return true
+		}
 	}
 	if current.BackendListenAddr != normalized.BackendListenAddr || current.ProxyListenAddr != normalized.ProxyListenAddr {
+		return true
+	}
+	if current.Appearance.Theme != normalized.Appearance.Theme {
 		return true
 	}
 	if current.ProviderStreamIdleTimeout == normalized.ProviderStreamIdleTimeout {

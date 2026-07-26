@@ -55,7 +55,7 @@ function toggleVisibility() {
       :type="inputType"
       :placeholder="placeholder"
       :disabled="disabled"
-      class="h-9 w-full rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none transition-colors focus:border-[#10AD5D] disabled:cursor-not-allowed disabled:opacity-60"
+      class="h-9 w-full rounded-[6px] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-60"
       :class="canToggleVisibility ? 'pr-10' : ''"
       @input="handleInput"
     />
@@ -63,7 +63,7 @@ function toggleVisibility() {
     <button
       v-if="canToggleVisibility"
       type="button"
-      class="absolute inset-y-0 right-0 center-row px-3 text-[#8f8f8f] transition-colors hover:text-[#d4d4d4] focus:text-[#d4d4d4] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      class="absolute inset-y-0 right-0 center-row px-3 text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)] focus:text-[var(--color-text)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
       :aria-label="isPasswordVisible ? '隐藏访问密钥' : '显示访问密钥'"
       :aria-pressed="isPasswordVisible"
       :disabled="disabled"

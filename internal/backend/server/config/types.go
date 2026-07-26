@@ -16,6 +16,7 @@ const (
 	DefaultProxyListenAddr                  = "127.0.0.1:18080"
 	DefaultFrontendBaseURL                  = "http://127.0.0.1"
 	DefaultRoutingMode                      = "local"
+	DefaultTheme                            = "light"
 	DefaultProviderStreamIdleTimeoutSeconds = 240
 	MinProviderStreamIdleTimeoutSeconds     = 30
 )
@@ -51,6 +52,18 @@ type HomeMetricsConfig struct {
 	IncludeCacheWriteInHitRate bool `json:"includeCacheWriteInHitRate" yaml:"includeCacheWriteInHitRate"`
 }
 
+type AppearanceConfig struct {
+	Theme string `json:"theme" yaml:"theme"`
+}
+
+type AdvertisingConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+type UpdatesConfig struct {
+	CheckOnStartup bool `json:"checkOnStartup" yaml:"checkOnStartup"`
+}
+
 type Config struct {
 	Log                       bool                 `json:"log" yaml:"log"`
 	ProviderStreamIdleTimeout int                  `json:"providerStreamIdleTimeout" yaml:"providerStreamIdleTimeout"`
@@ -59,6 +72,9 @@ type Config struct {
 	ModelAdapters             []ModelAdapterConfig `json:"modelAdapters" yaml:"modelAdapters"`
 	Routing                   RoutingConfig        `json:"routing" yaml:"routing"`
 	HomeMetrics               HomeMetricsConfig    `json:"homeMetrics" yaml:"homeMetrics"`
+	Appearance                AppearanceConfig     `json:"appearance" yaml:"appearance"`
+	Advertising               AdvertisingConfig    `json:"advertising" yaml:"advertising"`
+	Updates                   UpdatesConfig        `json:"updates" yaml:"updates"`
 	LastAgentModelHash        string               `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
 }
 
@@ -71,6 +87,15 @@ func DefaultConfig() Config {
 		ModelAdapters:             []ModelAdapterConfig{},
 		Routing: RoutingConfig{
 			Mode: DefaultRoutingMode,
+		},
+		Appearance: AppearanceConfig{
+			Theme: DefaultTheme,
+		},
+		Advertising: AdvertisingConfig{
+			Enabled: false,
+		},
+		Updates: UpdatesConfig{
+			CheckOnStartup: false,
 		},
 	}
 }
@@ -90,6 +115,9 @@ func NormalizeConfig(input Config) (Config, error) {
 	output.BackendListenAddr = backendListenAddr
 	output.ProxyListenAddr = proxyListenAddr
 	output.HomeMetrics.IncludeCacheWriteInHitRate = input.HomeMetrics.IncludeCacheWriteInHitRate
+	output.Appearance.Theme = normalizeTheme(input.Appearance.Theme)
+	output.Advertising.Enabled = input.Advertising.Enabled
+	output.Updates.CheckOnStartup = input.Updates.CheckOnStartup
 	output.LastAgentModelHash = strings.TrimSpace(input.LastAgentModelHash)
 	output.Routing.Mode = normalizeRoutingMode(input.Routing.Mode)
 	if output.Routing.Mode == "" {
@@ -278,6 +306,17 @@ func normalizeModelAdapterType(value string) string {
 		return "anthropic"
 	default:
 		return ""
+	}
+}
+
+func normalizeTheme(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "light":
+		return "light"
+	case "dark":
+		return "dark"
+	default:
+		return DefaultTheme
 	}
 }
 

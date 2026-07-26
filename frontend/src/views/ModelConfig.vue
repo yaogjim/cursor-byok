@@ -219,7 +219,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col p-4 pt-0 text-[#e5e5e5] overflow-hidden">
+  <div class="flex h-full min-h-0 flex-col p-4 pt-0 text-[var(--color-text)] overflow-hidden">
     <div class="shrink-0 pb-4">
       <div class="flex items-center justify-between gap-4">
         <div class="center-row gap-2">
@@ -229,8 +229,8 @@ onBeforeUnmount(() => {
             type="button"
             class="center-row gap-2 rounded-[8px] border px-3 py-2 text-sm transition-colors duration-150"
             :class="activeType === tab.value
-              ? 'border-[#1ca35a] bg-[#123322] text-white'
-              : 'border-[#343434] bg-[#252525] text-[#a3a3a3] hover:border-[#4a4a4a] hover:text-[#e5e5e5]'"
+              ? 'border-[var(--color-primary)] bg-[var(--color-success-bg)] text-[var(--color-text)]'
+              : 'border-[var(--color-border)] bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)]'"
             @click="activeType = tab.value"
           >
             <span :class="[tab.icon, 'text-[16px]']"></span>
@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
 
     <div class="min-h-0 flex-1">
       <div v-if="filteredAdapters.length === 0"
-        class="flex h-full min-h-[220px] items-center justify-center rounded-[8px] border border-dashed border-[#3a3a3a] bg-[#232323] px-4 text-sm text-[#a3a3a3]">
+        class="flex h-full min-h-[220px] items-center justify-center rounded-[8px] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface-muted)] px-4 text-sm text-[var(--color-text-secondary)]">
         当前还没有配置任何 {{ typeLabel(activeType) }} 模型。
       </div>
 
@@ -266,29 +266,29 @@ onBeforeUnmount(() => {
               <div class="flex flex-col gap-2.5">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0 flex-1">
-                    <div class="truncate text-base font-medium text-white">{{ adapter.displayName }}</div>
-                    <div class="mt-1 truncate text-sm text-[#8f8f8f]">{{ adapter.modelID }}</div>
-                    <div v-if="adapter.type === 'openai'" class="mt-0.5 truncate text-xs text-[#737373]">
+                    <div class="truncate text-base font-medium text-[var(--color-text)]">{{ adapter.displayName }}</div>
+                    <div class="mt-1 truncate text-sm text-[var(--color-text-secondary)]">{{ adapter.modelID }}</div>
+                    <div v-if="adapter.type === 'openai'" class="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">
                       {{ adapter.openAIEndpoint || "/v1/responses" }}
                     </div>
                   </div>
                   <span
-                    class="center-row shrink-0 gap-1 rounded-[999px] border border-[#3f3f3f] px-[7px] py-[4px] text-[11px] font-medium text-[#cfcfcf]"
+                    class="center-row shrink-0 gap-1 rounded-[999px] border border-[var(--color-border)] px-[7px] py-[4px] text-[11px] font-medium text-[var(--color-text)]"
                   >
-                    <span class="icon-[bxl--openai] text-[14px] !text-white" v-if="adapter.type === 'openai'"></span>
+                    <span class="icon-[bxl--openai] text-[14px] !text-[var(--color-text)]" v-if="adapter.type === 'openai'"></span>
                     <span class="icon-[logos--claude-icon] text-[14px]" v-else></span>
                     <span>{{ typeLabel(adapter.type) }}</span>
                   </span>
                 </div>
 
-                <div class="grid grid-cols-2 gap-2 text-sm text-[#a3a3a3]">
-                  <div class="rounded-[8px] bg-[#232323] px-3 py-2">
-                    <div class="text-[11px] uppercase tracking-[0.08em] text-[#666]">Host</div>
-                    <div class="mt-1 truncate text-[#d4d4d4]" :title="adapter.baseURL">{{ formatHost(adapter.baseURL) }}</div>
+                <div class="grid grid-cols-2 gap-2 text-sm text-[var(--color-text-secondary)]">
+                  <div class="rounded-[8px] bg-[var(--color-surface-muted)] px-3 py-2">
+                    <div class="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">Host</div>
+                    <div class="mt-1 truncate text-[var(--color-text)]" :title="adapter.baseURL">{{ formatHost(adapter.baseURL) }}</div>
                   </div>
-                  <div class="rounded-[8px] bg-[#232323] px-3 py-2">
-                    <div class="text-[11px] uppercase tracking-[0.08em] text-[#666]">API Key</div>
-                    <div class="mt-1 truncate text-[#d4d4d4]">{{ maskSecret(adapter.apiKey) }}</div>
+                  <div class="rounded-[8px] bg-[var(--color-surface-muted)] px-3 py-2">
+                    <div class="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">API Key</div>
+                    <div class="mt-1 truncate text-[var(--color-text)]">{{ maskSecret(adapter.apiKey) }}</div>
                   </div>
                 </div>
 
@@ -300,7 +300,7 @@ onBeforeUnmount(() => {
                 />
               </div>
 
-              <div class="center-row flex-wrap justify-end gap-2 border-t border-[#343434] pt-3">
+              <div class="center-row flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
                 <Button
                   variant="default"
                   :disabled="appState.configSaving || batchTesting || isAdapterTesting(adapter)"

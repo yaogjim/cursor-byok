@@ -6,6 +6,7 @@ import {
 } from "chart.js";
 import { computed } from "vue";
 import { Doughnut } from "vue-chartjs";
+import { appState } from "@/state/appState";
 
 ChartJS.register(ArcElement, Tooltip);
 
@@ -72,12 +73,28 @@ function getSegmentBorderRadius(dataIndex) {
       };
 }
 
+function readThemeColor(name, fallback) {
+  if (typeof document === "undefined") {
+    return fallback;
+  }
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
+const chartTheme = computed(() => {
+  // Depend on the state so the canvas is redrawn after a runtime theme change.
+  void appState.appearanceTheme;
+  return {
+    success: readThemeColor("--color-chart-success", "rgb(74 222 128)"),
+    track: readThemeColor("--color-chart-track", "rgb(215 222 232)"),
+  };
+});
+
 const chartData = computed(() => ({
   labels: ["命中", "未命中"],
   datasets: [
     {
       data: [percentage.value, Math.max(0, 100 - percentage.value)],
-      backgroundColor: ["#4ade80", "#373737"],
+      backgroundColor: [chartTheme.value.success, chartTheme.value.track],
       borderWidth: 0,
       hoverBorderWidth: 0,
       selfJoin: false,
@@ -117,7 +134,7 @@ const chartOptions = {
       <Doughnut class="h-full w-full" :data="chartData" :options="chartOptions" />
       <div class="pointer-events-none absolute inset-x-0 bottom-[10px] flex justify-center">
         <div
-          class="text-[20px] leading-none text-white"
+          class="text-[20px] leading-none text-[var(--color-text)]"
           style="font-family: var(--font-num)"
         >
           {{ label }}

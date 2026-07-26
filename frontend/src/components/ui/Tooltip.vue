@@ -117,7 +117,7 @@ onBeforeUnmount(() => {
     <button
       ref="triggerRef"
       type="button"
-      class="center-row h-[16px] w-[16px] cursor-help rounded-full text-[#727272] transition-colors duration-150 hover:text-[#cfcfcf]"
+      class="center-row h-[16px] w-[16px] cursor-help rounded-full text-[var(--color-text-muted)] transition-colors duration-150 hover:text-[var(--color-text)]"
       @mouseenter="showTooltip"
       @mouseleave="scheduleHideTooltip"
       @focus="showTooltip"
@@ -130,7 +130,7 @@ onBeforeUnmount(() => {
       <div
         v-if="isOpen"
         ref="tooltipRef"
-        class="fixed z-[10000] flex max-h-[320px] max-w-[420px] flex-col overflow-hidden rounded-[8px] border border-[#3f3f3f] bg-[#202020] px-3 py-2 text-left text-[12px] leading-relaxed text-[#d4d4d4] shadow-[0_12px_32px_rgba(0,0,0,0.45)]"
+        class="fixed z-[10000] flex max-h-[320px] max-w-[420px] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-left text-[12px] leading-relaxed text-[var(--color-text)] shadow-[0_12px_32px_rgba(0,0,0,0.45)]"
         :style="tooltipStyle"
         @mouseenter="showTooltip"
         @mouseleave="scheduleHideTooltip"
@@ -138,7 +138,7 @@ onBeforeUnmount(() => {
         <div v-if="showCopyButton" class="mb-2 flex shrink-0 justify-end">
           <button
             type="button"
-            class="center-row gap-1 rounded-[6px] border border-[#3f3f3f] bg-[#272727] px-2 py-1 text-[11px] text-[#d4d4d4] transition-colors duration-150 hover:border-[#4c4c4c] hover:bg-[#2f2f2f]"
+            class="center-row gap-1 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-2 py-1 text-[11px] text-[var(--color-text)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)]"
             @click="handleCopy"
           >
             <span :class="copied ? 'icon-[mdi--check]' : 'icon-[mdi--content-copy]'" class="text-[13px]"></span>

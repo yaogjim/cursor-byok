@@ -62,40 +62,40 @@ const rawResponseText = computed(() => {
 
 const panelClass = computed(() => {
   if (props.stale) {
-    return "border-[#6b5b1e] bg-[#2c2612]";
+    return "border-[var(--color-warning-border)] bg-[var(--color-warning-bg)]";
   }
   if (normalizedStatus.value === "running") {
-    return "border-[#164e63] bg-[#0b2530]";
+    return "border-[var(--color-info-border)] bg-[var(--color-info-bg)]";
   }
   if (normalizedStatus.value === "error") {
-    return "border-[#4b1d1d] bg-[#2a1313]";
+    return "border-[var(--color-error-border)] bg-[var(--color-error-bg)]";
   }
   if (normalizedStatus.value === "success" && props.result?.tokensEstimated) {
-    return "border-[#5a4314] bg-[#2f2612]";
+    return "border-[var(--color-warning-border)] bg-[var(--color-warning-bg)]";
   }
   if (normalizedStatus.value === "success") {
-    return "border-[#14532d] bg-[#102418]";
+    return "border-[var(--color-success-border)] bg-[var(--color-success-bg)]";
   }
-  return "border-[#343434] bg-[#232323]";
+  return "border-[var(--color-border)] bg-[var(--color-surface-muted)]";
 });
 
 const summaryClass = computed(() => {
   if (props.stale) {
-    return "text-[#f6d77a]";
+    return "text-[var(--color-warning-text)]";
   }
   if (normalizedStatus.value === "running") {
-    return "text-[#67e8f9]";
+    return "text-[var(--color-info-text)]";
   }
   if (normalizedStatus.value === "error") {
-    return "text-[#fca5a5]";
+    return "text-[var(--color-error-text)]";
   }
   if (normalizedStatus.value === "success" && props.result?.tokensEstimated) {
-    return "text-[#fcd34d]";
+    return "text-[var(--color-warning-text)]";
   }
   if (normalizedStatus.value === "success") {
-    return "text-[#86efac]";
+    return "text-[var(--color-success-text)]";
   }
-  return "text-[#a3a3a3]";
+  return "text-[var(--color-text-secondary)]";
 });
 </script>
 
@@ -105,11 +105,11 @@ const summaryClass = computed(() => {
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1.5">
           <div
-            :class="compact ? 'text-[11px] uppercase tracking-[0.08em] text-[#666]' : 'text-sm font-medium text-white'"
+            :class="compact ? 'text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]' : 'text-sm font-medium text-[var(--color-text)]'"
           >
             {{ title }}
           </div>
-          <div v-if="rawResponseText" class="center-row gap-1 text-[11px] text-[#8f8f8f]">
+          <div v-if="rawResponseText" class="center-row gap-1 text-[11px] text-[var(--color-text-secondary)]">
             <span>原始返回</span>
             <Tooltip :content="rawResponseText" copyable />
           </div>
@@ -120,13 +120,13 @@ const summaryClass = computed(() => {
       </div>
       <span
         v-if="stale"
-        class="shrink-0 rounded-[999px] border border-[#8a6d1a] px-2 py-1 text-xs text-[#f6d77a]"
+        class="shrink-0 rounded-[999px] border border-[var(--color-warning-border)] px-2 py-1 text-xs text-[var(--color-warning-text)]"
       >
         需重测
       </span>
     </div>
 
-    <div v-if="stale" class="mt-2 text-xs text-[#f6d77a]">
+    <div v-if="stale" class="mt-2 text-xs text-[var(--color-warning-text)]">
       配置已变更，请重新测试
     </div>
 
@@ -134,19 +134,19 @@ const summaryClass = computed(() => {
       v-if="showMetrics && normalizedStatus === 'success'"
       class="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2"
     >
-      <div class="rounded-[8px] bg-[#1c1c1c] px-3 py-2">
-        <div class="text-[11px] uppercase tracking-[0.08em] text-[#666]">总耗时</div>
-        <div class="mt-1 text-sm text-[#d4d4d4]">{{ formatDuration(result?.totalDurationMS) }}</div>
+      <div class="rounded-[8px] bg-[var(--color-surface)] px-3 py-2">
+        <div class="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">总耗时</div>
+        <div class="mt-1 text-sm text-[var(--color-text)]">{{ formatDuration(result?.totalDurationMS) }}</div>
       </div>
-      <div class="rounded-[8px] bg-[#1c1c1c] px-3 py-2">
-        <div class="text-[11px] uppercase tracking-[0.08em] text-[#666]">输出 Token</div>
-        <div class="mt-1 text-sm text-[#d4d4d4]">{{ result?.outputTokens ?? 0 }}</div>
+      <div class="rounded-[8px] bg-[var(--color-surface)] px-3 py-2">
+        <div class="text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">输出 Token</div>
+        <div class="mt-1 text-sm text-[var(--color-text)]">{{ result?.outputTokens ?? 0 }}</div>
       </div>
     </div>
 
     <div
       v-if="normalizedStatus === 'success' && result?.tokensEstimated"
-      class="mt-2 text-xs text-[#8f8f8f]"
+      class="mt-2 text-xs text-[var(--color-text-secondary)]"
     >
       输出 Token 为估算值
     </div>

@@ -197,13 +197,13 @@ onUnmounted(() => {
         class="absolute right-[10px] top-[8px] z-99999 center-row gap-[1px]"
       >
         <button
-          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[#777] hover:bg-[#333] hover:text-[#ddd] cursor-pointer"
+          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
           @click="minimizeWindow"
         >
           <span class="icon-[ic--round-minus]"></span>
         </button>
         <button
-          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[#777] hover:bg-[#333] hover:text-[#ddd] cursor-pointer"
+          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
           @click="closeWindow"
         >
           <span class="icon-[ic--round-close]"></span>
@@ -217,7 +217,7 @@ onUnmounted(() => {
 
     <footer
       v-if="showFooter"
-      class="flex !pr-1 h-[30px] shrink-0 items-center gap-[8px] border-t border-[#242424] px-[14px] text-[12px] text-[#8f8f8f]"
+      class="flex !pr-1 h-[30px] shrink-0 items-center gap-[8px] border-t border-[var(--color-border)] px-[14px] text-[12px] text-[var(--color-text-secondary)]"
     >
       <div
         v-if="proxyBadgeText"
@@ -230,7 +230,7 @@ onUnmounted(() => {
       <button
         v-if="!updateViewState.footerDownloading"
         type="button"
-        class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[#1f1f1f] hover:text-[#e5e5e5]"
+        class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
         :disabled="updateViewState.footerBusy"
         @click="handleCheckForUpdates"
       >
@@ -239,7 +239,7 @@ onUnmounted(() => {
       </button>
       <button
         type="button"
-        class="center-row shrink-0 gap-[2px]  cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[#1f1f1f] hover:text-[#e5e5e5]"
+        class="center-row shrink-0 gap-[2px]  cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
         @click="handleOpenUsageDocs"
       >
         <span class="icon-[mdi--file-document-outline] text-[15px]"></span>
@@ -248,7 +248,7 @@ onUnmounted(() => {
       <button
         v-if="localizedAuthorInfo"
         type="button"
-        class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[#1f1f1f] hover:text-[#e5e5e5]"
+        class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
         @click="handleOpenAuthorHome"
       >
         <span class="icon-[ant-design--bilibili-outlined] text-[14px]"></span>
@@ -261,14 +261,14 @@ onUnmounted(() => {
         <span class="shrink-0">{{ updateViewState.footerVersionLabel }}</span>
         <div class="center-row min-w-0 gap-[8px]">
           <div
-            class="h-[6px] w-[120px] overflow-hidden rounded-full bg-[#1f1f1f]"
+            class="h-[6px] w-[120px] overflow-hidden rounded-full bg-[var(--color-surface-muted)]"
           >
             <div
-              class="h-full rounded-full bg-gradient-to-r from-[#10AD5D] to-[#29c776]"
+              class="h-full rounded-full bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-hover)]"
               :style="updateViewState.footerProgressStyle"
             ></div>
           </div>
-          <span class="shrink-0 text-[#d4d4d4]">{{
+          <span class="shrink-0 text-[var(--color-text)]">{{
             updateViewState.footerProgressText
           }}</span>
         </div>
@@ -278,7 +278,7 @@ onUnmounted(() => {
           :border="false"
           aria-label="界面语言"
           wrapper-class="w-auto"
-          button-class="h-[24px] bg-transparent px-1.5 text-[12px] !text-[#8f8f8f] !hover:text-[#e5e5e5]"
+          button-class="h-[24px] bg-transparent px-1.5 text-[12px] !text-[var(--color-text-secondary)] !hover:text-[var(--color-text)]"
           menu-class="text-[12px]"
         />
       </div>

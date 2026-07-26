@@ -46,22 +46,21 @@ function onEnter(event) {
         <Transition name="modal-content">
           <div
             v-show="visible"
-            class="relative z-10 w-full max-w-[380px] overflow-hidden rounded-[8px] p-px shadow-[0_25px_50px_-12px_rgba(0,0,0,0.6)]"
-            style="background: linear-gradient(to bottom, #656565 0%, #3A3A3A 10px, #3A3A3A 100%);"
+            class="relative z-10 w-full max-w-[380px] overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-popover)]"
             @click.stop
           >
-            <div class="rounded-[7px] bg-[#292929] p-5">
-              <h3 class="mb-3 text-base font-medium text-white">
+            <div class="rounded-[7px] p-5">
+              <h3 class="mb-3 text-base font-medium text-[var(--color-text)]">
                 {{ title }}
               </h3>
-              <p class="mb-3 text-sm leading-relaxed text-[#a3a3a3]">
+              <p class="mb-3 text-sm leading-relaxed text-[var(--color-text-secondary)]">
                 {{ content }}
               </p>
               <input
                 :value="modelValue"
                 :placeholder="placeholder"
                 type="text"
-                class="mb-5 h-9 w-full rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                class="mb-5 h-9 w-full rounded-[6px] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-primary)]"
                 @input="onInput"
                 @keydown.enter="onEnter"
               />

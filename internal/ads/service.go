@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cursor/internal/netproxy"
@@ -41,6 +42,7 @@ type Options struct {
 	HTTPClient    *http.Client
 	AppVersion    string
 	AssetBaseURL  string
+	Enabled       bool
 	DeviceID      DeviceIDProvider
 	Metrics       MetricsProvider
 	ProviderCount ProviderCountProvider
@@ -54,6 +56,7 @@ type Service struct {
 	deviceID      DeviceIDProvider
 	metrics       MetricsProvider
 	providerCount ProviderCountProvider
+	enabled       atomic.Bool
 
 	assetBaseURLMu sync.RWMutex
 	refreshMu      sync.Mutex
@@ -109,7 +112,7 @@ func NewService(options Options) *Service {
 	if client == nil {
 		client = netproxy.NewHTTPClient(defaultFetchTimeout)
 	}
-	return &Service{
+	service := &Service{
 		storeRoot:     strings.TrimSpace(options.StoreRoot),
 		httpClient:    client,
 		appVersion:    strings.TrimSpace(options.AppVersion),
@@ -118,6 +121,19 @@ func NewService(options Options) *Service {
 		metrics:       options.Metrics,
 		providerCount: options.ProviderCount,
 	}
+	service.enabled.Store(options.Enabled)
+	return service
+}
+
+func (service *Service) SetEnabled(enabled bool) {
+	if service == nil {
+		return
+	}
+	service.enabled.Store(enabled)
+}
+
+func (service *Service) Enabled() bool {
+	return service != nil && service.enabled.Load()
 }
 
 func (service *Service) SetAssetBaseURL(rawURL string) bool {
@@ -151,6 +167,9 @@ func (service *Service) Refresh(parent context.Context) (Runtime, bool, error) {
 	if service == nil {
 		return Runtime{}, false, fmt.Errorf("ad service is nil")
 	}
+	if !service.Enabled() {
+		return Runtime{}, false, nil
+	}
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -172,6 +191,9 @@ func (service *Service) Refresh(parent context.Context) (Runtime, bool, error) {
 func (service *Service) FetchOnce(ctx context.Context) (FetchResult, error) {
 	if service == nil {
 		return FetchResult{}, fmt.Errorf("ad service is nil")
+	}
+	if !service.Enabled() {
+		return FetchResult{}, nil
 	}
 	var output FetchResult
 	var firstErr error
@@ -261,6 +283,9 @@ func (service *Service) currentHash(ctx context.Context, slotID string) (string,
 }
 
 func (service *Service) GetRuntime(ctx context.Context) (Runtime, error) {
+	if !service.Enabled() {
+		return Runtime{}, nil
+	}
 	runtimeState := Runtime{
 		AssetBaseURL: service.currentAssetBaseURL(),
 	}
@@ -308,6 +333,9 @@ func (service *Service) getSlotRuntime(ctx context.Context, slotID string) (Slot
 }
 
 func (service *Service) LoadAsset(ctx context.Context, rawPath string) (parsedAsset, string, bool, error) {
+	if !service.Enabled() {
+		return parsedAsset{}, "", false, nil
+	}
 	slotID, assetPath, err := normalizeRequestAssetPath(rawPath)
 	if err != nil {
 		return parsedAsset{}, "", false, err

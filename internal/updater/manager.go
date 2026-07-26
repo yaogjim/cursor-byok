@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,13 +25,25 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-const checkInterval = 20 * time.Minute
+const (
+	manifestTimeout       = 90 * time.Second
+	downloadTimeout       = 10 * time.Minute
+	maxUpdateArchiveBytes = 512 << 20
+)
+
+var allowedRedirectHosts = map[string]struct{}{
+	"github.com":                            {},
+	"release-assets.githubusercontent.com":  {},
+	"objects.githubusercontent.com":         {},
+	"github-releases.githubusercontent.com": {},
+}
 
 type State string
 
 const (
 	StateIdle        State = "idle"
 	StateChecking    State = "checking"
+	StateAvailable   State = "available"
 	StateDownloading State = "downloading"
 	StateReady       State = "ready"
 	StateInstalling  State = "installing"
@@ -74,50 +87,77 @@ type Manager struct {
 	currentInfo    *UpdateInfo
 	readyInfo      *UpdateInfo
 	downloadedPath string
+	closed         bool
 }
 
 func NewManager(app *application.App) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		app:    app,
-		client: netproxy.NewHTTPClient(5 * time.Minute),
+		client: newUpdateHTTPClient(5 * time.Minute),
 		ctx:    ctx,
 		cancel: cancel,
 		state:  StateIdle,
 	}
 }
 
-func (m *Manager) Start() {
+func newUpdateHTTPClient(timeout time.Duration) *http.Client {
+	client := netproxy.NewHTTPClient(timeout)
+	client.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+		if !isAllowedUpdateRedirect(request) {
+			host := ""
+			if request != nil && request.URL != nil {
+				host = request.URL.Host
+			}
+			return fmt.Errorf("更新请求重定向到不受信任的地址: %s", host)
+		}
+		return nil
+	}
+	return client
+}
+
+func isAllowedUpdateHost(host string) bool {
+	_, ok := allowedRedirectHosts[strings.ToLower(strings.TrimSpace(host))]
+	return ok
+}
+
+func isAllowedUpdateRedirect(request *http.Request) bool {
+	if request == nil || request.URL == nil || request.URL.Scheme != "https" || request.URL.Port() != "" {
+		return false
+	}
+	return isAllowedUpdateHost(request.URL.Hostname())
+}
+
+func (m *Manager) Start(checkOnStartup bool) {
 	m.emitState(StateIdle, nil, "", "", false, "")
-	go m.loop()
+	if checkOnStartup {
+		m.CheckNow(false)
+	}
 }
 
 func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	m.mu.Unlock()
+
 	m.cancel()
+	m.cleanupDownloadedFile()
 }
 
 func (m *Manager) CheckNow(manual bool) {
 	go m.checkNow(manual)
 }
 
-func (m *Manager) InstallReadyUpdate() error {
-	return m.installReadyUpdate()
+func (m *Manager) DownloadAvailableUpdate() error {
+	return m.startAvailableDownload()
 }
 
-func (m *Manager) loop() {
-	m.checkNow(false)
-
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			m.checkNow(false)
-		}
-	}
+func (m *Manager) InstallReadyUpdate() error {
+	return m.installReadyUpdate()
 }
 
 func (m *Manager) checkNow(manual bool) {
@@ -126,11 +166,20 @@ func (m *Manager) checkNow(manual bool) {
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
 	switch m.state {
 	case StateReady:
 		info := m.readyInfo
 		m.mu.Unlock()
 		m.emitReady(info, true)
+		return
+	case StateAvailable:
+		info := m.currentInfo
+		m.mu.Unlock()
+		m.emitAvailable(info, true)
 		return
 	case StateChecking, StateDownloading, StateInstalling:
 		state := m.state
@@ -149,7 +198,7 @@ func (m *Manager) checkNow(manual bool) {
 	}
 	m.emitState(StateChecking, nil, "", "", false, "")
 
-	ctx, cancel := context.WithTimeout(m.ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(m.ctx, manifestTimeout)
 	defer cancel()
 
 	info, err := m.fetchUpdateInfo(ctx)
@@ -166,18 +215,59 @@ func (m *Manager) checkNow(manual bool) {
 	}
 
 	logger.Infof("发现新版本：current=%s latest=%s platform=%s", buildinfo.CurrentVersion(), info.Version, info.PlatformKey)
-	m.setState(StateDownloading, info, "")
+	m.setState(StateAvailable, info, "")
+	m.emitAvailable(info, true)
+}
+
+func (m *Manager) startAvailableDownload() error {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errors.New("更新管理器已关闭")
+	}
+	if m.state != StateAvailable || m.currentInfo == nil {
+		m.mu.Unlock()
+		return errors.New("当前没有等待下载的更新")
+	}
+	info := m.currentInfo
+	m.state = StateDownloading
+	m.readyInfo = nil
+	m.downloadedPath = ""
+	m.mu.Unlock()
+
 	m.emitState(StateDownloading, info, "", "", false, "")
+	go m.downloadAvailable(info)
+	return nil
+}
+
+func (m *Manager) downloadAvailable(info *UpdateInfo) {
+	ctx, cancel := context.WithTimeout(m.ctx, downloadTimeout)
+	defer cancel()
 
 	archivePath, err := m.downloadUpdate(ctx, info)
 	if err != nil {
 		logger.Errorf("下载更新失败: %v", err)
-		m.setState(StateError, info, "")
-		m.emitError(info, err.Error(), manual)
+		m.mu.Lock()
+		closed := m.closed
+		m.mu.Unlock()
+		if !closed {
+			m.setState(StateError, info, "")
+			m.emitError(info, err.Error(), true)
+		}
 		return
 	}
 
-	m.setState(StateReady, info, archivePath)
+	m.mu.Lock()
+	if m.closed || m.ctx.Err() != nil {
+		m.mu.Unlock()
+		_ = os.Remove(archivePath)
+		return
+	}
+	m.state = StateReady
+	m.currentInfo = info
+	m.readyInfo = info
+	m.downloadedPath = archivePath
+	m.mu.Unlock()
 	m.emitState(StateReady, info, "", "", false, "")
 	m.emitReady(info, true)
 }
@@ -216,6 +306,9 @@ func (m *Manager) fetchUpdateInfo(ctx context.Context) (*UpdateInfo, error) {
 	if !ok {
 		return nil, errNoSupportedAsset
 	}
+	if err := validateUpdateAsset(asset); err != nil {
+		return nil, err
+	}
 
 	return &UpdateInfo{
 		Version:      strings.TrimSpace(data.Version),
@@ -242,6 +335,12 @@ func (m *Manager) downloadUpdate(ctx context.Context, info *UpdateInfo) (string,
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download request failed: %s", resp.Status)
 	}
+	if resp.ContentLength > maxUpdateArchiveBytes {
+		return "", fmt.Errorf("更新包超过大小限制: %d", resp.ContentLength)
+	}
+	if resp.ContentLength > 0 && resp.ContentLength != info.Asset.Size {
+		return "", fmt.Errorf("更新包 Content-Length 与 manifest 不一致: expected %d got %d", info.Asset.Size, resp.ContentLength)
+	}
 
 	tempFile, err := os.CreateTemp("", "cursor-byok-update-*"+archiveSuffix(info.Asset.URL))
 	if err != nil {
@@ -260,15 +359,29 @@ func (m *Manager) downloadUpdate(ctx context.Context, info *UpdateInfo) (string,
 		m.emitProgress(info, downloaded, total)
 	})
 	m.emitProgress(info, 0, total)
-	if _, err := io.Copy(io.MultiWriter(tempFile, hasher, progress), resp.Body); err != nil {
+	limitedBody := io.LimitReader(resp.Body, maxUpdateArchiveBytes+1)
+	downloadedBytes, err := io.Copy(io.MultiWriter(tempFile, hasher, progress), limitedBody)
+	if err != nil {
 		_ = os.Remove(tempFile.Name())
 		return "", err
 	}
-	m.emitProgress(info, total, total)
+	if downloadedBytes > maxUpdateArchiveBytes {
+		_ = os.Remove(tempFile.Name())
+		return "", fmt.Errorf("更新包超过大小限制: %d", downloadedBytes)
+	}
+	if downloadedBytes != info.Asset.Size {
+		_ = os.Remove(tempFile.Name())
+		return "", fmt.Errorf("更新包大小与 manifest 不一致: expected %d got %d", info.Asset.Size, downloadedBytes)
+	}
+	m.emitProgress(info, downloadedBytes, info.Asset.Size)
 
 	expectedChecksum := strings.TrimSpace(strings.TrimPrefix(info.Asset.Checksum, "sha256:"))
 	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
-	if expectedChecksum != "" && !strings.EqualFold(expectedChecksum, actualChecksum) {
+	if expectedChecksum == "" {
+		_ = os.Remove(tempFile.Name())
+		return "", errors.New("更新包缺少 SHA-256 校验值")
+	}
+	if !strings.EqualFold(expectedChecksum, actualChecksum) {
 		_ = os.Remove(tempFile.Name())
 		return "", fmt.Errorf("checksum mismatch: expected %s got %s", expectedChecksum, actualChecksum)
 	}
@@ -279,6 +392,10 @@ func (m *Manager) downloadUpdate(ctx context.Context, info *UpdateInfo) (string,
 
 func (m *Manager) installReadyUpdate() error {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errors.New("更新管理器已关闭")
+	}
 	if m.state != StateReady || m.readyInfo == nil || m.downloadedPath == "" {
 		m.mu.Unlock()
 		return errors.New("当前没有可安装的更新")
@@ -424,6 +541,7 @@ func (m *Manager) emitState(state State, info *UpdateInfo, errMsg, message strin
 		payload.Version = info.Version
 		payload.ReleaseDate = info.ReleaseDate
 		payload.ReleaseNotes = info.ReleaseNotes
+		payload.Mandatory = info.Mandatory
 	}
 	m.app.Event.Emit(EventState, payload)
 }
@@ -456,6 +574,10 @@ func (m *Manager) emitProgress(info *UpdateInfo, downloaded, total int64) {
 	m.app.Event.Emit(EventProgress, payload)
 }
 
+func (m *Manager) emitAvailable(info *UpdateInfo, prompt bool) {
+	m.emitState(StateAvailable, info, "", "", prompt, "available")
+}
+
 func (m *Manager) emitReady(info *UpdateInfo, prompt bool) {
 	if m.app == nil || info == nil {
 		return
@@ -466,6 +588,7 @@ func (m *Manager) emitReady(info *UpdateInfo, prompt bool) {
 		Version:      info.Version,
 		ReleaseDate:  info.ReleaseDate,
 		ReleaseNotes: info.ReleaseNotes,
+		Mandatory:    info.Mandatory,
 		Prompt:       prompt,
 		PromptKind:   "ready",
 	}
@@ -489,13 +612,59 @@ func (m *Manager) emitError(info *UpdateInfo, errMsg string, prompt bool) {
 	m.app.Event.Emit(EventError, payload)
 }
 
+func (m *Manager) cleanupDownloadedFile() {
+	m.mu.Lock()
+	if m.state == StateInstalling {
+		m.mu.Unlock()
+		return
+	}
+	archivePath := m.downloadedPath
+	m.downloadedPath = ""
+	m.readyInfo = nil
+	m.mu.Unlock()
+	if strings.TrimSpace(archivePath) != "" {
+		_ = os.Remove(archivePath)
+	}
+}
+
 func (m *Manager) setState(state State, info *UpdateInfo, archivePath string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.state = state
 	m.currentInfo = info
-	m.readyInfo = info
+	// readyInfo 只在“已下载可安装”路径持有，避免 available/error 误入安装语义
+	if state == StateReady || state == StateInstalling {
+		m.readyInfo = info
+	} else {
+		m.readyInfo = nil
+	}
 	m.downloadedPath = archivePath
+}
+
+func validateUpdateAsset(asset manifestPlatform) error {
+	parsed, err := url.Parse(strings.TrimSpace(asset.URL))
+	if err != nil {
+		return fmt.Errorf("invalid update asset URL: %w", err)
+	}
+	if parsed.Scheme != "https" || !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Port() != "" {
+		return errors.New("更新包地址必须使用 github.com HTTPS 发布地址")
+	}
+	expectedPathPrefix := "/" + buildinfo.ReleaseRepo + "/releases/download/"
+	if !strings.HasPrefix(parsed.EscapedPath(), expectedPathPrefix) {
+		return errors.New("更新包地址不属于当前项目的 GitHub Release")
+	}
+	if parsed.User != nil || strings.TrimSpace(parsed.RawQuery) != "" || strings.TrimSpace(parsed.Fragment) != "" {
+		return errors.New("更新包地址包含不允许的凭据、查询参数或片段")
+	}
+	if asset.Size <= 0 || asset.Size > maxUpdateArchiveBytes {
+		return fmt.Errorf("更新包大小必须在 1-%d 字节之间", maxUpdateArchiveBytes)
+	}
+	checksum := strings.TrimSpace(strings.TrimPrefix(asset.Checksum, "sha256:"))
+	decoded, err := hex.DecodeString(checksum)
+	if err != nil || len(decoded) != sha256.Size {
+		return errors.New("更新包必须提供合法的 SHA-256 校验值")
+	}
+	return nil
 }
 
 func currentPlatformKey() (string, error) {
@@ -530,6 +699,8 @@ func stateLabel(state State) string {
 	switch state {
 	case StateChecking:
 		return "检查更新"
+	case StateAvailable:
+		return "等待下载确认"
 	case StateDownloading:
 		return "下载更新"
 	case StateInstalling:

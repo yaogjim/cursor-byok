@@ -139,34 +139,33 @@ function handleSave() {
         <Transition name="modal-content">
           <div
             v-show="visible"
-            class="relative z-10 w-full max-w-[560px] overflow-hidden rounded-[8px] p-px shadow-[0_25px_50px_-12px_rgba(0,0,0,0.6)]"
-            style="background: linear-gradient(to bottom, #656565 0%, #3A3A3A 10px, #3A3A3A 100%);"
+            class="relative z-10 w-full max-w-[560px] overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-popover)]"
             @click.stop
           >
-            <div class="rounded-[7px] bg-[#292929] p-5">
-              <h3 class="mb-4 text-base font-medium text-white">{{ title }}</h3>
+            <div class="rounded-[7px] p-5">
+              <h3 class="mb-4 text-base font-medium text-[var(--color-text)]">{{ title }}</h3>
 
               <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">显示名称</span>
+                  <span class="text-sm text-[var(--color-text)]">显示名称</span>
                   <input
                     v-model="draft.displayName"
                     type="text"
-                    class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                    class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">ModelID</span>
+                  <span class="text-sm text-[var(--color-text)]">ModelID</span>
                   <input
                     v-model="draft.modelID"
                     type="text"
-                    class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                    class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">类型</span>
+                  <span class="text-sm text-[var(--color-text)]">类型</span>
                   <Select
                     v-model="draft.type"
                     :options="modelTypeOptions"
@@ -174,38 +173,38 @@ function handleSave() {
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">API Key</span>
+                  <span class="text-sm text-[var(--color-text)]">API Key</span>
                   <input
                     v-model="draft.apiKey"
                     type="text"
-                    class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                    class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </label>
               </div>
 
               <label class="mt-3 flex flex-col gap-1">
-                <span class="text-sm text-[#d4d4d4]">baseURL</span>
+                <span class="text-sm text-[var(--color-text)]">baseURL</span>
                 <input
                   v-model="draft.baseURL"
                   type="text"
-                  class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                  class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
               </label>
 
               <label class="mt-3 flex flex-col gap-1">
-                <span class="text-sm text-[#d4d4d4]">context_window_tokens</span>
+                <span class="text-sm text-[var(--color-text)]">context_window_tokens</span>
                 <input
                   v-model="contextWindowTokensInput"
                   type="text"
                   inputmode="numeric"
                   placeholder="留空时默认 200000"
-                  class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                  class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
               </label>
 
               <div v-if="draft.type === 'openai'" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">reasoning_effort</span>
+                  <span class="text-sm text-[var(--color-text)]">reasoning_effort</span>
                   <Select
                     v-model="draft.reasoningEffort"
                     :options="reasoningEffortOptions"
@@ -213,18 +212,18 @@ function handleSave() {
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">max token</span>
+                  <span class="text-sm text-[var(--color-text)]">max token</span>
                   <input
                     v-model="maxCompletionTokensInput"
                     type="text"
                     inputmode="numeric"
                     placeholder="留空时默认 65536"
-                    class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                    class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">endpoint</span>
+                  <span class="text-sm text-[var(--color-text)]">endpoint</span>
                   <Select
                     v-model="draft.openAIEndpoint"
                     :options="openAIEndpointOptions"
@@ -232,17 +231,17 @@ function handleSave() {
                 </label>
               </div>
 
-              <div v-if="draft.type === 'openai'" class="mt-3 rounded-[8px] border border-[#343434] bg-[#252525] p-3">
+              <div v-if="draft.type === 'openai'" class="mt-3 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
                 <div class="flex items-center justify-between gap-3">
-                  <span class="flex items-center gap-1.5 text-sm text-[#d4d4d4]">
+                  <span class="flex items-center gap-1.5 text-sm text-[var(--color-text)]">
                     <Tooltip :content="fieldTips.openAIExtraParams" />
                     <span>额外参数 JSON</span>
                   </span>
-                  <label class="flex items-center gap-2 text-xs text-[#d4d4d4]">
+                  <label class="flex items-center gap-2 text-xs text-[var(--color-text)]">
                     <input
                       v-model="draft.openAIExtraParamsEnabled"
                       type="checkbox"
-                      class="size-4 accent-[#10AD5D]"
+                      class="size-4 accent-[var(--color-primary)]"
                     />
                     <span>启用</span>
                   </label>
@@ -252,24 +251,24 @@ function handleSave() {
                   v-model="draft.openAIExtraParamsJSON"
                   rows="5"
                   spellcheck="false"
-                  class="mt-3 min-h-[120px] w-full resize-none rounded-[6px] border border-[#3f3f3f] bg-[#1f1f1f] px-3 py-2 font-mono text-xs text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                  class="mt-3 min-h-[120px] w-full resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
               </div>
 
               <div v-if="draft.type === 'anthropic'" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">max_tokens</span>
+                  <span class="text-sm text-[var(--color-text)]">max_tokens</span>
                   <input
                     v-model="anthropicMaxTokensInput"
                     type="text"
                     inputmode="numeric"
                     placeholder="留空时默认 65536"
-                    class="h-9 rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                    class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                   />
                 </label>
 
                 <label class="flex flex-col gap-1">
-                  <span class="text-sm text-[#d4d4d4]">thinking effort</span>
+                  <span class="text-sm text-[var(--color-text)]">thinking effort</span>
                   <Select
                     v-model="draft.anthropicThinkingEffort"
                     :options="anthropicThinkingEffortOptions"
@@ -278,17 +277,17 @@ function handleSave() {
               </div>
 
               <label class="mt-3 flex flex-col gap-1">
-                <span class="text-sm text-[#d4d4d4]">tooltipData</span>
+                <span class="text-sm text-[var(--color-text)]">tooltipData</span>
                 <textarea
                   v-model="draft.tooltipData"
                   rows="5"
-                  class="min-h-[120px] resize-none rounded-[6px] border border-[#3f3f3f] bg-[#232323] px-3 py-2 text-sm text-[#e5e5e5] outline-none focus:border-[#10AD5D]"
+                  class="min-h-[120px] resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
               </label>
 
               <div
                 v-if="errorMessage"
-                class="mt-4 rounded-[8px] border border-[#4b1d1d] bg-[#2a1313] px-3 py-2 text-sm text-[#fca5a5]"
+                class="mt-4 rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]"
               >
                 {{ errorMessage }}
               </div>

@@ -237,14 +237,14 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
     <div class="flex flex-col gap-4">
       <div class="flex items-center justify-between gap-4 h-[42px]">
         <div v-if="!hasHomeAd" class="flex flex-col gap-1 w-[200px] shrink-0">
-          <h2 class="text-[14px] font-medium text-white/80">会话统计</h2>
+          <h2 class="text-[14px] font-medium text-[var(--color-text-secondary)]">会话统计</h2>
         </div>
         <div v-else class="grid min-w-0  grid-cols-3 gap-2 shrink-0">
           <div
             v-for="ad in normalizedHomeAds"
             :key="ad.id"
             style="font-family: var(--font-num)"
-            class="center-row h-[42px] min-w-0 cursor-pointer gap-[8px] rounded-[6px] border border-[#343434] bg-[#242424] px-[8px] pr-[10px] text-left transition-colors duration-150 hover:border-[#4a4a4a] hover:bg-[#2a2a2a] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
+            class="center-row h-[42px] min-w-0 cursor-pointer gap-[8px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] px-[8px] pr-[10px] text-left transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
             role="button"
             tabindex="0"
             :title="ad.subtitle ? `${ad.title}\n${ad.subtitle}` : ad.title"
@@ -258,12 +258,12 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
               <span class="icon-[cil--badge]"></span>
             </div>
             <div class="min-w-0 flex-1">
-              <div class="truncate text-[13px] font-medium leading-[16px] text-white">
+              <div class="truncate text-[13px] font-medium leading-[16px] text-[var(--color-text)]">
                 {{ ad.title }}
               </div>
               <div
                 v-if="ad.subtitle"
-                class="mt-[2px] center-row min-w-0 gap-[2px] text-[11px] leading-[12px] text-[#8A8A8A]"
+                class="mt-[2px] center-row min-w-0 gap-[2px] text-[11px] leading-[12px] text-[var(--color-text-secondary)]"
               >
                 <span class="truncate">{{ ad.subtitle }}</span>
               </div>
@@ -271,12 +271,12 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           </div>
         </div>
         <div
-          class="flex-1 center-row justify-end shrink-0 gap-2 text-xs text-[#6f6f6f] pr-4 w-[200px]"
+          class="flex-1 center-row justify-end shrink-0 gap-2 text-xs text-[var(--color-text-muted)] pr-4 w-[200px]"
         >
           <span>刷新统计</span>
           <button
             type="button"
-            class="center-row justify-center h-[24px] w-[24px] rounded-[6px] border border-[#3b3b3b] bg-[#242424] text-[#9d9d9d] transition-colors duration-150 hover:border-[#4c4c4c] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+            class="center-row justify-center h-[24px] w-[24px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="loading"
             :title="loading ? '刷新中' : '刷新统计'"
             @click="emit('refresh')"
@@ -290,14 +290,14 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
       </div>
 
       <div
-        class="mt-[-4px] grid grid-cols-4 gap-0 overflow-hidden rounded-[8px] border border-[#343434] bg-[#242424] h-[130px]"
+        class="mt-[-4px] grid grid-cols-4 gap-0 overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] h-[130px]"
       >
         <div class="min-w-0 px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[#7f7f7f]">
+          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>缓存命中率</span>
             <Tooltip>
               <div class="w-[280px] space-y-3">
-                <div class="border-b border-[#343434] pb-3">
+                <div class="border-b border-[var(--color-border)] pb-3">
                   <Switch
                     compact
                     label="计入缓存创建"
@@ -311,7 +311,7 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
                   />
                 </div>
                 <div class="whitespace-pre-wrap">{{ cacheTooltipContent }}</div>
-                <div v-if="homeMetricsConfigError" class="text-[11px] text-[#f87171]">
+                <div v-if="homeMetricsConfigError" class="text-[11px] text-[var(--color-error-text)]">
                   {{ homeMetricsConfigError }}
                 </div>
               </div>
@@ -321,21 +321,21 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
         </div>
 
         <div
-          class="min-w-0 border-l border-[#343434] px-4 py-4 flex flex-col justify-between"
+          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
         >
-          <div class="center-row justify-start gap-1 text-xs text-[#7f7f7f]">
+          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>对话轮次</span>
             <Tooltip :content="turnsTooltipContent" />
           </div>
           <div>
             <div
-              class="text-[30px] leading-none text-white"
+              class="text-[30px] leading-none text-[var(--color-text)]"
               style="font-family: var(--font-num)"
               :title="formatInteger(metrics.turnsTotal)"
             >
               {{ formatCompactInteger(metrics.turnsTotal) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[#8c8c8c]">
+            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
               有效
               <span :title="formatInteger(metrics.validTurnsTotal)">
                 {{ formatCompactInteger(metrics.validTurnsTotal) }}
@@ -349,21 +349,21 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
         </div>
 
         <div
-          class="min-w-0 border-l border-[#343434] px-4 py-4 flex flex-col justify-between"
+          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
         >
-          <div class="center-row justify-start gap-1 text-xs text-[#7f7f7f]">
+          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>Token 消耗</span>
             <Tooltip :content="tokensTooltipContent" />
           </div>
           <div>
             <div
-              class="truncate text-[30px] leading-none text-white"
+              class="truncate text-[30px] leading-none text-[var(--color-text)]"
               style="font-family: var(--font-num)"
               :title="formatInteger(metrics.requestTokensTotal)"
             >
               {{ formatCompactInteger(metrics.requestTokensTotal) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[#8c8c8c]">
+            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
               Prompt
               <span :title="formatInteger(metrics.promptTokensTotal)">
                 {{ formatCompactInteger(metrics.promptTokensTotal) }}
@@ -373,21 +373,21 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
         </div>
 
         <div
-          class="min-w-0 border-l border-[#343434] px-4 py-4 flex flex-col justify-between"
+          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
         >
-          <div class="center-row justify-start gap-1 text-xs text-[#7f7f7f]">
+          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>价值估算</span>
             <Tooltip :content="costTooltipContent" />
           </div>
           <div>
             <div
-              class="truncate text-[30px] leading-none text-white"
+              class="truncate text-[30px] leading-none text-[var(--color-text)]"
               style="font-family: var(--font-num)"
               :title="formatUSD(estimatedTokenCost.total)"
             >
               {{ formatUSD(estimatedTokenCost.total) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[#8c8c8c]">
+            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
               缓存读写
               <span :title="formatUSD(estimatedTokenCost.cacheRead + estimatedTokenCost.cacheWrite)">
                 {{ formatUSD(estimatedTokenCost.cacheRead + estimatedTokenCost.cacheWrite) }}

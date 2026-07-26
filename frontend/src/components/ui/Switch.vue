@@ -27,20 +27,20 @@ function handleToggle() {
     :class="compact ? 'py-0' : 'py-1'"
   >
     <div class="flex min-w-0 flex-col" :class="compact ? 'gap-[2px]' : 'gap-1'">
-      <div :class="compact ? 'text-[12px]' : 'text-sm'" class="font-medium text-white">
+      <div :class="compact ? 'text-[12px]' : 'text-sm'" class="font-medium text-[var(--color-text)]">
         {{ label }}
       </div>
       <div
         v-if="description"
         :class="compact ? 'text-[11px] leading-[16px]' : 'text-xs'"
-        class="text-[#a3a3a3]"
+        class="text-[var(--color-text-secondary)]"
       >
         {{ description }}
       </div>
       <div
         :class="[
           compact ? 'text-[11px] leading-[16px]' : 'text-xs',
-          enabled ? 'text-[#10AD5D]' : 'text-[#a3a3a3]',
+          enabled ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-secondary)]',
         ]"
       >
         {{ busy ? busyText : enabled ? enabledText : disabledText }}
@@ -52,8 +52,8 @@ function handleToggle() {
       role="switch"
       :aria-checked="enabled"
       :disabled="disabled || busy"
-      class="relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full outline-none transition-all duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-55 focus-visible:ring-2 focus-visible:ring-[#10AD5D]/35"
-      :class="enabled ? 'bg-[#10AD5D]' : 'bg-[rgba(255,255,255,0.22)]'"
+      class="relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full outline-none transition-all duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-55 focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/35"
+      :class="enabled ? 'bg-[var(--color-primary)]' : 'bg-[var(--color-border-strong)]'"
       @click="handleToggle"
     >
       <span

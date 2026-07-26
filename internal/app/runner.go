@@ -80,17 +80,20 @@ func Run(resources EmbeddedResources) error {
 		return err
 	}
 	proxyService := bridge.NewProxyService(proxyServer, certManager, embeddedCACertPEM)
-	adAssetBaseURL := defaultBackendBaseURL
+	startupConfig := serverconfig.DefaultConfig()
 	if cfg, err := proxyService.LoadUserConfig(); err == nil {
-		adAssetBaseURL = browserReachableLoopbackBaseURL(cfg.BackendListenAddr)
+		startupConfig = cfg
 	}
+	adAssetBaseURL := browserReachableLoopbackBaseURL(startupConfig.BackendListenAddr)
 	metricsService := bridge.NewMetricsService()
 	windowService := bridge.NewWindowService()
+	windowService.SetAppearanceTheme(startupConfig.Appearance.Theme)
 	adCore := ads.NewService(ads.Options{
 		StoreRoot:    appdata.AdsRootPath(),
 		HTTPClient:   netproxy.NewHTTPClient(30 * time.Second),
 		AppVersion:   buildinfo.CurrentVersion(),
 		AssetBaseURL: adAssetBaseURL + ads.RoutePrefix,
+		Enabled:      startupConfig.Advertising.Enabled,
 		DeviceID:     cursor.GetDeviceID,
 		Metrics: func(context.Context) (ads.MetricsSnapshot, error) {
 			if err := appdata.EnsureAssistantHome(); err != nil {
@@ -219,7 +222,7 @@ func Run(resources EmbeddedResources) error {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255},
+		BackgroundColour:    appWindowBackgroundColour(startupConfig.Appearance.Theme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -243,6 +246,7 @@ func Run(resources EmbeddedResources) error {
 	})
 
 	window := mainWindow
+	windowService.SetMainWindow(window)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
 		window.Hide()
 		e.Cancel()
@@ -354,9 +358,19 @@ func Run(resources EmbeddedResources) error {
 	app.Event.On("proxy:state", func(event *application.CustomEvent) {
 		refreshTray()
 	})
+	app.Event.On("user-config:changed", func(event *application.CustomEvent) {
+		if cfg, ok := event.Data.(serverconfig.Config); ok {
+			windowService.SetAppearanceTheme(cfg.Appearance.Theme)
+			adCore.SetEnabled(cfg.Advertising.Enabled)
+			refreshAdRuntime()
+			if cfg.Advertising.Enabled {
+				refreshAdAsync()
+			}
+		}
+	})
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(event *application.ApplicationEvent) {
 		logger.Infof("应用版本：v%s", buildinfo.CurrentVersion())
-		updateManager.Start()
+		updateManager.Start(startupConfig.Updates.CheckOnStartup)
 		startAdRefreshLoop(adRefreshCtx)
 		go func() {
 			logger.Infof("application started, begin auto start service in background")
@@ -402,6 +416,13 @@ func Run(resources EmbeddedResources) error {
 	refreshTray()
 
 	return app.Run()
+}
+
+func appWindowBackgroundColour(theme string) application.RGBA {
+	if theme == "dark" {
+		return application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255}
+	}
+	return application.RGBA{Red: 246, Green: 248, Blue: 251, Alpha: 255}
 }
 
 func browserReachableLoopbackBaseURL(listenAddr string) string {

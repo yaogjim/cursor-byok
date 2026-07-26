@@ -10,7 +10,6 @@ import { useLocale } from "@/i18n/runtime";
 import {
   appState,
   appViewState,
-  openConfigWindow,
   openModelConfigWindow,
   saveRoutingMode,
   syncHomeMetrics,
@@ -20,7 +19,9 @@ import {
 } from "@/state/appState";
 import { Events } from "@wailsio/runtime";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 
+const router = useRouter();
 const directModeEnabled = computed(() => appState.routingMode === "upstream");
 const message = useMessage();
 const AD_UPDATED_EVENT = "ad:updated";
@@ -46,7 +47,7 @@ function asBoolean(value) {
 const { locale } = useLocale();
 
 const homeAds = computed(() => {
-  if (locale.value !== "zh-CN") {
+  if (!appState.advertisingEnabled || locale.value !== "zh-CN") {
     return [];
   }
   const runtime = adRuntime.value && typeof adRuntime.value === "object" ? adRuntime.value : {};
@@ -74,6 +75,10 @@ const homeAds = computed(() => {
 });
 
 async function syncAdRuntimeQuietly() {
+  if (!appState.advertisingEnabled) {
+    adRuntime.value = null;
+    return;
+  }
   try {
     adRuntime.value = await getAdRuntime();
   } catch (_error) {
@@ -118,11 +123,7 @@ async function handleRefreshMetrics() {
 }
 
 async function handleOpenConfig() {
-  try {
-    await openConfigWindow();
-  } catch (error) {
-    await showActionError("打开失败", toUserError(error));
-  }
+  await router.push("/config");
 }
 
 async function handleOpenModelConfig() {
@@ -155,7 +156,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4 p-4 pt-0 text-[#e5e5e5]">
+  <div class="flex flex-col gap-4 p-4 pt-0 text-[var(--color-text)]">
     <HomeMetricsCard
       :metrics="appState.homeMetrics"
       :loading="appState.homeMetricsLoading"
@@ -183,7 +184,7 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="appState.serviceLastError"
-          class="rounded-[8px] border border-[#4b1d1d] bg-[#2a1313] px-3 py-2 text-sm text-[#fca5a5]">
+          class="rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]">
           {{ appState.serviceLastError }}
         </div>
 
@@ -203,11 +204,11 @@ onBeforeUnmount(() => {
     <Card>
       <div class="flex items-center justify-between gap-4">
         <div>
-          <h2 class="text-base font-medium text-white">本地配置</h2>
-          <div class="text-sm text-[#a3a3a3]">打开设置目录，或单独管理模型配置</div>
+          <h2 class="text-base font-medium text-[var(--color-text)]">本地配置</h2>
+          <div class="text-sm text-[var(--color-text-secondary)]">打开设置目录，或单独管理模型配置</div>
         </div>
         <div class="center-row gap-2">
-          <Button variant="default" @click="handleOpenConfig">设置文件夹</Button>
+          <Button variant="default" @click="handleOpenConfig">客户端设置</Button>
           <Button variant="primary" @click="handleOpenModelConfig">模型配置</Button>
         </div>
       </div>

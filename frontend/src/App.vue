@@ -1,7 +1,7 @@
 <template>
   <MainLayout />
   <MessageProvider />
-  <AdModelProvider v-if="isMainWindow" />
+  <AdModelProvider v-if="isMainWindow && appState.advertisingEnabled" />
   <Modal
 
     :visible="modalState.visible"

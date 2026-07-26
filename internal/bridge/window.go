@@ -25,6 +25,8 @@ type modelEditorContext struct {
 type WindowService struct {
 	app               *application.App
 	updater           *updater.Manager
+	appearanceTheme   string
+	mainWindow        *application.WebviewWindow
 	modelConfigWindow *application.WebviewWindow
 	modelEditorWindow *application.WebviewWindow
 	editorCtx         *modelEditorContext
@@ -33,7 +35,32 @@ type WindowService struct {
 
 // NewWindowService 用于处理与 NewWindowService 相关的逻辑。
 func NewWindowService() *WindowService {
-	return &WindowService{}
+	return &WindowService{appearanceTheme: "light"}
+}
+
+func (s *WindowService) SetAppearanceTheme(theme string) {
+	s.mu.Lock()
+	if theme == "dark" {
+		s.appearanceTheme = "dark"
+	} else {
+		s.appearanceTheme = "light"
+	}
+	background := windowBackgroundColour(s.appearanceTheme)
+	windows := []*application.WebviewWindow{s.mainWindow, s.modelConfigWindow, s.modelEditorWindow}
+	s.mu.Unlock()
+
+	for _, window := range windows {
+		if window != nil {
+			window.SetBackgroundColour(background)
+		}
+	}
+}
+
+// SetMainWindow 关联主窗口，使主题切换可以同步原生背景。
+func (s *WindowService) SetMainWindow(window *application.WebviewWindow) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mainWindow = window
 }
 
 // SetApp 用于处理与 SetApp 相关的逻辑。
@@ -64,6 +91,17 @@ func (s *WindowService) CheckForUpdates() {
 		return
 	}
 	manager.CheckNow(true)
+}
+
+// DownloadAvailableUpdate 下载已由用户确认的新版本。
+func (s *WindowService) DownloadAvailableUpdate() error {
+	s.mu.RLock()
+	manager := s.updater
+	s.mu.RUnlock()
+	if manager == nil {
+		return fmt.Errorf("更新管理器未初始化")
+	}
+	return manager.DownloadAvailableUpdate()
 }
 
 // InstallReadyUpdate 安装当前已下载完成的更新。
@@ -112,7 +150,7 @@ func (s *WindowService) OpenModelConfigWindow() {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255},
+		BackgroundColour:    windowBackgroundColour(s.appearanceTheme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -185,7 +223,7 @@ func (s *WindowService) OpenModelEditorWindow(index int, adapterJSON string) {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255},
+		BackgroundColour:    windowBackgroundColour(s.appearanceTheme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -239,6 +277,13 @@ func (s *WindowService) GetModelEditorContext() map[string]any {
 func (s *WindowService) OpenHistoryWindow() {
 	_ = os.MkdirAll(client.ResolveLogsRootPath(), 0o755)
 	openDirectory(client.ResolveLogsRootPath())
+}
+
+func windowBackgroundColour(theme string) application.RGBA {
+	if theme == "dark" {
+		return application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255}
+	}
+	return application.RGBA{Red: 246, Green: 248, Blue: 251, Alpha: 255}
 }
 
 // openDirectory 用于处理与 openDirectory 相关的逻辑。
