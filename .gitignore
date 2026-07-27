@@ -33,3 +33,4 @@ cursor-tab-server/cursor-tab-server-linux-amd64.tar
 bin/
 build/
 .DS_Store
+.vscode/settings.json
