@@ -11,15 +11,15 @@
 
 ## 系统截图
 
-<img width="820" alt="Cursor BYOK noad 主界面，展示本地代理状态和模型使用概览" src="https://github.com/user-attachments/assets/2e1710b0-cdbd-4576-bd24-1614df016219" />
+![main](./docs/images/main.png)
 
 **主界面**：快速确认本地服务状态、模型调用概览、Token 使用和常用入口。`noad` 分支默认不显示广告位，首页更聚焦模型接入和运行状态。
 
-<img width="820" alt="Cursor BYOK 模型配置界面，配置自有 OpenAI、Anthropic 或兼容模型 API" src="https://github.com/user-attachments/assets/00885453-6a91-4052-aadf-f686daeec881" />
+![model](./docs/images/model.png)
 
 **模型配置**：配置自有模型的 Base URL、API Key、模型 ID、协议端点和上下文参数；适合把多个供应商或自托管模型统一接到 Cursor。
 
-<img width="820" alt="Cursor BYOK 设置界面，管理主题、广告开关、更新检查和本地代理配置" src="https://github.com/user-attachments/assets/a607be84-a738-4e33-9750-13352e74001c" />
+![cursor model](./docs/images/cursor model.png)
 
 **本地设置**：集中管理主题、广告内容、启动时检查更新、本地端口和模型配置入口。`noad` 的关键行为都落在本地配置，不依赖远端默认值。
 
@@ -50,11 +50,6 @@
 我希望打破这种绑定关系：模型应该可以自由选择。开发者应该能够把自己的模型 API 接入到任何 IDE、Chat、Agent 或开发工具中，也可以自托管整套服务，避免被单一平台锁定。
 
 这个项目的目标，是让模型选择权重新回到用户手里。
-
-## 路线图
-
-[正式版路线图](https://github.com/leookun/cursor-byok/discussions/32)
-[详细使用教程](https://dcne38qm5vlg.feishu.cn/wiki/JeP7wdGnziBXuikNaF5czWbrn8c)
 
 ## 后续
 
