@@ -11,15 +11,15 @@
 
 ## 系统截图
 
-<img width="820" alt="Cursor BYOK 主界面，展示本地代理状态和模型使用概览" src="https://github.com/user-attachments/assets/2e1710b0-cdbd-4576-bd24-1614df016219" />
+<img width="820" alt="Cursor BYOK 主界面，展示本地代理状态和模型使用概览" src="./docs/images/main.png" />
 
 **主界面**：查看本地服务状态、模型调用概览、Token 使用和常用操作入口，快速确认 Cursor 是否正在通过本地 BYOK 链路工作。
 
-<img width="820" alt="Cursor BYOK 模型配置界面，配置自有 OpenAI、Anthropic 或兼容模型 API" src="https://github.com/user-attachments/assets/00885453-6a91-4052-aadf-f686daeec881" />
+<img width="820" alt="Cursor BYOK 模型配置界面，配置自有 OpenAI、Anthropic 或兼容模型 API" src="./docs/images/model.png" />
 
 **模型配置**：添加和管理多个模型适配器，配置 Base URL、API Key、模型 ID、协议端点、上下文窗口和额外请求参数。
 
-<img width="820" alt="Cursor BYOK 设置界面，管理本地代理、模型配置和客户端偏好" src="https://github.com/user-attachments/assets/a607be84-a738-4e33-9750-13352e74001c" />
+<img width="820" alt="Cursor BYOK 设置界面，管理本地代理、模型配置和客户端偏好" src="./docs/images/cursor%20model.png" />
 
 **本地设置**：管理本地服务、代理端口、模型配置入口和客户端偏好，让 Cursor 与自有模型之间的接入路径更透明。
 
