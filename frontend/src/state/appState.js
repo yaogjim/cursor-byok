@@ -1,13 +1,19 @@
 import { computed, reactive, watchSyncEffect } from "vue";
 import { Events } from "@wailsio/runtime";
 import dayjs from "dayjs";
-import { buildClientPreferencesFromState } from "@/state/configProjection";
+import {
+  buildClientPreferencesFromState,
+  buildObservabilityConfigFromState,
+  normalizeObservabilityConfig,
+} from "@/state/configProjection";
 import {
   checkForUpdates,
   downloadAvailableUpdate,
   getAppVersion,
   getHomeMetricsSummary,
+  getLogCaptureStatus,
   getModelAdapterTestResults,
+  cleanupClosedLogSessions,
   installReadyUpdate,
   getProxyState,
   openConfigWindow as openConfig,
@@ -550,7 +556,7 @@ function normalizeConfig(source) {
   const advertising = raw.advertising && typeof raw.advertising === "object" ? raw.advertising : {};
   const updates = raw.updates && typeof raw.updates === "object" ? raw.updates : {};
   return {
-    log: asBoolean(raw.log),
+    observability: normalizeObservabilityConfig(raw.observability, raw.log),
     providerStreamIdleTimeout: asPositiveInteger(raw.providerStreamIdleTimeout),
     backendListenAddr: asString(raw.configBackendListenAddr) || asString(raw.backendListenAddr),
     proxyListenAddr: asString(raw.configProxyListenAddr) || asString(raw.proxyListenAddr),
@@ -603,7 +609,7 @@ function applyHomeMetrics(raw) {
 
 function serializeConfigPayload(normalized) {
   return {
-    log: normalized.log,
+    observability: normalized.observability,
     providerStreamIdleTimeout: normalized.providerStreamIdleTimeout,
     backendListenAddr: normalized.backendListenAddr,
     proxyListenAddr: normalized.proxyListenAddr,
@@ -624,7 +630,7 @@ function buildConfigPayload(source) {
 function buildConfigPayloadFromState(source = appState) {
   const preferences = buildClientPreferencesFromState(source);
   return serializeConfigPayload(normalizeConfig({
-    log: source.configLog,
+    observability: buildObservabilityConfigFromState(source),
     providerStreamIdleTimeout: source.providerStreamIdleTimeout,
     backendListenAddr: source.configBackendListenAddr || source.backendListenAddr,
     proxyListenAddr: source.configProxyListenAddr || source.proxyListenAddr,
@@ -649,7 +655,9 @@ function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
     return normalized;
   }
   appState.modelAdapters = normalized.modelAdapters;
-  appState.configLog = normalized.log;
+  appState.observabilityMode = normalized.observability.mode;
+  appState.observabilityRetentionDays = normalized.observability.retentionDays;
+  appState.observabilityMaxDiskMB = normalized.observability.maxDiskMB;
   appState.providerStreamIdleTimeout = normalized.providerStreamIdleTimeout;
   appState.lastAgentModelHash = normalized.lastAgentModelHash;
   appState.configBackendListenAddr = normalized.backendListenAddr;
@@ -919,7 +927,21 @@ export const appState = reactive({
   netProxyDescription: asString(cachedState.netProxyDescription),
 
   configSaving: false,
-  configLog: asBoolean(cachedConfig.log),
+  observabilityMode: cachedConfig.observability.mode,
+  observabilityRetentionDays: cachedConfig.observability.retentionDays,
+  observabilityMaxDiskMB: cachedConfig.observability.maxDiskMB,
+  logCaptureStatus: {
+    enabled: false,
+    mode: cachedConfig.observability.mode,
+    sessionId: "",
+    sessionPath: "",
+    logsRoot: "",
+    payloadDegraded: false,
+    droppedEvents: 0,
+    lastError: "",
+  },
+  logCaptureLoading: false,
+  logCleanupRunning: false,
   providerStreamIdleTimeout: cachedConfig.providerStreamIdleTimeout,
   lastAgentModelHash: cachedConfig.lastAgentModelHash,
   homeMetrics: createEmptyHomeMetrics(),
@@ -1218,6 +1240,7 @@ export async function persistUserConfig() {
   const currentConfig = await loadPersistedUserConfig();
   return persistConfigPayload({
     ...currentConfig,
+    observability: buildObservabilityConfigFromState(appState),
     modelAdapters: normalizeModelAdapters(appState.modelAdapters),
     routing: {
       mode: appState.routingMode,
@@ -1376,6 +1399,52 @@ export async function duplicateModelAdapterAt(index) {
     },
     { modelAdaptersOnly: true },
   );
+}
+
+function normalizeLogCaptureStatus(source) {
+  const raw = source && typeof source === "object" ? source : {};
+  return {
+    enabled: asBoolean(raw.enabled),
+    mode: asString(raw.mode) || "basic",
+    sessionId: asString(raw.sessionId ?? raw.session_id),
+    sessionPath: asString(raw.sessionPath ?? raw.session_path),
+    logsRoot: asString(raw.logsRoot ?? raw.logs_root),
+    payloadDegraded: asBoolean(raw.payloadDegraded ?? raw.payload_degraded),
+    droppedEvents: Math.max(0, Math.round(asNumber(raw.droppedEvents ?? raw.dropped_events))),
+    lastError: asString(raw.lastError ?? raw.last_error),
+  };
+}
+
+export async function syncLogCaptureStatus() {
+  appState.logCaptureLoading = true;
+  try {
+    const status = normalizeLogCaptureStatus(await getLogCaptureStatus());
+    appState.logCaptureStatus = status;
+    return status;
+  } finally {
+    appState.logCaptureLoading = false;
+  }
+}
+
+export async function clearClosedLogSessions() {
+  if (appState.logCleanupRunning) {
+    return { ok: false, error: "日志清理正在进行" };
+  }
+  appState.logCleanupRunning = true;
+  try {
+    const raw = await cleanupClosedLogSessions();
+    await syncLogCaptureStatus();
+    return {
+      ok: true,
+      error: "",
+      removedSessions: Math.max(0, Math.round(asNumber(raw?.removedSessions ?? raw?.removed_sessions))),
+      freedBytes: Math.max(0, Math.round(asNumber(raw?.freedBytes ?? raw?.freed_bytes))),
+    };
+  } catch (error) {
+    return { ok: false, error: toUserError(error), removedSessions: 0, freedBytes: 0 };
+  } finally {
+    appState.logCleanupRunning = false;
+  }
 }
 
 export async function syncServiceState() {

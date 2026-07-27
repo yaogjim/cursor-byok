@@ -1,4 +1,16 @@
 const SUPPORTED_THEMES = new Set(["light", "dark"]);
+const SUPPORTED_OBSERVABILITY_MODES = new Set(["basic", "full"]);
+
+export const DEFAULT_OBSERVABILITY_CONFIG = Object.freeze({
+  mode: "basic",
+  retentionDays: 7,
+  maxDiskMB: 1024,
+});
+
+export const OBSERVABILITY_LIMITS = Object.freeze({
+  retentionDays: Object.freeze({ min: 1, max: 90 }),
+  maxDiskMB: Object.freeze({ min: 64, max: 10240 }),
+});
 
 export const DEFAULT_CLIENT_PREFERENCES = Object.freeze({
   appearance: { theme: "light" },
@@ -29,6 +41,45 @@ function asBoolean(value) {
 function normalizeTheme(value) {
   const theme = asString(value).toLowerCase();
   return SUPPORTED_THEMES.has(theme) ? theme : DEFAULT_CLIENT_PREFERENCES.appearance.theme;
+}
+
+function boundedInteger(value, fallback, { min, max }) {
+  const parsed = Number(asString(value));
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, parsed));
+}
+
+export function normalizeObservabilityConfig(source, legacyLog = false) {
+  const hasObservability = Boolean(source && typeof source === "object" && !Array.isArray(source));
+  const raw = hasObservability ? source : {};
+  const requestedMode = asString(raw.mode).toLowerCase();
+  const mode = SUPPORTED_OBSERVABILITY_MODES.has(requestedMode)
+    ? requestedMode
+    : (!hasObservability && asBoolean(legacyLog) ? "full" : DEFAULT_OBSERVABILITY_CONFIG.mode);
+  return {
+    mode,
+    retentionDays: boundedInteger(
+      raw.retentionDays,
+      DEFAULT_OBSERVABILITY_CONFIG.retentionDays,
+      OBSERVABILITY_LIMITS.retentionDays,
+    ),
+    maxDiskMB: boundedInteger(
+      raw.maxDiskMB,
+      DEFAULT_OBSERVABILITY_CONFIG.maxDiskMB,
+      OBSERVABILITY_LIMITS.maxDiskMB,
+    ),
+  };
+}
+
+export function buildObservabilityConfigFromState(source = {}) {
+  const raw = source && typeof source === "object" ? source : {};
+  return normalizeObservabilityConfig({
+    mode: raw.observabilityMode,
+    retentionDays: raw.observabilityRetentionDays,
+    maxDiskMB: raw.observabilityMaxDiskMB,
+  });
 }
 
 export function normalizeClientPreferences(source = {}) {

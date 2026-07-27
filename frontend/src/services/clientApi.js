@@ -28,47 +28,41 @@ import { Call } from "@wailsio/runtime";
 const API_LOG_PREFIX = "[clientApi]";
 const PROXY_SERVICE_NAME = "cursor/internal/bridge.ProxyService";
 
-function logSuccess(name, payload, result) {
-  console.log(`${API_LOG_PREFIX} ${name} response`, {
-    payload,
-    result,
-  });
+function logSuccess(name) {
+  console.debug(`${API_LOG_PREFIX} ${name} completed`);
 }
 
-function logError(name, payload, error) {
-  console.error(`${API_LOG_PREFIX} ${name} error`, {
-    payload,
-    error,
-  });
+function logError(name) {
+  console.error(`${API_LOG_PREFIX} ${name} failed`);
 }
 
-function withApiLogging(name, payload, runner) {
+function withApiLogging(name, runner) {
   return Promise.resolve()
     .then(() => runner())
     .then((result) => {
-      logSuccess(name, payload, result);
+      logSuccess(name);
       return result;
     })
     .catch((error) => {
-      logError(name, payload, error);
+      logError(name);
       throw error;
     });
 }
 
 export function loadUserConfig() {
-  return withApiLogging("LoadUserConfig", undefined, () => LoadUserConfig());
+  return withApiLogging("LoadUserConfig", () => LoadUserConfig());
 }
 
 export function saveUserConfig(payload) {
-  return withApiLogging("SaveUserConfig", payload, () => SaveUserConfig(payload));
+  return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
 }
 
 export function getProxyState() {
-  return withApiLogging("GetState", undefined, () => GetState());
+  return withApiLogging("GetState", () => GetState());
 }
 
 export function getHomeMetricsSummary() {
-  return withApiLogging("GetHomeMetricsSummary", undefined, () => GetHomeMetricsSummary());
+  return withApiLogging("GetHomeMetricsSummary", () => GetHomeMetricsSummary());
 }
 
 export function getAdRuntime() {
@@ -80,74 +74,86 @@ export function openAdExternalURL(url) {
 }
 
 export function startProxyService() {
-  return withApiLogging("StartProxy", undefined, () => StartProxy());
+  return withApiLogging("StartProxy", () => StartProxy());
 }
 
 export function stopProxyService() {
-  return withApiLogging("StopProxy", undefined, () => StopProxy());
+  return withApiLogging("StopProxy", () => StopProxy());
+}
+
+export function getLogCaptureStatus() {
+  return withApiLogging("GetLogCaptureStatus", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.GetLogCaptureStatus`),
+  );
+}
+
+export function cleanupClosedLogSessions() {
+  return withApiLogging("CleanupClosedLogSessions", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.CleanupClosedLogSessions`),
+  );
 }
 
 export function openLogsDirectory() {
-  return withApiLogging("OpenHistoryWindow", undefined, () => OpenHistoryWindow());
+  return withApiLogging("OpenHistoryWindow", () => OpenHistoryWindow());
 }
 
 export function openConfigWindow() {
-  return withApiLogging("OpenConfigWindow", undefined, () => OpenConfigWindow());
+  return withApiLogging("OpenConfigWindow", () => OpenConfigWindow());
 }
 
 export function getAppVersion() {
-  return withApiLogging("GetAppVersion", undefined, () => GetAppVersion());
+  return withApiLogging("GetAppVersion", () => GetAppVersion());
 }
 
 export function getFooterAuthorInfo() {
-  return withApiLogging("GetFooterAuthorInfo", undefined, () => GetFooterAuthorInfo());
+  return withApiLogging("GetFooterAuthorInfo", () => GetFooterAuthorInfo());
 }
 
 export function checkForUpdates() {
-  return withApiLogging("CheckForUpdates", undefined, () => CheckForUpdates());
+  return withApiLogging("CheckForUpdates", () => CheckForUpdates());
 }
 
 export function downloadAvailableUpdate() {
-  return withApiLogging("DownloadAvailableUpdate", undefined, () => DownloadAvailableUpdate());
+  return withApiLogging("DownloadAvailableUpdate", () => DownloadAvailableUpdate());
 }
 
 export function installReadyUpdate() {
-  return withApiLogging("InstallReadyUpdate", undefined, () => InstallReadyUpdate());
+  return withApiLogging("InstallReadyUpdate", () => InstallReadyUpdate());
 }
 
 export function openFooterAuthorHome() {
-  return withApiLogging("OpenFooterAuthorHome", undefined, () => OpenFooterAuthorHome());
+  return withApiLogging("OpenFooterAuthorHome", () => OpenFooterAuthorHome());
 }
 
 export function openModelConfig() {
-  return withApiLogging("OpenModelConfigWindow", undefined, () => OpenModelConfigWindow());
+  return withApiLogging("OpenModelConfigWindow", () => OpenModelConfigWindow());
 }
 
 export function openModelEditor(index, adapterJSON) {
-  return withApiLogging("OpenModelEditorWindow", { index, adapterJSON }, () =>
+  return withApiLogging("OpenModelEditorWindow", () =>
     OpenModelEditorWindow(index, adapterJSON),
   );
 }
 
 export function getModelEditorContext() {
-  return withApiLogging("GetModelEditorContext", undefined, () => GetModelEditorContext());
+  return withApiLogging("GetModelEditorContext", () => GetModelEditorContext());
 }
 
 export function testModelAdapter(adapter) {
   return Call.ByName(`${PROXY_SERVICE_NAME}.TestModelAdapter`, adapter).then(
     (result) => {
-      logSuccess("TestModelAdapter", adapter, result);
+      logSuccess("TestModelAdapter");
       return result;
     },
     (error) => {
-      logError("TestModelAdapter", adapter, error);
+      logError("TestModelAdapter");
       throw error;
     },
   );
 }
 
 export function getModelAdapterTestResults() {
-  return withApiLogging("GetModelAdapterTestResults", undefined, () =>
+  return withApiLogging("GetModelAdapterTestResults", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.GetModelAdapterTestResults`),
   );
 }
