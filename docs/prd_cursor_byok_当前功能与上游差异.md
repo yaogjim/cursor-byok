@@ -2,10 +2,12 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前已提交基线**：`noad@e9b6d701d63f3cc315676afffaddc3128c7db7cc`
+- **当前代码合并基线**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
+- **本次合并来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始主线基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：代码已提交；治理文档和路线图正在作为独立文档提交
+- **原始上游核对基线**：`main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
+- **当前工作树**：安全 merge 已提交；本 PRD 与同步说明作为独立记录提交
 - **状态**：功能记录与差异基线；运行时窗口和网络零请求验收仍需按同步说明执行
 
 ## 1. 文档职责与证据口径
@@ -28,10 +30,11 @@
 
 本次核对得到：
 
-- 原始仓库 `https://github.com/leookun/cursor-byok.git` 的 `refs/heads/main` 仍以同步时实际获取的 commit 为准；当前历史记录的原始主线基线为 `799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`。
-- 本地 `noad` 的客户端体验治理代码基线为 `e9b6d701d63f3cc315676afffaddc3128c7db7cc`。
-- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游应通过 `upstream` 远程获取，不使用 `origin/main` 代替上游。
-- 本次治理文档和客户端体验路线图与代码基线分开提交，后续以 Git 提交记录和本 PRD 的版本记录为准。
+- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次核对到 `main@9e057399690bff78cd7571dba2e7a14e12767585`。
+- 本次按用户明确目标合并本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`，不能据此把 `origin/main` 永久视为原始上游。
+- 本地同步前基线为 `noad@841a49c0963a911b4c838157438e074ef930b33b`；安全 merge `74c1c38ec3e68ed0f40fbefceaedd41c69616065` 的两个父提交分别为 `841a49c` 与 `b438237`。
+- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；后续原始上游同步仍应通过 `upstream` 远程获取。
+- 本次 merge 未推送远程；本 PRD 和同步说明作为独立文档提交。
 
 相对 `799dbda...b7cd64f` 的已提交差异统计为 **23 个文件，1978 行新增、19 行删除**；客户端体验治理提交相对 `b7cd64f` 另有 **36 个文件，1502 行新增、285 行删除**。统计用于识别同步风险，不代表所有行都是独立产品功能。
 
@@ -44,6 +47,7 @@
 | `0d78c09` | 修复 `ForceBackgroundShell` 在无 reasoning payload 时工具结果无法历史 replay 的阶段断裂，并加入功能特征测试 | 已提交；不得泛化为所有孤立结果放行 |
 | `045b60b` | 增加精确路由优先于 `/AiService/*` 通配路由的测试 | 已提交；只保护路由优先级，不改变目标 |
 | `b7cd64f` | 保存验证路线图与工作决策 | 已提交；属于决策记录，不是运行时功能 |
+| `74c1c38` | 以真实 merge 同步本地 `main@b438237`，整合 artifact 生命周期、Agent replay、静态 i18n 与俄语，并保留本地安全策略 | 已提交并通过完整自动化门禁；运行中实例与网络窗口验收待维护窗口完成 |
 
 ### 2.3 已有验证证据
 
@@ -71,7 +75,7 @@
 已完成验证：`git diff --check`、`go test ./...`、`go build ./...`、`yarn test:config-projection` 和 `yarn build`。
 ## 4. 相对原始仓库的功能差异
 
-原始版本以 `leookun/cursor-byok` 的 `main@799dbda` 为准。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
+历史差异以 `leookun/cursor-byok main@799dbda` 为起点；本次原始上游核对点为 `9e05739`，实际合并来源为本地 `main@b438237`。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
 
 | 功能域 | 原始主线行为 | 本地已提交差异 | 当前工作树或决策 | 状态与合并口径 |
 | --- | --- | --- | --- | --- |
@@ -79,7 +83,7 @@
 | OpenAI 协议选择 | 原始默认行为以 Responses 为主 | 默认调整为 Chat Completions，同时保留显式 Responses/Custom | 不得静默覆盖用户已有模型配置 | 已提交；配置冲突需人工审查 |
 | Tab/Cpp/FileSync/Git 路由 | 相关 RPC 经 `tab.leokun.cn` relay | 增加脱敏审计接入，转发目标和 body 语义未改变 | 计划支持 `local_official/external_relay` 双模式，但 token 导入和官方直连尚未实现 | 已提交审计；路由变更待验证和确认 |
 | 隐私审计 | 无本项目专用字段摘要观察器 | 默认关闭，仅输出 metadata/字段 presence/大小/事件类型/host 分类 | 仅允许 synthetic canary，禁止正文和凭据落盘 | 已提交并验证；不得恢复 raw dump |
-| 原始 observability | 存在写入完整 Bidi/provider 工件的调试能力 | 本地决策维持 `log:false`，尚未完成全面 raw observability 治理 | 后续单独治理权限、保留期和显式导出 | 决策已定；治理待完成 |
+| 原始 observability | 存在写入完整 Bidi/provider 工件的调试能力 | 本地决策维持 `log:false`，provider debug 文件已收紧为 `0600` | 后续单独治理保留期和显式导出 | 权限已收紧；其余治理待完成 |
 | 工具 replay | 未覆盖该阶段的专项保护 | 修复 `ForceBackgroundShell` 无 reasoning 时的历史 replay | 保持专项门控 | 已提交；不得泛化 |
 | Commit Message | 存在精确 RPC 与 `/AiService/*` 通配 handler 的静态路由关系 | 增加精确路由优先级测试 | 真实 UI transport 未解析，不切换或删除路由 | 已调查未定性 |
 | Repository/Docs/Upload | 多个本地处理器可返回 success | 增加隔离特征测试锁定能力缺失、错误状态和部分提交 | 暂不把 success 改成 failure，先验证客户端状态机 | 已确认缺陷；修复待设计 |
@@ -103,18 +107,53 @@
 
 ## 6. 当前发布前验收缺口
 
-将提交 `e9b6d701d63f3cc315676afffaddc3128c7db7cc` 视为可发布或可供上游合并前，仍需要：
+`74c1c38ec3e68ed0f40fbefceaedd41c69616065` 的静态、单元、race 和前端双构建门禁已通过。发布前仍需要在维护窗口完成：
 
-1. `git diff --check`、`go test ./...`、`go build ./...`。
-2. `cd frontend && yarn test:config-projection && yarn build`。
-3. 验证旧 `config.yaml` 迁移不丢失模型、路由和监听地址。
-4. 默认广告关闭时不访问 `ads.leokun.cn`；默认更新设置不请求 manifest 或资源。
-5. 更新资源 URL、大小、checksum、取消和退出清理测试通过。
-6. 审计默认关闭；审计文件不含正文、凭据、canary 原值或完整 header。
-7. 保留 `tab.leokun.cn` 现状路由，确认没有新增自动 fallback。
-8. Git diff 不包含 `.env`、Token、API Key、真实 Prompt、真实 workspace 或 synthetic 原始产物。
+1. 验证旧 `config.yaml` 实机迁移不丢失模型、路由和监听地址。
+2. 默认广告关闭时不访问 `ads.leokun.cn`；默认更新设置不请求 manifest 或资源。
+3. 验证更新资源 URL、大小、checksum、取消和退出清理的真实发布资源流程。
+4. 复核审计默认关闭；审计文件不含正文、凭据、canary 原值或完整 header。
+5. 保留 `tab.leokun.cn` 现状路由，并以运行时元数据确认没有新增自动 fallback。
+6. 完成窗口首屏、`18080/18090` 候选实例交接和 `/healthz` 验收。
 
-## 7. 后续版本记录格式
+## 7. `main@b438237` 同步记录
+
+- **同步时间**：`2026-07-26T18:07:14-07:00`
+- **原始上游核对点**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **本地合并来源**：`main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
+- **本地同步前基线**：`noad@841a49c0963a911b4c838157438e074ef930b33b`
+- **merge commit**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
+
+### 7.1 实际保留与接受
+
+- 保留 `noad` 的 Chat Completions 默认 Endpoint、无隐式 fallback、默认关闭审计、默认关闭广告和分阶段更新确认。
+- 接受 provider artifact session 释放、请求摘要化、Agent replay 归并、俄语、静态 i18n、Linux 依赖、`0.0.41` 版本元数据与贡献文档。
+- 广告策略保持本地显式开关为硬门禁；关闭时不展示，启用后允许所有 locale 展示。
+
+### 7.2 重做与拒绝
+
+- 重做三处冲突：`frontend/package.json`、`frontend/src/state/appState.js`、`frontend/src/views/Home.vue`，以本地配置事实源和状态机为准接入 scanner。
+- 补齐 scanner 新增的 22 个源 key 在英、日、俄三种语言中的 66 个翻译；四个 locale 均为 246 个非空 key。
+- 将 conversation/provider artifact 与 provider debug 文件创建权限收紧为 `0600`，并增加退出路径、payload 不驻留和 replay 专项测试。
+- 拒绝 Windows 固定管理员/HKLM 安装，保留 user/machine 双 scope；拒绝发布说明中的 API Key 暴露引导和无法由实际 diff 证明的功能声明。
+
+### 7.3 测试证据
+
+- `git diff --cached --check`、冲突标记扫描；
+- `go vet ./...`、`go test ./...`、`go test -race ./internal/backend/forwarder`、`go build ./...`；
+- `yarn test:config-projection`；
+- `yarn build` 连续两次且 catalog/locale 哈希稳定；
+- i18n key、空值、中文 fallback 与 placeholder 集合校验通过。
+
+既有 macOS linker 目标版本警告和 Vite chunk 大小警告不阻断退出码。
+
+### 7.4 未验证边界
+
+- 未停止或替换运行中的 `18080/18090` 代理，因此窗口首屏、候选实例交接、`/healthz` 与真实网络零请求验收仍待维护窗口。
+- 广告关闭零请求、更新完整交互序列、旧配置实机迁移与发布资源安装不在本次自动化证据范围内。
+- 本次不执行 `git push`，远程 `origin/noad` 不因本地快进自动更新。
+
+## 8. 后续版本记录格式
 
 上游更新或本地功能落地后，在本 PRD 中追加一条版本记录，至少包含：
 

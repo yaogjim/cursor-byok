@@ -4,8 +4,10 @@
 - **原始上游仓库**：<https://github.com/leookun/cursor-byok>
 - **本地 Fork（`origin`）**：<https://github.com/yaogjim/cursor-byok>
 - **本地分支**：`noad`
-- **本地已提交基线**：`e9b6d701d63f3cc315676afffaddc3128c7db7cc`
-- **原始主线基线**：`main@799dbda`
+- **当前代码合并基线**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
+- **本次合并来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
+- **原始上游核对基线**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **原始主线历史基线**：`main@799dbda`
 - **决策 PRD**：[`prd_cursor_byok_工作决策基线.md`](prd_cursor_byok_工作决策基线.md)
 - **功能差异 PRD**：[`prd_cursor_byok_当前功能与上游差异.md`](prd_cursor_byok_当前功能与上游差异.md)
 
@@ -351,3 +353,56 @@ cd frontend && yarn test:config-projection && yarn build
 - 是否需要用户重新确认路由、token、隐私或更新策略。
 
 没有这些记录，不把 merge 标记为完成。
+
+## 8. `main@b438237` 同步记录
+
+- **同步时间**：`2026-07-26T18:07:14-07:00`
+- **同步来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
+- **原始上游核对点**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **本地同步前基线**：`noad@841a49c0963a911b4c838157438e074ef930b33b`
+- **安全 merge commit**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
+- **拓扑**：双父分别为 `841a49c` 与 `b438237`，使用真实 merge，未使用 cherry-pick。
+
+### 8.1 接受与整合
+
+- 接受 provider artifact session 释放与请求摘要化，完整 provider payload 不再保留在 active session。
+- 接受 Agent replay 对连续 assistant text/reasoning/tool-call 的归并兼容修复，并保留 reasoning signature、Responses 状态、tool-call ID 和结果顺序。
+- 接受俄语 locale、静态 i18n scanner、Linux GTK3/WebKit 4.1 依赖、`0.0.41` 版本元数据、贡献指南和 PR 模板。
+- 保留本地主题、广告、更新配置事实源；广告仍默认关闭，只有本地显式开启后才允许所有 locale 展示。
+- `.vscode/settings.json` 未进入索引；仓库只新增对应 `.gitignore` 规则。
+
+### 8.2 重做与安全收紧
+
+- 将 scanner 新增的 22 个本地中文源 key 补齐为 `en-US`、`ja-JP`、`ru-RU` 共 66 个非空翻译，四个 locale 的 key 与 placeholder 集合一致。
+- provider/conversation atomic 文件与 provider debug JSONL 的创建权限收紧为 `0600`。
+- 增加 artifact 成功、错误、取消、sink 提前退出清理测试，以及 payload 不驻留和文件权限测试。
+- 增加多 tool-call replay、sanitizer 幂等和 `ForceBackgroundShell` 唯一无 reasoning 例外测试。
+- 修复两处既有 protobuf 锁值拷贝，使 `go vet ./...` 成为可通过门禁。
+- 发布说明收敛为真实代码差异，并加入禁止在聊天、日志或截图中粘贴真实 API Key 的提示。
+
+### 8.3 明确拒绝
+
+- 拒绝 Windows 安装器固定 `RequestExecutionLevel admin` 和固定写入 `HKLM`；保留 `WAILS_INSTALL_SCOPE` 驱动的 user/machine 双模式、HKCU/HKLM 对称卸载及最小权限能力，仅同步版本号。
+- 拒绝发布说明中让 AI 读取、处理或接收真实 API Key 的操作引导。
+- 拒绝发布说明中无法由本次真实代码差异证明的模型、图片识别、搜索 fallback 和 Windows 行为声明。
+
+### 8.4 自动化证据
+
+以下门禁在 merge commit 前通过：
+
+- `git diff --cached --check` 与冲突标记扫描；
+- `go vet ./...`；
+- `go test ./...`；
+- `go test -race ./internal/backend/forwarder`；
+- `go build ./...`；
+- `cd frontend && yarn test:config-projection`；
+- `cd frontend && yarn build` 连续两次，catalog 与四个 locale 哈希稳定；
+- i18n 完整性校验：`246` 个 key × `4` 个 locale，无空值、无新增中文 fallback、placeholder 集合一致。
+
+仅观察到既有非阻断告警：macOS linker 目标版本警告与 Vite chunk 大小警告。
+
+### 8.5 未验证边界
+
+- 本轮未停止或替换正在使用的 `18080/18090` 代理，因此没有执行候选实例交接、窗口首屏、`/healthz` 或真实网络零请求验收。
+- 广告关闭零请求、更新完整交互序列、旧配置实机迁移和发布资源实机安装仍需在明确维护窗口验证；本记录不把这些事项声明为已完成。
+- 本轮只更新本地分支，不执行 `git push`。
