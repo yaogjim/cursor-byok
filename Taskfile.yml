@@ -291,6 +291,21 @@ tasks:
     cmds:
       - task: '{{if eq OS "darwin"}}release:prepare:darwin{{else}}release:prepare:linux{{end}}'
 
+  release:prepare:macos:
+    summary: 在 macOS 上生成 arm64 与 amd64 发布资产
+    preconditions:
+      - sh: '[ "{{OS}}" = "darwin" ]'
+        msg: "release:prepare:macos 仅支持在 macOS 上执行。"
+      - sh: wails3 version >/dev/null 2>&1
+        msg: "未检测到 wails3，请先安装 Wails v3 CLI。"
+    cmds:
+      - task: release:clean
+      - task: common:update:build-assets
+      - task: release:notes
+      - task: release:build:macos:arm64
+      - task: release:build:macos:amd64
+      - task: release:verify:analyzer-isolation
+
   release:prepare:darwin:
     summary: 在 macOS 上生成 macOS/Windows/Linux 发布资产
     preconditions:
@@ -306,6 +321,7 @@ tasks:
       - task: release:build:macos:amd64
       - task: release:build:windows:amd64
       - task: release:build:linux:amd64
+      - task: release:verify:analyzer-isolation
 
   release:prepare:linux:
     summary: 在当前主机上生成 Linux 发布资产
@@ -319,6 +335,52 @@ tasks:
       - task: common:update:build-assets
       - task: release:notes
       - task: release:build:linux:amd64
+      - task: release:verify:analyzer-isolation
+
+  release:verify:analyzer-isolation:
+    summary: 验证客户端发布包不包含独立日志分析器
+    preconditions:
+      - sh: python3 --version > /dev/null 2>&1
+        msg: "未检测到 python3，无法执行发布隔离检查。"
+    cmds:
+      - |
+        python3 - <<'PY'
+        import pathlib
+        import sys
+        import tarfile
+        import zipfile
+
+        release_dir = pathlib.Path("{{.RELEASE_DIR}}")
+        archives = sorted(release_dir.glob("*.tar.gz")) + sorted(release_dir.glob("*.zip"))
+        forbidden_paths = ("tools/log-analyzer", "log-analyzer", "cursor-log-analyzer")
+        forbidden_markers = (b"cursor-log-analyzer", b"tools/log-analyzer")
+        violations = []
+
+        def inspect_member(archive_path, name, payload):
+            normalized = name.replace(chr(92), "/").lower()
+            if any(token in normalized for token in forbidden_paths):
+                violations.append(f"{archive_path}: forbidden member {name}")
+            if any(marker in payload for marker in forbidden_markers):
+                violations.append(f"{archive_path}: analyzer marker in {name}")
+
+        for archive_path in archives:
+            if archive_path.suffix == ".zip":
+                with zipfile.ZipFile(archive_path) as archive:
+                    for info in archive.infolist():
+                        if not info.is_dir():
+                            inspect_member(archive_path, info.filename, archive.read(info))
+            else:
+                with tarfile.open(archive_path, "r:gz") as archive:
+                    for member in archive.getmembers():
+                        if member.isfile():
+                            stream = archive.extractfile(member)
+                            inspect_member(archive_path, member.name, stream.read() if stream else b"")
+
+        if violations:
+            print("\n".join(violations), file=sys.stderr)
+            raise SystemExit(1)
+        print(f"analyzer isolation verified: {len(archives)} archive(s)")
+        PY
 
   release:verify:assets:
     summary: 验证当前版本发布资产是否齐全
@@ -334,6 +396,7 @@ tasks:
       - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.tar.gz"
         msg: "缺少 Linux amd64 发布资产。"
     cmds:
+      - task: release:verify:analyzer-isolation
       - echo "release assets verified"
 
   release:sync:readme:
