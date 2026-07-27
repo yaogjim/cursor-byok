@@ -45,6 +45,12 @@ type UsageRecordsData = client.UsageRecordsData
 // UsageRecordsResult 定义了当前模块中的 UsageRecordsResult 类型。
 type UsageRecordsResult = client.UsageRecordsResult
 
+// LogCaptureStatus 定义当前客户端采集状态。
+type LogCaptureStatus = client.LogCaptureStatus
+
+// LogCleanupResult 定义已关闭采集 session 的清理结果。
+type LogCleanupResult = client.LogCleanupResult
+
 // ProxyService 定义了当前模块中的 ProxyService 类型。
 type ProxyService struct {
 	// core 表示当前声明中的 core。
@@ -99,6 +105,14 @@ func (s *ProxyService) TestModelAdapter(adapter ModelAdapterConfig) (ModelAdapte
 // GetModelAdapterTestResults 用于处理与 GetModelAdapterTestResults 相关的逻辑。
 func (s *ProxyService) GetModelAdapterTestResults() []ModelAdapterTestResult {
 	return s.core.GetModelAdapterTestResults()
+}
+
+func (s *ProxyService) GetLogCaptureStatus() LogCaptureStatus {
+	return s.core.GetLogCaptureStatus()
+}
+
+func (s *ProxyService) CleanupClosedLogSessions() (LogCleanupResult, error) {
+	return s.core.CleanupClosedLogSessions()
 }
 
 // GetDeviceID 用于处理与 GetDeviceID 相关的逻辑。

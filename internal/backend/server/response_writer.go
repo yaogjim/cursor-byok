@@ -13,8 +13,9 @@ type responseWrittenTracker interface {
 
 type trackedResponseWriter struct {
 	http.ResponseWriter
-	wroteHeader bool
-	statusCode  int
+	wroteHeader  bool
+	statusCode   int
+	bytesWritten int64
 }
 
 func newTrackedResponseWriter(writer http.ResponseWriter) *trackedResponseWriter {
@@ -40,7 +41,9 @@ func (writer *trackedResponseWriter) Write(payload []byte) (int, error) {
 	if !writer.wroteHeader {
 		writer.WriteHeader(http.StatusOK)
 	}
-	return writer.ResponseWriter.Write(payload)
+	written, err := writer.ResponseWriter.Write(payload)
+	writer.bytesWritten += int64(written)
+	return written, err
 }
 
 func (writer *trackedResponseWriter) Flush() {
@@ -76,6 +79,20 @@ func (writer *trackedResponseWriter) Unwrap() http.ResponseWriter {
 
 func (writer *trackedResponseWriter) ResponseWritten() bool {
 	return writer != nil && writer.wroteHeader
+}
+
+func (writer *trackedResponseWriter) StatusCode() int {
+	if writer == nil || !writer.wroteHeader {
+		return http.StatusOK
+	}
+	return writer.statusCode
+}
+
+func (writer *trackedResponseWriter) BytesWritten() int64 {
+	if writer == nil {
+		return 0
+	}
+	return writer.bytesWritten
 }
 
 func responseWriterHasWrittenHeader(writer http.ResponseWriter) bool {

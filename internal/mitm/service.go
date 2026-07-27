@@ -20,6 +20,7 @@ import (
 	"cursor/internal/certs"
 	"cursor/internal/logger"
 	"cursor/internal/netproxy"
+	"cursor/internal/observability"
 
 	"github.com/elazarl/goproxy"
 )
@@ -27,7 +28,13 @@ import (
 const (
 	// HeaderServerUpstreamURL 表示转发给 backend server 时携带的原始上游地址。
 	HeaderServerUpstreamURL = "X-Server-Upstream-URL"
+	HeaderTraceID           = "X-Cursor-BYOK-Trace-ID"
+	HeaderParentSpanID      = "X-Cursor-BYOK-Parent-Span-ID"
 )
+
+type captureRecorder interface {
+	Record(context.Context, observability.Capture) bool
+}
 
 // ProxyServer 定义了当前模块中的 ProxyServer 类型。
 type ProxyServer struct {
@@ -44,6 +51,7 @@ type ProxyServer struct {
 
 	// upstreamClient 表示当前声明中的 upstreamClient。
 	upstreamClient *http.Client
+	capture        captureRecorder
 
 	// proxy 表示当前声明中的 proxy。
 	proxy *goproxy.ProxyHttpServer
@@ -178,10 +186,14 @@ func logSuppressedProxyMessages(prefix string, suppressed int) {
 }
 
 // NewProxyServer 用于处理与 NewProxyServer 相关的逻辑。
-func NewProxyServer(addr, baseURL, _ string, _ string, certManager *certs.Manager) (*ProxyServer, error) {
+func NewProxyServer(addr, baseURL, _ string, _ string, certManager *certs.Manager, captures ...captureRecorder) (*ProxyServer, error) {
 	u, normalizedBaseURL, err := parseBaseURL(baseURL)
 	if err != nil {
 		return nil, err
+	}
+	var capture captureRecorder
+	if len(captures) > 0 {
+		capture = captures[0]
 	}
 
 	s := &ProxyServer{
@@ -189,6 +201,7 @@ func NewProxyServer(addr, baseURL, _ string, _ string, certManager *certs.Manage
 		baseURL:      normalizedBaseURL,
 		certManager:  certManager,
 		baseEndpoint: u,
+		capture:      capture,
 		upstreamClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -455,6 +468,21 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	if incoming == nil {
 		return nil, errors.New("nil request")
 	}
+	startedAt := time.Now()
+	correlation := observability.NewTrace()
+	correlation.HTTPRequestID = strings.TrimSpace(incoming.Header.Get("x-request-id"))
+	if correlation.HTTPRequestID == "" {
+		correlation.HTTPRequestID = correlation.TraceID
+	}
+	captureContext := observability.WithCorrelation(incoming.Context(), correlation)
+	requestBytes := incoming.ContentLength
+	if requestBytes < 0 {
+		requestBytes = 0
+	}
+	requestPath := "/"
+	if incoming.URL != nil && strings.TrimSpace(incoming.URL.Path) != "" {
+		requestPath = incoming.URL.Path
+	}
 
 	rawURL, err := rawURLForRelay(incoming)
 	if err != nil {
@@ -477,14 +505,84 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	serverReq.ContentLength = incoming.ContentLength
 	copyHeaders(serverReq.Header, incoming.Header)
 	serverReq.Header.Set(HeaderServerUpstreamURL, rawURL)
+	serverReq.Header.Set(HeaderTraceID, correlation.TraceID)
+	serverReq.Header.Set(HeaderParentSpanID, correlation.SpanID)
 	removeHopByHop(serverReq.Header)
+	s.recordCapture(captureContext, observability.Event{
+		Layer:           "mitm",
+		Event:           "backend_forward_started",
+		Route:           requestPath,
+		ExecutionTarget: "backend",
+		Protocol:        "http",
+		Status:          "started",
+		RequestBytes:    requestBytes,
+		Fields: map[string]any{
+			"method":      incoming.Method,
+			"target_host": incoming.Host,
+		},
+	})
 
 	resp, err := s.upstreamClient.Do(serverReq)
 	if err != nil {
+		s.recordCapture(captureContext, observability.Event{
+			Layer:           "mitm",
+			Event:           "backend_forward_finished",
+			Route:           requestPath,
+			ExecutionTarget: "backend",
+			Protocol:        "http",
+			Status:          "error",
+			ErrorCategory:   "backend_unavailable",
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			RequestBytes:    requestBytes,
+		})
 		return nil, fmt.Errorf("forward to backend server: %w", err)
 	}
+	responseBytes := resp.ContentLength
+	if responseBytes < 0 {
+		responseBytes = 0
+	}
+	s.recordCapture(captureContext, observability.Event{
+		Layer:           "mitm",
+		Event:           "backend_forward_finished",
+		Route:           requestPath,
+		ExecutionTarget: "backend",
+		Protocol:        "http",
+		Status:          httpStatus(resp.StatusCode),
+		ErrorCategory:   httpErrorCategory(resp.StatusCode),
+		DurationMS:      time.Since(startedAt).Milliseconds(),
+		RequestBytes:    requestBytes,
+		ResponseBytes:   responseBytes,
+		Fields: map[string]any{
+			"status_code": resp.StatusCode,
+		},
+	})
 	removeHopByHop(resp.Header)
 	return resp, nil
+}
+
+func (s *ProxyServer) recordCapture(ctx context.Context, event observability.Event) {
+	if s == nil || s.capture == nil {
+		return
+	}
+	s.capture.Record(ctx, observability.Capture{Event: event})
+}
+
+func httpStatus(statusCode int) string {
+	if statusCode >= http.StatusBadRequest {
+		return "error"
+	}
+	return "ok"
+}
+
+func httpErrorCategory(statusCode int) string {
+	switch {
+	case statusCode >= http.StatusInternalServerError:
+		return "server_error"
+	case statusCode >= http.StatusBadRequest:
+		return "client_error"
+	default:
+		return ""
+	}
 }
 
 // requestHost 用于处理与 requestHost 相关的逻辑。

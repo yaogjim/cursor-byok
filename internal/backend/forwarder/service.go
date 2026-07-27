@@ -268,7 +268,7 @@ type agentModelMemory interface {
 }
 
 // NewService 使用默认依赖创建 forwarder 服务。
-func NewService(historyRoot string, resolver modeladapter.ChannelResolver) *Service {
+func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captures ...captureRecorder) *Service {
 	projector := NewHistoryProjector()
 	store := NewConversationFileStore(historyRoot)
 	broker := NewStreamBroker()
@@ -281,7 +281,7 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver) *Serv
 	if candidate, ok := resolver.(debugLogConfig); ok {
 		debugConfig = candidate
 	}
-	debug := newDebugRecorder(historyRoot, broker, debugConfig)
+	debug := newDebugRecorder(historyRoot, broker, debugConfig, captures...)
 	service := &Service{
 		store:              store,
 		usageStore:         NewUsageFileStore(historyRoot),

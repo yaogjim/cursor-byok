@@ -468,7 +468,7 @@ func (s *LocalSystemSettingService) ResolveFrontendBaseURL(context.Context) (str
 func (s *LocalSystemSettingService) IsObservabilityLogEnabled(ctx context.Context) bool {
 	cfg, err := s.load(ctx)
 	if err != nil {
-		return true
+		return false
 	}
 	return cfg.ObservabilityLogEnabled
 }

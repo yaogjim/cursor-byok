@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"cursor/internal/appdata"
+	"cursor/internal/observability"
 
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-colorable"
@@ -52,6 +53,7 @@ func Init() {
 		}
 		slog.SetDefault(slog.New(handler))
 		stdlog.SetFlags(0)
+		stdlog.SetOutput(stdLogBridge{})
 		if logFilePath != "" {
 			slog.Info("应用日志已写入文件", "path", logFilePath, "pid", os.Getpid())
 		}
@@ -61,13 +63,13 @@ func Init() {
 // Info 输出 info 级日志。
 func Info(msg string, args ...any) {
 	Init()
-	slog.Info(msg, args...)
+	slog.Info(observability.SanitizeText(msg), args...)
 }
 
 // Error 输出 error 级日志。
 func Error(msg string, args ...any) {
 	Init()
-	slog.Error(msg, args...)
+	slog.Error(observability.SanitizeText(msg), args...)
 }
 
 // Infof 输出格式化的 info 级日志。
@@ -84,9 +86,18 @@ func Errorf(format string, args ...any) {
 
 func formatMessage(format string, args ...any) string {
 	if len(args) == 0 {
-		return strings.TrimSpace(format)
+		return observability.SanitizeText(strings.TrimSpace(format))
 	}
-	return strings.TrimSpace(fmt.Sprintf(format, args...))
+	return observability.SanitizeText(strings.TrimSpace(fmt.Sprintf(format, args...)))
+}
+
+type stdLogBridge struct{}
+
+func (stdLogBridge) Write(payload []byte) (int, error) {
+	if message := observability.SanitizeText(strings.TrimSpace(string(payload))); message != "" {
+		slog.Info(message)
+	}
+	return len(payload), nil
 }
 
 func disableColor() bool {
@@ -180,8 +191,12 @@ func (writer *lineWindowFileWriter) Write(payload []byte) (int, error) {
 }
 
 func (writer *lineWindowFileWriter) openLocked() error {
-	file, err := os.OpenFile(writer.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(writer.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
 		return err
 	}
 	writer.file = file
@@ -204,7 +219,13 @@ func (writer *lineWindowFileWriter) trimToLastLinesLocked(targetLines int) error
 		return err
 	}
 	trimmed, lineCount := lastLinesBytes(payload, targetLines)
-	if err := os.WriteFile(writer.path, trimmed, 0o644); err != nil {
+	if err := os.WriteFile(writer.path, trimmed, 0o600); err != nil {
+		if reopenErr := writer.openLocked(); reopenErr != nil {
+			return errors.Join(err, reopenErr)
+		}
+		return err
+	}
+	if err := os.Chmod(writer.path, 0o600); err != nil {
 		if reopenErr := writer.openLocked(); reopenErr != nil {
 			return errors.Join(err, reopenErr)
 		}

@@ -22,6 +22,9 @@ import (
 const (
 	defaultConfigPath = "./config.yaml"
 	defaultListenAddr = ":8041"
+	defaultLogRoot    = "./logs"
+	headerTraceID     = "X-Cursor-BYOK-Trace-ID"
+	headerParentSpan  = "X-Cursor-BYOK-Parent-Span-ID"
 )
 
 var hopByHopHeaders = map[string]struct{}{
@@ -65,6 +68,7 @@ type serverApp struct {
 	config          appConfig
 	client          *http.Client
 	upstreamTargets map[string]string
+	recorder        *relayRecorder
 }
 
 func main() {
@@ -73,10 +77,16 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
 		os.Exit(1)
 	}
+	recorder, recorderErr := openRelayRecorder(relayLogRoot())
+	if recorderErr != nil {
+		log.Printf("链路日志初始化失败 error_category=recorder_init_failed")
+	} else {
+		defer func() { _ = recorder.Close() }()
+	}
 	log.Printf("cursor-tab-server 启动 listen_addr=%s config_path=%s", defaultListenAddr, defaultConfigPath)
 	server := &http.Server{
 		Addr:              defaultListenAddr,
-		Handler:           newServerApp(cfg, newHTTPClient(), defaultUpstreamTargets),
+		Handler:           newServerAppWithRecorder(cfg, newHTTPClient(), defaultUpstreamTargets, recorder),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -86,10 +96,15 @@ func main() {
 }
 
 func newServerApp(cfg appConfig, client *http.Client, upstreamTargets map[string]string) http.Handler {
+	return newServerAppWithRecorder(cfg, client, upstreamTargets, nil)
+}
+
+func newServerAppWithRecorder(cfg appConfig, client *http.Client, upstreamTargets map[string]string, recorder *relayRecorder) http.Handler {
 	app := &serverApp{
 		config:          cfg,
 		client:          client,
 		upstreamTargets: cloneUpstreamTargets(upstreamTargets),
+		recorder:        recorder,
 	}
 	if app.client == nil {
 		app.client = newHTTPClient()
@@ -103,12 +118,55 @@ func (app *serverApp) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	}
 }
 
-func (app *serverApp) handleProxy(writer http.ResponseWriter, request *http.Request) error {
+func (app *serverApp) handleProxy(writer http.ResponseWriter, request *http.Request) (resultErr error) {
 	if app == nil {
 		return fmt.Errorf("服务实例为空")
 	}
-	rawTarget, ok := app.upstreamTargets[strings.TrimSpace(request.URL.Path)]
+	startedAt := time.Now()
+	route := strings.TrimSpace(request.URL.Path)
+	correlation := relayCorrelationFromHeaders(
+		request.Header.Get(headerTraceID),
+		request.Header.Get(headerParentSpan),
+		request.Header.Get("x-request-id"),
+	)
+	requestBytes := int64(0)
+	responseBytes := int64(0)
+	statusCode := http.StatusBadGateway
+	defer func() {
+		status := "ok"
+		errorCategory := ""
+		if resultErr != nil {
+			status = "error"
+			errorCategory = "official_upstream_failed"
+		} else if statusCode >= http.StatusBadRequest {
+			status = "error"
+			if statusCode >= http.StatusInternalServerError {
+				errorCategory = "upstream_server_error"
+			} else {
+				errorCategory = "upstream_client_error"
+			}
+		}
+		app.record(correlation, relayEvent{
+			Layer:           "relay",
+			Event:           "request_finished",
+			Route:           route,
+			ExecutionTarget: "official_upstream",
+			Protocol:        "http",
+			Status:          status,
+			ErrorCategory:   errorCategory,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			RequestBytes:    requestBytes,
+			ResponseBytes:   responseBytes,
+			Fields: map[string]any{
+				"method":      request.Method,
+				"status_code": statusCode,
+			},
+		})
+	}()
+
+	rawTarget, ok := app.upstreamTargets[route]
 	if !ok {
+		statusCode = http.StatusNotFound
 		http.NotFound(writer, request)
 		return nil
 	}
@@ -125,12 +183,28 @@ func (app *serverApp) handleProxy(writer http.ResponseWriter, request *http.Requ
 			return fmt.Errorf("读取请求体失败: %w", err)
 		}
 	}
+	requestBytes = int64(len(requestBody))
+	app.record(correlation, relayEvent{
+		Layer:           "relay",
+		Event:           "request_started",
+		Route:           route,
+		ExecutionTarget: "official_upstream",
+		Protocol:        "http",
+		Status:          "started",
+		RequestBytes:    requestBytes,
+		Fields: map[string]any{
+			"method":      request.Method,
+			"target_host": targetURL.Host,
+		},
+	})
 
 	upstreamRequest, err := http.NewRequestWithContext(request.Context(), request.Method, targetURL.String(), bytes.NewReader(requestBody))
 	if err != nil {
 		return fmt.Errorf("构建上游请求失败: %w", err)
 	}
 	copyRequestHeaders(upstreamRequest.Header, request.Header)
+	upstreamRequest.Header.Del(headerTraceID)
+	upstreamRequest.Header.Del(headerParentSpan)
 	authorization := formatBearerAuthorization(app.config.Token)
 	upstreamRequest.Header.Set("Authorization", authorization)
 	upstreamRequest.Header.Set("x-cursor-checksum", buildCursorChecksum(authorization))
@@ -143,16 +217,31 @@ func (app *serverApp) handleProxy(writer http.ResponseWriter, request *http.Requ
 
 	response, err := app.client.Do(upstreamRequest)
 	if err != nil {
-		log.Printf("上游转发失败 method=%s path=%s target=%s err=%v", request.Method, request.URL.Path, targetURL.String(), err)
+		log.Printf("上游转发失败 method=%s path=%s target_host=%s error_category=upstream_request_failed", request.Method, request.URL.Path, targetURL.Host)
 		return fmt.Errorf("上游请求失败: %w", err)
 	}
 	defer response.Body.Close()
+	statusCode = response.StatusCode
 	log.Printf("上游响应 method=%s path=%s target_host=%s status=%d", request.Method, request.URL.Path, targetURL.Host, response.StatusCode)
 
 	copyResponseHeaders(writer.Header(), response.Header)
 	writer.WriteHeader(response.StatusCode)
-	_, err = copyStream(writer, response.Body)
-	return err
+	responseBytes, resultErr = copyStream(writer, response.Body)
+	return resultErr
+}
+
+func (app *serverApp) record(correlation relayCorrelation, event relayEvent) {
+	if app == nil || app.recorder == nil {
+		return
+	}
+	app.recorder.Record(correlation, event)
+}
+
+func relayLogRoot() string {
+	if value := strings.TrimSpace(os.Getenv("CURSOR_TAB_LOG_DIR")); value != "" {
+		return value
+	}
+	return defaultLogRoot
 }
 
 func loadConfig(path string) (appConfig, error) {

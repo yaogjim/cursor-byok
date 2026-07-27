@@ -2,18 +2,146 @@ package forwarder
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"cursor/internal/observability"
 )
 
 type enabledDebugLogConfig struct{}
 
 func (enabledDebugLogConfig) IsObservabilityLogEnabled(context.Context) bool {
 	return true
+}
+
+func TestDebugRecorderUsesUnifiedSanitizedCapture(t *testing.T) {
+	historyRoot := filepath.Join(t.TempDir(), "history")
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	capture, err := observability.NewRecorder(logsRoot, observability.Settings{
+		Mode:          observability.ModeFull,
+		RetentionDays: 7,
+		MaxDiskMB:     64,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	status := capture.Status()
+	debug := newDebugRecorder(historyRoot, nil, enabledDebugLogConfig{}, capture)
+	debug.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1", "llm_request", map[string]any{
+		"prompt": "full prompt",
+		"apiKey": "provider-secret",
+	})
+	if err := capture.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	legacyPath := filepath.Join(historyRoot, "conversation-1", "debug", "provider.jsonl")
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy debug artifact still exists: %v", err)
+	}
+	payloadDir := filepath.Join(status.SessionPath, "payloads")
+	entries, err := os.ReadDir(payloadDir)
+	if err != nil {
+		t.Fatalf("read unified payload directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("payload count = %d, want 1", len(entries))
+	}
+	payload, err := os.ReadFile(filepath.Join(payloadDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read unified payload: %v", err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, "full prompt") || !strings.Contains(text, observability.RedactedValue) {
+		t.Fatalf("unexpected unified payload: %s", text)
+	}
+	if strings.Contains(text, "provider-secret") {
+		t.Fatalf("unified payload retained credential: %s", text)
+	}
+}
+
+func TestUnifiedCaptureOmitsUnknownBidiRawBytes(t *testing.T) {
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	capture, err := observability.NewRecorder(logsRoot, observability.Settings{
+		Mode:          observability.ModeFull,
+		RetentionDays: 7,
+		MaxDiskMB:     64,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	status := capture.Status()
+	debug := newDebugRecorder(t.TempDir(), nil, enabledDebugLogConfig{}, capture)
+	debug.LogBidiRaw(context.Background(), "request-raw", "conversation-raw", 1, "deadbeef", "accepted", nil)
+	if err := capture.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(status.SessionPath, "payloads"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("payload count = %d, want 1", len(entries))
+	}
+	payload, err := os.ReadFile(filepath.Join(status.SessionPath, "payloads", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	if strings.Contains(text, "deadbeef") || strings.Contains(text, "data_hex") {
+		t.Fatalf("unknown raw bytes were persisted: %s", text)
+	}
+	if !strings.Contains(text, "raw_omitted") {
+		t.Fatalf("omission metadata missing: %s", text)
+	}
+}
+
+func TestHTTPTraceReplacesPrematureBackgroundCorrelation(t *testing.T) {
+	capture, err := observability.NewRecorder(t.TempDir(), observability.Settings{
+		Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := capture.Status()
+	debug := newDebugRecorder(t.TempDir(), nil, enabledDebugLogConfig{}, capture)
+	debug.LogRuntime(context.Background(), "request-correlation", "conversation-1", "premature_background_event", nil)
+	authoritative := observability.Correlation{
+		TraceID: "trace-from-mitm", SpanID: "backend-span", HTTPRequestID: "http-request-1",
+	}
+	httpContext := observability.WithCorrelation(context.Background(), authoritative)
+	debug.LogBidiRaw(httpContext, "request-correlation", "conversation-1", 1, "00", "accepted", nil)
+	debug.LogProviderArtifact(context.Background(), "request-correlation", "conversation-1", "model-call-1", "llm_request", map[string]any{"model": "test"})
+	if err := capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(filepath.Join(status.SessionPath, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("event count = %d, want 3", len(lines))
+	}
+	var bidiEvent observability.Event
+	var providerEvent observability.Event
+	if err := json.Unmarshal([]byte(lines[1]), &bidiEvent); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &providerEvent); err != nil {
+		t.Fatal(err)
+	}
+	if bidiEvent.TraceID != authoritative.TraceID || providerEvent.TraceID != authoritative.TraceID {
+		t.Fatalf("authoritative trace was not retained: bidi=%+v provider=%+v", bidiEvent, providerEvent)
+	}
+	if providerEvent.HTTPRequestID != authoritative.HTTPRequestID {
+		t.Fatalf("provider HTTP correlation = %q, want %q", providerEvent.HTTPRequestID, authoritative.HTTPRequestID)
+	}
 }
 
 func TestArtifactRecorderRetainsOnlyRequestPrefixUntilCleared(t *testing.T) {

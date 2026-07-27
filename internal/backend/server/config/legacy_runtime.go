@@ -39,7 +39,7 @@ func (store *Store) LegacyRuntimeSnapshot(ctx context.Context) (legacyruntime.Ru
 	}
 
 	return legacyruntime.RuntimeConfigSnapshot{
-		ObservabilityLogEnabled:   cfg.Log,
+		ObservabilityLogEnabled:   isFullObservabilityMode(cfg.Observability.Mode),
 		ProviderStreamIdleTimeout: cfg.ProviderStreamIdleTimeout,
 		ModelAdapters:             adapters,
 	}, nil

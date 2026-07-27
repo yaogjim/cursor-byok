@@ -1,14 +1,17 @@
 package server
 
 import (
+	"context"
 	"cursor/internal/logger"
 	"errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
 
@@ -22,6 +25,154 @@ func Recover() Middleware {
 			}()
 			return next(ctx)
 		}
+	}
+}
+
+type captureRecorder interface {
+	Record(context.Context, observability.Capture) bool
+	RecordEvent(context.Context, observability.Event) bool
+}
+
+func Observe(recorder captureRecorder) Middleware {
+	return func(next HandlerFunc) HandlerFunc {
+		return func(ctx *Context) (err error) {
+			if ctx == nil || ctx.Request == nil || recorder == nil {
+				return next(ctx)
+			}
+			correlation := requestCorrelation(ctx.Request)
+			ctx.Correlation = correlation
+			requestContext := observability.WithCorrelation(ctx.Request.Context(), correlation)
+			ctx.Request = ctx.Request.WithContext(requestContext)
+			requestBytes := ctx.Request.ContentLength
+			if requestBytes < 0 {
+				requestBytes = 0
+			}
+			recorder.RecordEvent(requestContext, observability.Event{
+				Layer:        "backend",
+				Event:        "request_started",
+				Route:        ctx.RouteName,
+				Protocol:     string(ctx.Protocol),
+				Status:       "started",
+				RequestBytes: requestBytes,
+				Fields: map[string]any{
+					"method": ctx.Request.Method,
+					"path":   ctx.Request.URL.Path,
+				},
+			})
+
+			defer func() {
+				recovered := recover()
+				finalErr := err
+				if ctx.LastError != nil {
+					finalErr = ctx.LastError
+				}
+				statusCode, responseBytes := responseMetrics(ctx.Writer)
+				if recovered != nil {
+					finalErr = fmt.Errorf("panic: %v", recovered)
+					if statusCode < http.StatusBadRequest {
+						// Recover converts the panic to an error that the route writes as 502
+						// after this middleware unwinds. Record that eventual HTTP terminal state.
+						statusCode = http.StatusBadGateway
+					}
+				}
+				status := "ok"
+				if finalErr != nil || statusCode >= http.StatusBadRequest {
+					status = "error"
+				}
+				recorder.RecordEvent(requestContext, observability.Event{
+					Layer:           "backend",
+					Event:           "request_finished",
+					Route:           ctx.RouteName,
+					ExecutionTarget: executionTarget(ctx),
+					Protocol:        string(ctx.Protocol),
+					Status:          status,
+					ErrorCategory:   serverErrorCategory(finalErr, statusCode),
+					DurationMS:      time.Since(ctx.StartedAt).Milliseconds(),
+					RequestBytes:    requestBytes,
+					ResponseBytes:   responseBytes,
+					Fields: map[string]any{
+						"method":      ctx.Request.Method,
+						"path":        ctx.Request.URL.Path,
+						"status_code": statusCode,
+						"source":      string(ctx.Source),
+					},
+				})
+				if recovered != nil {
+					panic(recovered)
+				}
+			}()
+
+			err = next(ctx)
+			return err
+		}
+	}
+}
+
+func requestCorrelation(request *http.Request) observability.Correlation {
+	trace := observability.NewTrace()
+	if request == nil {
+		return trace
+	}
+	incomingTraceID := strings.TrimSpace(request.Header.Get(HeaderTraceID))
+	incomingSpanID := strings.TrimSpace(request.Header.Get(HeaderParentSpanID))
+	if incomingTraceID != "" {
+		trace = observability.ChildSpan(observability.Correlation{
+			TraceID: incomingTraceID,
+			SpanID:  incomingSpanID,
+		})
+	}
+	trace.HTTPRequestID = strings.TrimSpace(request.Header.Get("x-request-id"))
+	if trace.HTTPRequestID == "" {
+		trace.HTTPRequestID = trace.TraceID
+	}
+	return trace
+}
+
+func responseMetrics(writer http.ResponseWriter) (int, int64) {
+	for writer != nil {
+		if tracked, ok := writer.(*trackedResponseWriter); ok {
+			return tracked.StatusCode(), tracked.BytesWritten()
+		}
+		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			break
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == writer {
+			break
+		}
+		writer = next
+	}
+	return http.StatusOK, 0
+}
+
+func executionTarget(ctx *Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if target := strings.TrimSpace(ctx.ExecutionTarget); target != "" {
+		return target
+	}
+	if ctx.Mode == ModeUpstream {
+		return "official_upstream"
+	}
+	return "local_runtime"
+}
+
+func serverErrorCategory(err error, statusCode int) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case err != nil:
+		return "handler_error"
+	case statusCode >= http.StatusInternalServerError:
+		return "server_error"
+	case statusCode >= http.StatusBadRequest:
+		return "client_error"
+	default:
+		return ""
 	}
 }
 

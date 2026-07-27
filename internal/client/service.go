@@ -14,6 +14,7 @@ import (
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
+	"cursor/internal/observability"
 )
 
 const (
@@ -65,6 +66,22 @@ type ProxyService struct {
 	modelTestMu sync.RWMutex
 	// modelTestResults 保存当前进程内的模型测速结果。
 	modelTestResults map[string]ModelAdapterTestResult
+}
+
+type LogCaptureStatus struct {
+	Enabled         bool   `json:"enabled"`
+	Mode            string `json:"mode"`
+	SessionID       string `json:"sessionId,omitempty"`
+	SessionPath     string `json:"sessionPath,omitempty"`
+	LogsRoot        string `json:"logsRoot"`
+	PayloadDegraded bool   `json:"payloadDegraded"`
+	DroppedEvents   uint64 `json:"droppedEvents"`
+	LastError       string `json:"lastError,omitempty"`
+}
+
+type LogCleanupResult struct {
+	RemovedSessions int   `json:"removedSessions"`
+	FreedBytes      int64 `json:"freedBytes"`
 }
 
 // NewProxyService 用于处理与 NewProxyService 相关的逻辑。
@@ -132,12 +149,51 @@ func (s *ProxyService) ensureProxy(cfg serverconfig.Config) error {
 		}
 	}
 
-	proxyServer, err := mitm.NewProxyServer(listenAddr, baseURL, "", "", s.certManager)
+	var capture *observability.Controller
+	if s.backendHost != nil {
+		capture = s.backendHost.Observability()
+	}
+	proxyServer, err := mitm.NewProxyServer(listenAddr, baseURL, "", "", s.certManager, capture)
 	if err != nil {
 		return err
 	}
 	s.proxy = proxyServer
 	return nil
+}
+
+func (s *ProxyService) GetLogCaptureStatus() LogCaptureStatus {
+	status := observability.Status{}
+	if s != nil && s.backendHost != nil && s.backendHost.Observability() != nil {
+		status = s.backendHost.Observability().Status()
+	}
+	logsRoot := ""
+	if s != nil {
+		logsRoot = s.logsRoot
+	}
+	return LogCaptureStatus{
+		Enabled:         status.Enabled,
+		Mode:            status.Mode,
+		SessionID:       status.SessionID,
+		SessionPath:     status.SessionPath,
+		LogsRoot:        logsRoot,
+		PayloadDegraded: status.PayloadDegraded,
+		DroppedEvents:   status.DroppedEvents,
+		LastError:       status.LastError,
+	}
+}
+
+func (s *ProxyService) CleanupClosedLogSessions() (LogCleanupResult, error) {
+	if s == nil {
+		return LogCleanupResult{}, nil
+	}
+	result, err := observability.CleanupAllClosedSessions(s.logsRoot)
+	if err != nil {
+		return LogCleanupResult{}, err
+	}
+	return LogCleanupResult{
+		RemovedSessions: result.RemovedSessions,
+		FreedBytes:      result.FreedBytes,
+	}, nil
 }
 
 func (s *ProxyService) waitForBackend(ctx context.Context) error {

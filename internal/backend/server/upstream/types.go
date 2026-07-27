@@ -10,6 +10,7 @@ import (
 
 	"cursor/internal/audit"
 	"cursor/internal/backend/server"
+	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
 
@@ -25,10 +26,15 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+type CaptureRecorder interface {
+	Record(context.Context, observability.Capture) bool
+}
+
 type Dependencies struct {
 	SystemSettingService SystemSettingService
 	HTTPClient           HTTPClient
 	Audit                *audit.Observer
+	Capture              CaptureRecorder
 	LogRoot              string
 	Routes               []Route
 }

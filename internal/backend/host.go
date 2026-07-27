@@ -19,6 +19,7 @@ import (
 	"cursor/internal/backend/server/upstream"
 	"cursor/internal/logger"
 	"cursor/internal/netproxy"
+	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
 
@@ -27,10 +28,12 @@ const healthPath = "/healthz"
 const tabServerBaseURL = "https://tab.leokun.cn"
 
 type Host struct {
-	store      *serverconfig.Store
-	listenAddr string
-	configs    *serverconfig.Manager
-	healthHTTP *http.Client
+	store              *serverconfig.Store
+	listenAddr         string
+	configs            *serverconfig.Manager
+	observability      *observability.Controller
+	stopConfigObserver func()
+	healthHTTP         *http.Client
 
 	runMu      sync.RWMutex
 	httpServer *http.Server
@@ -55,7 +58,26 @@ func NewHost(store *serverconfig.Store) (*Host, error) {
 		configs:    configs,
 		healthHTTP: newLoopbackHTTPClient(),
 	}
+	controller, observabilityErr := observability.NewControllerWithHumanSink(
+		store.LogsRoot(),
+		observabilitySettings(cfg),
+		logObservabilityEvent,
+	)
+	if observabilityErr != nil {
+		logger.Errorf("初始化链路日志采集失败 error_category=recorder_init_failed")
+	} else {
+		host.observability = controller
+		host.stopConfigObserver = configs.Subscribe(func(next serverconfig.Config) {
+			if err := controller.Reconfigure(observabilitySettings(next)); err != nil {
+				logger.Errorf("更新链路日志采集配置失败 error_category=recorder_reconfigure_failed")
+			}
+		})
+	}
 	if err := host.rebuild(cfg); err != nil {
+		if host.stopConfigObserver != nil {
+			host.stopConfigObserver()
+		}
+		_ = controller.Close()
 		return nil, err
 	}
 	return host, nil
@@ -66,6 +88,24 @@ func (host *Host) ConfigManager() *serverconfig.Manager {
 		return nil
 	}
 	return host.configs
+}
+
+func (host *Host) Observability() *observability.Controller {
+	if host == nil {
+		return nil
+	}
+	return host.observability
+}
+
+func (host *Host) CloseObservability() error {
+	if host == nil {
+		return nil
+	}
+	if host.stopConfigObserver != nil {
+		host.stopConfigObserver()
+		host.stopConfigObserver = nil
+	}
+	return host.observability.Close()
 }
 
 func (host *Host) LoadConfig(ctx context.Context) (serverconfig.Config, error) {
@@ -243,6 +283,26 @@ func (host *Host) InProcessHealthCheck() error {
 	return nil
 }
 
+func observabilitySettings(cfg serverconfig.Config) observability.Settings {
+	return observability.Settings{
+		Mode:          cfg.Observability.Mode,
+		RetentionDays: cfg.Observability.RetentionDays,
+		MaxDiskMB:     cfg.Observability.MaxDiskMB,
+	}
+}
+
+func logObservabilityEvent(event observability.Event) {
+	logger.Info("链路事件",
+		"layer", event.Layer,
+		"event", event.Event,
+		"trace_id", event.TraceID,
+		"route", event.Route,
+		"execution_target", event.ExecutionTarget,
+		"status", event.Status,
+		"duration_ms", event.DurationMS,
+	)
+}
+
 func newLoopbackHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
@@ -267,17 +327,19 @@ func (host *Host) rebuild(cfg serverconfig.Config) error {
 
 func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 	host.listenAddr = cfg.BackendListenAddr
-	agentModule := forwarder.NewModule(appdata.HistoryRootPath(), host.configs)
+	agentModule := forwarder.NewModule(appdata.HistoryRootPath(), host.configs, host.observability)
 	legacyBidiAppendProcedure := "/aiserver.v1.BidiService/BidiAppend"
 	legacyRunSSEProcedure := "/agent.v1.AgentService/RunSSE"
 	routeDeps := upstream.Dependencies{
 		SystemSettingService: &serverSystemSettings{configs: host.configs},
 		HTTPClient:           netproxy.NewHTTPClient(30000 * time.Second),
+		Capture:              host.observability,
 	}
 
 	host.mux = server.New(
 		server.Use(
 			server.Recover(),
+			server.Observe(host.observability),
 			server.ServerContext(),
 			server.PolicyMiddleware(host.configs),
 			server.ErrorEncoder(),
@@ -707,6 +769,9 @@ func directUpstreamProcedure(pattern string, name string, protocol server.RouteO
 			targetURL.Host = "api2.cursor.sh:443"
 			ctx.UpstreamURL = &targetURL
 		}
+		if ctx != nil {
+			ctx.ExecutionTarget = "official_upstream"
+		}
 		return direct(ctx)
 	}
 	return server.POST(pattern,
@@ -751,6 +816,7 @@ func tabServerUpstreamProcedure(pattern string, name string, protocol server.Rou
 			targetURL.Scheme = baseURL.Scheme
 			targetURL.Host = baseURL.Host
 			ctx.UpstreamURL = &targetURL
+			ctx.ExecutionTarget = "external_relay"
 		}
 		return direct(ctx)
 	}

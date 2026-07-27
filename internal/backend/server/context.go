@@ -6,9 +6,15 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"cursor/internal/observability"
 )
 
-const HeaderServerUpstreamURL = "X-Server-Upstream-URL"
+const (
+	HeaderServerUpstreamURL = "X-Server-Upstream-URL"
+	HeaderTraceID           = "X-Cursor-BYOK-Trace-ID"
+	HeaderParentSpanID      = "X-Cursor-BYOK-Parent-Span-ID"
+)
 
 type SourceKind string
 
@@ -26,16 +32,18 @@ const (
 )
 
 type Context struct {
-	Writer    http.ResponseWriter
-	Request   *http.Request
-	RouteName string
-	Source    SourceKind
-	Protocol  ProtocolClass
-	StartedAt time.Time
+	Writer      http.ResponseWriter
+	Request     *http.Request
+	RouteName   string
+	Source      SourceKind
+	Protocol    ProtocolClass
+	StartedAt   time.Time
+	Correlation observability.Correlation
 
-	UpstreamURL *url.URL
-	Mode        ExecutionMode
-	LastError   error
+	UpstreamURL     *url.URL
+	Mode            ExecutionMode
+	ExecutionTarget string
+	LastError       error
 
 	Logger *slog.Logger
 }

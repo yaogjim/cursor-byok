@@ -115,12 +115,16 @@ func (manager *Manager) ProviderStreamIdleTimeout(ctx context.Context) time.Dura
 	return time.Duration(seconds) * time.Second
 }
 
-func (manager *Manager) IsObservabilityLogEnabled(ctx context.Context) bool {
+func (manager *Manager) Observability(ctx context.Context) ObservabilityConfig {
 	if manager == nil {
-		return false
+		return DefaultConfig().Observability
 	}
 	manager.reloadIfChanged(ctx)
-	return manager.currentConfig().Log
+	return normalizeObservabilityConfig(manager.currentConfig().Observability, nil)
+}
+
+func (manager *Manager) IsObservabilityLogEnabled(ctx context.Context) bool {
+	return isFullObservabilityMode(manager.Observability(ctx).Mode)
 }
 
 func (manager *Manager) Subscribe(listener func(Config)) func() {
@@ -165,7 +169,7 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 		})
 	}
 	return legacyruntime.RuntimeConfigSnapshot{
-		ObservabilityLogEnabled:   cfg.Log,
+		ObservabilityLogEnabled:   isFullObservabilityMode(cfg.Observability.Mode),
 		ProviderStreamIdleTimeout: cfg.ProviderStreamIdleTimeout,
 		ModelAdapters:             adapters,
 	}, nil

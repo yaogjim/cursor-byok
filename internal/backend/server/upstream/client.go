@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"cursor/internal/backend/server"
 	"cursor/internal/logger"
 	"cursor/internal/netproxy"
+	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -45,14 +47,39 @@ func ForwardToUpstream(reqCtx *RequestContext, options ForwardOptions) (*Forward
 	if !shouldRequestCarryBody(reqCtx.Method) {
 		requestBody = []byte{}
 	}
+	startedAt := time.Now()
+	target := upstreamExecutionTarget(reqCtx.TargetURL)
+	captureContext := reqCtx.Request.Context()
+	correlation := observability.ChildSpan(observability.CorrelationFromContext(captureContext))
+	captureContext = observability.WithCorrelation(captureContext, correlation)
+	requestPayload, decodeError := safeJSONPayload(reqCtx.ContentType, requestBody)
+	recordUpstreamCapture(reqCtx, captureContext, observability.Capture{
+		Event: observability.Event{
+			Layer:           "upstream",
+			Event:           "request_started",
+			Route:           requestRoute(reqCtx.TargetURL),
+			ExecutionTarget: target,
+			Protocol:        "http",
+			Status:          "started",
+			RequestBytes:    int64(len(requestBody)),
+			DecodeError:     decodeError,
+			Fields: map[string]any{
+				"method":      reqCtx.Method,
+				"target_host": requestHost(reqCtx.TargetURL),
+			},
+		},
+		Payload: requestPayload,
+	})
 
 	upstreamRequest, upstreamClient, err := buildUpstreamRequest(reqCtx, requestBody, options)
 	if err != nil {
+		recordUpstreamFinished(reqCtx, captureContext, target, startedAt, len(requestBody), nil, err)
 		return nil, err
 	}
 
 	upstreamResponse, err := upstreamClient.Do(upstreamRequest)
 	if err != nil {
+		recordUpstreamFinished(reqCtx, captureContext, target, startedAt, len(requestBody), nil, err)
 		return nil, err
 	}
 	defer upstreamResponse.Body.Close()
@@ -67,10 +94,96 @@ func ForwardToUpstream(reqCtx *RequestContext, options ForwardOptions) (*Forward
 		ContentType:  upstreamResponse.Header.Get("content-type"),
 		ResponseSize: written,
 	}
+	recordUpstreamFinished(reqCtx, captureContext, target, startedAt, len(requestBody), meta, copyErr)
 	if copyErr != nil {
 		return meta, copyErr
 	}
 	return meta, nil
+}
+
+func recordUpstreamFinished(reqCtx *RequestContext, ctx context.Context, target string, startedAt time.Time, requestBytes int, meta *ForwardMeta, err error) {
+	statusCode := 0
+	responseBytes := int64(0)
+	if meta != nil {
+		statusCode = meta.StatusCode
+		responseBytes = meta.ResponseSize
+	}
+	status := "ok"
+	errorCategory := ""
+	if err != nil {
+		status = "error"
+		errorCategory = "upstream_request_failed"
+	} else if statusCode >= http.StatusBadRequest {
+		status = "error"
+		if statusCode >= http.StatusInternalServerError {
+			errorCategory = "upstream_server_error"
+		} else {
+			errorCategory = "upstream_client_error"
+		}
+	}
+	recordUpstreamCapture(reqCtx, ctx, observability.Capture{Event: observability.Event{
+		Layer:           "upstream",
+		Event:           "request_finished",
+		Route:           requestRoute(reqCtx.TargetURL),
+		ExecutionTarget: target,
+		Protocol:        "http",
+		Status:          status,
+		ErrorCategory:   errorCategory,
+		DurationMS:      time.Since(startedAt).Milliseconds(),
+		RequestBytes:    int64(requestBytes),
+		ResponseBytes:   responseBytes,
+		Fields: map[string]any{
+			"method":      reqCtx.Method,
+			"status_code": statusCode,
+			"target_host": requestHost(reqCtx.TargetURL),
+		},
+	}})
+}
+
+func recordUpstreamCapture(reqCtx *RequestContext, ctx context.Context, capture observability.Capture) {
+	if reqCtx == nil || reqCtx.Deps == nil || reqCtx.Deps.Capture == nil {
+		return
+	}
+	reqCtx.Deps.Capture.Record(ctx, capture)
+}
+
+func safeJSONPayload(contentType string, body []byte) (*observability.Payload, bool) {
+	if len(body) == 0 {
+		return nil, false
+	}
+	if !strings.Contains(strings.ToLower(contentType), "json") {
+		return nil, true
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, true
+	}
+	return &observability.Payload{
+		Name:        "upstream_request",
+		ContentType: "application/json",
+		Data:        decoded,
+	}, false
+}
+
+func upstreamExecutionTarget(target *url.URL) string {
+	if shouldPropagateCorrelation(target) {
+		return "external_relay"
+	}
+	return "official_upstream"
+}
+
+func requestRoute(target *url.URL) string {
+	if target == nil || strings.TrimSpace(target.Path) == "" {
+		return "/"
+	}
+	return target.Path
+}
+
+func requestHost(target *url.URL) string {
+	if target == nil {
+		return ""
+	}
+	return target.Host
 }
 
 func buildUpstreamRequest(reqCtx *RequestContext, body []byte, options ForwardOptions) (*http.Request, HTTPClient, error) {
@@ -81,6 +194,13 @@ func buildUpstreamRequest(reqCtx *RequestContext, body []byte, options ForwardOp
 
 	copyRequestHeadersForUpstream(upstreamRequest.Header, reqCtx.Headers)
 	upstreamRequest.Header.Del(HeaderRawServerURL)
+	upstreamRequest.Header.Del(server.HeaderTraceID)
+	upstreamRequest.Header.Del(server.HeaderParentSpanID)
+	if shouldPropagateCorrelation(reqCtx.TargetURL) {
+		correlation := observability.CorrelationFromContext(reqCtx.Request.Context())
+		upstreamRequest.Header.Set(server.HeaderTraceID, correlation.TraceID)
+		upstreamRequest.Header.Set(server.HeaderParentSpanID, correlation.SpanID)
+	}
 	if !shouldRequestCarryBody(reqCtx.Method) {
 		upstreamRequest.Header.Del("content-length")
 	} else {
@@ -177,6 +297,14 @@ func copyResponseHeadersToClient(target http.Header, source http.Header) {
 			target.Add(key, value)
 		}
 	}
+}
+
+func shouldPropagateCorrelation(target *url.URL) bool {
+	if target == nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(target.Hostname())), ".")
+	return host == "tab.leokun.cn"
 }
 
 func shouldRewriteHost(host string) bool {

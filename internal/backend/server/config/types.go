@@ -19,6 +19,13 @@ const (
 	DefaultTheme                            = "light"
 	DefaultProviderStreamIdleTimeoutSeconds = 240
 	MinProviderStreamIdleTimeoutSeconds     = 30
+	DefaultObservabilityMode                = "basic"
+	DefaultObservabilityRetentionDays       = 7
+	DefaultObservabilityMaxDiskMB           = 1024
+	MinObservabilityRetentionDays           = 1
+	MaxObservabilityRetentionDays           = 90
+	MinObservabilityMaxDiskMB               = 64
+	MaxObservabilityMaxDiskMB               = 10240
 )
 
 type ModelAdapterConfig struct {
@@ -64,8 +71,15 @@ type UpdatesConfig struct {
 	CheckOnStartup bool `json:"checkOnStartup" yaml:"checkOnStartup"`
 }
 
+type ObservabilityConfig struct {
+	Mode          string `json:"mode" yaml:"mode"`
+	RetentionDays int    `json:"retentionDays" yaml:"retentionDays"`
+	MaxDiskMB     int    `json:"maxDiskMB" yaml:"maxDiskMB"`
+}
+
 type Config struct {
-	Log                       bool                 `json:"log" yaml:"log"`
+	LegacyLog                 *bool                `json:"-" yaml:"log,omitempty"`
+	Observability             ObservabilityConfig  `json:"observability" yaml:"observability"`
 	ProviderStreamIdleTimeout int                  `json:"providerStreamIdleTimeout" yaml:"providerStreamIdleTimeout"`
 	BackendListenAddr         string               `json:"backendListenAddr" yaml:"backendListenAddr"`
 	ProxyListenAddr           string               `json:"proxyListenAddr" yaml:"proxyListenAddr"`
@@ -80,7 +94,11 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Log:                       false,
+		Observability: ObservabilityConfig{
+			Mode:          DefaultObservabilityMode,
+			RetentionDays: DefaultObservabilityRetentionDays,
+			MaxDiskMB:     DefaultObservabilityMaxDiskMB,
+		},
 		ProviderStreamIdleTimeout: DefaultProviderStreamIdleTimeoutSeconds,
 		BackendListenAddr:         DefaultBackendListenAddr,
 		ProxyListenAddr:           DefaultProxyListenAddr,
@@ -102,7 +120,7 @@ func DefaultConfig() Config {
 
 func NormalizeConfig(input Config) (Config, error) {
 	output := DefaultConfig()
-	output.Log = input.Log
+	output.Observability = normalizeObservabilityConfig(input.Observability, input.LegacyLog)
 	output.ProviderStreamIdleTimeout = normalizeProviderStreamIdleTimeout(input.ProviderStreamIdleTimeout)
 	backendListenAddr, err := normalizeListenAddr(input.BackendListenAddr, DefaultBackendListenAddr, "backendListenAddr")
 	if err != nil {
@@ -287,6 +305,49 @@ func normalizeProviderStreamIdleTimeout(value int) int {
 	}
 	if value < MinProviderStreamIdleTimeoutSeconds {
 		return MinProviderStreamIdleTimeoutSeconds
+	}
+	return value
+}
+
+func normalizeObservabilityConfig(input ObservabilityConfig, legacyLog *bool) ObservabilityConfig {
+	mode := normalizeObservabilityMode(input.Mode)
+	if mode == "" {
+		mode = DefaultObservabilityMode
+		if input == (ObservabilityConfig{}) && legacyLog != nil && *legacyLog {
+			mode = "full"
+		}
+	}
+	return ObservabilityConfig{
+		Mode:          mode,
+		RetentionDays: clampPositiveInt(input.RetentionDays, DefaultObservabilityRetentionDays, MinObservabilityRetentionDays, MaxObservabilityRetentionDays),
+		MaxDiskMB:     clampPositiveInt(input.MaxDiskMB, DefaultObservabilityMaxDiskMB, MinObservabilityMaxDiskMB, MaxObservabilityMaxDiskMB),
+	}
+}
+
+func isFullObservabilityMode(value string) bool {
+	return normalizeObservabilityMode(value) == "full"
+}
+
+func normalizeObservabilityMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "basic":
+		return "basic"
+	case "full":
+		return "full"
+	default:
+		return ""
+	}
+}
+
+func clampPositiveInt(value int, fallback int, minimum int, maximum int) int {
+	if value <= 0 {
+		return fallback
+	}
+	if value < minimum {
+		return minimum
+	}
+	if value > maximum {
+		return maximum
 	}
 	return value
 }

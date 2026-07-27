@@ -264,6 +264,9 @@ func (s *ProxyService) ShutdownForQuit() {
 		if err := s.backendHost.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			finalErr = errors.Join(finalErr, err)
 		}
+		if err := s.backendHost.CloseObservability(); err != nil {
+			finalErr = errors.Join(finalErr, err)
+		}
 	}
 	if finalErr != nil {
 		s.setLastError(finalErr)

@@ -14,29 +14,48 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
+	"cursor/internal/observability"
 )
 
 type debugLogConfig interface {
 	IsObservabilityLogEnabled(context.Context) bool
 }
 
-type debugRecorder struct {
-	historyRoot string
-	broker      *StreamBroker
-	config      debugLogConfig
-	mu          sync.Mutex
+type captureRecorder interface {
+	Record(context.Context, observability.Capture) bool
 }
 
-func newDebugRecorder(historyRoot string, broker *StreamBroker, config debugLogConfig) *debugRecorder {
+type debugRecorder struct {
+	historyRoot  string
+	broker       *StreamBroker
+	config       debugLogConfig
+	capture      captureRecorder
+	mu           sync.Mutex
+	correlations map[string]observability.Correlation
+}
+
+func newDebugRecorder(historyRoot string, broker *StreamBroker, config debugLogConfig, captures ...captureRecorder) *debugRecorder {
+	var capture captureRecorder
+	if len(captures) > 0 {
+		capture = captures[0]
+	}
 	return &debugRecorder{
-		historyRoot: strings.TrimSpace(historyRoot),
-		broker:      broker,
-		config:      config,
+		historyRoot:  strings.TrimSpace(historyRoot),
+		broker:       broker,
+		config:       config,
+		capture:      capture,
+		correlations: make(map[string]observability.Correlation),
 	}
 }
 
 func (recorder *debugRecorder) enabled(ctx context.Context) bool {
-	if recorder == nil || recorder.config == nil {
+	if recorder == nil {
+		return false
+	}
+	if recorder.capture != nil {
+		return true
+	}
+	if recorder.config == nil {
 		return false
 	}
 	if ctx == nil {
@@ -146,17 +165,24 @@ func (recorder *debugRecorder) appendJSONL(ctx context.Context, requestID string
 	if !recorder.enabled(ctx) || len(event) == 0 {
 		return
 	}
+	if recorder.capture != nil {
+		recorder.recordCapture(ctx, requestID, conversationID, filename, event)
+		return
+	}
 	dir := recorder.debugDir(requestID, conversationID)
 	if strings.TrimSpace(dir) == "" {
 		return
 	}
-	payload, err := json.Marshal(event)
+	payload, err := json.Marshal(observability.Sanitize(event))
 	if err != nil {
 		return
 	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return
 	}
 	file, err := os.OpenFile(filepath.Join(dir, filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -165,6 +191,170 @@ func (recorder *debugRecorder) appendJSONL(ctx context.Context, requestID string
 	}
 	defer file.Close()
 	_, _ = file.Write(append(payload, '\n'))
+}
+
+func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID string, conversationID string, filename string, rawEvent map[string]any) {
+	requestID = strings.TrimSpace(requestID)
+	correlation := observability.CorrelationFromContext(ctx)
+	stored := recorder.correlationForRequest(requestID)
+	if stored.TraceID != "" {
+		useStoredTrace := stored.HTTPRequestID != "" || correlation.HTTPRequestID == ""
+		if useStoredTrace {
+			correlation.TraceID = stored.TraceID
+			if correlation.SpanID == "" {
+				correlation.SpanID = stored.SpanID
+				correlation.ParentSpanID = stored.ParentSpanID
+			}
+		}
+		correlation.HTTPRequestID = firstNonEmpty(correlation.HTTPRequestID, stored.HTTPRequestID)
+	} else if correlation.TraceID == "" {
+		correlation = observability.NewTrace()
+	}
+	correlation.CursorRequestID = firstNonEmpty(correlation.CursorRequestID, requestID)
+	correlation.ConversationID = firstNonEmpty(
+		correlation.ConversationID,
+		strings.TrimSpace(conversationID),
+		recorder.conversationIDForRequest(requestID),
+		stored.ConversationID,
+	)
+	correlation.ModelCallID = firstNonEmpty(correlation.ModelCallID, debugString(rawEvent, "model_call_id"))
+	recorder.rememberCorrelation(requestID, correlation)
+
+	layer := firstNonEmpty(debugString(rawEvent, "layer"), "forwarder")
+	eventName := strings.TrimSuffix(strings.TrimSpace(filename), filepath.Ext(filename))
+	if value := debugString(rawEvent, "event"); value != "" {
+		eventName = value
+	}
+	status := debugString(rawEvent, "status")
+	errorCategory := ""
+	payloadFields, _ := rawEvent["payload"].(map[string]any)
+	errorText := firstNonEmpty(debugString(rawEvent, "error"), debugString(payloadFields, "error"))
+	if errorText != "" {
+		errorCategory = layer + "_error"
+		status = "error"
+	}
+	if status == "" {
+		switch eventName {
+		case "terminal", "terminal_after_context_done":
+			if debugString(rawEvent, "terminal_error_code") == "" {
+				status = "completed"
+			} else {
+				status = "error"
+				errorCategory = "terminal_error"
+			}
+		case "llm_summary":
+			status = "completed"
+		case "llm_request", "subscribe":
+			status = "started"
+		}
+	}
+	fields := make(map[string]any)
+	for _, key := range []string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms"} {
+		if value, ok := rawEvent[key]; ok {
+			fields[key] = value
+		} else if value, ok := payloadFields[key]; ok {
+			fields[key] = value
+		}
+	}
+	protocol := ""
+	executionTarget := "local_runtime"
+	switch layer {
+	case "bidi_raw", "bidi_decoded":
+		protocol = "connect_unary"
+	case "runsse":
+		protocol = "connect_stream"
+	case "provider":
+		protocol = "http_stream"
+		executionTarget = "provider"
+	}
+	requestBytes := int64(0)
+	responseBytes := int64(0)
+	if layer == "bidi_raw" {
+		requestBytes = readInt64Value(rawEvent["data_len"])
+	}
+	if layer == "provider" && eventName == "llm_response_chunk" {
+		responseBytes = readInt64Value(payloadFields["byte_len"])
+	}
+	durationMS := readInt64Value(payloadFields["duration_ms"])
+	payloadData := any(rawEvent)
+	decodeError := false
+	if layer == "bidi_raw" {
+		metadata := make(map[string]any, len(rawEvent))
+		for key, value := range rawEvent {
+			if key == "data_hex" {
+				continue
+			}
+			metadata[key] = value
+		}
+		metadata["raw_omitted"] = true
+		payloadData = metadata
+		decodeError = true
+	}
+	recorder.capture.Record(observability.WithCorrelation(ctx, correlation), observability.Capture{
+		Event: observability.Event{
+			Layer:           layer,
+			Event:           eventName,
+			Route:           debugString(rawEvent, "procedure"),
+			ExecutionTarget: executionTarget,
+			Protocol:        protocol,
+			Status:          status,
+			ErrorCategory:   errorCategory,
+			DurationMS:      durationMS,
+			RequestBytes:    requestBytes,
+			ResponseBytes:   responseBytes,
+			DecodeError:     decodeError,
+			Fields:          fields,
+		},
+		Payload: &observability.Payload{
+			Name:        eventName,
+			ContentType: "application/json",
+			Data:        payloadData,
+		},
+	})
+	if eventName == "terminal" || eventName == "terminal_after_context_done" {
+		recorder.forgetCorrelation(requestID)
+	}
+}
+
+func (recorder *debugRecorder) correlationForRequest(requestID string) observability.Correlation {
+	if recorder == nil || strings.TrimSpace(requestID) == "" {
+		return observability.Correlation{}
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.correlations[strings.TrimSpace(requestID)]
+}
+
+func (recorder *debugRecorder) rememberCorrelation(requestID string, correlation observability.Correlation) {
+	if recorder == nil || strings.TrimSpace(requestID) == "" {
+		return
+	}
+	recorder.mu.Lock()
+	if len(recorder.correlations) >= 4096 {
+		for key := range recorder.correlations {
+			delete(recorder.correlations, key)
+			break
+		}
+	}
+	recorder.correlations[strings.TrimSpace(requestID)] = correlation
+	recorder.mu.Unlock()
+}
+
+func (recorder *debugRecorder) forgetCorrelation(requestID string) {
+	if recorder == nil || strings.TrimSpace(requestID) == "" {
+		return
+	}
+	recorder.mu.Lock()
+	delete(recorder.correlations, strings.TrimSpace(requestID))
+	recorder.mu.Unlock()
+}
+
+func debugString(event map[string]any, key string) string {
+	value, ok := event[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func (recorder *debugRecorder) debugDir(requestID string, conversationID string) string {
