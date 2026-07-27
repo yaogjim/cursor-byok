@@ -1,7 +1,6 @@
 import { computed, reactive, watchSyncEffect } from "vue";
 import { Events } from "@wailsio/runtime";
 import dayjs from "dayjs";
-import { getLocale } from "@/i18n/runtime";
 import { buildClientPreferencesFromState } from "@/state/configProjection";
 import {
   checkForUpdates,
@@ -1080,43 +1079,21 @@ export const appViewState = reactive({
 
 function localizeUpdateMessage(msg) {
   if (!msg) return "";
-  if (msg.includes("当前已是最新版本")) {
+  if (/当前已是最新版本/.test(msg)) {
     const match = msg.match(/v?([0-9]+\.[0-9]+\.[0-9]+)/);
     const version = match ? match[1] : appState.appVersion || "...";
-    const locale = getLocale ? getLocale() : "zh-CN";
-    if (locale === "en-US") {
-      return `You are already on the latest version (v${version}).`;
-    }
-    if (locale === "ja-JP") {
-      return `すでに最新バージョン（v${version}）です。`;
-    }
     return `当前已是最新版本（v${version}）。`;
   }
   return msg;
 }
 
 function localizeReadyContent() {
-  const locale = getLocale ? getLocale() : "zh-CN";
   const version = appState.updateVersion || appState.appVersion || "...";
   const date = formatReleaseDate(appState.updateReleaseDate);
   const notes = appState.updateReleaseNotes || "";
   const kind = appState.updatePromptKind;
 
   const actionHint = (() => {
-    if (locale === "en-US") {
-      if (kind === "available") return appState.updateMandatory
-        ? "This is a required update, but downloading still requires confirmation."
-        : "Confirm to start downloading. Install still requires a second confirmation.";
-      if (kind === "ready") return "Confirm to restart and install this update.";
-      return "";
-    }
-    if (locale === "ja-JP") {
-      if (kind === "available") return appState.updateMandatory
-        ? "必須アップデートですが、ダウンロードには確認が必要です。"
-        : "確認するとダウンロードを開始します。インストールは別途確認が必要です。";
-      if (kind === "ready") return "確認すると再起動してこのアップデートをインストールします。";
-      return "";
-    }
     if (kind === "available") return appState.updateMandatory
       ? "该版本为必要更新，但下载仍需确认。"
       : "确认后才会开始下载；安装仍需再次确认。";
@@ -1124,24 +1101,6 @@ function localizeReadyContent() {
     return "";
   })();
 
-  if (locale === "en-US") {
-    return [
-      `Version: v${version}`,
-      `Release Date: ${date}`,
-      actionHint,
-      "",
-      notes || "No release notes",
-    ].join("\n");
-  }
-  if (locale === "ja-JP") {
-    return [
-      `バージョン: v${version}`,
-      `リリース日: ${date}`,
-      actionHint,
-      "",
-      notes || "リリースノートはありません",
-    ].join("\n");
-  }
   return [
     `版本：v${version}`,
     `发布时间：${date}`,
@@ -1160,28 +1119,14 @@ export const updateViewState = reactive({
     width: `${Math.max(0, Math.min(100, appState.updateProgressPercent || 0))}%`,
   })),
   promptTitle: computed(() => {
-    const locale = getLocale ? getLocale() : "zh-CN";
     switch (appState.updatePromptKind) {
       case "available":
-        if (appState.updateMandatory) {
-          if (locale === "en-US") return "Required Update Available";
-          if (locale === "ja-JP") return "必須アップデートがあります";
-          return "发现必要更新";
-        }
-        if (locale === "en-US") return "New Version Available";
-        if (locale === "ja-JP") return "新しいバージョンがあります";
-        return "发现新版本";
+        return appState.updateMandatory ? "发现必要更新" : "发现新版本";
       case "ready":
-        if (locale === "en-US") return "Update Ready";
-        if (locale === "ja-JP") return "アップデートの準備ができました";
         return "更新已下载";
       case "error":
-        if (locale === "en-US") return "Update Failed";
-        if (locale === "ja-JP") return "アップデートに失敗しました";
         return "更新失败";
       default:
-        if (locale === "en-US") return "Check for Updates";
-        if (locale === "ja-JP") return "アップデートを確認";
         return "检查更新";
     }
   }),
@@ -1197,30 +1142,21 @@ export const updateViewState = reactive({
     }
   }),
   promptConfirmText: computed(() => {
-    const locale = getLocale ? getLocale() : "zh-CN";
     if (appState.updatePromptKind === "available") {
-      if (locale === "en-US") return "Download Update";
-      if (locale === "ja-JP") return "アップデートをダウンロード";
       return "下载更新";
     }
     if (appState.updatePromptKind === "ready") {
-      if (locale === "en-US") return "Restart to Update";
-      if (locale === "ja-JP") return "再起動して更新";
       return "立即重启更新";
     }
-    if (locale === "en-US") return "OK";
-    if (locale === "ja-JP") return "OK";
     return "确定";
   }),
   promptCancelText: computed(() => {
-    const locale = getLocale ? getLocale() : "zh-CN";
-    if (["available", "ready"].includes(appState.updatePromptKind)) {
-      if (locale === "en-US") return appState.updatePromptKind === "available" ? "Not Now" : "Later";
-      if (locale === "ja-JP") return appState.updatePromptKind === "available" ? "今はしない" : "後で";
-      return appState.updatePromptKind === "available" ? "暂不下载" : "稍后";
+    if (appState.updatePromptKind === "available") {
+      return "暂不下载";
     }
-    if (locale === "en-US") return "Cancel";
-    if (locale === "ja-JP") return "キャンセル";
+    if (appState.updatePromptKind === "ready") {
+      return "稍后";
+    }
     return "取消";
   }),
   promptShowCancel: computed(() => ["available", "ready"].includes(appState.updatePromptKind)),

@@ -159,7 +159,7 @@ func (recorder *debugRecorder) appendJSONL(ctx context.Context, requestID string
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
-	file, err := os.OpenFile(filepath.Join(dir, filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(filepath.Join(dir, filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return
 	}

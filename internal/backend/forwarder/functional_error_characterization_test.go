@@ -319,6 +319,31 @@ func TestForceBackgroundShellResultReplaysWithoutReasoning(t *testing.T) {
 	}
 }
 
+func TestIsolatedToolResultWithoutReasoningOnlyReplaysForForceBackgroundShell(t *testing.T) {
+	tests := []struct {
+		toolName string
+		want     int
+	}{
+		{toolName: "ForceBackgroundShell", want: 2},
+		{toolName: "Shell", want: 0},
+		{toolName: "PatchEdit", want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.toolName, func(t *testing.T) {
+			conversation := &ConversationFile{Entries: []HistoryEntry{
+				newToolResultEntry(1, "request", "call-1", test.toolName, `{}`, `{"ok":true}`, "", nil),
+			}}
+			messages, err := NewHistoryProjector().ProjectPromptReplay(conversation)
+			if err != nil {
+				t.Fatalf("ProjectPromptReplay() error = %v", err)
+			}
+			if len(messages) != test.want {
+				t.Fatalf("ProjectPromptReplay() message count = %d, want %d: %#v", len(messages), test.want, messages)
+			}
+		})
+	}
+}
+
 func containsString(values []string, expected string) bool {
 	for _, value := range values {
 		if value == expected {

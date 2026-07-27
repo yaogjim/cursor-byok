@@ -273,7 +273,6 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
         <div
           class="flex-1 center-row justify-end shrink-0 gap-2 text-xs text-[var(--color-text-muted)] pr-4 w-[200px]"
         >
-          <span>刷新统计</span>
           <button
             type="button"
             class="center-row justify-center h-[24px] w-[24px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
