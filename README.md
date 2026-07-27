@@ -1,10 +1,34 @@
-<img  width="820"  alt="image" src="https://github.com/user-attachments/assets/2e1710b0-cdbd-4576-bd24-1614df016219" />
+# Cursor BYOK
 
-<img width="820"  alt="image" src="https://github.com/user-attachments/assets/00885453-6a91-4052-aadf-f686daeec881" />
+> 一句话：这是一个让 Cursor 使用你自己模型 API 的本地 BYOK 客户端，把模型选择权、额度使用权和自托管能力从单一平台绑定里拆出来。
 
-<img  width="820"  alt="image" src="https://github.com/user-attachments/assets/a607be84-a738-4e33-9750-13352e74001c" />
+## 核心特点
 
+- **自带 BYOK 代理能力**：把 OpenAI、Anthropic 或兼容接口接入 Cursor，让已有模型额度直接用于 Chat、Agent 和开发辅助任务。
+- **本地优先、可自托管**：核心服务运行在本机，可按需扩展到自托管部署，降低对单一平台订阅和计费方式的依赖。
+- **协议适配更灵活**：面向不同模型供应商处理协议端点、模型 ID、上下文窗口、额外参数和自定义 Header。
+- **面向更多工具扩展**：目标不是只服务一个入口，而是让自己的模型 API 能接入 IDE、Chat、Agent 和更多开发工作流。
 
+## 系统截图
+
+<img width="820" alt="Cursor BYOK 主界面，展示本地代理状态和模型使用概览" src="https://github.com/user-attachments/assets/2e1710b0-cdbd-4576-bd24-1614df016219" />
+
+**主界面**：查看本地服务状态、模型调用概览、Token 使用和常用操作入口，快速确认 Cursor 是否正在通过本地 BYOK 链路工作。
+
+<img width="820" alt="Cursor BYOK 模型配置界面，配置自有 OpenAI、Anthropic 或兼容模型 API" src="https://github.com/user-attachments/assets/00885453-6a91-4052-aadf-f686daeec881" />
+
+**模型配置**：添加和管理多个模型适配器，配置 Base URL、API Key、模型 ID、协议端点、上下文窗口和额外请求参数。
+
+<img width="820" alt="Cursor BYOK 设置界面，管理本地代理、模型配置和客户端偏好" src="https://github.com/user-attachments/assets/a607be84-a738-4e33-9750-13352e74001c" />
+
+**本地设置**：管理本地服务、代理端口、模型配置入口和客户端偏好，让 Cursor 与自有模型之间的接入路径更透明。
+
+## 基础使用路径
+
+1. 启动客户端，让本地后端和代理服务运行在默认端口。
+2. 在模型配置中添加自己的 OpenAI、Anthropic 或兼容 API。
+3. 按需调整协议端点、上下文窗口、额外参数和自定义 Header。
+4. 在 Cursor 中把流量指向本地代理，即可通过自己的模型完成 Chat、Agent 和开发辅助任务。
 
 ## 为什么做这个项目
 
@@ -31,9 +55,6 @@
 - 降低接入成本，让已有模型额度可以被更充分地利用
 
 最终希望做到：让你的模型 API 可以自由接入到你想使用的任何工具中。
-
-
-
 
 ## Star History
 
