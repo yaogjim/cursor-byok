@@ -9,6 +9,10 @@
 - **协议适配更灵活**：面向不同模型供应商处理协议端点、模型 ID、上下文窗口、额外参数和自定义 Header。
 - **面向更多工具扩展**：目标不是只服务一个入口，而是让自己的模型 API 能接入 IDE、Chat、Agent 和更多开发工作流。
 
+## 交流群组
+
+https://t.me/cursor_byok
+
 ## 系统截图
 
 <img width="820" alt="Cursor BYOK 主界面，展示本地代理状态和模型使用概览" src="./docs/images/main.png" />
