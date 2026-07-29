@@ -35,8 +35,9 @@ type Host struct {
 	stopConfigObserver func()
 	healthHTTP         *http.Client
 
-	runMu      sync.RWMutex
-	httpServer *http.Server
+	runMu       sync.RWMutex
+	httpServer  *http.Server
+	agentModule *forwarder.Module
 
 	lastRunErr error
 
@@ -218,13 +219,17 @@ func (host *Host) Stop(ctx context.Context) error {
 	}
 	host.runMu.Lock()
 	serverInstance := host.httpServer
+	module := host.agentModule
 	host.httpServer = nil
+	host.agentModule = nil
 	host.runMu.Unlock()
+	if module != nil {
+		defer module.Close()
+	}
 	if serverInstance == nil {
 		return nil
 	}
-	err := serverInstance.Shutdown(ctx)
-	return err
+	return serverInstance.Shutdown(ctx)
 }
 
 func (host *Host) HealthCheck(ctx context.Context) error {
@@ -757,6 +762,11 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		),
 	)
 
+	previousModule := host.agentModule
+	host.agentModule = agentModule
+	if previousModule != nil {
+		previousModule.Close()
+	}
 	return nil
 }
 

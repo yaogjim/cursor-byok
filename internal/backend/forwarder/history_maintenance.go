@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"cursor/internal/logsink"
 )
 
 const historyMaintenanceLockStaleAfter = 30 * time.Minute
@@ -47,7 +49,12 @@ func (service *Service) runHistoryMaintenance() error {
 			cleanupRootLegacyHistoryArtifact(historyRoot, entry.Name())
 			continue
 		}
-		service.cleanupConversationLegacyArtifacts(filepath.Join(historyRoot, entry.Name()))
+		path := filepath.Join(historyRoot, entry.Name())
+		if entry.Name() == "_debug" {
+			cleanupManagedDebugArtifacts(path)
+			continue
+		}
+		service.cleanupConversationLegacyArtifacts(path)
 	}
 	return nil
 }
@@ -122,6 +129,26 @@ func (service *Service) cleanupConversationLegacyArtifacts(conversationDir strin
 		if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Printf("forwarder numeric legacy cleanup failed path=%s err=%v", path, err)
 		}
+	}
+	payloadDir := filepath.Join(conversationDir, "debug", "payloads")
+	if stats, cleanupErr := logsink.CleanupPayloadDirectory(payloadDir, true); cleanupErr != nil {
+		log.Printf("forwarder legacy payload cleanup failed path=%s err=%v", payloadDir, cleanupErr)
+	} else if stats.Removed > 0 {
+		log.Printf("forwarder legacy payload cleanup completed path=%s removed=%d kept=%d", payloadDir, stats.Removed, stats.Kept)
+	}
+	cleanupManagedDebugArtifacts(filepath.Join(conversationDir, "debug"))
+}
+
+func cleanupManagedDebugArtifacts(debugRoot string) {
+	stats, err := logsink.CleanupDebugTree(debugRoot, logsink.DebugCleanupConfig{
+		MaxAge: debugLogMaxAge,
+	})
+	if err != nil {
+		log.Printf("forwarder expired debug cleanup failed path=%s err=%v", debugRoot, err)
+		return
+	}
+	if stats.Removed > 0 {
+		log.Printf("forwarder expired debug cleanup completed path=%s removed=%d kept=%d", debugRoot, stats.Removed, stats.Kept)
 	}
 }
 

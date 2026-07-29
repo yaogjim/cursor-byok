@@ -24,6 +24,7 @@ const router = useRouter();
 const routeModeOptions = ROUTE_MODE_OPTIONS;
 const themeOptions = THEME_OPTIONS;
 const observabilityModeOptions = [
+  { label: "关闭", value: "off" },
   { label: "基础（推荐）", value: "basic" },
   { label: "完整调试", value: "full" },
 ];
@@ -149,7 +150,7 @@ onMounted(async () => {
           <div>
             <h2 class="text-base font-medium text-[var(--color-text)]">日志采集</h2>
             <div class="text-sm text-[var(--color-text-secondary)]">
-              基础模式只保存链路元数据；完整调试模式会保存经过凭据清洗的本机业务数据
+              正常 warning/error 日志始终保存；关闭模式不采集会话 debug，基础模式只保存链路元数据，完整调试会额外保存分片 payload
             </div>
           </div>
           <div class="w-[220px] max-w-full">

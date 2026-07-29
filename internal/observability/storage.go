@@ -465,6 +465,8 @@ func sanitizeFilename(value string) string {
 
 func normalizeSettings(settings Settings) Settings {
 	switch strings.ToLower(strings.TrimSpace(settings.Mode)) {
+	case ModeOff:
+		settings.Mode = ModeOff
 	case ModeFull:
 		settings.Mode = ModeFull
 	default:

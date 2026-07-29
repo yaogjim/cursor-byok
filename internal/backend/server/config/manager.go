@@ -123,8 +123,12 @@ func (manager *Manager) Observability(ctx context.Context) ObservabilityConfig {
 	return normalizeObservabilityConfig(manager.currentConfig().Observability, nil)
 }
 
+func (manager *Manager) ObservabilityLogMode(ctx context.Context) string {
+	return manager.Observability(ctx).Mode
+}
+
 func (manager *Manager) IsObservabilityLogEnabled(ctx context.Context) bool {
-	return isFullObservabilityMode(manager.Observability(ctx).Mode)
+	return isFullObservabilityMode(manager.ObservabilityLogMode(ctx))
 }
 
 func (manager *Manager) Subscribe(listener func(Config)) func() {

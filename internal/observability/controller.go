@@ -21,9 +21,13 @@ func NewController(root string, settings Settings) (*Controller, error) {
 
 func NewControllerWithHumanSink(root string, settings Settings, humanSink HumanSink) (*Controller, error) {
 	normalized := normalizeSettings(settings)
-	recorder, err := NewRecorderWithHumanSink(root, normalized, humanSink)
-	if err != nil {
-		return nil, err
+	var recorder *Recorder
+	var err error
+	if normalized.Mode != ModeOff {
+		recorder, err = NewRecorderWithHumanSink(root, normalized, humanSink)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &Controller{
 		root:      root,
@@ -61,14 +65,18 @@ func (controller *Controller) Reconfigure(settings Settings) error {
 	controller.mu.RUnlock()
 	normalized := normalizeSettings(settings)
 	controller.mu.RLock()
-	unchanged := controller.recorder != nil && controller.settings == normalized
+	unchanged := controller.settings == normalized
 	controller.mu.RUnlock()
 	if unchanged {
 		return nil
 	}
-	next, err := NewRecorderWithHumanSink(controller.root, normalized, controller.humanSink)
-	if err != nil {
-		return err
+	var next *Recorder
+	var err error
+	if normalized.Mode != ModeOff {
+		next, err = NewRecorderWithHumanSink(controller.root, normalized, controller.humanSink)
+		if err != nil {
+			return err
+		}
 	}
 	controller.mu.Lock()
 	previous := controller.recorder
@@ -84,7 +92,11 @@ func (controller *Controller) Status() Status {
 	}
 	controller.mu.RLock()
 	recorder := controller.recorder
+	mode := controller.settings.Mode
 	controller.mu.RUnlock()
+	if recorder == nil {
+		return Status{Mode: mode}
+	}
 	return recorder.Status()
 }
 

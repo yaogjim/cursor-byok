@@ -11,7 +11,7 @@
 - `state.json`
 - `context.json`
 - `usage.json`
-- `logs/app.log`
+- `logs/app/app-*.log`
 - `conversation_id`
 - `current_request_id`
 - `request_id`
@@ -179,9 +179,9 @@
 
 ## 快速判断规则
 
-- 如果问题是“给你一个 id，让你先判断是什么 ID，再找日志”，先看 `history/<id>/state.json` 是否存在，再扫 `history/*/state.json`、`history/*/context.json` 和 `logs/app.log`。
+- 如果问题是“给你一个 id，让你先判断是什么 ID，再找日志”，先看 `history/<id>/state.json` 是否存在，再扫 `history/*/state.json`、`history/*/context.json` 和 `logs/app/app-*.log`。
 - 如果问题是“模型输出语义不对”，先看 `context.json.items` 到 `ProjectPromptReplay()` 的投影，再看 provider request normalization。
-- 如果问题是“provider 报 400/参数错误”，先看模型适配层请求构造、`state.latest_request_prefix`、`state.last_provider_call`、`logs/app.log`。
+- 如果问题是“provider 报 400/参数错误”，先看模型适配层请求构造、`state.latest_request_prefix`、`state.last_provider_call`、`logs/app/app-*.log`。
 - 如果问题是“客户端没回某个工具结果 / pending 不收口”，先看 `cursor-always-local` 与 forwarder，同时核对同一 `turn_seq` 是否有 `tool_result` 或控制面错误 entry。
 - 如果问题是“backend 重启后为什么 checkpoint 没法继续恢复 pending”，不要找磁盘 checkpoint；checkpoint 是 live state，重启后的事实源是 `state.json + context.json`。
 - 如果问题是“为什么同一个 `modelID` 还能出现多个渠道”，先检查渠道 ID：规范化后 `baseURL + modelID + apiKey + displayName + openAIEndpoint` 的短 SHA-256；resolver 仍兼容 legacy `baseURL + modelID + apiKey + displayName`。
@@ -220,4 +220,4 @@
 - `history/*/state.json` 的 `current_request_id`、`latest_request_prefix`、`last_provider_call`
 - `history/*/context.json` 的 `items[].request_id`、`items[].tool_call_id`、`items[].payload`
 - `history/usage.json` 的 `event_index` / `recent_events`
-- `logs/app.log`
+- `logs/app/app-*.log`

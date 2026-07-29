@@ -15,8 +15,8 @@ import (
 
 type enabledDebugLogConfig struct{}
 
-func (enabledDebugLogConfig) IsObservabilityLogEnabled(context.Context) bool {
-	return true
+func (enabledDebugLogConfig) ObservabilityLogMode(context.Context) string {
+	return "full"
 }
 
 func TestDebugRecorderUsesUnifiedSanitizedCapture(t *testing.T) {
@@ -32,6 +32,7 @@ func TestDebugRecorderUsesUnifiedSanitizedCapture(t *testing.T) {
 	}
 	status := capture.Status()
 	debug := newDebugRecorder(historyRoot, nil, enabledDebugLogConfig{}, capture)
+	t.Cleanup(debug.Close)
 	debug.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1", "llm_request", map[string]any{
 		"prompt": "full prompt",
 		"apiKey": "provider-secret",
@@ -77,6 +78,7 @@ func TestUnifiedCaptureOmitsUnknownBidiRawBytes(t *testing.T) {
 	}
 	status := capture.Status()
 	debug := newDebugRecorder(t.TempDir(), nil, enabledDebugLogConfig{}, capture)
+	t.Cleanup(debug.Close)
 	debug.LogBidiRaw(context.Background(), "request-raw", "conversation-raw", 1, "deadbeef", "accepted", nil)
 	if err := capture.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -110,6 +112,7 @@ func TestHTTPTraceReplacesPrematureBackgroundCorrelation(t *testing.T) {
 	}
 	status := capture.Status()
 	debug := newDebugRecorder(t.TempDir(), nil, enabledDebugLogConfig{}, capture)
+	t.Cleanup(debug.Close)
 	debug.LogRuntime(context.Background(), "request-correlation", "conversation-1", "premature_background_event", nil)
 	authoritative := observability.Correlation{
 		TraceID: "trace-from-mitm", SpanID: "backend-span", HTTPRequestID: "http-request-1",
@@ -214,8 +217,15 @@ func TestArtifactFilesAreOwnerOnly(t *testing.T) {
 		root := t.TempDir()
 		recorder := newDebugRecorder(root, nil, enabledDebugLogConfig{})
 		recorder.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1", "llm_request", map[string]any{"payload": "sensitive"})
-		path := filepath.Join(root, "conversation-1", "debug", "provider.jsonl")
-		info, err := os.Stat(path)
+		recorder.Close()
+		paths, err := filepath.Glob(filepath.Join(root, "conversation-1", "debug", "provider", "event-*.jsonl"))
+		if err != nil {
+			t.Fatalf("glob provider debug logs: %v", err)
+		}
+		if len(paths) != 1 {
+			t.Fatalf("provider debug log count = %d, want 1", len(paths))
+		}
+		info, err := os.Stat(paths[0])
 		if err != nil {
 			t.Fatalf("stat provider debug log: %v", err)
 		}

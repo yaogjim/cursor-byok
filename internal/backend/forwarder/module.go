@@ -18,6 +18,13 @@ type Module struct {
 	UploadServiceHandler     http.Handler
 }
 
+func (module *Module) Close() {
+	if module == nil || module.Service == nil {
+		return
+	}
+	module.Service.Close()
+}
+
 // NewModule 创建 forwarder 模块，并导出本地 Bidi / RunSSE 处理器。
 func NewModule(historyRoot string, channelService modeladapter.ChannelResolver, captures ...captureRecorder) *Module {
 	service := NewService(historyRoot, channelService, captures...)

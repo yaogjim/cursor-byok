@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"cursor/internal/appdata"
+	"cursor/internal/logsink"
 	"cursor/internal/observability"
 
 	"github.com/lmittmann/tint"
@@ -22,13 +22,14 @@ import (
 )
 
 const (
-	appLogMaxLines        = 10000
-	appLogTrimReserveLine = 1000
+	appLogSegmentMaxBytes = 10 << 20
+	appLogMaxFiles        = 10
+	appLogMaxTotalBytes   = 100 << 20
+	appLogMaxAge          = 14 * 24 * time.Hour
 )
 
 var (
 	initOnce    sync.Once
-	logFile     *os.File
 	logFilePath string
 )
 
@@ -53,10 +54,11 @@ func Init() {
 		}
 		slog.SetDefault(slog.New(handler))
 		stdlog.SetFlags(0)
-		stdlog.SetOutput(stdLogBridge{})
+		stdlog.SetOutput(standardLogWriter{})
 		if logFilePath != "" {
-			slog.Info("应用日志已写入文件", "path", logFilePath, "pid", os.Getpid())
+			slog.Info("应用日志已写入分片目录", "path", logFilePath, "pid", os.Getpid())
 		}
+		go cleanupLegacyPayloadDirectory()
 	})
 }
 
@@ -64,6 +66,12 @@ func Init() {
 func Info(msg string, args ...any) {
 	Init()
 	slog.Info(observability.SanitizeText(msg), args...)
+}
+
+// Warn 输出 warning 级日志。
+func Warn(msg string, args ...any) {
+	Init()
+	slog.Warn(observability.SanitizeText(msg), args...)
 }
 
 // Error 输出 error 级日志。
@@ -76,6 +84,12 @@ func Error(msg string, args ...any) {
 func Infof(format string, args ...any) {
 	Init()
 	slog.Info(formatMessage(format, args...))
+}
+
+// Warnf 输出格式化的 warning 级日志。
+func Warnf(format string, args ...any) {
+	Init()
+	slog.Warn(formatMessage(format, args...))
 }
 
 // Errorf 输出格式化的 error 级日志。
@@ -91,15 +105,6 @@ func formatMessage(format string, args ...any) string {
 	return observability.SanitizeText(strings.TrimSpace(fmt.Sprintf(format, args...)))
 }
 
-type stdLogBridge struct{}
-
-func (stdLogBridge) Write(payload []byte) (int, error) {
-	if message := observability.SanitizeText(strings.TrimSpace(string(payload))); message != "" {
-		slog.Info(message)
-	}
-	return len(payload), nil
-}
-
 func disableColor() bool {
 	if strings.TrimSpace(os.Getenv("NO_COLOR")) != "" {
 		return true
@@ -111,194 +116,49 @@ func disableColor() bool {
 	return !isatty.IsTerminal(fd) && !isatty.IsCygwinTerminal(fd)
 }
 
+func cleanupLegacyPayloadDirectory() {
+	path := filepath.Join(appdata.LogsRootPath(), "payloads")
+	stats, err := logsink.CleanupPayloadDirectory(path, false)
+	if err != nil {
+		slog.Warn("旧版 payload 日志清理失败", "path", path, "error", err)
+		return
+	}
+	if stats.Removed > 0 {
+		slog.Info("旧版 payload 日志清理完成", "path", path, "removed", stats.Removed)
+	}
+}
+
 func buildFileHandler() (slog.Handler, string, error) {
 	if err := appdata.EnsureAssistantHome(); err != nil {
 		return nil, "", err
 	}
-	path := filepath.Join(appdata.LogsRootPath(), "app.log")
-	writer, err := newLineWindowFileWriter(path, appLogMaxLines, appLogTrimReserveLine)
-	if err != nil {
-		return nil, "", err
+	dir := filepath.Join(appdata.LogsRootPath(), "app")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("创建应用日志目录失败: %w", err)
 	}
-	logFile = writer.file
+	writer := logsink.NewRotatingFile(dir, logsink.RotationConfig{
+		Prefix:        "app",
+		Extension:     ".log",
+		MaxBytes:      appLogSegmentMaxBytes,
+		MaxFiles:      appLogMaxFiles,
+		MaxTotalBytes: appLogMaxTotalBytes,
+		MaxAge:        appLogMaxAge,
+	})
 	return tint.NewHandler(writer, &tint.Options{
 		Level:      slog.LevelInfo,
 		TimeFormat: time.RFC3339,
 		NoColor:    true,
-	}), path, nil
+	}), dir, nil
 }
 
-type lineWindowFileWriter struct {
-	mu          sync.Mutex
-	path        string
-	file        *os.File
-	lineCount   int
-	openLine    bool
-	maxLines    int
-	trimReserve int
-}
+type standardLogWriter struct{}
 
-func newLineWindowFileWriter(path string, maxLines int, trimReserve int) (*lineWindowFileWriter, error) {
-	writer := &lineWindowFileWriter{
-		path:        path,
-		maxLines:    maxLines,
-		trimReserve: trimReserve,
+func (standardLogWriter) Write(payload []byte) (int, error) {
+	message := observability.SanitizeText(strings.TrimSpace(string(payload)))
+	if message != "" {
+		slog.Warn(message, "source", "stdlib")
 	}
-	if err := writer.openLocked(); err != nil {
-		return nil, err
-	}
-	lineCount, openLine, err := countFileLines(path)
-	if err != nil {
-		_ = writer.file.Close()
-		return nil, err
-	}
-	writer.lineCount = lineCount
-	writer.openLine = openLine
-	if maxLines > 0 && lineCount > maxLines {
-		if err := writer.trimToLastLinesLocked(maxLines); err != nil {
-			_ = writer.file.Close()
-			return nil, err
-		}
-	}
-	return writer, nil
-}
-
-func (writer *lineWindowFileWriter) Write(payload []byte) (int, error) {
-	writer.mu.Lock()
-	defer writer.mu.Unlock()
-	if writer == nil || writer.file == nil {
-		return 0, fmt.Errorf("log file writer is not initialized")
-	}
-	newLines := writer.countIncomingLines(payload)
-	if writer.maxLines > 0 && newLines > 0 && writer.lineCount+newLines > writer.maxLines {
-		target := writer.maxLines - newLines - writer.trimReserve
-		if target < 0 {
-			target = writer.maxLines - newLines
-		}
-		if target < 0 {
-			target = 0
-		}
-		if err := writer.trimToLastLinesLocked(target); err != nil {
-			return 0, err
-		}
-	}
-	written, err := writer.file.Write(payload)
-	writer.lineCount += writer.countIncomingLines(payload[:written])
-	if written > 0 {
-		writer.openLine = payload[written-1] != '\n'
-	}
-	return written, err
-}
-
-func (writer *lineWindowFileWriter) openLocked() error {
-	file, err := os.OpenFile(writer.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return err
-	}
-	writer.file = file
-	logFile = file
-	return nil
-}
-
-func (writer *lineWindowFileWriter) trimToLastLinesLocked(targetLines int) error {
-	if writer.file != nil {
-		if err := writer.file.Close(); err != nil {
-			return err
-		}
-		writer.file = nil
-	}
-	payload, err := os.ReadFile(writer.path)
-	if err != nil {
-		if reopenErr := writer.openLocked(); reopenErr != nil {
-			return errors.Join(err, reopenErr)
-		}
-		return err
-	}
-	trimmed, lineCount := lastLinesBytes(payload, targetLines)
-	if err := os.WriteFile(writer.path, trimmed, 0o600); err != nil {
-		if reopenErr := writer.openLocked(); reopenErr != nil {
-			return errors.Join(err, reopenErr)
-		}
-		return err
-	}
-	if err := os.Chmod(writer.path, 0o600); err != nil {
-		if reopenErr := writer.openLocked(); reopenErr != nil {
-			return errors.Join(err, reopenErr)
-		}
-		return err
-	}
-	if err := writer.openLocked(); err != nil {
-		return err
-	}
-	writer.lineCount = lineCount
-	writer.openLine = len(trimmed) > 0 && trimmed[len(trimmed)-1] != '\n'
-	return nil
-}
-
-func (writer *lineWindowFileWriter) countIncomingLines(payload []byte) int {
-	if len(payload) == 0 {
-		return 0
-	}
-	newlineCount := bytes.Count(payload, []byte{'\n'})
-	endsWithNewline := payload[len(payload)-1] == '\n'
-	delta := newlineCount
-	switch {
-	case writer.openLine && endsWithNewline:
-		delta--
-	case !writer.openLine && !endsWithNewline:
-		delta++
-	}
-	if delta < 0 {
-		return 0
-	}
-	return delta
-}
-
-func countFileLines(path string) (int, bool, error) {
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	return countBytesLines(payload), len(payload) > 0 && payload[len(payload)-1] != '\n', nil
-}
-
-func countBytesLines(payload []byte) int {
-	if len(payload) == 0 {
-		return 0
-	}
-	count := bytes.Count(payload, []byte{'\n'})
-	if payload[len(payload)-1] != '\n' {
-		count++
-	}
-	return count
-}
-
-func lastLinesBytes(payload []byte, targetLines int) ([]byte, int) {
-	if len(payload) == 0 || targetLines <= 0 {
-		return nil, 0
-	}
-	lineCount := countBytesLines(payload)
-	if lineCount <= targetLines {
-		return append([]byte(nil), payload...), lineCount
-	}
-	dropLines := lineCount - targetLines
-	offset := 0
-	for i := 0; i < dropLines; i++ {
-		next := bytes.IndexByte(payload[offset:], '\n')
-		if next < 0 {
-			return nil, 0
-		}
-		offset += next + 1
-	}
-	trimmed := append([]byte(nil), payload[offset:]...)
-	return trimmed, countBytesLines(trimmed)
+	return len(payload), nil
 }
 
 type multiHandler struct {

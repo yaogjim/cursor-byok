@@ -21,7 +21,7 @@
   - provider call 与 turn usage 聚合。
   - 重点字段：`totals`、`daily`、`recent_events`、`event_index`。
 
-`logs/app.log` 是运行日志；它只用于补充运行时证据，不是会话事实源。
+`logs/app/app-*.log` 是运行日志；它只用于补充运行时证据，不是会话事实源。
 
 当前实现不再支持：
 
@@ -45,11 +45,11 @@
 2. 是否是 `requestId`
    - 在 `history/*/state.json` 中查 `current_request_id`、`latest_request_prefix.request_id`、`last_provider_call.request_id`。
    - 在 `history/*/context.json` 的 `items[].request_id` 中查。
-   - 在 `logs/app.log` 中查。
+   - 在 `logs/app/app-*.log` 中查。
 3. 是否是 `modelCallId`
    - 在 `state.json` 中查 `latest_request_prefix.model_call_id`、`last_provider_call.model_call_id`。
    - 在 `context.json.items[].payload` 中查 `model_call_id`。
-   - 在 `logs/app.log` 中查 `model_call_id=<id>`。
+   - 在 `logs/app/app-*.log` 中查 `model_call_id=<id>`。
 4. 是否是 `toolCallId` / `exec_id`
    - 在 `context.json.items[].tool_call_id`、`items[].payload` 中查。
    - 在协议/工具相关日志中查。
@@ -88,16 +88,14 @@ ls -la "$HISTORY_ROOT/$CONV_ID"
 当前 provider artifact recorder 的行为：
 
 - `RecordLLMRequest(...)`
-  - 只缓存当前 provider call 的请求摘要。
-  - 如果 payload 可解析 provider/model/openai_endpoint，会更新 `state.latest_request_prefix`。
-  - 不再写 `request.json`。
+  - 缓存当前 provider call 的请求摘要，并更新 `state.latest_request_prefix`。
+  - `full` 模式把原始请求 payload 写入 `debug/payloads/pack-*.jsonl`，在 `debug/provider/event-*.jsonl` 中保存 `payload_ref`。
 - `AppendLLMResponseChunk(...)`
-  - 当前是 no-op。
-  - 不再写 `sse.jsonl`。
+  - `full` 模式把响应 chunk 聚合写入 payload pack，不再制造逐 chunk 小文件。
+  - `basic` 模式只记录 chunk 字节数等摘要。
 - `RecordLLMSummary(...)`
-  - 只补齐当前 provider call summary，并更新 `state.latest_request_prefix.prompt_tokens_total`。
-  - usage 聚合写入 `history/usage.json`。
-  - 不再写 `summary.json`。
+  - 更新 `state.latest_request_prefix.prompt_tokens_total`。
+  - `basic/full` 模式在 provider event 分片记录摘要；usage 聚合仍写入 `history/usage.json`。
 
 所以 provider 错误排查应优先看：
 
@@ -105,7 +103,7 @@ ls -la "$HISTORY_ROOT/$CONV_ID"
 - `state.latest_request_prefix`
 - `context.json.items` 里的 `metadata/provider_error/turn_completed` 等 payload
 - `history/usage.json`
-- `logs/app.log`
+- `logs/app/app-*.log`
 - `internal/backend/agent/model/openai.go` / `anthropic.go` 的请求构造和错误解析
 
 ## 这些文件是怎么生成的
@@ -171,7 +169,7 @@ ls -la "$HISTORY_ROOT/$CONV_ID"
 ## 快速判断规则
 
 - 用户只发一个 id 时，先查 `history/<id>/state.json` 是否存在；不存在再扫 `state.json/context.json/logs`。
-- 请求失败时，先看 `state.last_provider_call`、`context.json.items` 的错误 metadata、`logs/app.log`；不要找 `turns/<n>/summary.json`。
+- 请求失败时，先看 `state.last_provider_call`、`context.json.items` 的错误 metadata、`logs/app/app-*.log`；不要找 `turns/<n>/summary.json`。
 - pending / 工具不收口时，先看同一 `turn_seq` 的 tool call 和 tool result entries，再对照协议上行 `exec_client_message` / `exec_client_control_message` / `interaction_response`。
 - prefix cache 异常时，先看 `context.json.items` 的稳定追加顺序和 `usage.json` 的 cache token 字段。
 - 如果 history 与日志冲突，优先相信当前仍在更新的 `state.json/context.json`，再用日志解释运行时经过了哪条路径。

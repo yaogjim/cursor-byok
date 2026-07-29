@@ -20,6 +20,9 @@ const (
 	DefaultProviderStreamIdleTimeoutSeconds = 240
 	MinProviderStreamIdleTimeoutSeconds     = 30
 	DefaultObservabilityMode                = "basic"
+	ObservabilityModeOff                    = "off"
+	ObservabilityModeBasic                  = "basic"
+	ObservabilityModeFull                   = "full"
 	DefaultObservabilityRetentionDays       = 7
 	DefaultObservabilityMaxDiskMB           = 1024
 	MinObservabilityRetentionDays           = 1
@@ -120,6 +123,9 @@ func DefaultConfig() Config {
 
 func NormalizeConfig(input Config) (Config, error) {
 	output := DefaultConfig()
+	if strings.TrimSpace(input.Observability.Mode) != "" && normalizeObservabilityMode(input.Observability.Mode) == "" {
+		return Config{}, errors.New("observability.mode 仅支持 off、basic 或 full")
+	}
 	output.Observability = normalizeObservabilityConfig(input.Observability, input.LegacyLog)
 	output.ProviderStreamIdleTimeout = normalizeProviderStreamIdleTimeout(input.ProviderStreamIdleTimeout)
 	backendListenAddr, err := normalizeListenAddr(input.BackendListenAddr, DefaultBackendListenAddr, "backendListenAddr")
@@ -313,8 +319,12 @@ func normalizeObservabilityConfig(input ObservabilityConfig, legacyLog *bool) Ob
 	mode := normalizeObservabilityMode(input.Mode)
 	if mode == "" {
 		mode = DefaultObservabilityMode
-		if input == (ObservabilityConfig{}) && legacyLog != nil && *legacyLog {
-			mode = "full"
+		if input == (ObservabilityConfig{}) && legacyLog != nil {
+			if *legacyLog {
+				mode = ObservabilityModeFull
+			} else {
+				mode = ObservabilityModeOff
+			}
 		}
 	}
 	return ObservabilityConfig{
@@ -325,15 +335,17 @@ func normalizeObservabilityConfig(input ObservabilityConfig, legacyLog *bool) Ob
 }
 
 func isFullObservabilityMode(value string) bool {
-	return normalizeObservabilityMode(value) == "full"
+	return normalizeObservabilityMode(value) == ObservabilityModeFull
 }
 
 func normalizeObservabilityMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "basic":
-		return "basic"
-	case "full":
-		return "full"
+	case ObservabilityModeOff:
+		return ObservabilityModeOff
+	case ObservabilityModeBasic:
+		return ObservabilityModeBasic
+	case ObservabilityModeFull:
+		return ObservabilityModeFull
 	default:
 		return ""
 	}

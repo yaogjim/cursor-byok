@@ -12,6 +12,7 @@ import (
 const SchemaVersion = 1
 
 const (
+	ModeOff   = "off"
 	ModeBasic = "basic"
 	ModeFull  = "full"
 )

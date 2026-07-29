@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,7 +17,7 @@ import (
 )
 
 type debugLogConfig interface {
-	IsObservabilityLogEnabled(context.Context) bool
+	ObservabilityLogMode(context.Context) string
 }
 
 type captureRecorder interface {
@@ -30,6 +29,7 @@ type debugRecorder struct {
 	broker       *StreamBroker
 	config       debugLogConfig
 	capture      captureRecorder
+	sink         *debugSink
 	mu           sync.Mutex
 	correlations map[string]observability.Correlation
 }
@@ -39,33 +39,48 @@ func newDebugRecorder(historyRoot string, broker *StreamBroker, config debugLogC
 	if len(captures) > 0 {
 		capture = captures[0]
 	}
+	var sink *debugSink
+	if config != nil || capture != nil {
+		sink = newDebugSink()
+	}
 	return &debugRecorder{
 		historyRoot:  strings.TrimSpace(historyRoot),
 		broker:       broker,
 		config:       config,
 		capture:      capture,
+		sink:         sink,
 		correlations: make(map[string]observability.Correlation),
 	}
 }
 
-func (recorder *debugRecorder) enabled(ctx context.Context) bool {
-	if recorder == nil {
-		return false
-	}
-	if recorder.capture != nil {
-		return true
-	}
-	if recorder.config == nil {
-		return false
+func (recorder *debugRecorder) mode(ctx context.Context) string {
+	if recorder == nil || recorder.config == nil {
+		return "off"
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return recorder.config.IsObservabilityLogEnabled(ctx)
+	switch strings.ToLower(strings.TrimSpace(recorder.config.ObservabilityLogMode(ctx))) {
+	case "basic":
+		return "basic"
+	case "full":
+		return "full"
+	default:
+		return "off"
+	}
+}
+
+func (recorder *debugRecorder) enabled(ctx context.Context) bool {
+	return recorder.mode(ctx) != "off"
+}
+
+func (recorder *debugRecorder) full(ctx context.Context) bool {
+	return recorder.mode(ctx) == "full"
 }
 
 func (recorder *debugRecorder) LogBidiRaw(ctx context.Context, requestID string, conversationID string, appendSeqno int64, dataHex string, status string, extra map[string]any) {
-	if !recorder.enabled(ctx) {
+	mode := recorder.mode(ctx)
+	if mode == "off" {
 		return
 	}
 	event := recorder.baseEvent("bidi_raw", requestID, conversationID)
@@ -73,8 +88,12 @@ func (recorder *debugRecorder) LogBidiRaw(ctx context.Context, requestID string,
 	event["procedure"] = "/aiserver.v1.BidiService/BidiAppend"
 	event["append_seqno"] = appendSeqno
 	event["status"] = strings.TrimSpace(status)
-	event["data_hex"] = dataHex
 	event["data_len"] = len(dataHex)
+	if mode == "full" {
+		event["data_hex"] = dataHex
+	} else {
+		event["payload_omitted"] = "basic_mode"
+	}
 	for key, value := range extra {
 		event[key] = value
 	}
@@ -82,7 +101,8 @@ func (recorder *debugRecorder) LogBidiRaw(ctx context.Context, requestID string,
 }
 
 func (recorder *debugRecorder) LogBidiDecoded(ctx context.Context, requestID string, conversationID string, appendSeqno int64, clientKind string, message *agentv1.AgentClientMessage, intent InboundIntent, extra map[string]any) {
-	if !recorder.enabled(ctx) {
+	mode := recorder.mode(ctx)
+	if mode == "off" {
 		return
 	}
 	event := recorder.baseEvent("bidi_decoded", requestID, conversationID)
@@ -90,8 +110,13 @@ func (recorder *debugRecorder) LogBidiDecoded(ctx context.Context, requestID str
 	event["append_seqno"] = appendSeqno
 	event["client_kind"] = strings.TrimSpace(clientKind)
 	event["message_case"] = agentClientMessageCase(message)
-	event["message"] = protoJSONDebugPayload(message)
-	event["intent"] = inboundIntentDebugPayload(intent)
+	if mode == "full" {
+		event["message"] = deferredProtoJSONDebugPayload(message)
+		event["intent"] = deferredInboundIntentDebugPayload(intent)
+	} else {
+		event["intent_kind"] = strings.TrimSpace(intent.Kind)
+		event["payload_omitted"] = "basic_mode"
+	}
 	if requestedModel := requestedModelDebugPayload(message); requestedModel != nil {
 		event["requested_model"] = requestedModel
 	}
@@ -141,13 +166,36 @@ func (recorder *debugRecorder) LogProvider(ctx context.Context, requestID string
 }
 
 func (recorder *debugRecorder) LogProviderArtifact(ctx context.Context, requestID string, conversationID string, modelCallID string, eventName string, payload map[string]any) {
-	if !recorder.enabled(ctx) {
+	mode := recorder.mode(ctx)
+	if mode == "off" {
 		return
 	}
-	recorder.LogProvider(ctx, requestID, conversationID, eventName, map[string]any{
+	fields := map[string]any{
 		"model_call_id": strings.TrimSpace(modelCallID),
-		"payload":       payload,
-	})
+	}
+	if mode == "full" {
+		fields["payload"] = payload
+	} else {
+		fields["payload_summary"] = summarizeDebugArtifactPayload(payload)
+		fields["payload_omitted"] = "basic_mode"
+	}
+	recorder.LogProvider(ctx, requestID, conversationID, eventName, fields)
+}
+
+func (recorder *debugRecorder) ServerMessagePayload(ctx context.Context, message *agentv1.AgentServerMessage) any {
+	if !recorder.full(ctx) || message == nil {
+		return nil
+	}
+	return deferredProtoJSONDebugPayload(message)
+}
+
+func (recorder *debugRecorder) Close() {
+	if recorder == nil {
+		return
+	}
+	if recorder.sink != nil {
+		recorder.sink.Close()
+	}
 }
 
 func (recorder *debugRecorder) baseEvent(layer string, requestID string, conversationID string) map[string]any {
@@ -162,35 +210,20 @@ func (recorder *debugRecorder) baseEvent(layer string, requestID string, convers
 }
 
 func (recorder *debugRecorder) appendJSONL(ctx context.Context, requestID string, conversationID string, filename string, event map[string]any) {
-	if !recorder.enabled(ctx) || len(event) == 0 {
+	if len(event) == 0 || recorder == nil {
 		return
 	}
 	if recorder.capture != nil {
 		recorder.recordCapture(ctx, requestID, conversationID, filename, event)
+	}
+	if recorder.sink == nil {
 		return
 	}
 	dir := recorder.debugDir(requestID, conversationID)
 	if strings.TrimSpace(dir) == "" {
 		return
 	}
-	payload, err := json.Marshal(observability.Sanitize(event))
-	if err != nil {
-		return
-	}
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return
-	}
-	file, err := os.OpenFile(filepath.Join(dir, filename), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.Write(append(payload, '\n'))
+	recorder.sink.Append(dir, filename, event)
 }
 
 func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID string, conversationID string, filename string, rawEvent map[string]any) {
@@ -477,6 +510,67 @@ func requestedModelPayload(model *agentv1.RequestedModel) map[string]any {
 		"built_in_model":                   model.GetBuiltInModel(),
 		"is_variant_string_representation": model.GetIsVariantStringRepresentation(),
 		"parameters":                       parameters,
+	}
+}
+
+func summarizeDebugArtifactPayload(payload map[string]any) map[string]any {
+	if len(payload) == 0 {
+		return nil
+	}
+	summary := make(map[string]any)
+	for _, key := range []string{
+		"request_id",
+		"run_id",
+		"model_call_id",
+		"provider",
+		"openai_endpoint",
+		"model",
+		"runtime_model_id",
+		"resolved_channel_id",
+		"resolved_channel_name",
+		"started_at",
+		"first_event_at",
+		"finished_at",
+		"finish_reason",
+		"input_tokens",
+		"output_tokens",
+		"cache_read_tokens",
+		"cache_write_tokens",
+		"prompt_tokens_total",
+		"request_tokens_total",
+		"error",
+		"ttft_ms",
+		"duration_ms",
+		"byte_len",
+	} {
+		if value, ok := payload[key]; ok {
+			summary[key] = value
+		}
+	}
+	if body, ok := payload["body"]; ok && body != nil {
+		summary["body_omitted"] = true
+	}
+	if chunk, ok := payload["raw_chunk"].(string); ok {
+		summary["raw_chunk_byte_len"] = len([]byte(chunk))
+	}
+	return summary
+}
+
+func deferredProtoJSONDebugPayload(message proto.Message) debugFieldEncoder {
+	return func() ([]byte, error) {
+		if message == nil {
+			return []byte("null"), nil
+		}
+		return protojson.MarshalOptions{
+			UseProtoNames:   true,
+			EmitUnpopulated: false,
+		}.Marshal(message)
+	}
+}
+
+func deferredInboundIntentDebugPayload(intent InboundIntent) debugFieldEncoder {
+	return func() ([]byte, error) {
+		return json.Marshal(inboundIntentDebugPayload(intent))
 	}
 }
 

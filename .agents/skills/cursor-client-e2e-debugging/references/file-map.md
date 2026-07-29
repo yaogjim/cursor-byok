@@ -43,7 +43,7 @@
 - `~/.cursor-local-assistant-v2/history/<conversationId>/state.json`
 - `~/.cursor-local-assistant-v2/history/<conversationId>/context.json`
 - `~/.cursor-local-assistant-v2/history/<conversationId>/conversation.lock`
-- `~/.cursor-local-assistant-v2/logs/app.log`
+- `~/.cursor-local-assistant-v2/logs/app/app-*.log`
 
 其中：
 

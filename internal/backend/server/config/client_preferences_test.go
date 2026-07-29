@@ -81,18 +81,9 @@ func TestNormalizeConfigMigratesAndBoundsObservability(t *testing.T) {
 		RetentionDays: MinObservabilityRetentionDays - 1,
 		MaxDiskMB:     MaxObservabilityMaxDiskMB + 1,
 	}
-	normalized, err = NormalizeConfig(input)
-	if err != nil {
-		t.Fatalf("NormalizeConfig() observability error = %v", err)
-	}
-	if normalized.Observability.Mode != "basic" {
-		t.Fatalf("explicit invalid mode = %q, want basic", normalized.Observability.Mode)
-	}
-	if normalized.Observability.RetentionDays != DefaultObservabilityRetentionDays {
-		t.Fatalf("retention days = %d, want default %d", normalized.Observability.RetentionDays, DefaultObservabilityRetentionDays)
-	}
-	if normalized.Observability.MaxDiskMB != MaxObservabilityMaxDiskMB {
-		t.Fatalf("max disk MB = %d, want max %d", normalized.Observability.MaxDiskMB, MaxObservabilityMaxDiskMB)
+	_, err = NormalizeConfig(input)
+	if err == nil {
+		t.Fatal("NormalizeConfig() accepted unsupported observability mode")
 	}
 
 	input.LegacyLog = nil
@@ -139,8 +130,8 @@ func TestStoreLoadMigratesMissingClientPreferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.Observability.Mode != "basic" {
-		t.Fatalf("legacy log=false mode = %q, want basic", cfg.Observability.Mode)
+	if cfg.Observability.Mode != "off" {
+		t.Fatalf("legacy log=false mode = %q, want off", cfg.Observability.Mode)
 	}
 	if cfg.Appearance.Theme != "light" || cfg.Advertising.Enabled || cfg.Updates.CheckOnStartup {
 		t.Fatalf("unexpected migrated preferences: %+v", cfg)

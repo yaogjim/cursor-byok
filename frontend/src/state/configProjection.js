@@ -1,5 +1,5 @@
 const SUPPORTED_THEMES = new Set(["light", "dark"]);
-const SUPPORTED_OBSERVABILITY_MODES = new Set(["basic", "full"]);
+const SUPPORTED_OBSERVABILITY_MODES = new Set(["off", "basic", "full"]);
 
 export const DEFAULT_OBSERVABILITY_CONFIG = Object.freeze({
   mode: "basic",
@@ -57,7 +57,9 @@ export function normalizeObservabilityConfig(source, legacyLog = false) {
   const requestedMode = asString(raw.mode).toLowerCase();
   const mode = SUPPORTED_OBSERVABILITY_MODES.has(requestedMode)
     ? requestedMode
-    : (!hasObservability && asBoolean(legacyLog) ? "full" : DEFAULT_OBSERVABILITY_CONFIG.mode);
+    : (!hasObservability && legacyLog !== undefined
+      ? (asBoolean(legacyLog) ? "full" : "off")
+      : DEFAULT_OBSERVABILITY_CONFIG.mode);
   return {
     mode,
     retentionDays: boundedInteger(

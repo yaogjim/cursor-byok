@@ -304,6 +304,13 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captu
 	return service
 }
 
+func (service *Service) Close() {
+	if service == nil || service.debug == nil {
+		return
+	}
+	service.debug.Close()
+}
+
 // newServiceWithDependencies 主要用于测试场景，允许注入替身依赖。
 func newServiceWithDependencies(store *ConversationFileStore, projector *HistoryProjector, compiler PromptCompiler, provider ProviderGateway, broker *StreamBroker) *Service {
 	historyRoot := ""
@@ -462,7 +469,7 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 						service.debug.LogRunSSE(ctx, requestID, "", "send_error", map[string]any{
 							"cursor":       cursor,
 							"message_case": agentServerMessageCase(event.Message),
-							"message":      protoJSONDebugPayload(event.Message),
+							"message":      service.debug.ServerMessagePayload(ctx, event.Message),
 							"error":        err.Error(),
 						})
 						return err
@@ -470,7 +477,7 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 					service.debug.LogRunSSE(ctx, requestID, "", "send_message", map[string]any{
 						"cursor":       cursor,
 						"message_case": agentServerMessageCase(event.Message),
-						"message":      protoJSONDebugPayload(event.Message),
+						"message":      service.debug.ServerMessagePayload(ctx, event.Message),
 					})
 				}
 				cursor++
@@ -523,7 +530,7 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 			service.debug.LogRunSSE(ctx, requestID, "", "heartbeat_error", map[string]any{
 				"cursor":       cursor,
 				"message_case": agentServerMessageCase(heartbeat),
-				"message":      protoJSONDebugPayload(heartbeat),
+				"message":      service.debug.ServerMessagePayload(ctx, heartbeat),
 				"error":        err.Error(),
 			})
 			return err
@@ -531,7 +538,7 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 		service.debug.LogRunSSE(ctx, requestID, "", "heartbeat", map[string]any{
 			"cursor":       cursor,
 			"message_case": agentServerMessageCase(heartbeat),
-			"message":      protoJSONDebugPayload(heartbeat),
+			"message":      service.debug.ServerMessagePayload(ctx, heartbeat),
 		})
 	}
 }

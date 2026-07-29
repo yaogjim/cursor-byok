@@ -7,7 +7,7 @@ description: Use when debugging Cursor client agent/local-mode/tool/backend-stor
 
 当用户只给一个 UUID / id，希望反查它是 `conversationId`、`requestId`、`modelCallId`、`toolCallId` 还是其它运行期 id，并继续定位对应的会话 history、provider 调用状态或协议日志时，也使用此技能。
 
-当用户遇到 provider 400/参数错误、SSE `event: error`、需要从 `debug/provider.jsonl` 抽取最终 provider body 并用 curl 独立复现时，也使用此技能。
+当用户遇到 provider 400/参数错误、SSE `event: error`、需要从 `debug/provider/event-*.jsonl` 抽取最终 provider body 并用 curl 独立复现时，也使用此技能。
 
 ## 首要约束
 
@@ -40,7 +40,7 @@ description: Use when debugging Cursor client agent/local-mode/tool/backend-stor
 
 ## 当前工作流
 
-1. 如果用户给了一个 id，先用 `history/` 目录、`context.json.items`、`state.json` 和 `logs/app.log` 判断它属于哪类 id；不要假设它一定是 `requestId`。
+1. 如果用户给了一个 id，先用 `history/` 目录、`context.json.items`、`state.json` 和 `logs/app/app-*.log` 判断它属于哪类 id；不要假设它一定是 `requestId`。
 2. 一旦拿到 `conversationId`，同时看两份事实源：
    - `history/<conversationId>/state.json`：会话元数据和当前状态，例如 loop、token、current todo/plan、`latest_request_prefix`、`last_provider_call`。
    - `history/<conversationId>/context.json`：append-only 的语义历史 entries；prompt replay 由 `ProjectPromptReplay()` 从这里投影。
@@ -49,7 +49,7 @@ description: Use when debugging Cursor client agent/local-mode/tool/backend-stor
 5. 用 references 里的固定搜索词快速找到入口函数、协议消息和桥接点。
 6. 如果 provider 返回 400/参数错误、SSE `event: error`，或需要验证最终出站 provider body：
    - 先读 [references/provider-replay-debugging.md](references/provider-replay-debugging.md)。
-   - 通过 id 反查拿到 `conversationId`、`requestId`、`modelCallId`，再定位 `history/<conversationId>/debug/provider.jsonl`。
+   - 通过 id 反查拿到 `conversationId`、`requestId`、`modelCallId`，再定位 `history/<conversationId>/debug/provider/event-*.jsonl`，并按事件中的 `payload_ref` 从 `debug/payloads/pack-*.jsonl` 还原 payload。
    - 必要时运行 [scripts/provider-replay.sh](scripts/provider-replay.sh)，只保存 replay 产物，不把 API key 或完整 request body 写进技能/回复。
 7. 如果用户要核对 prefix cache / cache hit：
    - 优先运行 `go run ./scripts/historymetrics [conversationId|path]`
@@ -94,4 +94,4 @@ description: Use when debugging Cursor client agent/local-mode/tool/backend-stor
 
 - 统计 prefix cache / cache hit：运行 `go run ./scripts/historymetrics [conversationId|path]`
 - 兼容壳脚本：运行 [scripts/cache-hit-rate.mjs](scripts/cache-hit-rate.mjs)
-- provider curl 重放：运行 [scripts/provider-replay.sh](scripts/provider-replay.sh)，必填 `REQUEST_LOG`、`REQUEST_ID`、`MODEL_CALL_ID`
+- provider curl 重放：运行 [scripts/provider-replay.sh](scripts/provider-replay.sh)，必填 `DEBUG_DIR`、`REQUEST_ID`、`MODEL_CALL_ID`

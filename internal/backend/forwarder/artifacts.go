@@ -265,7 +265,7 @@ func replayMessageCountFromSummaryObjects(messages []map[string]any) int {
 
 func sanitizeArtifactName(value string) string {
 	replacer := strings.NewReplacer("/", "_", "\\", "_", ":", "_", " ", "_")
-	normalized := replacer.Replace(strings.TrimSpace(value))
+	normalized := strings.Trim(replacer.Replace(strings.TrimSpace(value)), ".")
 	if normalized == "" {
 		return "unknown"
 	}

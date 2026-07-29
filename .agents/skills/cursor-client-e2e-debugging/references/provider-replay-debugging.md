@@ -6,63 +6,64 @@
 
 ## 证据边界
 
-- `history/<conversationId>/debug/provider.jsonl`
+- `history/<conversationId>/debug/provider/event-*.jsonl`
   - 最接近 provider 出站边界。
-  - `event=llm_request` 的 `payload.body` 是最终 provider request body。
-  - 用它做 curl replay，判断问题是否已经出现在出站请求形状。
+  - `event=llm_request` 只保存摘要与 `payload_ref`；完整 payload 位于 `debug/payloads/pack-*.jsonl`。
+  - replay 脚本会校验 ref 路径、offset、length、SHA-256，并还原最终 provider request body。
 - `history/<conversationId>/state.json`
   - 当前状态和最近 provider 摘要。
   - 重点看 `latest_request_prefix`、`last_provider_call`。
 - `history/<conversationId>/context.json`
   - replayable 语义历史。
   - 用来解释为什么会形成这次 prompt，不用来直接重放 provider HTTP 请求。
-- `history/<conversationId>/debug/bidi.raw.jsonl`
-  - 客户端原始上行字节证据。
-- `history/<conversationId>/debug/bidi.decoded.jsonl`
+- `history/<conversationId>/debug/bidi/raw/event-*.jsonl`
+  - 客户端原始上行字节证据；大字段通过 payload pack 引用。
+- `history/<conversationId>/debug/bidi/decoded/event-*.jsonl`
   - 当前 known-schema 解码后的客户端上行证据。
-- `history/<conversationId>/debug/runtime.jsonl`
+- `history/<conversationId>/debug/runtime/event-*.jsonl`
   - 后端把哪些字段挂到 active request / stream 上。
-- `history/<conversationId>/debug/runsse.jsonl`
+- `history/<conversationId>/debug/runsse/event-*.jsonl`
   - 后端尝试发回客户端的消息。
 
 不要把这些证据混用：provider replay 只能证明最终 provider HTTP 请求与响应，不能单独证明客户端原始上传了什么，也不能替代 `context.json` 的语义历史。
 
 ## 前置条件
 
-- 请求发生时 `config.yaml` 中 `log: true`，或已有 `history/<conversationId>/debug/provider.jsonl`。
+- 请求发生时 `config.yaml` 中 `observability.mode: full`，或旧配置 `log: true` 已迁移为 `full`。
+- 已存在 `history/<conversationId>/debug/provider/event-*.jsonl` 和对应的 `debug/payloads/pack-*.jsonl`。
 - 已经通过 id 反查拿到：
   - `conversationId`
   - `requestId`
   - `modelCallId`
 - 已经确认要测的是 Anthropic-compatible `/v1/messages` 请求。
 
-如果没有 debug 文件，先回到 `state.json`、`context.json`、`usage.json`、`logs/app.log` 做推断，并明确“没有直接 provider body 证据”。
+如果没有 debug 文件，先回到 `state.json`、`context.json`、`usage.json`、`logs/app/app-*.log` 做推断，并明确“没有直接 provider body 证据”。
 
 ## 最小流程
 
-1. 定位 provider debug 文件：
+1. 定位 conversation debug 目录：
 
 ```bash
 ROOT="$HOME/.cursor-local-assistant-v2"
 CONV="<conversationId>"
 REQ="<requestId>"
 MODEL_CALL="<modelCallId>"
-REQUEST_LOG="$ROOT/history/$CONV/debug/provider.jsonl"
+DEBUG_DIR="$ROOT/history/$CONV/debug"
 ```
 
-2. 确认 `llm_request` 存在：
+2. 确认 `llm_request` 事件及其 payload 引用存在：
 
 ```bash
 jq -c --arg req "$REQ" --arg mc "$MODEL_CALL" '
   select(.event == "llm_request" and .request_id == $req and .model_call_id == $mc)
-  | {at, conversation_id, request_id, model_call_id, provider: .payload.provider, model: .payload.body.model}
-' "$REQUEST_LOG"
+  | {at, conversation_id, request_id, model_call_id, payload_ref, payload_byte_len}
+' "$DEBUG_DIR/provider/"event-*.jsonl
 ```
 
-3. 执行通用重放脚本：
+3. 执行通用重放脚本；脚本会从 pack 还原 payload，再提取其中的 `body`：
 
 ```bash
-REQUEST_LOG="$REQUEST_LOG" \
+DEBUG_DIR="$DEBUG_DIR" \
 REQUEST_ID="$REQ" \
 MODEL_CALL_ID="$MODEL_CALL" \
 CHANNEL_NAME="GLM" \
@@ -73,7 +74,7 @@ OUT_DIR="/tmp/cursor-provider-replay-$REQ" \
 也可以直接传入 provider 配置，避免读取 `config.yaml`：
 
 ```bash
-REQUEST_LOG="$REQUEST_LOG" \
+DEBUG_DIR="$DEBUG_DIR" \
 REQUEST_ID="$REQ" \
 MODEL_CALL_ID="$MODEL_CALL" \
 BASE_URL="<provider-base-url>" \
@@ -87,7 +88,7 @@ OUT_DIR="/tmp/cursor-provider-replay-$REQ" \
 - `request.body.json`：抽取出的最终 provider body。
 - `response.headers`：HTTP 响应头。
 - `response.sse`：SSE 响应体。
-- `replay.meta.json`：本次重放引用的 id 和 provider log 路径。
+- `replay.meta.json`：本次重放引用的 id、provider event 分片和 payload pack 路径。
 
 ## 结果判断
 
@@ -102,7 +103,7 @@ OUT_DIR="/tmp/cursor-provider-replay-$REQ" \
   - 这种情况下重点比对 `request.body.json` 的消息结构、tool schema、thinking/reasoning 参数、model 名称和 endpoint 兼容性。
 - SSE 正常流式输出
   - 原始 provider 请求形状基本可用。
-  - 如果客户端仍失败，回到 `runsse.jsonl`、forwarder 状态机或客户端协议层继续查。
+  - 如果客户端仍失败，回到 `runsse/event-*.jsonl`、forwarder 状态机或客户端协议层继续查。
 
 ## 常见收敛方向
 
@@ -129,10 +130,11 @@ provider 参数错误时，优先检查：
 `scripts/provider-replay.sh` 使用环境变量控制：
 
 - 必填：
-  - `REQUEST_LOG`
+  - `DEBUG_DIR`，conversation 的 `debug/` 目录；脚本会读取 `provider/event-*.jsonl` 与 `payloads/pack-*.jsonl`。
   - `REQUEST_ID`
   - `MODEL_CALL_ID`
 - 可选：
+  - `EXTRACT_ONLY=1`，只还原 `request.body.json` 与 `replay.meta.json`，不发起 curl。
   - `BASE_URL`
   - `API_KEY`
   - `GLM_BASE_URL`

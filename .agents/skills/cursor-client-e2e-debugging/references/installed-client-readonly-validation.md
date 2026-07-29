@@ -64,7 +64,7 @@ rg -n 'agent window|open_agent_window|NameAgent|UpdateConversationMetadata|shoul
 - 进程路径是否是目标 app
 - 目标扩展 host 是否起来
 - 本地监听端口是否存在
-- `~/.cursor-local-assistant-v2/logs/app.log` 是否更新
+- `~/.cursor-local-assistant-v2/logs/app/app-*.log` 是否更新
 - `~/.cursor-local-assistant-v2/history/<conversationId>/state.json` / `context.json` 是否更新
 - 请求/协议事件是否真的经过你正在分析的 bundle 文件
 
