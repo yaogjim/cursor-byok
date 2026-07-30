@@ -4,22 +4,23 @@
 
 ## 核心特点
 
-- **自带 BYOK 代理能力**：把 OpenAI、Anthropic 或兼容接口接入 Cursor，让已有模型额度直接用于开发工具。
-- **本地优先、可自托管**：核心服务运行在本机，默认使用 `127.0.0.1:18080` 代理和 `127.0.0.1:18090` 后端入口。
+- **自带 BYOK 代理能力**：把 OpenAI、Anthropic 或兼容接口接入 Cursor，让已有模型额度直接用于 Chat、Agent 和开发辅助任务。
+- **本地优先、可自托管**：核心服务运行在本机，默认使用 `127.0.0.1:18080` 代理和 `127.0.0.1:18090` 后端入口，也可按需扩展到自托管部署。
+- **协议适配更灵活**：面向不同模型供应商处理协议端点、模型 ID、上下文窗口、额外参数和自定义 Header。
 - **noad 体验治理**：默认关闭广告网络请求，默认不自动检查和下载更新，启动后是更干净的浅色客户端体验。
 - **保留可控开关**：广告、更新检查、主题等行为集中在本地配置中；开启广告或更新下载都需要用户明确动作。
 
 ## 系统截图
 
-![main](./docs/images/main.png)
+<img width="820" alt="Cursor BYOK noad 主界面，展示本地代理状态和模型使用概览" src="./docs/images/main.png" />
 
 **主界面**：快速确认本地服务状态、模型调用概览、Token 使用和常用入口。`noad` 分支默认不显示广告位，首页更聚焦模型接入和运行状态。
 
-![model](./docs/images/model.png)
+<img width="820" alt="Cursor BYOK noad 模型配置界面，配置自有 OpenAI、Anthropic 或兼容模型 API" src="./docs/images/model.png" />
 
-**模型配置**：配置自有模型的 Base URL、API Key、模型 ID、协议端点和上下文参数；适合把多个供应商或自托管模型统一接到 Cursor。
+**模型配置**：配置自有模型的 Base URL、API Key、模型 ID、协议端点、上下文窗口和额外参数；适合把多个供应商或自托管模型统一接到 Cursor。
 
-![cursor model](./docs/images/cursor model.png)
+<img width="820" alt="Cursor BYOK noad 设置界面，管理本地代理、模型配置和客户端偏好" src="./docs/images/cursor%20model.png" />
 
 **本地设置**：集中管理主题、广告内容、启动时检查更新、本地端口和模型配置入口。`noad` 的关键行为都落在本地配置，不依赖远端默认值。
 
@@ -43,13 +44,11 @@
 3. 按需调整协议端点、上下文窗口、额外参数和自定义 Header。
 4. 在 Cursor 中把流量指向本地代理，即可通过自己的模型完成 Chat、Agent 和开发辅助任务。
 
-## 为什么做这个项目
 
-公司喜欢把 Agent 服务与模型绑定在一起，让用户只能在指定模型、指定订阅和指定计费方式下使用工具。
+## 路线图
 
-我希望打破这种绑定关系：模型应该可以自由选择。开发者应该能够把自己的模型 API 接入到任何 IDE、Chat、Agent 或开发工具中，也可以自托管整套服务，避免被单一平台锁定。
-
-这个项目的目标，是让模型选择权重新回到用户手里。
+[正式版路线图](https://github.com/leookun/cursor-byok/discussions/32)
+[详细使用教程](https://dcne38qm5vlg.feishu.cn/wiki/JeP7wdGnziBXuikNaF5czWbrn8c)
 
 ## 后续
 
