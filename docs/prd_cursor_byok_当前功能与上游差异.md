@@ -2,13 +2,13 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前代码合并基线**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
-- **本次合并来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
+- **当前代码合并基线**：`81be6166eca8b29ee0f51ce8446f2463d492477e`
+- **本次合并来源**：本地 `main@14f20fe654c9ad798510dad9e51f90d2d6a26b8f`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始上游核对基线**：`main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **原始上游核对基线**：`release/0.0.43@726f082e6b9570a6dbaf1c05cc93caf9e5e28c54`
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：安全 merge 已提交；本 PRD 与同步说明作为独立记录提交
-- **状态**：功能记录与差异基线；日志分析 GUI 与能力改进闭环已完成 Design，代码实施中；运行时窗口和网络零请求验收仍需按同步说明执行
+- **当前工作树**：`release/0.0.43` 安全 merge 已提交；本 PRD 同步记录作为独立文档提交
+- **状态**：`0.0.43` 自动化合并门禁已通过；真实账号登录、运行中实例交接、发布资产与安装验收仍按同步说明执行
 
 ## 1. 文档职责与证据口径
 
@@ -30,13 +30,13 @@
 
 本次核对得到：
 
-- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次核对到 `main@9e057399690bff78cd7571dba2e7a14e12767585`。
-- 本次按用户明确目标合并本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`，不能据此把 `origin/main` 永久视为原始上游。
-- 本地同步前基线为 `noad@841a49c0963a911b4c838157438e074ef930b33b`；安全 merge `74c1c38ec3e68ed0f40fbefceaedd41c69616065` 的两个父提交分别为 `841a49c` 与 `b438237`。
-- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；后续原始上游同步仍应通过 `upstream` 远程获取。
-- 本次 merge 未推送远程；本 PRD 和同步说明作为独立文档提交。
+- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次按用户确认同步 `release/0.0.43@726f082e6b9570a6dbaf1c05cc93caf9e5e28c54`；同名 tag 指向另一提交，未作为合并来源。
+- 上游目标先通过同步引用快进到本地 `main@14f20fe654c9ad798510dad9e51f90d2d6a26b8f`，再以真实双父 merge 合入 `noad`。
+- 本地同步前基线为 `noad@17659ece3f283b4fa79af7963a347d508700fcea`；安全 merge `81be6166eca8b29ee0f51ce8446f2463d492477e` 的两个父提交分别为 `17659ec` 与 `14f20fe`。
+- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `https://github.com/leookun/cursor-byok.git`，没有从 `origin/main` 推断上游状态。
+- 本次 merge 创建时尚未推送远程；推送与 release 结果由后续发布步骤单独验证和记录。
 
-相对 `799dbda...b7cd64f` 的已提交差异统计为 **23 个文件，1978 行新增、19 行删除**；客户端体验治理提交相对 `b7cd64f` 另有 **36 个文件，1502 行新增、285 行删除**。统计用于识别同步风险，不代表所有行都是独立产品功能。
+本次 merge 相对 `noad@17659ec` 的差异为 **49 个文件，2665 行新增、466 行删除**。统计包含上游功能、安全整合和专项测试，只用于识别同步范围。
 
 ### 2.2 已提交工作
 
@@ -48,6 +48,8 @@
 | `045b60b` | 增加精确路由优先于 `/AiService/*` 通配路由的测试 | 已提交；只保护路由优先级，不改变目标 |
 | `b7cd64f` | 保存验证路线图与工作决策 | 已提交；属于决策记录，不是运行时功能 |
 | `74c1c38` | 以真实 merge 同步本地 `main@b438237`，整合 artifact 生命周期、Agent replay、静态 i18n 与俄语，并保留本地安全策略 | 已提交并通过完整自动化门禁；运行中实例与网络窗口验收待维护窗口完成 |
+| `17659ec` | 完善日志观测语义、分析项目生命周期、查询/诊断能力与独立分析器 GUI | 已提交并通过主模块及独立分析器门禁 |
+| `81be616` | 安全同步上游 `release/0.0.43`，整合 command/summarize/transcript、控制面账号和版本元数据，并收紧鉴权、凭据与文件写入边界 | 已提交并通过根模块、Tab relay、日志分析器和前端门禁；真实账号与发布资产验收待完成 |
 
 ### 2.3 已有验证证据
 
@@ -75,13 +77,14 @@
 已完成验证：`git diff --check`、`go test ./...`、`go build ./...`、`yarn test:config-projection` 和 `yarn build`。
 ## 4. 相对原始仓库的功能差异
 
-历史差异以 `leookun/cursor-byok main@799dbda` 为起点；本次原始上游核对点为 `9e05739`，实际合并来源为本地 `main@b438237`。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
+历史差异以 `leookun/cursor-byok main@799dbda` 为起点；上一同步记录核对到 `main@9e05739`，本次实际同步原始上游 `release/0.0.43@726f082`，并经本地 `main@14f20fe` 合入。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
 
 | 功能域 | 原始主线行为 | 本地已提交差异 | 当前工作树或决策 | 状态与合并口径 |
 | --- | --- | --- | --- | --- |
 | Agent BYOK provider | 已有本地 provider 主链路及 OpenAI/Anthropic 适配 | 调整 OpenAI 默认协议；增加 retry/replay 相关保护 | 继续以用户 Endpoint 为主要推理出口 | 已提交；必须回归输入输出、重试和恢复 |
 | OpenAI 协议选择 | 原始默认行为以 Responses 为主 | 默认调整为 Chat Completions，同时保留显式 Responses/Custom | 不得静默覆盖用户已有模型配置 | 已提交；配置冲突需人工审查 |
-| Tab/Cpp/FileSync/Git 路由 | 相关 RPC 经 `tab.leokun.cn` relay | 增加脱敏审计接入，转发目标和 body 语义未改变 | 计划支持 `local_official/external_relay` 双模式，但 token 导入和官方直连尚未实现 | 已提交审计；路由变更待验证和确认 |
+| Tab/Cpp/FileSync/Git 路由 | 相关 RPC 经 `tab.leokun.cn` relay | 增加脱敏审计接入，转发目标和 body 语义未改变 | 计划支持 `local_official/external_relay` 双模式；`0.0.43` 的独立账号仅用于插件、Skills 和 MCP 控制面，不改变 Tab relay 身份 | 已提交审计；路由变更待验证和确认 |
+| Cursor 控制面账号 | 原始 `0.0.43` 增加浏览器 PKCE 登录及 `api2.cursor.sh` 控制面转发 | 保留独立身份边界；凭据文件强制 `0600`，前端只接收脱敏状态；未登录时沿用本地兼容动作 | 仅允许插件、Skills、MCP 相关白名单路由使用真实账号，不改变 Cursor 客户端账号 | 已提交并通过单元/构建门禁；真实账号登录和权限行为待隔离验收 |
 | 隐私审计 | 无本项目专用字段摘要观察器 | 默认关闭，仅输出 metadata/字段 presence/大小/事件类型/host 分类 | 仅允许 synthetic canary，禁止正文和凭据落盘 | 已提交并验证；不得恢复 raw dump |
 | 结构化 observability | 原始 debug 工件分散且保留期/配额不足 | 已实现 schema v1 basic/full session、凭据清洗、轮转/配额和独立 CLI 分析 | schema v2 的 project/turn/capability/operation/outcome/build 指纹正在实施 | v1 已实现并验证；v2 Design 已批准、代码未完成 |
 | 独立日志分析器 | 原始主线无本项目独立分析工作流 | 已实现临时 SQLite 流式 CLI、JSON/HTML/脱敏 ZIP | 规划独立 Wails GUI、多维检索、案例库、AI 证据包和客户端受限启动 | CLI 已验证；GUI 与闭环正在实施，独立于客户端发布 |
@@ -99,7 +102,7 @@
 
 - 17 个低可见 RPC 的精确触发条件、失败重试和 privacy mode 差异。
 - 合法隔离 Cursor token 的 Hobby/付费权限、额度、过期和刷新行为。
-- 用户 Cursor token 的 Keychain、刷新、身份隔离和 `local_official/external_relay` 实现。
+- 用户 Cursor token 的 Keychain 存储，以及把独立控制面身份扩展到插件、Skills、MCP 白名单之外的 `local_official/external_relay` 实现。
 - relay、官方直连、本地实现、no-op 和禁用之间的逐 RPC 功能影响。
 - Repository/Docs/Upload 改为诚实失败或完整持久化后的 Cursor UI/状态机影响。
 - 客户端体验治理的网络零请求、旧配置迁移、窗口首屏和发布资源实机验收。
@@ -110,7 +113,7 @@
 
 ## 6. 当前发布前验收缺口
 
-`74c1c38ec3e68ed0f40fbefceaedd41c69616065` 的静态、单元、race 和前端双构建门禁已通过。发布前仍需要在维护窗口完成：
+`81be6166eca8b29ee0f51ce8446f2463d492477e` 的静态、单元、race、独立模块和前端构建门禁已通过。发布与运行时验收仍需要：
 
 1. 验证旧 `config.yaml` 实机迁移不丢失模型、路由和监听地址。
 2. 默认广告关闭时不访问 `ads.leokun.cn`；默认更新设置不请求 manifest 或资源。
@@ -118,6 +121,8 @@
 4. 复核审计默认关闭；审计文件不含正文、凭据、canary 原值或完整 header。
 5. 保留 `tab.leokun.cn` 现状路由，并以运行时元数据确认没有新增自动 fallback。
 6. 完成窗口首屏、`18080/18090` 候选实例交接和 `/healthz` 验收。
+7. 使用隔离账号验证 PKCE 登录、刷新、插件/Skills/MCP 白名单和断开清理，不读取或输出真实 token。
+8. 构建并校验 `0.0.43` 跨平台资产、update manifest、GitHub Release 与安装结果。
 
 ## 7. `main@b438237` 同步记录
 
@@ -156,7 +161,48 @@
 - 广告关闭零请求、更新完整交互序列、旧配置实机迁移与发布资源安装不在本次自动化证据范围内。
 - 本次不执行 `git push`，远程 `origin/noad` 不因本地快进自动更新。
 
-## 8. 后续版本记录格式
+## 8. `release/0.0.43` 同步记录
+
+- **同步时间**：`2026-08-02T20:22:14-07:00`
+- **原始上游目标**：`release/0.0.43@726f082e6b9570a6dbaf1c05cc93caf9e5e28c54`
+- **本地合并来源**：`main@14f20fe654c9ad798510dad9e51f90d2d6a26b8f`
+- **本地同步前基线**：`noad@17659ece3f283b4fa79af7963a347d508700fcea`
+- **merge commit**：`81be6166eca8b29ee0f51ce8446f2463d492477e`
+
+### 8.1 实际接受与整合
+
+- 接受 Cursor command replay、`/summarize` 主动压缩、fork message transcript 同步和 `0.0.43` 版本元数据。
+- 接受独立 Cursor 控制面账号：浏览器 PKCE 登录、access/refresh token 刷新，以及插件、Skills、MCP 白名单请求向 `api2.cursor.sh` 的账号鉴权转发。
+- 接受账号卡片和 Wails API，但保留 noad 的隐私日志封装，并将组件颜色接入现有 light/dark 主题 token。
+- 接受上游删除过时的“禁止写任何测试”技能规则；保留其他 `.agents` 调试与编码指导。
+
+### 8.2 安全重做与边界
+
+- 恢复 `policy.go`、`ModeLocal/ModeUpstream`、`PolicyMiddleware`、全局 fallback upstream 与显式 route precedence；local 处理失败不会自动切换到 official 或 relay。
+- `cursor.sh` 本地模拟身份只在 `ModeLocal` 重写；`ModeUpstream` 保留原始官方身份，账号控制面请求再由专用 header patch 明确覆盖。
+- 控制面凭据独立保存于应用数据目录的 `cursor-account.json`，新建、保存和加载均强制 `0600`；前端状态不含 access/refresh token，断开账号会删除文件。
+- transcript 写入仅接受当前用户 `~/.cursor/projects/**/agent-transcripts`，拒绝相对路径、其他目录和缺少项目层级的路径，避免请求上下文扩大文件写入范围。
+- `tab.leokun.cn` 目标和 17 条 relay 主链路保持原有显式动作；新增外部目标仅为账号登录所需的 `cursor.com` 和白名单控制面 `api2.cursor.sh`。
+
+### 8.3 自动化证据
+
+- `git diff --check`、`git diff --cached --check`、冲突标记和真实凭据特征扫描通过；merge commit 双父为 `17659ec` 与 `14f20fe`。
+- 根模块：`go test ./...`、`go build ./...`、`go vet ./...` 通过。
+- 路由与账号专项：覆盖 local/upstream、Policy middleware、fallback、显式 upstream precedence、请求关联、本地/官方身份隔离、控制面 header patch、凭据权限/脱敏/删除。
+- `cursor-tab-server`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- `tools/log-analyzer`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- 前端：`npm run test:config-projection`、`npm run build` 通过；Wails bindings 已重新生成并确认 4 services、41 methods 后完成生产构建。
+
+仅观察到既有非阻断告警：macOS linker 目标版本警告与 Vite chunk 大小告警。
+
+### 8.4 未验证边界
+
+- 未使用真实 Cursor 账号执行浏览器登录、token 刷新、插件市场、Skills 或 MCP 权限验收；自动化测试使用的均为合成身份。
+- 未停止或替换运行中的 `18080/18090` 代理，因此候选实例交接、窗口首屏、`/healthz` 与真实网络目标序列未在本轮执行。
+- 本记录生成时尚未构建、校验或安装 `0.0.43` 发布资产；发布产物、manifest、GitHub Release 和跨平台安装结果必须以随后 release 流程的实际输出为准。
+- 账号凭据当前采用应用私有文件 `0600` 持久化，不宣称已接入 macOS Keychain、Windows Credential Manager 或 Linux Secret Service。
+
+## 9. 后续版本记录格式
 
 上游更新或本地功能落地后，在本 PRD 中追加一条版本记录，至少包含：
 
