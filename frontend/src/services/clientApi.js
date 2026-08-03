@@ -1,7 +1,10 @@
 import {
+  DisconnectCursorAccount,
+  GetCursorAccountStatus,
   GetState,
   LoadUserConfig,
   SaveUserConfig,
+  StartCursorAccountLogin,
   StartProxy,
   StopProxy,
 } from "@bindings/cursor/internal/bridge/proxyservice.js";
@@ -55,6 +58,18 @@ export function loadUserConfig() {
 
 export function saveUserConfig(payload) {
   return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
+}
+
+export function getCursorAccountStatus() {
+  return withApiLogging("GetCursorAccountStatus", () => GetCursorAccountStatus());
+}
+
+export function startCursorAccountLogin() {
+  return withApiLogging("StartCursorAccountLogin", () => StartCursorAccountLogin());
+}
+
+export function disconnectCursorAccount() {
+  return withApiLogging("DisconnectCursorAccount", () => DisconnectCursorAccount());
 }
 
 export function getProxyState() {

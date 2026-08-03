@@ -136,12 +136,15 @@ func (store *Store) saveLocked(normalized Config) error {
 }
 
 func shouldPersistNormalizedConfig(raw []byte, current Config, normalized Config) bool {
-	for _, key := range []string{"observability", "backendListenAddr", "proxyListenAddr", "appearance", "advertising", "updates"} {
+	for _, key := range []string{"observability", "backendListenAddr", "proxyListenAddr", "routing", "appearance", "advertising", "updates"} {
 		if !yamlHasKey(raw, key) {
 			return true
 		}
 	}
 	if yamlHasKey(raw, "log") || current.Observability != normalized.Observability {
+		return true
+	}
+	if current.Routing != normalized.Routing {
 		return true
 	}
 	if current.BackendListenAddr != normalized.BackendListenAddr || current.ProxyListenAddr != normalized.ProxyListenAddr {

@@ -498,13 +498,6 @@ export function validateModelAdapters(source) {
   return "";
 }
 
-function validateConfigPayload(payload) {
-  if (!SUPPORTED_ROUTE_MODES.has(normalizeRouteMode(payload?.routing?.mode, ""))) {
-    return "运行模式仅支持 local 或 upstream";
-  }
-  return "";
-}
-
 function canUseLocalStorage() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 }
@@ -550,7 +543,6 @@ function loadCachedState() {
 
 function normalizeConfig(source) {
   const raw = source && typeof source === "object" ? source : {};
-  const routing = raw.routing && typeof raw.routing === "object" ? raw.routing : {};
   const homeMetrics = raw.homeMetrics && typeof raw.homeMetrics === "object" ? raw.homeMetrics : {};
   const appearance = raw.appearance && typeof raw.appearance === "object" ? raw.appearance : {};
   const advertising = raw.advertising && typeof raw.advertising === "object" ? raw.advertising : {};
@@ -562,7 +554,7 @@ function normalizeConfig(source) {
     proxyListenAddr: asString(raw.configProxyListenAddr) || asString(raw.proxyListenAddr),
     modelAdapters: normalizeModelAdapters(raw.modelAdapters),
     routing: {
-      mode: normalizeRouteMode(routing.mode),
+      mode: normalizeRouteMode(raw.routing?.mode),
     },
     homeMetrics: {
       includeCacheWriteInHitRate: asBoolean(homeMetrics.includeCacheWriteInHitRate),
@@ -676,13 +668,6 @@ async function loadPersistedUserConfig() {
 
 async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) {
   const payload = buildConfigPayload(config);
-  const configValidationError = validateConfigPayload(payload);
-  if (configValidationError) {
-    return {
-      ok: false,
-      error: configValidationError,
-    };
-  }
   const validationError = validateModelAdapters(payload.modelAdapters);
   if (validationError) {
     return {

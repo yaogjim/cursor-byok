@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"cursor/internal/logger"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/logger"
 	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
@@ -199,7 +199,14 @@ func ServerContext() Middleware {
 func PolicyMiddleware(configs *serverconfig.Manager) Middleware {
 	return func(next HandlerFunc) HandlerFunc {
 		return func(ctx *Context) error {
-			ctx.Mode = parseExecutionMode(configs.RouteMode(ctx.UpstreamURL != nil))
+			if ctx == nil {
+				return fmt.Errorf("server context is nil")
+			}
+			if configs == nil {
+				ctx.Mode = ModeLocal
+			} else {
+				ctx.Mode = parseExecutionMode(configs.RouteMode(ctx.UpstreamURL != nil))
+			}
 			logger.Infof("ctx.Mode=%s upstream=%t", ctx.Mode, ctx.UpstreamURL != nil)
 			return next(ctx)
 		}

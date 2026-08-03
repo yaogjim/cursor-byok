@@ -381,7 +381,6 @@ func normalizeModelAdapterType(value string) string {
 		return ""
 	}
 }
-
 func normalizeTheme(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "light":

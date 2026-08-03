@@ -268,6 +268,9 @@ func (s *ProxyService) ShutdownForQuit() {
 			finalErr = errors.Join(finalErr, err)
 		}
 	}
+	if s.cursorAccount != nil {
+		s.cursorAccount.Shutdown()
+	}
 	if finalErr != nil {
 		s.setLastError(finalErr)
 	}
