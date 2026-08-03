@@ -50,6 +50,9 @@ func Observe(recorder captureRecorder) Middleware {
 			recorder.RecordEvent(requestContext, observability.Event{
 				Layer:        "backend",
 				Event:        "request_started",
+				Capability:   "unknown",
+				Operation:    "transport.request",
+				Direction:    observability.DirectionCursorToProxy,
 				Route:        ctx.RouteName,
 				Protocol:     string(ctx.Protocol),
 				Status:       "started",
@@ -82,6 +85,9 @@ func Observe(recorder captureRecorder) Middleware {
 				recorder.RecordEvent(requestContext, observability.Event{
 					Layer:           "backend",
 					Event:           "request_finished",
+					Capability:      "unknown",
+					Operation:       "transport.request",
+					Direction:       observability.DirectionProxyToCursor,
 					Route:           ctx.RouteName,
 					ExecutionTarget: executionTarget(ctx),
 					Protocol:        string(ctx.Protocol),

@@ -104,6 +104,76 @@ func TestIntoWorkspaceDiscoversDeduplicatesAndOrdersInputs(t *testing.T) {
 	assertStrings(t, safeFields, []string{`{"method":"POST"}`})
 }
 
+func TestIntoWorkspaceAcceptsMixedV1V2AndPersistsSemantics(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "manifest.json"), []byte(`{
+		"schema_version":2,
+		"app_session_id":"session-mixed",
+		"source_kind":"client",
+		"project_id":"project-hmac",
+		"app_version":"1.2.3",
+		"build_id":"build-7",
+		"platform":"darwin-arm64",
+		"config_fingerprint":"config-hmac"
+	}`))
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(strings.Join([]string{
+		`{"schema_version":1,"app_session_id":"session-mixed","sequence":1,"timestamp":"2026-03-14T10:00:00Z","layer":"proxy","event":"request"}`,
+		`{"schema_version":2,"app_session_id":"session-mixed","sequence":2,"timestamp":"2026-03-14T10:00:01Z","layer":"tool","event":"result","project_id":"project-hmac","turn_id":"turn-1","turn_sequence":1,"capability":"tool","operation":"tool.result","direction":"proxy_to_cursor","semantic_outcome":"succeeded","implementation_state":"implemented","severity":"info","payload_ref":"payloads/2.json"}`,
+	}, "\n")+"\n"))
+	writeFile(t, filepath.Join(root, "app-20260314T100000.000000000Z-000001.log"), []byte(strings.Join([]string{
+		"2026/03/14 10:00:02 INF application started",
+		"2026/03/14 10:00:03 ERR PatchEdit failed",
+	}, "\n")+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 2 || stats.ManifestCount != 1 || stats.WarningCount != 0 || stats.AppLogLineCount != 2 {
+		t.Fatalf("mixed schema stats = %+v, want 2 events, 1 manifest, 2 app lines, 0 warnings", stats)
+	}
+
+	eventSemantics := queryStrings(t, ws.DBPath(), `
+		SELECT project_id || '|' || turn_id || '|' || capability || '|' || operation || '|' || direction || '|' || semantic_outcome || '|' || implementation_state || '|' || severity || '|' || payload_ref
+		FROM events WHERE dataset_id = ? AND sequence_key = '00000000000000000002'
+	`, currentID)
+	assertStrings(t, eventSemantics, []string{"project-hmac|turn-1|tool|tool.result|proxy_to_cursor|succeeded|implemented|info|payloads/2.json"})
+
+	manifestSemantics := queryStrings(t, ws.DBPath(), `
+		SELECT source_kind || '|' || app_version || '|' || build_id || '|' || platform || '|' || config_fingerprint
+		FROM manifests WHERE dataset_id = ? AND app_session_id = 'session-mixed'
+	`, currentID)
+	assertStrings(t, manifestSemantics, []string{"client|1.2.3|build-7|darwin-arm64|config-hmac"})
+
+	appLogs, err := ws.SearchAppLogs(context.Background(), workspace.AppLogSearchRequest{
+		DatasetID: currentID, Keyword: "PatchEdit", Severity: "error", Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("SearchAppLogs() error = %v", err)
+	}
+	if appLogs.Total != 1 || len(appLogs.Lines) != 1 || appLogs.Lines[0].LineNumber != 2 || appLogs.Lines[0].TimestampText != "2026/03/14 10:00:03" {
+		t.Fatalf("app log search = %+v, want second error line", appLogs)
+	}
+}
+
+func TestIntoWorkspaceRejectsInvalidV2Semantics(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(`{"schema_version":2,"app_session_id":"session-v2","sequence":1,"timestamp":"2026-03-14T10:00:00Z","layer":"tool","event":"result","capability":"invented"}`+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{})
+	if err == nil || !strings.Contains(err.Error(), `invalid capability="invented"`) {
+		t.Fatalf("IntoWorkspace() error = %v, want invalid capability", err)
+	}
+}
+
 func TestIntoWorkspaceKeepsDatasetsIsolatedAndBatches(t *testing.T) {
 	current := t.TempDir()
 	baseline := t.TempDir()

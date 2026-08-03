@@ -46,6 +46,37 @@ type TraceSummary struct {
 	HasError         bool     `json:"has_error"`
 }
 
+type DiagnosticMetric struct {
+	Dimension       string  `json:"dimension"`
+	Value           string  `json:"value"`
+	EventCount      int     `json:"event_count"`
+	CompletedCount  int     `json:"completed_count"`
+	FailedCount     int     `json:"failed_count"`
+	DegradedCount   int     `json:"degraded_count"`
+	FailureRate     float64 `json:"semantic_failure_rate"`
+	DurationSamples int     `json:"duration_samples"`
+	DurationP50MS   int64   `json:"duration_p50_ms"`
+	DurationP95MS   int64   `json:"duration_p95_ms"`
+	DurationP99MS   int64   `json:"duration_p99_ms"`
+	TTFTSamples     int     `json:"ttft_samples"`
+	TTFTP50MS       int64   `json:"ttft_p50_ms"`
+	TTFTP95MS       int64   `json:"ttft_p95_ms"`
+	TTFTP99MS       int64   `json:"ttft_p99_ms"`
+	RequestBytes    int64   `json:"request_bytes"`
+	ResponseBytes   int64   `json:"response_bytes"`
+}
+
+type DiagnosticComparison struct {
+	Dimension                string  `json:"dimension"`
+	Value                    string  `json:"value"`
+	CurrentCompleted         int     `json:"current_completed"`
+	BaselineCompleted        int     `json:"baseline_completed"`
+	SemanticFailureRateDelta float64 `json:"semantic_failure_rate_delta"`
+	DurationP95DeltaMS       int64   `json:"duration_p95_delta_ms"`
+	CurrentFindingCount      int     `json:"current_finding_count"`
+	BaselineFindingCount     int     `json:"baseline_finding_count"`
+}
+
 type Comparison struct {
 	Target                 string  `json:"target"`
 	CurrentFinished        int     `json:"current_finished"`
@@ -105,6 +136,11 @@ type traceState struct {
 	hasError         bool
 	pairs            map[string]*pairCounts
 	tools            map[string]*pairCounts
+	canceledOps      map[string]struct{}
+	insufficient     int
+	providerTerminal bool
+	runsseStarted    bool
+	runsseTerminal   bool
 }
 
 func Workspace(ctx context.Context, store *workspace.Workspace, includeBaseline bool) (Summary, error) {
@@ -129,10 +165,13 @@ func Workspace(ctx context.Context, store *workspace.Workspace, includeBaseline 
 		if err := store.ClearAnalysis(ctx, baselineID); err != nil {
 			return Summary{}, err
 		}
-		if err := summarizeTargets(ctx, store, baselineID); err != nil {
+		if err := analyzeCurrent(ctx, store, baselineID); err != nil {
 			return Summary{}, err
 		}
 		if err := compareTargets(ctx, store, currentID, baselineID); err != nil {
+			return Summary{}, err
+		}
+		if err := store.RebuildDiagnosticComparisons(ctx, currentID, baselineID); err != nil {
 			return Summary{}, err
 		}
 	}
@@ -191,29 +230,16 @@ func analyzeCurrent(ctx context.Context, store *workspace.Workspace, datasetID i
 			return err
 		}
 	}
-	return targets.flush(ctx, store)
-}
-
-func summarizeTargets(ctx context.Context, store *workspace.Workspace, datasetID int64) error {
-	targets := newTargetBuffer(datasetID)
-	var after *workspace.EventCursor
-	for {
-		rows, err := store.ListGlobalEvents(ctx, datasetID, after, eventBatchLimit)
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			break
-		}
-		for index := range rows {
-			if err := targets.add(ctx, store, rows[index].EventRecord); err != nil {
-				return err
-			}
-		}
-		last := rows[len(rows)-1].Cursor
-		after = &last
+	if err := targets.flush(ctx, store); err != nil {
+		return err
 	}
-	return targets.flush(ctx, store)
+	if err := store.InsertTraceIntegrityFindings(ctx, datasetID); err != nil {
+		return err
+	}
+	if err := store.InsertSequenceFindings(ctx, datasetID); err != nil {
+		return err
+	}
+	return store.RebuildDiagnosticMetrics(ctx, datasetID)
 }
 
 func insertManifestFindings(ctx context.Context, store *workspace.Workspace, datasetID int64) error {
@@ -239,12 +265,13 @@ func insertManifestFindings(ctx context.Context, store *workspace.Workspace, dat
 
 func newTraceState(datasetID int64, traceKey string) *traceState {
 	return &traceState{
-		datasetID: datasetID,
-		traceKey:  traceKey,
-		layers:    make(map[string]struct{}),
-		targets:   make(map[string]struct{}),
-		pairs:     make(map[string]*pairCounts),
-		tools:     make(map[string]*pairCounts),
+		datasetID:   datasetID,
+		traceKey:    traceKey,
+		layers:      make(map[string]struct{}),
+		targets:     make(map[string]struct{}),
+		pairs:       make(map[string]*pairCounts),
+		tools:       make(map[string]*pairCounts),
+		canceledOps: make(map[string]struct{}),
 	}
 }
 
@@ -268,7 +295,11 @@ func (state *traceState) addEvent(ctx context.Context, store *workspace.Workspac
 			return err
 		}
 	}
-	state.hasError = state.hasError || event.Status == "error" || event.ErrorCategory != ""
+	state.hasError = state.hasError || event.Status == "error" || event.ErrorCategory != "" || isSemanticFailure(event.SemanticOutcome)
+	state.addSemanticState(event)
+	if err := state.insertSemanticFindings(ctx, store, event); err != nil {
+		return err
+	}
 	pairKey := event.Layer + ":" + event.Route
 	switch event.Event {
 	case "request_started", "backend_forward_started":
@@ -317,6 +348,118 @@ func (state *traceState) addEvent(ctx context.Context, store *workspace.Workspac
 		}
 	}
 	return nil
+}
+
+func (state *traceState) addSemanticState(event workspace.EventRecord) {
+	operation := strings.TrimSpace(event.Operation)
+	outcome := strings.TrimSpace(event.SemanticOutcome)
+	implementation := strings.TrimSpace(event.ImplementationState)
+	if event.SchemaVersion >= 2 && strings.TrimSpace(event.Capability) != "" && event.Capability != "unknown" && operation != "" && (outcome == "unknown" || implementation == "unknown") {
+		state.insufficient++
+	}
+	if event.Capability == "provider" && isSemanticTerminal(outcome) && outcome != "canceled" {
+		state.providerTerminal = true
+	}
+	if event.Event == "subscribe" {
+		state.runsseStarted = true
+	}
+	if event.Event == "terminal" || event.Event == "terminal_after_context_done" {
+		state.runsseTerminal = true
+	}
+	key := semanticOperationKey(event)
+	if key == "" {
+		return
+	}
+	if _, canceled := state.canceledOps[key]; canceled && outcome != "canceled" && (isSemanticTerminal(outcome) || event.ResponseBytes > 0) {
+		state.addPair("continued_after_cancel:"+key, 1, 0)
+	}
+	if outcome == "started" {
+		state.addPair("operation:"+key, 1, 0)
+	}
+	if isSemanticTerminal(outcome) {
+		state.addPair("operation:"+key, 0, 1)
+	}
+	if outcome == "canceled" {
+		if len(state.canceledOps) >= stateFlushLimit {
+			state.insufficient++
+			state.canceledOps = make(map[string]struct{})
+		}
+		state.canceledOps[key] = struct{}{}
+	}
+}
+
+func (state *traceState) insertSemanticFindings(ctx context.Context, store *workspace.Workspace, event workspace.EventRecord) error {
+	implementation := strings.TrimSpace(event.ImplementationState)
+	outcome := strings.TrimSpace(event.SemanticOutcome)
+	if implementation == "partial" || implementation == "compat" || implementation == "unsupported" {
+		severity := "warning"
+		if implementation == "unsupported" {
+			severity = "error"
+		}
+		if err := store.InsertFinding(ctx, workspace.FindingRecord{
+			DatasetID: state.datasetID, Severity: severity, SeverityRank: severityRank(severity),
+			Code: "capability_limitation", Message: fmt.Sprintf("%s/%s implementation=%s", firstNonEmpty(event.Capability, "unknown"), firstNonEmpty(event.Operation, "unknown"), implementation),
+			TraceKey: state.traceKey, FirstIngestOrder: event.IngestOrder,
+		}); err != nil {
+			return err
+		}
+	}
+	if outcome == "partial" || outcome == "compat_only" || outcome == "unsupported" || outcome == "degraded" {
+		severity := "warning"
+		if outcome == "unsupported" {
+			severity = "error"
+		}
+		if err := store.InsertFinding(ctx, workspace.FindingRecord{
+			DatasetID: state.datasetID, Severity: severity, SeverityRank: severityRank(severity),
+			Code: "semantic_outcome_gap", Message: fmt.Sprintf("%s/%s outcome=%s", firstNonEmpty(event.Capability, "unknown"), firstNonEmpty(event.Operation, "unknown"), outcome),
+			TraceKey: state.traceKey, FirstIngestOrder: event.IngestOrder,
+		}); err != nil {
+			return err
+		}
+	}
+	if isTechnicalSuccess(event.Status) && implementation != "" && implementation != "implemented" && implementation != "unknown" {
+		return store.InsertFinding(ctx, workspace.FindingRecord{
+			DatasetID: state.datasetID, Severity: "warning", SeverityRank: severityRank("warning"),
+			Code: "technical_success_without_capability_success", Message: fmt.Sprintf("%s/%s 技术状态成功，但 implementation=%s", firstNonEmpty(event.Capability, "unknown"), firstNonEmpty(event.Operation, "unknown"), implementation),
+			TraceKey: state.traceKey, FirstIngestOrder: event.IngestOrder,
+		})
+	}
+	return nil
+}
+
+func semanticOperationKey(event workspace.EventRecord) string {
+	operation := strings.TrimSpace(event.Operation)
+	if operation == "" || strings.TrimSpace(event.SemanticOutcome) == "" || event.SemanticOutcome == "unknown" {
+		return ""
+	}
+	capability := firstNonEmpty(event.Capability, "unknown")
+	correlation := firstNonEmpty(event.ToolCallID, event.ModelCallID, event.TurnID, event.HTTPRequestID, event.CursorRequestID)
+	if correlation != "" {
+		return capability + ":" + correlation
+	}
+	return capability + ":" + operation + ":" + firstNonEmpty(event.Route, "trace")
+}
+
+func isSemanticTerminal(outcome string) bool {
+	switch outcome {
+	case "succeeded", "failed", "canceled", "timeout", "degraded", "unsupported", "partial", "compat_only":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSemanticFailure(outcome string) bool {
+	return outcome == "failed" || outcome == "timeout" || outcome == "unsupported"
+}
+
+func isTechnicalSuccess(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ok", "success", "succeeded", "completed", "complete", "finished":
+		return true
+	default:
+		return false
+	}
 }
 
 func (state *traceState) addPair(key string, starts int, finishes int) {
@@ -375,6 +518,9 @@ func finalizeTrace(ctx context.Context, store *workspace.Workspace, state *trace
 	if err := insertToolStateFindings(ctx, store, state); err != nil {
 		return err
 	}
+	if err := insertTraceStateFindings(ctx, store, state); err != nil {
+		return err
+	}
 	if err := store.InsertTraceSummary(ctx, workspace.TraceSummaryRecord{
 		DatasetID:        state.datasetID,
 		TraceKey:         state.traceKey,
@@ -391,6 +537,25 @@ func finalizeTrace(ctx context.Context, store *workspace.Workspace, state *trace
 	return store.DeleteTraceScratch(ctx, state.datasetID, state.traceKey)
 }
 
+func insertTraceStateFindings(ctx context.Context, store *workspace.Workspace, state *traceState) error {
+	if strings.HasPrefix(state.traceKey, "orphan:") {
+		if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "warning", SeverityRank: severityRank("warning"), Code: "orphan_event", Message: "事件缺少 trace_id，无法重建跨层链路", TraceKey: state.traceKey, Count: state.eventCount, FirstIngestOrder: state.firstIngestOrder}); err != nil {
+			return err
+		}
+	}
+	if state.providerTerminal && state.runsseStarted && !state.runsseTerminal {
+		if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "error", SeverityRank: severityRank("error"), Code: "runsse_terminal_missing", Message: "provider 已产生终态，但 RunSSE 未产生终态", TraceKey: state.traceKey, Count: 1, FirstIngestOrder: state.firstIngestOrder}); err != nil {
+			return err
+		}
+	}
+	if state.insufficient > 0 {
+		if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "info", SeverityRank: severityRank("info"), Code: "insufficient_evidence", Message: fmt.Sprintf("%d 个语义事件缺少可判定 outcome，需补采集终态", state.insufficient), TraceKey: state.traceKey, Count: state.insufficient, FirstIngestOrder: state.firstIngestOrder}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func insertPairStateFindings(ctx context.Context, store *workspace.Workspace, state *traceState) error {
 	var after string
 	for {
@@ -404,7 +569,17 @@ func insertPairStateFindings(ctx context.Context, store *workspace.Workspace, st
 		for _, item := range pairs {
 			if item.Finishes < item.Starts {
 				missing := item.Starts - item.Finishes
-				if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "error", SeverityRank: severityRank("error"), Code: "missing_terminal", Message: fmt.Sprintf("%s 缺少 %d 个终态事件", item.Key, missing), TraceKey: state.traceKey, Count: missing, FirstIngestOrder: state.firstIngestOrder}); err != nil {
+				code := "missing_terminal"
+				message := fmt.Sprintf("%s 缺少 %d 个终态事件", item.Key, missing)
+				if strings.HasPrefix(item.Key, "operation:") {
+					code = "operation_terminal_missing"
+					message = fmt.Sprintf("%s 开始后缺少语义终态", strings.TrimPrefix(item.Key, "operation:"))
+				}
+				if strings.HasPrefix(item.Key, "continued_after_cancel:") {
+					code = "continued_after_cancel"
+					message = fmt.Sprintf("%s 取消后仍继续输出", strings.TrimPrefix(item.Key, "continued_after_cancel:"))
+				}
+				if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "error", SeverityRank: severityRank("error"), Code: code, Message: message, TraceKey: state.traceKey, Count: missing, FirstIngestOrder: state.firstIngestOrder}); err != nil {
 					return err
 				}
 			}

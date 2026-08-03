@@ -3,6 +3,7 @@ package report
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -41,6 +42,20 @@ func TestDiagnosticBundleRemovesSensitiveContent(t *testing.T) {
 	}
 	if err := staged.Publish(); err != nil {
 		t.Fatalf("Publish() error = %v", err)
+	}
+	reportPayload, err := os.ReadFile(filepath.Join(output, "report.json"))
+	if err != nil {
+		t.Fatalf("read report.json: %v", err)
+	}
+	var reportDocument struct {
+		SchemaVersion     int                        `json:"schema_version"`
+		DiagnosticMetrics []analyze.DiagnosticMetric `json:"diagnostic_metrics"`
+	}
+	if err := json.Unmarshal(reportPayload, &reportDocument); err != nil {
+		t.Fatalf("decode report.json: %v", err)
+	}
+	if reportDocument.SchemaVersion != 1 || len(reportDocument.DiagnosticMetrics) == 0 {
+		t.Fatalf("report compatibility or diagnostic metrics missing: %+v", reportDocument)
 	}
 
 	archive, err := zip.OpenReader(filepath.Join(output, "diagnostic-bundle.zip"))

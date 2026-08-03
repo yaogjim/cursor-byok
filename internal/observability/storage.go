@@ -95,11 +95,16 @@ func openSession(root string, settings Settings) (*sessionWriter, error) {
 		eventsFile:  eventsFile,
 		maxDiskByte: int64(settings.MaxDiskMB) * 1024 * 1024,
 		manifest: Manifest{
-			SchemaVersion: SchemaVersion,
-			AppSessionID:  sessionID,
-			Mode:          settings.Mode,
-			Status:        "open",
-			StartedAt:     now,
+			SchemaVersion:     SchemaVersion,
+			AppSessionID:      sessionID,
+			Mode:              settings.Mode,
+			Status:            "open",
+			StartedAt:         now,
+			SourceKind:        settings.Metadata.SourceKind,
+			AppVersion:        settings.Metadata.AppVersion,
+			BuildID:           settings.Metadata.BuildID,
+			Platform:          settings.Metadata.Platform,
+			ConfigFingerprint: settings.Metadata.ConfigFingerprint,
 		},
 	}
 	if writer.usageBytes, err = directorySize(root); err != nil {
@@ -489,5 +494,13 @@ func normalizeSettings(settings Settings) Settings {
 	} else if settings.QueueSize > 65536 {
 		settings.QueueSize = 65536
 	}
+	settings.Metadata.SourceKind = strings.ToLower(strings.TrimSpace(settings.Metadata.SourceKind))
+	if settings.Metadata.SourceKind == "" {
+		settings.Metadata.SourceKind = "client"
+	}
+	settings.Metadata.AppVersion = strings.TrimSpace(settings.Metadata.AppVersion)
+	settings.Metadata.BuildID = strings.TrimSpace(settings.Metadata.BuildID)
+	settings.Metadata.Platform = strings.TrimSpace(settings.Metadata.Platform)
+	settings.Metadata.ConfigFingerprint = strings.TrimSpace(settings.Metadata.ConfigFingerprint)
 	return settings
 }

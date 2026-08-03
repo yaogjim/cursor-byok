@@ -32,6 +32,7 @@ type debugRecorder struct {
 	sink         *debugSink
 	mu           sync.Mutex
 	correlations map[string]observability.Correlation
+	projectPaths map[string][]string
 }
 
 func newDebugRecorder(historyRoot string, broker *StreamBroker, config debugLogConfig, captures ...captureRecorder) *debugRecorder {
@@ -50,6 +51,7 @@ func newDebugRecorder(historyRoot string, broker *StreamBroker, config debugLogC
 		capture:      capture,
 		sink:         sink,
 		correlations: make(map[string]observability.Correlation),
+		projectPaths: make(map[string][]string),
 	}
 }
 
@@ -105,6 +107,7 @@ func (recorder *debugRecorder) LogBidiDecoded(ctx context.Context, requestID str
 	if mode == "off" {
 		return
 	}
+	recorder.rememberProjectPaths(requestID, workspacePathsFromIntent(intent))
 	event := recorder.baseEvent("bidi_decoded", requestID, conversationID)
 	event["schema_version"] = 2
 	event["append_seqno"] = appendSeqno
@@ -243,6 +246,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	} else if correlation.TraceID == "" {
 		correlation = observability.NewTrace()
 	}
+	correlation.ProjectID = firstNonEmpty(correlation.ProjectID, stored.ProjectID)
 	correlation.CursorRequestID = firstNonEmpty(correlation.CursorRequestID, requestID)
 	correlation.ConversationID = firstNonEmpty(
 		correlation.ConversationID,
@@ -250,7 +254,22 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		recorder.conversationIDForRequest(requestID),
 		stored.ConversationID,
 	)
-	correlation.ModelCallID = firstNonEmpty(correlation.ModelCallID, debugString(rawEvent, "model_call_id"))
+	correlation.ModelCallID = firstNonEmpty(correlation.ModelCallID, debugString(rawEvent, "model_call_id"), stored.ModelCallID)
+	correlation.ToolCallID = firstNonEmpty(correlation.ToolCallID, debugString(rawEvent, "tool_call_id"), stored.ToolCallID)
+	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
+	if correlation.TurnSequence == 0 {
+		correlation.TurnSequence = stored.TurnSequence
+	}
+	turnSequence := readInt64Value(rawEvent["turn_seq"])
+	if turnSequence <= 0 {
+		turnSequence = readInt64Value(rawEvent["turn_sequence"])
+	}
+	if turnSequence > 0 {
+		correlation.TurnSequence = uint64(turnSequence)
+	}
+	if correlation.TurnSequence > 0 && strings.TrimSpace(correlation.ConversationID) != "" {
+		correlation.TurnID = fmt.Sprintf("%s:%d", correlation.ConversationID, correlation.TurnSequence)
+	}
 	recorder.rememberCorrelation(requestID, correlation)
 
 	layer := firstNonEmpty(debugString(rawEvent, "layer"), "forwarder")
@@ -261,6 +280,19 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	status := debugString(rawEvent, "status")
 	errorCategory := ""
 	payloadFields, _ := rawEvent["payload"].(map[string]any)
+	if correlation.TurnSequence == 0 {
+		turnSequence = readInt64Value(payloadFields["turn_seq"])
+		if turnSequence <= 0 {
+			turnSequence = readInt64Value(payloadFields["turn_sequence"])
+		}
+		if turnSequence > 0 {
+			correlation.TurnSequence = uint64(turnSequence)
+			if strings.TrimSpace(correlation.ConversationID) != "" {
+				correlation.TurnID = fmt.Sprintf("%s:%d", correlation.ConversationID, correlation.TurnSequence)
+			}
+			recorder.rememberCorrelation(requestID, correlation)
+		}
+	}
 	errorText := firstNonEmpty(debugString(rawEvent, "error"), debugString(payloadFields, "error"))
 	if errorText != "" {
 		errorCategory = layer + "_error"
@@ -323,30 +355,181 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		payloadData = metadata
 		decodeError = true
 	}
+	projectPaths := debugProjectPaths(rawEvent, payloadFields)
+	if len(projectPaths) > 0 {
+		recorder.rememberProjectPaths(requestID, projectPaths)
+	} else {
+		projectPaths = recorder.projectPathsForRequest(requestID)
+	}
+	semantics := classifyDebugSemantics(layer, eventName, status, errorCategory, rawEvent)
 	recorder.capture.Record(observability.WithCorrelation(ctx, correlation), observability.Capture{
 		Event: observability.Event{
-			Layer:           layer,
-			Event:           eventName,
-			Route:           debugString(rawEvent, "procedure"),
-			ExecutionTarget: executionTarget,
-			Protocol:        protocol,
-			Status:          status,
-			ErrorCategory:   errorCategory,
-			DurationMS:      durationMS,
-			RequestBytes:    requestBytes,
-			ResponseBytes:   responseBytes,
-			DecodeError:     decodeError,
-			Fields:          fields,
+			Layer:               layer,
+			Event:               eventName,
+			Capability:          semantics.Capability,
+			Operation:           semantics.Operation,
+			Direction:           semantics.Direction,
+			SemanticOutcome:     semantics.Outcome,
+			ImplementationState: semantics.Implementation,
+			Route:               debugString(rawEvent, "procedure"),
+			ExecutionTarget:     executionTarget,
+			Protocol:            protocol,
+			Status:              status,
+			ErrorCategory:       errorCategory,
+			DurationMS:          durationMS,
+			RequestBytes:        requestBytes,
+			ResponseBytes:       responseBytes,
+			DecodeError:         decodeError,
+			Fields:              fields,
 		},
 		Payload: &observability.Payload{
 			Name:        eventName,
 			ContentType: "application/json",
 			Data:        payloadData,
 		},
+		ProjectPaths: projectPaths,
 	})
 	if eventName == "terminal" || eventName == "terminal_after_context_done" {
 		recorder.forgetCorrelation(requestID)
 	}
+}
+
+type debugEventSemantics struct {
+	Capability     string
+	Operation      string
+	Direction      string
+	Outcome        string
+	Implementation string
+}
+
+func classifyDebugSemantics(layer string, eventName string, status string, errorCategory string, rawEvent map[string]any) debugEventSemantics {
+	layer = strings.ToLower(strings.TrimSpace(layer))
+	eventName = strings.ToLower(strings.TrimSpace(eventName))
+	status = strings.ToLower(strings.TrimSpace(status))
+	capability := debugCapability(layer, eventName)
+	operationPrefix := layer
+	switch layer {
+	case "bidi_raw", "bidi_decoded", "runtime":
+		operationPrefix = "agent"
+	}
+	semantics := debugEventSemantics{
+		Capability:     capability,
+		Operation:      operationPrefix + "." + semanticSegment(eventName),
+		Direction:      debugDirection(layer, debugString(rawEvent, "direction")),
+		Implementation: observability.ImplementationImplemented,
+	}
+	switch {
+	case strings.TrimSpace(errorCategory) != "", status == "error", status == "failed":
+		semantics.Outcome = observability.OutcomeFailed
+	case status == "started", status == "accepted":
+		semantics.Outcome = observability.OutcomeStarted
+	case status == "completed", status == "success", status == "succeeded", status == "ok":
+		semantics.Outcome = observability.OutcomeSucceeded
+	case status == "canceled", status == "cancelled":
+		semantics.Outcome = observability.OutcomeCanceled
+	case status == "timeout":
+		semantics.Outcome = observability.OutcomeTimeout
+	case status == "degraded":
+		semantics.Outcome = observability.OutcomeDegraded
+	case status == "partial":
+		semantics.Outcome = observability.OutcomePartial
+		semantics.Implementation = observability.ImplementationPartial
+	case status == "compat", status == "compat_only":
+		semantics.Outcome = observability.OutcomeCompatOnly
+		semantics.Implementation = observability.ImplementationCompat
+	case status == "unsupported":
+		semantics.Outcome = observability.OutcomeUnsupported
+		semantics.Implementation = observability.ImplementationUnsupported
+	}
+	return semantics
+}
+
+func debugCapability(layer string, eventName string) string {
+	joined := layer + "." + eventName
+	switch {
+	case strings.Contains(joined, "tool"), strings.Contains(joined, "exec"), strings.Contains(joined, "shell"), strings.Contains(joined, "patch"):
+		return "tool"
+	case strings.Contains(joined, "repository"), strings.Contains(joined, "codebase"), strings.Contains(joined, "index"):
+		return "repository"
+	case strings.Contains(joined, "docs"):
+		return "docs"
+	case layer == "provider":
+		return "provider"
+	default:
+		return "agent"
+	}
+}
+
+func debugDirection(layer string, rawDirection string) string {
+	switch strings.ToLower(strings.TrimSpace(rawDirection)) {
+	case "client_to_backend", "cursor_to_proxy":
+		return observability.DirectionCursorToProxy
+	case "backend_to_client", "server_to_client", "proxy_to_cursor":
+		return observability.DirectionProxyToCursor
+	case "proxy_to_provider":
+		return observability.DirectionProxyToProvider
+	}
+	switch layer {
+	case "provider":
+		return observability.DirectionProxyToProvider
+	case "runsse":
+		return observability.DirectionProxyToCursor
+	default:
+		return observability.DirectionProxyInternal
+	}
+}
+
+func semanticSegment(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return "event"
+	}
+	var builder strings.Builder
+	for _, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9', character == '_':
+			builder.WriteRune(character)
+		default:
+			builder.WriteByte('_')
+		}
+	}
+	return strings.Trim(builder.String(), "_")
+}
+
+func workspacePathsFromIntent(intent InboundIntent) []string {
+	if intent.RequestContext == nil || intent.RequestContext.GetEnv() == nil {
+		return nil
+	}
+	env := intent.RequestContext.GetEnv()
+	return compactWorkspacePaths(env.GetWorkspacePaths(), env.GetProjectFolder())
+}
+
+func debugProjectPaths(rawEvent map[string]any, payloadFields map[string]any) []string {
+	paths := make([]string, 0, 4)
+	for _, values := range []map[string]any{rawEvent, payloadFields} {
+		for _, key := range []string{"workspace_paths", "workspace_path", "project_folder"} {
+			paths = appendDebugProjectPaths(paths, values[key])
+		}
+	}
+	return paths
+}
+
+func appendDebugProjectPaths(paths []string, value any) []string {
+	switch typed := value.(type) {
+	case string:
+		if path := strings.TrimSpace(typed); path != "" {
+			paths = append(paths, path)
+		}
+	case []string:
+		for _, path := range typed {
+			paths = appendDebugProjectPaths(paths, path)
+		}
+	case []any:
+		for _, path := range typed {
+			paths = appendDebugProjectPaths(paths, path)
+		}
+	}
+	return paths
 }
 
 func (recorder *debugRecorder) correlationForRequest(requestID string) observability.Correlation {
@@ -366,10 +549,29 @@ func (recorder *debugRecorder) rememberCorrelation(requestID string, correlation
 	if len(recorder.correlations) >= 4096 {
 		for key := range recorder.correlations {
 			delete(recorder.correlations, key)
+			delete(recorder.projectPaths, key)
 			break
 		}
 	}
 	recorder.correlations[strings.TrimSpace(requestID)] = correlation
+	recorder.mu.Unlock()
+}
+
+func (recorder *debugRecorder) projectPathsForRequest(requestID string) []string {
+	if recorder == nil || strings.TrimSpace(requestID) == "" {
+		return nil
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return append([]string(nil), recorder.projectPaths[strings.TrimSpace(requestID)]...)
+}
+
+func (recorder *debugRecorder) rememberProjectPaths(requestID string, paths []string) {
+	if recorder == nil || strings.TrimSpace(requestID) == "" || len(paths) == 0 {
+		return
+	}
+	recorder.mu.Lock()
+	recorder.projectPaths[strings.TrimSpace(requestID)] = append([]string(nil), paths...)
 	recorder.mu.Unlock()
 }
 
@@ -379,6 +581,7 @@ func (recorder *debugRecorder) forgetCorrelation(requestID string) {
 	}
 	recorder.mu.Lock()
 	delete(recorder.correlations, strings.TrimSpace(requestID))
+	delete(recorder.projectPaths, strings.TrimSpace(requestID))
 	recorder.mu.Unlock()
 }
 

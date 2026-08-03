@@ -167,7 +167,7 @@ func writeReportJSON(ctx context.Context, writer io.Writer, store *workspace.Wor
 	if _, err := buffered.WriteString("{"); err != nil {
 		return err
 	}
-	if err := object.scalar("schema_version", contract.SupportedSchemaVersion); err != nil {
+	if err := object.scalar("schema_version", contract.ReportSchemaVersion); err != nil {
 		return err
 	}
 	if err := object.scalar("generated_at", generatedAt); err != nil {
@@ -219,6 +219,29 @@ func writeReportJSON(ctx context.Context, writer io.Writer, store *workspace.Wor
 	}); err != nil {
 		return err
 	}
+	if err := object.array("diagnostic_metrics", func(yield func(any) error) error {
+		return store.ForEachDiagnosticMetric(ctx, currentID, func(record workspace.DiagnosticMetricRecord) error {
+			value := record.Value
+			if options.Safe {
+				value = sanitizeText(value)
+			}
+			terminalCount := record.CompletedCount + record.FailedCount + record.DegradedCount
+			failureRate := 0.0
+			if terminalCount > 0 {
+				failureRate = float64(record.FailedCount) / float64(terminalCount)
+			}
+			return yield(analyze.DiagnosticMetric{
+				Dimension: record.Dimension, Value: value, EventCount: record.EventCount,
+				CompletedCount: record.CompletedCount, FailedCount: record.FailedCount, DegradedCount: record.DegradedCount,
+				FailureRate: failureRate, DurationSamples: record.DurationSamples,
+				DurationP50MS: record.DurationP50MS, DurationP95MS: record.DurationP95MS, DurationP99MS: record.DurationP99MS,
+				TTFTSamples: record.TTFTSamples, TTFTP50MS: record.TTFTP50MS, TTFTP95MS: record.TTFTP95MS, TTFTP99MS: record.TTFTP99MS,
+				RequestBytes: record.RequestBytes, ResponseBytes: record.ResponseBytes,
+			})
+		})
+	}); err != nil {
+		return err
+	}
 	if err := object.field("traces", func() error {
 		return writeTraceSummariesJSON(ctx, buffered, store, currentID, options.Safe)
 	}); err != nil {
@@ -228,6 +251,22 @@ func writeReportJSON(ctx context.Context, writer io.Writer, store *workspace.Wor
 		if err := object.array("comparison", func(yield func(any) error) error {
 			return store.ForEachComparison(ctx, func(record workspace.ComparisonRecord) error {
 				return yield(analyze.Comparison{Target: record.Target, CurrentFinished: record.CurrentFinished, BaselineFinished: record.BaselineFinished, ErrorRateDelta: record.ErrorRateDelta, AverageDurationDeltaMS: record.AverageDurationDeltaMS})
+			})
+		}); err != nil {
+			return err
+		}
+		if err := object.array("diagnostic_comparison", func(yield func(any) error) error {
+			return store.ForEachDiagnosticComparison(ctx, func(record workspace.DiagnosticComparisonRecord) error {
+				value := record.Value
+				if options.Safe {
+					value = sanitizeText(value)
+				}
+				return yield(analyze.DiagnosticComparison{
+					Dimension: record.Dimension, Value: value,
+					CurrentCompleted: record.CurrentCompleted, BaselineCompleted: record.BaselineCompleted,
+					SemanticFailureRateDelta: record.SemanticFailureRateDelta, DurationP95DeltaMS: record.DurationP95DeltaMS,
+					CurrentFindingCount: record.CurrentFindingCount, BaselineFindingCount: record.BaselineFindingCount,
+				})
 			})
 		}); err != nil {
 			return err
@@ -629,30 +668,39 @@ func targetDTO(record workspace.TargetSummaryRecord) analyze.TargetSummary {
 
 func eventFromRecord(record workspace.EventRecord) contract.Event {
 	event := contract.Event{
-		SchemaVersion:   record.SchemaVersion,
-		Timestamp:       record.Timestamp,
-		Sequence:        record.Sequence,
-		AppSessionID:    record.AppSessionID,
-		TraceID:         record.TraceID,
-		SpanID:          record.SpanID,
-		ParentSpanID:    record.ParentSpanID,
-		HTTPRequestID:   record.HTTPRequestID,
-		CursorRequestID: record.CursorRequestID,
-		ConversationID:  record.ConversationID,
-		ModelCallID:     record.ModelCallID,
-		ToolCallID:      record.ToolCallID,
-		Layer:           record.Layer,
-		Event:           record.Event,
-		Route:           record.Route,
-		ExecutionTarget: record.ExecutionTarget,
-		Protocol:        record.Protocol,
-		Status:          record.Status,
-		ErrorCategory:   record.ErrorCategory,
-		DurationMS:      record.DurationMS,
-		RequestBytes:    record.RequestBytes,
-		ResponseBytes:   record.ResponseBytes,
-		DecodeError:     record.DecodeError,
-		DroppedEvents:   record.DroppedEvents,
+		SchemaVersion:       record.SchemaVersion,
+		Timestamp:           record.Timestamp,
+		Sequence:            record.Sequence,
+		AppSessionID:        record.AppSessionID,
+		ProjectID:           record.ProjectID,
+		TraceID:             record.TraceID,
+		SpanID:              record.SpanID,
+		ParentSpanID:        record.ParentSpanID,
+		HTTPRequestID:       record.HTTPRequestID,
+		CursorRequestID:     record.CursorRequestID,
+		ConversationID:      record.ConversationID,
+		TurnID:              record.TurnID,
+		TurnSequence:        record.TurnSequence,
+		ModelCallID:         record.ModelCallID,
+		ToolCallID:          record.ToolCallID,
+		Layer:               record.Layer,
+		Event:               record.Event,
+		Capability:          record.Capability,
+		Operation:           record.Operation,
+		Direction:           record.Direction,
+		Route:               record.Route,
+		ExecutionTarget:     record.ExecutionTarget,
+		Protocol:            record.Protocol,
+		Status:              record.Status,
+		SemanticOutcome:     record.SemanticOutcome,
+		ImplementationState: record.ImplementationState,
+		ErrorCategory:       record.ErrorCategory,
+		DurationMS:          record.DurationMS,
+		RequestBytes:        record.RequestBytes,
+		ResponseBytes:       record.ResponseBytes,
+		DecodeError:         record.DecodeError,
+		DroppedEvents:       record.DroppedEvents,
+		PayloadRef:          record.PayloadRef,
 	}
 	if strings.TrimSpace(record.SafeFieldsJSON) != "" {
 		var fields map[string]any
@@ -665,12 +713,14 @@ func eventFromRecord(record workspace.EventRecord) contract.Event {
 
 func sanitizeEvent(event contract.Event) (contract.Event, error) {
 	event.AppSessionID = pseudonym(event.AppSessionID)
+	event.ProjectID = pseudonym(event.ProjectID)
 	event.TraceID = pseudonym(event.TraceID)
 	event.SpanID = pseudonym(event.SpanID)
 	event.ParentSpanID = pseudonym(event.ParentSpanID)
 	event.HTTPRequestID = pseudonym(event.HTTPRequestID)
 	event.CursorRequestID = pseudonym(event.CursorRequestID)
 	event.ConversationID = pseudonym(event.ConversationID)
+	event.TurnID = pseudonym(event.TurnID)
 	event.ModelCallID = pseudonym(event.ModelCallID)
 	event.ToolCallID = pseudonym(event.ToolCallID)
 	event.Route = sanitizeRoute(event.Route)

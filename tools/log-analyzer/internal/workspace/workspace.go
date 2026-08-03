@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	querydsl "cursor-log-analyzer/internal/query"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -26,6 +28,7 @@ const (
 const (
 	FileEvents   FileKind = "events"
 	FileManifest FileKind = "manifest"
+	FileAppLog   FileKind = "app_log"
 )
 
 type DatasetKind string
@@ -45,50 +48,65 @@ type Workspace struct {
 }
 
 type EventRecord struct {
-	DatasetID       int64
-	SourceFileID    int64
-	LineNumber      int
-	Timestamp       time.Time
-	Sequence        uint64
-	IngestOrder     int64
-	TraceKey        string
-	SchemaVersion   int
-	AppSessionID    string
-	TraceID         string
-	SpanID          string
-	ParentSpanID    string
-	HTTPRequestID   string
-	CursorRequestID string
-	ConversationID  string
-	ModelCallID     string
-	ToolCallID      string
-	Layer           string
-	Event           string
-	Route           string
-	ExecutionTarget string
-	Protocol        string
-	Status          string
-	ErrorCategory   string
-	DurationMS      int64
-	RequestBytes    int64
-	ResponseBytes   int64
-	DecodeError     bool
-	DroppedEvents   uint64
-	SafeFieldsJSON  string
+	DatasetID           int64
+	SourceFileID        int64
+	LineNumber          int
+	Timestamp           time.Time
+	Sequence            uint64
+	IngestOrder         int64
+	TraceKey            string
+	SchemaVersion       int
+	AppSessionID        string
+	ProjectID           string
+	TraceID             string
+	SpanID              string
+	ParentSpanID        string
+	HTTPRequestID       string
+	CursorRequestID     string
+	ConversationID      string
+	TurnID              string
+	TurnSequence        uint64
+	ModelCallID         string
+	ToolCallID          string
+	Layer               string
+	Event               string
+	Capability          string
+	Operation           string
+	Direction           string
+	Route               string
+	ExecutionTarget     string
+	Protocol            string
+	Status              string
+	SemanticOutcome     string
+	ImplementationState string
+	Severity            string
+	ErrorCategory       string
+	DurationMS          int64
+	RequestBytes        int64
+	ResponseBytes       int64
+	DecodeError         bool
+	DroppedEvents       uint64
+	SafeFieldsJSON      string
+	PayloadRef          string
 }
 
 type ManifestRecord struct {
-	DatasetID       int64
-	InputFileID     int64
-	SchemaVersion   int
-	AppSessionID    string
-	Mode            string
-	Status          string
-	StartedAt       time.Time
-	ClosedAt        *time.Time
-	PayloadDegraded bool
-	DroppedEvents   uint64
-	LastError       string
+	DatasetID         int64
+	InputFileID       int64
+	SchemaVersion     int
+	AppSessionID      string
+	Mode              string
+	Status            string
+	StartedAt         time.Time
+	ClosedAt          *time.Time
+	PayloadDegraded   bool
+	DroppedEvents     uint64
+	LastError         string
+	SourceKind        string
+	AppVersion        string
+	BuildID           string
+	Platform          string
+	ConfigFingerprint string
 }
 
 type WarningRecord struct {
@@ -98,9 +116,43 @@ type WarningRecord struct {
 }
 
 type DatasetStats struct {
-	EventCount    int64
-	ManifestCount int64
-	WarningCount  int64
+	EventCount      int64
+	ManifestCount   int64
+	WarningCount    int64
+	AppLogLineCount int64
+}
+
+type AppLogRecord struct {
+	DatasetID     int64
+	InputFileID   int64
+	LineNumber    int
+	TimestampText string
+	Severity      string
+	Message       string
+}
+
+type AppLogRow struct {
+	ID int64
+	AppLogRecord
+}
+
+type AppLogSearchRequest struct {
+	DatasetID int64
+	Keyword   string
+	Severity  string
+	AfterID   int64
+	Limit     int
+}
+
+type AppLogSearchPage struct {
+	Lines      []AppLogRow
+	Total      int64
+	NextCursor int64
+}
+
+type PayloadLocator struct {
+	EventsFilePath string
+	Reference      string
 }
 
 type EventCursor struct {
@@ -109,6 +161,20 @@ type EventCursor struct {
 	TimestampNanoseconds int
 	SequenceKey          string
 	IngestOrder          int64
+}
+
+type EventSearchRequest struct {
+	DatasetID  int64
+	Query      string
+	After      *EventCursor
+	Limit      int
+	Descending bool
+}
+
+type EventSearchPage struct {
+	Events     []EventRow
+	Total      int64
+	NextCursor *EventCursor
 }
 
 type EventRow struct {
@@ -150,6 +216,23 @@ type FindingRecord struct {
 	TraceKey         string
 	Count            int
 	FirstIngestOrder int64
+}
+
+type FindingRow struct {
+	ID int64
+	FindingRecord
+}
+
+type FindingPage struct {
+	Findings   []FindingRow
+	Total      int64
+	NextCursor int64
+}
+
+type DiagnosticMetricPage struct {
+	Metrics    []DiagnosticMetricRecord
+	Total      int64
+	NextCursor string
 }
 
 type ComparisonRecord struct {
@@ -294,12 +377,14 @@ func (workspace *Workspace) InsertManifest(ctx context.Context, record ManifestR
 	result, err := db.ExecContext(ctx, `
 		INSERT INTO manifests(
 			dataset_id, input_file_id, schema_version, app_session_id, mode, status,
-			started_at, closed_at, payload_degraded, dropped_events_key, last_error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			started_at, closed_at, payload_degraded, dropped_events_key, last_error,
+			source_kind, app_version, build_id, platform, config_fingerprint
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.DatasetID, nullableID(record.InputFileID), record.SchemaVersion,
 		record.AppSessionID, record.Mode, record.Status, startedAt, closedAt,
 		boolInt(record.PayloadDegraded), SequenceKey(record.DroppedEvents), nullEmpty(record.LastError),
+		nullEmpty(record.SourceKind), nullEmpty(record.AppVersion), nullEmpty(record.BuildID), nullEmpty(record.Platform), nullEmpty(record.ConfigFingerprint),
 	)
 	if err != nil {
 		return 0, err
@@ -397,6 +482,131 @@ func (workspace *Workspace) InsertEvents(ctx context.Context, records []EventRec
 	return nil
 }
 
+func (workspace *Workspace) InsertAppLogLines(ctx context.Context, records []AppLogRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	db, err := workspace.database()
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	statement, err := tx.PrepareContext(ctx, `
+		INSERT INTO app_log_lines(dataset_id, input_file_id, line_number, timestamp_text, severity, message)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer statement.Close()
+	counts := make(map[int64]int64)
+	for _, record := range records {
+		if record.DatasetID <= 0 || record.LineNumber <= 0 || strings.TrimSpace(record.Message) == "" {
+			return errors.New("app log dataset, line number and message are required")
+		}
+		if _, err := statement.ExecContext(ctx,
+			record.DatasetID, nullableID(record.InputFileID), record.LineNumber,
+			nullEmpty(record.TimestampText), nullEmpty(record.Severity), record.Message,
+		); err != nil {
+			return err
+		}
+		counts[record.DatasetID]++
+	}
+	if err := statement.Close(); err != nil {
+		return err
+	}
+	for datasetID, count := range counts {
+		if _, err := tx.ExecContext(ctx, `UPDATE datasets SET app_log_line_count = app_log_line_count + ? WHERE id = ?`, count, datasetID); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func (workspace *Workspace) SearchAppLogs(ctx context.Context, request AppLogSearchRequest) (AppLogSearchPage, error) {
+	if request.DatasetID <= 0 {
+		return AppLogSearchPage{}, errors.New("dataset id is required")
+	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 200
+	} else if limit > 1000 {
+		limit = 1000
+	}
+	clauses := []string{"dataset_id = ?"}
+	args := []any{request.DatasetID}
+	if severity := strings.TrimSpace(request.Severity); severity != "" {
+		clauses = append(clauses, "COALESCE(severity, '') = ?")
+		args = append(args, severity)
+	}
+	if keyword := strings.TrimSpace(request.Keyword); keyword != "" {
+		clauses = append(clauses, "message LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+escapeSearchLike(keyword)+"%")
+	}
+	where := strings.Join(clauses, " AND ")
+	db, err := workspace.database()
+	if err != nil {
+		return AppLogSearchPage{}, err
+	}
+	var total int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_log_lines WHERE `+where, args...).Scan(&total); err != nil {
+		return AppLogSearchPage{}, err
+	}
+	pageArgs := append([]any(nil), args...)
+	pageArgs = append(pageArgs, request.AfterID, limit+1)
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, input_file_id, line_number, COALESCE(timestamp_text, ''), COALESCE(severity, ''), message
+		FROM app_log_lines
+		WHERE `+where+` AND id > ?
+		ORDER BY id
+		LIMIT ?
+	`, pageArgs...)
+	if err != nil {
+		return AppLogSearchPage{}, err
+	}
+	defer rows.Close()
+	lines := make([]AppLogRow, 0, limit+1)
+	for rows.Next() {
+		line := AppLogRow{AppLogRecord: AppLogRecord{DatasetID: request.DatasetID}}
+		var inputFileID sql.NullInt64
+		if err := rows.Scan(&line.ID, &inputFileID, &line.LineNumber, &line.TimestampText, &line.Severity, &line.Message); err != nil {
+			return AppLogSearchPage{}, err
+		}
+		if inputFileID.Valid {
+			line.InputFileID = inputFileID.Int64
+		}
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		return AppLogSearchPage{}, err
+	}
+	page := AppLogSearchPage{Lines: lines, Total: total}
+	if len(lines) > limit {
+		page.Lines = lines[:limit]
+		page.NextCursor = page.Lines[len(page.Lines)-1].ID
+	}
+	return page, nil
+}
+
+func escapeSearchLike(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
+}
+
 func (workspace *Workspace) EventCount(ctx context.Context, datasetID int64) (int64, error) {
 	db, err := workspace.database()
 	if err != nil {
@@ -416,10 +626,10 @@ func (workspace *Workspace) Stats(ctx context.Context, datasetID int64) (Dataset
 	}
 	var stats DatasetStats
 	if err := db.QueryRowContext(ctx, `
-		SELECT event_count, manifest_count, warning_count
+		SELECT event_count, manifest_count, warning_count, app_log_line_count
 		FROM datasets
 		WHERE id = ?
-	`, datasetID).Scan(&stats.EventCount, &stats.ManifestCount, &stats.WarningCount); err != nil {
+	`, datasetID).Scan(&stats.EventCount, &stats.ManifestCount, &stats.WarningCount, &stats.AppLogLineCount); err != nil {
 		return DatasetStats{}, err
 	}
 	return stats, nil
@@ -435,6 +645,7 @@ func (workspace *Workspace) ClearAnalysis(ctx context.Context, datasetID int64) 
 		`DELETE FROM trace_layers WHERE dataset_id = ?`,
 		`DELETE FROM trace_targets WHERE dataset_id = ?`,
 		`DELETE FROM target_summaries WHERE dataset_id = ?`,
+		`DELETE FROM diagnostic_metrics WHERE dataset_id = ?`,
 		`DELETE FROM findings WHERE dataset_id = ?`,
 		`DELETE FROM trace_pair_state WHERE dataset_id = ?`,
 		`DELETE FROM trace_tool_state WHERE dataset_id = ?`,
@@ -452,8 +663,129 @@ func (workspace *Workspace) ClearComparisons(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `DELETE FROM comparisons`)
+	if _, err := db.ExecContext(ctx, `DELETE FROM comparisons`); err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `DELETE FROM diagnostic_comparisons`)
 	return err
+}
+
+func (workspace *Workspace) EventPayloadLocator(ctx context.Context, datasetID int64, ingestOrder int64) (PayloadLocator, error) {
+	if datasetID <= 0 || ingestOrder <= 0 {
+		return PayloadLocator{}, errors.New("dataset id and ingest order are required")
+	}
+	db, err := workspace.database()
+	if err != nil {
+		return PayloadLocator{}, err
+	}
+	var locator PayloadLocator
+	if err := db.QueryRowContext(ctx, `
+		SELECT i.canonical_path, COALESCE(e.payload_ref, '')
+		FROM events AS e
+		JOIN input_files AS i ON i.id = e.source_file_id AND i.dataset_id = e.dataset_id
+		WHERE e.dataset_id = ? AND e.ingest_order = ? AND i.file_type = 'events'
+	`, datasetID, ingestOrder).Scan(&locator.EventsFilePath, &locator.Reference); err != nil {
+		return PayloadLocator{}, err
+	}
+	if strings.TrimSpace(locator.Reference) == "" {
+		return PayloadLocator{}, errors.New("event has no payload reference")
+	}
+	return locator, nil
+}
+
+func (workspace *Workspace) SearchEvents(ctx context.Context, request EventSearchRequest) (EventSearchPage, error) {
+	if request.DatasetID <= 0 {
+		return EventSearchPage{}, errors.New("dataset id is required")
+	}
+	predicate, err := querydsl.Compile(request.Query)
+	if err != nil {
+		return EventSearchPage{}, err
+	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 200
+	} else if limit > 1000 {
+		limit = 1000
+	}
+	join := `
+		LEFT JOIN (
+			SELECT dataset_id, app_session_id, MAX(source_kind) AS source_kind
+			FROM manifests
+			GROUP BY dataset_id, app_session_id
+		) AS m ON m.dataset_id = e.dataset_id AND m.app_session_id = e.app_session_id
+	`
+	db, err := workspace.database()
+	if err != nil {
+		return EventSearchPage{}, err
+	}
+	countArgs := append([]any{request.DatasetID}, predicate.Args()...)
+	var total int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM events AS e
+	`+join+`
+		WHERE e.dataset_id = ? AND (`+predicate.WhereSQL()+`)
+	`, countArgs...).Scan(&total); err != nil {
+		return EventSearchPage{}, err
+	}
+
+	cursorSQL, cursorArgs := globalCursorPredicate(request.After, request.Descending)
+	order := "ASC"
+	if request.Descending {
+		order = "DESC"
+	}
+	selectSQL := `
+		SELECT e.source_file_id, e.line_number, e.timestamp_seconds, e.timestamp_nanoseconds, e.timestamp_text,
+			e.sequence_key, e.ingest_order, e.trace_key, e.schema_version, e.app_session_id, e.project_id, e.trace_id, e.span_id,
+			e.parent_span_id, e.http_request_id, e.cursor_request_id, e.conversation_id, e.turn_id, e.turn_sequence_key, e.model_call_id, e.tool_call_id,
+			e.layer, e.event, e.capability, e.operation, e.direction, e.route, e.execution_target, e.protocol, e.status, e.semantic_outcome, e.implementation_state, e.severity, e.error_category, e.duration_ms,
+			e.request_bytes, e.response_bytes, e.decode_error, e.dropped_events_key, e.safe_fields_json, e.payload_ref
+		FROM events AS e
+	` + join + `
+		WHERE e.dataset_id = ? AND (` + predicate.WhereSQL() + `) AND (` + cursorSQL + `)
+		ORDER BY e.timestamp_seconds ` + order + `, e.timestamp_nanoseconds ` + order + `, e.sequence_key ` + order + `, e.ingest_order ` + order + `
+		LIMIT ?
+	`
+	args := []any{request.DatasetID}
+	args = append(args, predicate.Args()...)
+	args = append(args, cursorArgs...)
+	args = append(args, limit+1)
+	events, err := workspace.listEvents(ctx, selectSQL, args...)
+	if err != nil {
+		return EventSearchPage{}, err
+	}
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+	page := EventSearchPage{Events: events, Total: total}
+	if hasMore && len(events) > 0 {
+		cursor := events[len(events)-1].Cursor
+		page.NextCursor = &cursor
+	}
+	return page, nil
+}
+
+func globalCursorPredicate(after *EventCursor, descending bool) (string, []any) {
+	if after == nil {
+		return "1 = 1", nil
+	}
+	operator := ">"
+	if descending {
+		operator = "<"
+	}
+	clause := fmt.Sprintf(`
+		e.timestamp_seconds %[1]s ? OR
+		(e.timestamp_seconds = ? AND e.timestamp_nanoseconds %[1]s ?) OR
+		(e.timestamp_seconds = ? AND e.timestamp_nanoseconds = ? AND e.sequence_key %[1]s ?) OR
+		(e.timestamp_seconds = ? AND e.timestamp_nanoseconds = ? AND e.sequence_key = ? AND e.ingest_order %[1]s ?)
+	`, operator)
+	return clause, []any{
+		after.TimestampSeconds,
+		after.TimestampSeconds, after.TimestampNanoseconds,
+		after.TimestampSeconds, after.TimestampNanoseconds, after.SequenceKey,
+		after.TimestampSeconds, after.TimestampNanoseconds, after.SequenceKey, after.IngestOrder,
+	}
 }
 
 func (workspace *Workspace) ListTraceEvents(ctx context.Context, datasetID int64, after *EventCursor, limit int) ([]EventRow, error) {
@@ -462,10 +794,10 @@ func (workspace *Workspace) ListTraceEvents(ctx context.Context, datasetID int64
 	}
 	query := `
 		SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
-			sequence_key, ingest_order, trace_key, schema_version, app_session_id, trace_id, span_id,
-			parent_span_id, http_request_id, cursor_request_id, conversation_id, model_call_id, tool_call_id,
-			layer, event, route, execution_target, protocol, status, error_category, duration_ms,
-			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json
+			sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
+			parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+			layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
+			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 		FROM events
 		WHERE dataset_id = ?
 		ORDER BY trace_key, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order
@@ -475,10 +807,10 @@ func (workspace *Workspace) ListTraceEvents(ctx context.Context, datasetID int64
 	if after != nil {
 		query = `
 			SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
-				sequence_key, ingest_order, trace_key, schema_version, app_session_id, trace_id, span_id,
-				parent_span_id, http_request_id, cursor_request_id, conversation_id, model_call_id, tool_call_id,
-				layer, event, route, execution_target, protocol, status, error_category, duration_ms,
-				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json
+				sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
+				parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+				layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
+				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 			FROM events
 			WHERE dataset_id = ? AND (
 				trace_key > ? OR
@@ -509,10 +841,10 @@ func (workspace *Workspace) ListGlobalEvents(ctx context.Context, datasetID int6
 	}
 	query := `
 		SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
-			sequence_key, ingest_order, trace_key, schema_version, app_session_id, trace_id, span_id,
-			parent_span_id, http_request_id, cursor_request_id, conversation_id, model_call_id, tool_call_id,
-			layer, event, route, execution_target, protocol, status, error_category, duration_ms,
-			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json
+			sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
+			parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+			layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
+			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 		FROM events
 		WHERE dataset_id = ?
 		ORDER BY timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order
@@ -522,10 +854,10 @@ func (workspace *Workspace) ListGlobalEvents(ctx context.Context, datasetID int6
 	if after != nil {
 		query = `
 			SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
-				sequence_key, ingest_order, trace_key, schema_version, app_session_id, trace_id, span_id,
-				parent_span_id, http_request_id, cursor_request_id, conversation_id, model_call_id, tool_call_id,
-				layer, event, route, execution_target, protocol, status, error_category, duration_ms,
-				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json
+				sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
+				parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+				layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
+				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 			FROM events
 			WHERE dataset_id = ? AND (
 				timestamp_seconds > ? OR
@@ -762,11 +1094,12 @@ func (workspace *Workspace) CountRows(ctx context.Context, table string, dataset
 		return 0, err
 	}
 	queries := map[string]string{
-		"warnings":         `SELECT COUNT(*) FROM warnings WHERE dataset_id = ?`,
-		"findings":         `SELECT COUNT(*) FROM findings WHERE dataset_id = ?`,
-		"trace_summaries":  `SELECT COUNT(*) FROM trace_summaries WHERE dataset_id = ?`,
-		"target_summaries": `SELECT COUNT(*) FROM target_summaries WHERE dataset_id = ?`,
-		"comparisons":      `SELECT COUNT(*) FROM comparisons`,
+		"warnings":           `SELECT COUNT(*) FROM warnings WHERE dataset_id = ?`,
+		"findings":           `SELECT COUNT(*) FROM findings WHERE dataset_id = ?`,
+		"trace_summaries":    `SELECT COUNT(*) FROM trace_summaries WHERE dataset_id = ?`,
+		"target_summaries":   `SELECT COUNT(*) FROM target_summaries WHERE dataset_id = ?`,
+		"diagnostic_metrics": `SELECT COUNT(*) FROM diagnostic_metrics WHERE dataset_id = ?`,
+		"comparisons":        `SELECT COUNT(*) FROM comparisons`,
 	}
 	query, ok := queries[table]
 	if !ok {
@@ -1020,15 +1353,17 @@ func (workspace *Workspace) listEvents(ctx context.Context, query string, args .
 		var sourceFileID sql.NullInt64
 		var timestampText string
 		var sequenceKey string
+		var turnSequenceKey string
 		var decodeError int
 		var droppedEventsKey string
 		var safeFields sql.NullString
 		if err := rows.Scan(
 			&sourceFileID, &row.LineNumber, &row.Cursor.TimestampSeconds, &row.Cursor.TimestampNanoseconds, &timestampText,
-			&sequenceKey, &row.IngestOrder, &row.TraceKey, &row.SchemaVersion, &row.AppSessionID, &row.TraceID, &row.SpanID,
-			&row.ParentSpanID, &row.HTTPRequestID, &row.CursorRequestID, &row.ConversationID, &row.ModelCallID, &row.ToolCallID,
-			&row.Layer, &row.Event, &row.Route, &row.ExecutionTarget, &row.Protocol, &row.Status, &row.ErrorCategory, &row.DurationMS,
-			&row.RequestBytes, &row.ResponseBytes, &decodeError, &droppedEventsKey, &safeFields,
+			&sequenceKey, &row.IngestOrder, &row.TraceKey, &row.SchemaVersion, &row.AppSessionID, &row.ProjectID, &row.TraceID, &row.SpanID,
+			&row.ParentSpanID, &row.HTTPRequestID, &row.CursorRequestID, &row.ConversationID, &row.TurnID, &turnSequenceKey, &row.ModelCallID, &row.ToolCallID,
+			&row.Layer, &row.Event, &row.Capability, &row.Operation, &row.Direction, &row.Route, &row.ExecutionTarget, &row.Protocol, &row.Status,
+			&row.SemanticOutcome, &row.ImplementationState, &row.Severity, &row.ErrorCategory, &row.DurationMS,
+			&row.RequestBytes, &row.ResponseBytes, &decodeError, &droppedEventsKey, &safeFields, &row.PayloadRef,
 		); err != nil {
 			return nil, err
 		}
@@ -1041,6 +1376,11 @@ func (workspace *Workspace) listEvents(ctx context.Context, query string, args .
 			return nil, fmt.Errorf("parse sequence key %q: %w", sequenceKey, err)
 		}
 		row.Sequence = sequence
+		turnSequence, err := strconv.ParseUint(turnSequenceKey, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse turn sequence key %q: %w", turnSequenceKey, err)
+		}
+		row.TurnSequence = turnSequence
 		droppedEvents, err := strconv.ParseUint(droppedEventsKey, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("parse dropped events key %q: %w", droppedEventsKey, err)
@@ -1253,10 +1593,11 @@ func eventValues(record EventRecord) []any {
 		record.DatasetID, nullableID(record.SourceFileID), record.LineNumber,
 		utc.Unix(), utc.Nanosecond(), utc.Format(time.RFC3339Nano),
 		SequenceKey(record.Sequence), record.IngestOrder, strings.TrimSpace(record.TraceKey), record.SchemaVersion,
-		record.AppSessionID, record.TraceID, record.SpanID, record.ParentSpanID, record.HTTPRequestID,
-		record.CursorRequestID, record.ConversationID, record.ModelCallID, record.ToolCallID,
-		record.Layer, record.Event, record.Route, record.ExecutionTarget, record.Protocol, record.Status, record.ErrorCategory,
-		record.DurationMS, record.RequestBytes, record.ResponseBytes, boolInt(record.DecodeError), SequenceKey(record.DroppedEvents), nullEmpty(record.SafeFieldsJSON),
+		record.AppSessionID, record.ProjectID, record.TraceID, record.SpanID, record.ParentSpanID, record.HTTPRequestID,
+		record.CursorRequestID, record.ConversationID, record.TurnID, SequenceKey(record.TurnSequence), record.ModelCallID, record.ToolCallID,
+		record.Layer, record.Event, record.Capability, record.Operation, record.Direction, record.Route, record.ExecutionTarget, record.Protocol,
+		record.Status, record.SemanticOutcome, record.ImplementationState, record.Severity, record.ErrorCategory,
+		record.DurationMS, record.RequestBytes, record.ResponseBytes, boolInt(record.DecodeError), SequenceKey(record.DroppedEvents), nullEmpty(record.SafeFieldsJSON), record.PayloadRef,
 	}
 }
 
@@ -1265,11 +1606,12 @@ INSERT INTO events(
 	dataset_id, source_file_id, line_number,
 	timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 	sequence_key, ingest_order, trace_key, schema_version,
-	app_session_id, trace_id, span_id, parent_span_id, http_request_id,
-	cursor_request_id, conversation_id, model_call_id, tool_call_id,
-	layer, event, route, execution_target, protocol, status, error_category,
-	duration_ms, request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	app_session_id, project_id, trace_id, span_id, parent_span_id, http_request_id,
+	cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+	layer, event, capability, operation, direction, route, execution_target, protocol,
+	status, semantic_outcome, implementation_state, severity, error_category,
+	duration_ms, request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 const schemaSQL = `
@@ -1277,7 +1619,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     version INTEGER NOT NULL
 );
 INSERT INTO schema_meta(version)
-SELECT 1
+SELECT 5
 WHERE NOT EXISTS (SELECT 1 FROM schema_meta);
 
 CREATE TABLE IF NOT EXISTS datasets (
@@ -1286,7 +1628,8 @@ CREATE TABLE IF NOT EXISTS datasets (
     status TEXT NOT NULL CHECK(status IN ('ready', 'ingesting', 'ingested', 'analyzing', 'analyzed')),
     event_count INTEGER NOT NULL DEFAULT 0,
     manifest_count INTEGER NOT NULL DEFAULT 0,
-    warning_count INTEGER NOT NULL DEFAULT 0
+    warning_count INTEGER NOT NULL DEFAULT 0,
+    app_log_line_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS input_arguments (
@@ -1302,7 +1645,7 @@ CREATE TABLE IF NOT EXISTS input_files (
     dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
     argument_id INTEGER REFERENCES input_arguments(id) ON DELETE SET NULL,
     canonical_path TEXT NOT NULL,
-    file_type TEXT NOT NULL CHECK(file_type IN ('events', 'manifest')),
+    file_type TEXT NOT NULL CHECK(file_type IN ('events', 'manifest', 'app_log')),
     first_argument_ordinal INTEGER NOT NULL,
     UNIQUE(dataset_id, canonical_path)
 );
@@ -1320,7 +1663,12 @@ CREATE TABLE IF NOT EXISTS manifests (
     closed_at TEXT,
     payload_degraded INTEGER NOT NULL DEFAULT 0,
     dropped_events_key TEXT NOT NULL DEFAULT '00000000000000000000',
-    last_error TEXT
+    last_error TEXT,
+    source_kind TEXT,
+    app_version TEXT,
+    build_id TEXT,
+    platform TEXT,
+    config_fingerprint TEXT
 );
 
 CREATE TABLE IF NOT EXISTS warnings (
@@ -1330,6 +1678,19 @@ CREATE TABLE IF NOT EXISTS warnings (
     message TEXT NOT NULL,
     UNIQUE(dataset_id, ordinal)
 );
+
+CREATE TABLE IF NOT EXISTS app_log_lines (
+    id INTEGER PRIMARY KEY,
+    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    input_file_id INTEGER REFERENCES input_files(id) ON DELETE SET NULL,
+    line_number INTEGER NOT NULL,
+    timestamp_text TEXT,
+    severity TEXT,
+    message TEXT NOT NULL,
+    UNIQUE(dataset_id, input_file_id, line_number)
+);
+CREATE INDEX IF NOT EXISTS idx_app_log_lines_order ON app_log_lines(dataset_id, id);
+CREATE INDEX IF NOT EXISTS idx_app_log_lines_severity ON app_log_lines(dataset_id, severity, id);
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
@@ -1344,20 +1705,29 @@ CREATE TABLE IF NOT EXISTS events (
     trace_key TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
     app_session_id TEXT NOT NULL,
+    project_id TEXT,
     trace_id TEXT,
     span_id TEXT,
     parent_span_id TEXT,
     http_request_id TEXT,
     cursor_request_id TEXT,
     conversation_id TEXT,
+    turn_id TEXT,
+    turn_sequence_key TEXT NOT NULL DEFAULT '00000000000000000000' CHECK(length(turn_sequence_key) = 20),
     model_call_id TEXT,
     tool_call_id TEXT,
     layer TEXT NOT NULL,
     event TEXT NOT NULL,
+    capability TEXT,
+    operation TEXT,
+    direction TEXT,
     route TEXT,
     execution_target TEXT,
     protocol TEXT,
     status TEXT,
+    semantic_outcome TEXT,
+    implementation_state TEXT,
+    severity TEXT,
     error_category TEXT,
     duration_ms INTEGER NOT NULL DEFAULT 0,
     request_bytes INTEGER NOT NULL DEFAULT 0,
@@ -1365,11 +1735,16 @@ CREATE TABLE IF NOT EXISTS events (
     decode_error INTEGER NOT NULL DEFAULT 0,
     dropped_events_key TEXT NOT NULL DEFAULT '00000000000000000000',
     safe_fields_json TEXT,
+    payload_ref TEXT,
     UNIQUE(dataset_id, ingest_order)
 );
 CREATE INDEX IF NOT EXISTS idx_events_global_order ON events(dataset_id, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order);
 CREATE INDEX IF NOT EXISTS idx_events_trace_order ON events(dataset_id, trace_key, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order);
 CREATE INDEX IF NOT EXISTS idx_events_target ON events(dataset_id, execution_target);
+CREATE INDEX IF NOT EXISTS idx_events_project_time ON events(dataset_id, project_id, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order);
+CREATE INDEX IF NOT EXISTS idx_events_conversation_turn ON events(dataset_id, conversation_id, turn_sequence_key, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order);
+CREATE INDEX IF NOT EXISTS idx_events_semantics ON events(dataset_id, capability, operation, semantic_outcome, implementation_state);
+CREATE INDEX IF NOT EXISTS idx_events_severity_time ON events(dataset_id, severity, timestamp_seconds, timestamp_nanoseconds, sequence_key, ingest_order);
 
 CREATE TABLE IF NOT EXISTS trace_summaries (
     dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
@@ -1408,6 +1783,39 @@ CREATE TABLE IF NOT EXISTS target_summaries (
     request_bytes INTEGER NOT NULL,
     response_bytes INTEGER NOT NULL,
     PRIMARY KEY(dataset_id, target)
+);
+
+CREATE TABLE IF NOT EXISTS diagnostic_metrics (
+    dataset_id INTEGER NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    dimension TEXT NOT NULL CHECK(dimension IN ('project', 'capability', 'operation', 'route', 'target')),
+    value TEXT NOT NULL,
+    event_count INTEGER NOT NULL,
+    completed_count INTEGER NOT NULL,
+    failed_count INTEGER NOT NULL,
+    degraded_count INTEGER NOT NULL,
+    duration_samples INTEGER NOT NULL,
+    duration_p50_ms INTEGER NOT NULL,
+    duration_p95_ms INTEGER NOT NULL,
+    duration_p99_ms INTEGER NOT NULL,
+    ttft_samples INTEGER NOT NULL,
+    ttft_p50_ms INTEGER NOT NULL,
+    ttft_p95_ms INTEGER NOT NULL,
+    ttft_p99_ms INTEGER NOT NULL,
+    request_bytes INTEGER NOT NULL,
+    response_bytes INTEGER NOT NULL,
+    PRIMARY KEY(dataset_id, dimension, value)
+);
+
+CREATE TABLE IF NOT EXISTS diagnostic_comparisons (
+    dimension TEXT NOT NULL,
+    value TEXT NOT NULL,
+    current_completed INTEGER NOT NULL,
+    baseline_completed INTEGER NOT NULL,
+    semantic_failure_rate_delta REAL NOT NULL,
+    duration_p95_delta_ms INTEGER NOT NULL,
+    current_finding_count INTEGER NOT NULL,
+    baseline_finding_count INTEGER NOT NULL,
+    PRIMARY KEY(dimension, value)
 );
 
 CREATE TABLE IF NOT EXISTS findings (

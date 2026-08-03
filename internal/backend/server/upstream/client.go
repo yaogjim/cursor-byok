@@ -57,6 +57,9 @@ func ForwardToUpstream(reqCtx *RequestContext, options ForwardOptions) (*Forward
 		Event: observability.Event{
 			Layer:           "upstream",
 			Event:           "request_started",
+			Capability:      "unknown",
+			Operation:       "upstream.request",
+			Direction:       observability.DirectionProxyToUpstream,
 			Route:           requestRoute(reqCtx.TargetURL),
 			ExecutionTarget: target,
 			Protocol:        "http",
@@ -124,6 +127,9 @@ func recordUpstreamFinished(reqCtx *RequestContext, ctx context.Context, target 
 	recordUpstreamCapture(reqCtx, ctx, observability.Capture{Event: observability.Event{
 		Layer:           "upstream",
 		Event:           "request_finished",
+		Capability:      "unknown",
+		Operation:       "upstream.request",
+		Direction:       observability.DirectionProxyToUpstream,
 		Route:           requestRoute(reqCtx.TargetURL),
 		ExecutionTarget: target,
 		Protocol:        "http",

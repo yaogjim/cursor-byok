@@ -17,6 +17,7 @@ import (
 	"cursor/internal/backend/server"
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/backend/server/upstream"
+	"cursor/internal/buildinfo"
 	"cursor/internal/logger"
 	"cursor/internal/netproxy"
 	"cursor/internal/observability"
@@ -289,10 +290,32 @@ func (host *Host) InProcessHealthCheck() error {
 }
 
 func observabilitySettings(cfg serverconfig.Config) observability.Settings {
+	fingerprintValues := []string{
+		cfg.Observability.Mode,
+		fmt.Sprint(cfg.Observability.RetentionDays),
+		fmt.Sprint(cfg.Observability.MaxDiskMB),
+		cfg.Routing.Mode,
+		fmt.Sprint(cfg.ProviderStreamIdleTimeout),
+		fmt.Sprint(cfg.HomeMetrics.IncludeCacheWriteInHitRate),
+	}
+	for _, adapter := range cfg.ModelAdapters {
+		fingerprintValues = append(fingerprintValues,
+			adapter.Type,
+			adapter.ModelID,
+			adapter.ReasoningEffort,
+			adapter.AnthropicThinkingEffort,
+			fmt.Sprint(adapter.ContextWindowTokens),
+			fmt.Sprint(adapter.MaxCompletionTokens),
+			fmt.Sprint(adapter.AnthropicMaxTokens),
+			fmt.Sprint(adapter.ThinkingBudgetTokens),
+		)
+	}
+	fingerprint := observability.ConfigFingerprint(fingerprintValues...)
 	return observability.Settings{
 		Mode:          cfg.Observability.Mode,
 		RetentionDays: cfg.Observability.RetentionDays,
 		MaxDiskMB:     cfg.Observability.MaxDiskMB,
+		Metadata:      observability.RuntimeMetadata(buildinfo.CurrentVersion(), fingerprint),
 	}
 }
 

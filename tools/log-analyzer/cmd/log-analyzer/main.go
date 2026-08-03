@@ -9,10 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cursor-log-analyzer/internal/analyze"
-	"cursor-log-analyzer/internal/load"
-	"cursor-log-analyzer/internal/report"
-	"cursor-log-analyzer/internal/workspace"
+	"cursor-log-analyzer/internal/project"
 )
 
 type stringList []string
@@ -63,31 +60,22 @@ func run(arguments []string) error {
 	}
 
 	ctx := context.Background()
-	store, err := workspace.Open(ctx, workspace.Options{})
+	analysis, err := project.Open(ctx, project.OpenRequest{
+		Inputs:             inputs,
+		Baselines:          baselines,
+		AllowUnknownSchema: allowUnknown,
+	})
 	if err != nil {
 		return err
 	}
-	workspaceClosed := false
+	closed := false
 	defer func() {
-		if !workspaceClosed {
-			_ = store.CloseAndRemove()
+		if !closed {
+			_ = analysis.Close()
 		}
 	}()
 
-	options := load.Options{AllowUnknownSchema: allowUnknown}
-	if err := load.IntoWorkspace(ctx, store, workspace.DatasetCurrent, inputs, options); err != nil {
-		return err
-	}
-	if len(baselines) > 0 {
-		if err := load.IntoWorkspace(ctx, store, workspace.DatasetBaseline, baselines, options); err != nil {
-			return fmt.Errorf("load baseline: %w", err)
-		}
-	}
-	summary, err := analyze.Workspace(ctx, store, len(baselines) > 0)
-	if err != nil {
-		return err
-	}
-	staged, err := report.StageWorkspace(ctx, output, store, len(baselines) > 0)
+	staged, err := analysis.StageReport(ctx, output)
 	if err != nil {
 		return err
 	}
@@ -97,15 +85,15 @@ func run(arguments []string) error {
 			_ = staged.Cleanup()
 		}
 	}()
-	closeErr := store.CloseAndRemove()
-	workspaceClosed = true
-	if closeErr != nil {
-		return closeErr
+	if err := analysis.Close(); err != nil {
+		return err
 	}
+	closed = true
 	if err := staged.Publish(); err != nil {
 		return err
 	}
 	published = true
+	summary := analysis.Summary()
 	absoluteOutput, _ := filepath.Abs(output)
 	_, _ = fmt.Fprintf(os.Stdout, "分析完成: events=%d traces=%d findings=%d output=%s\n", summary.EventCount, summary.TraceCount, summary.FindingCount, absoluteOutput)
 	return nil

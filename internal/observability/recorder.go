@@ -12,12 +12,13 @@ import (
 type HumanSink func(Event)
 
 type Recorder struct {
-	root      string
-	settings  Settings
-	writer    *sessionWriter
-	humanSink HumanSink
-	queue     chan Capture
-	done      chan struct{}
+	root       string
+	settings   Settings
+	writer     *sessionWriter
+	projectKey []byte
+	humanSink  HumanSink
+	queue      chan Capture
+	done       chan struct{}
 
 	mu        sync.RWMutex
 	closed    bool
@@ -33,17 +34,22 @@ func NewRecorder(root string, settings Settings) (*Recorder, error) {
 
 func NewRecorderWithHumanSink(root string, settings Settings, humanSink HumanSink) (*Recorder, error) {
 	settings = normalizeSettings(settings)
+	projectKey, err := loadOrCreateProjectKey(root)
+	if err != nil {
+		return nil, err
+	}
 	writer, err := openSession(root, settings)
 	if err != nil {
 		return nil, err
 	}
 	recorder := &Recorder{
-		root:      root,
-		settings:  settings,
-		writer:    writer,
-		humanSink: humanSink,
-		queue:     make(chan Capture, settings.QueueSize),
-		done:      make(chan struct{}),
+		root:       root,
+		settings:   settings,
+		writer:     writer,
+		projectKey: projectKey,
+		humanSink:  humanSink,
+		queue:      make(chan Capture, settings.QueueSize),
+		done:       make(chan struct{}),
 		status: Status{
 			Enabled:     true,
 			Mode:        settings.Mode,
@@ -66,13 +72,20 @@ func (recorder *Recorder) Record(ctx context.Context, capture Capture) (accepted
 		}
 	}()
 	applyCorrelation(&capture.Event, CorrelationFromContext(ctx))
+	if capture.Event.ProjectID == "" {
+		capture.Event.ProjectID = deriveProjectID(recorder.projectKey, capture.ProjectPaths)
+	}
+	capture.ProjectPaths = nil
 	capture.Event.Layer = strings.TrimSpace(capture.Event.Layer)
 	capture.Event.Event = strings.TrimSpace(capture.Event.Event)
+	capture.Event.ProjectID = strings.TrimSpace(capture.Event.ProjectID)
+	capture.Event.TurnID = strings.TrimSpace(capture.Event.TurnID)
 	capture.Event.Route = sanitizeString(capture.Event.Route)
 	capture.Event.ExecutionTarget = strings.TrimSpace(capture.Event.ExecutionTarget)
 	capture.Event.Protocol = strings.TrimSpace(capture.Event.Protocol)
 	capture.Event.Status = strings.TrimSpace(capture.Event.Status)
 	capture.Event.ErrorCategory = strings.TrimSpace(capture.Event.ErrorCategory)
+	capture.Event = normalizeEventSemantics(capture.Event)
 	if capture.Event.Fields != nil {
 		capture.Event.Fields = sanitizedMap(capture.Event.Fields)
 	}
@@ -201,17 +214,24 @@ func (recorder *Recorder) writeCapture(sequence uint64, capture Capture) uint64 
 	if payloadError != "" {
 		sequence++
 		degradedEvent := Event{
-			SchemaVersion: SchemaVersion,
-			Timestamp:     time.Now().UTC(),
-			Sequence:      sequence,
-			AppSessionID:  recorder.writer.sessionID,
-			TraceID:       event.TraceID,
-			SpanID:        event.SpanID,
-			Layer:         "observability",
-			Event:         "payload_capture_disabled",
-			Status:        "degraded",
-			ErrorCategory: payloadError,
-			DroppedEvents: recorder.dropped.Load(),
+			SchemaVersion:       SchemaVersion,
+			Timestamp:           time.Now().UTC(),
+			Sequence:            sequence,
+			AppSessionID:        recorder.writer.sessionID,
+			ProjectID:           event.ProjectID,
+			TraceID:             event.TraceID,
+			SpanID:              event.SpanID,
+			Layer:               "observability",
+			Event:               "payload_capture_disabled",
+			Capability:          "config",
+			Operation:           "observability.payload_capture",
+			Direction:           DirectionProxyInternal,
+			Status:              "degraded",
+			SemanticOutcome:     OutcomeDegraded,
+			ImplementationState: ImplementationImplemented,
+			Severity:            SeverityWarning,
+			ErrorCategory:       payloadError,
+			DroppedEvents:       recorder.dropped.Load(),
 		}
 		if err := recorder.writer.appendEvent(degradedEvent); err != nil {
 			recorder.setFatal("event_write_failed")

@@ -147,6 +147,75 @@ func TestDatasetInputFileAndEventSchema(t *testing.T) {
 	}
 }
 
+func TestSearchEventsFiltersCountsAndUsesStableCursor(t *testing.T) {
+	ws, err := Open(context.Background(), Options{TempDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer ws.CloseAndRemove()
+	currentID, err := ws.DatasetID(context.Background(), DatasetCurrent)
+	if err != nil {
+		t.Fatalf("DatasetID(current) error = %v", err)
+	}
+	now := time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC)
+	if _, err := ws.InsertManifest(context.Background(), ManifestRecord{
+		DatasetID: currentID, SchemaVersion: 2, AppSessionID: "session", Mode: "basic", Status: "closed",
+		StartedAt: now, SourceKind: "client",
+	}); err != nil {
+		t.Fatalf("InsertManifest() error = %v", err)
+	}
+	records := []EventRecord{
+		{DatasetID: currentID, Timestamp: now, Sequence: 1, IngestOrder: 1, TraceKey: "trace-1", SchemaVersion: 2, AppSessionID: "session", ProjectID: "project-a", TraceID: "trace-1", Layer: "runtime", Event: "turn", Severity: "info"},
+		{DatasetID: currentID, Timestamp: now.Add(time.Second), Sequence: 2, IngestOrder: 2, TraceKey: "trace-2", SchemaVersion: 2, AppSessionID: "session", ProjectID: "project-a", TraceID: "trace-2", Layer: "runtime", Event: "tool_result", Capability: "tool", Operation: "tool.result", Severity: "error", SafeFieldsJSON: `{"tool":"PatchEdit"}`},
+		{DatasetID: currentID, Timestamp: now.Add(2 * time.Second), Sequence: 3, IngestOrder: 3, TraceKey: "trace-3", SchemaVersion: 2, AppSessionID: "session", ProjectID: "project-a", TraceID: "trace-3", Layer: "runtime", Event: "tool_result", Capability: "tool", Operation: "tool.result", Severity: "warning"},
+		{DatasetID: currentID, Timestamp: now.Add(3 * time.Second), Sequence: 4, IngestOrder: 4, TraceKey: "trace-4", SchemaVersion: 2, AppSessionID: "session", ProjectID: "project-b", TraceID: "trace-4", Layer: "provider", Event: "failed", Severity: "error"},
+		{DatasetID: currentID, Timestamp: now.Add(4 * time.Second), Sequence: 5, IngestOrder: 5, TraceKey: "trace-5", SchemaVersion: 2, AppSessionID: "session", ProjectID: "project-a", TraceID: "trace-5", Layer: "provider", Event: "failed", Severity: "error"},
+	}
+	if err := ws.InsertEvents(context.Background(), records); err != nil {
+		t.Fatalf("InsertEvents() error = %v", err)
+	}
+
+	request := EventSearchRequest{
+		DatasetID: currentID,
+		Query:     `(severity:error OR severity:warning) project:project-a`,
+		Limit:     2,
+	}
+	first, err := ws.SearchEvents(context.Background(), request)
+	if err != nil {
+		t.Fatalf("SearchEvents(first) error = %v", err)
+	}
+	if first.Total != 3 || len(first.Events) != 2 || first.NextCursor == nil {
+		t.Fatalf("first page = %+v, want total 3, 2 events and cursor", first)
+	}
+	if first.Events[0].Sequence != 2 || first.Events[1].Sequence != 3 {
+		t.Fatalf("first page sequences = %d,%d, want 2,3", first.Events[0].Sequence, first.Events[1].Sequence)
+	}
+	request.After = first.NextCursor
+	second, err := ws.SearchEvents(context.Background(), request)
+	if err != nil {
+		t.Fatalf("SearchEvents(second) error = %v", err)
+	}
+	if second.Total != 3 || len(second.Events) != 1 || second.Events[0].Sequence != 5 || second.NextCursor != nil {
+		t.Fatalf("second page = %+v, want final sequence 5", second)
+	}
+
+	keyword, err := ws.SearchEvents(context.Background(), EventSearchRequest{DatasetID: currentID, Query: `source:client keyword:PatchEdit`})
+	if err != nil {
+		t.Fatalf("SearchEvents(keyword) error = %v", err)
+	}
+	if keyword.Total != 1 || len(keyword.Events) != 1 || keyword.Events[0].Sequence != 2 {
+		t.Fatalf("keyword page = %+v, want sequence 2", keyword)
+	}
+
+	descending, err := ws.SearchEvents(context.Background(), EventSearchRequest{DatasetID: currentID, Query: `project:project-a`, Limit: 2, Descending: true})
+	if err != nil {
+		t.Fatalf("SearchEvents(descending) error = %v", err)
+	}
+	if descending.Total != 4 || len(descending.Events) != 2 || descending.Events[0].Sequence != 5 || descending.Events[1].Sequence != 3 {
+		t.Fatalf("descending page = %+v, want sequences 5,3", descending)
+	}
+}
+
 func TestInsertEventRejectsInvalidRecord(t *testing.T) {
 	ws, err := Open(context.Background(), Options{TempDir: t.TempDir()})
 	if err != nil {

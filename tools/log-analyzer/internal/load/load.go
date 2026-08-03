@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cursor-log-analyzer/internal/contract"
 	"cursor-log-analyzer/internal/workspace"
@@ -22,6 +23,7 @@ const (
 	defaultBatchByteLimit  = 32 << 20
 	defaultEventLineLimit  = 8 << 20
 	defaultManifestLimit   = 1 << 20
+	defaultAppLogLineLimit = 1 << 20
 )
 
 var errLineTooLarge = errors.New("line exceeds limit")
@@ -32,6 +34,7 @@ type Options struct {
 	BatchByteLimit     int
 	MaxEventLineBytes  int
 	MaxManifestBytes   int
+	MaxAppLogLineBytes int
 }
 
 type ingestOptions struct {
@@ -40,6 +43,7 @@ type ingestOptions struct {
 	batchByteLimit     int
 	maxEventLineBytes  int
 	maxManifestBytes   int
+	maxAppLogLineBytes int
 }
 
 type ingestState struct {
@@ -86,6 +90,8 @@ func IntoWorkspace(ctx context.Context, store *workspace.Workspace, kind workspa
 				return state.ingestEvents(ctx, fileID, file)
 			case workspace.FileManifest:
 				return state.ingestManifest(ctx, fileID, file)
+			case workspace.FileAppLog:
+				return state.ingestAppLog(ctx, fileID, file)
 			default:
 				return fmt.Errorf("unsupported input file %s", file)
 			}
@@ -137,13 +143,16 @@ func (state *ingestState) ingestEvents(ctx context.Context, fileID int64, path s
 		if err := validateVersion(event.SchemaVersion, state.options.allowUnknownSchema); err != nil {
 			return fmt.Errorf("validate %s:%d: %w", path, lineNumber, err)
 		}
-		if event.SchemaVersion != contract.SupportedSchemaVersion {
+		if !contract.IsSupportedSchemaVersion(event.SchemaVersion) {
 			if err := state.addWarning(ctx, fmt.Sprintf("%s:%d uses unknown schema_version=%d", path, lineNumber, event.SchemaVersion)); err != nil {
 				return err
 			}
 		}
 		if strings.TrimSpace(event.Layer) == "" || strings.TrimSpace(event.Event) == "" {
 			return fmt.Errorf("validate %s:%d: layer and event are required", path, lineNumber)
+		}
+		if err := contract.ValidateEventSemantics(event); err != nil {
+			return fmt.Errorf("validate %s:%d: %w", path, lineNumber, err)
 		}
 		safeFields, err := safeFieldsJSON(event.Fields)
 		if err != nil {
@@ -169,19 +178,103 @@ func (state *ingestState) ingestManifest(ctx context.Context, fileID int64, path
 		}
 	}
 	_, err = state.store.InsertManifest(ctx, workspace.ManifestRecord{
-		DatasetID:       state.datasetID,
-		InputFileID:     fileID,
-		SchemaVersion:   manifest.SchemaVersion,
-		AppSessionID:    manifest.AppSessionID,
-		Mode:            manifest.Mode,
-		Status:          manifest.Status,
-		StartedAt:       manifest.StartedAt,
-		ClosedAt:        manifest.ClosedAt,
-		PayloadDegraded: manifest.PayloadDegraded,
-		DroppedEvents:   manifest.DroppedEvents,
-		LastError:       manifest.LastError,
+		DatasetID:         state.datasetID,
+		InputFileID:       fileID,
+		SchemaVersion:     manifest.SchemaVersion,
+		AppSessionID:      manifest.AppSessionID,
+		Mode:              manifest.Mode,
+		Status:            manifest.Status,
+		StartedAt:         manifest.StartedAt,
+		ClosedAt:          manifest.ClosedAt,
+		PayloadDegraded:   manifest.PayloadDegraded,
+		DroppedEvents:     manifest.DroppedEvents,
+		LastError:         manifest.LastError,
+		SourceKind:        manifest.SourceKind,
+		AppVersion:        manifest.AppVersion,
+		BuildID:           manifest.BuildID,
+		Platform:          manifest.Platform,
+		ConfigFingerprint: manifest.ConfigFingerprint,
 	})
 	return err
+}
+
+func (state *ingestState) ingestAppLog(ctx context.Context, fileID int64, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	reader := bufio.NewReader(file)
+	batch := make([]workspace.AppLogRecord, 0, state.options.batchEventLimit)
+	lineNumber := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := state.store.InsertAppLogLines(ctx, batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+		return nil
+	}
+	for {
+		line, readErr := readLine(reader, state.options.maxAppLogLineBytes)
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if errors.Is(readErr, errLineTooLarge) {
+				return fmt.Errorf("read %s:%d: line exceeds %d bytes", path, lineNumber+1, state.options.maxAppLogLineBytes)
+			}
+			return fmt.Errorf("read %s:%d: %w", path, lineNumber+1, readErr)
+		}
+		lineNumber++
+		message := strings.TrimSpace(string(line))
+		if message == "" {
+			continue
+		}
+		timestamp, severity := appLogMetadata(message)
+		batch = append(batch, workspace.AppLogRecord{
+			DatasetID: state.datasetID, InputFileID: fileID, LineNumber: lineNumber,
+			TimestampText: timestamp, Severity: severity, Message: message,
+		})
+		if len(batch) >= state.options.batchEventLimit {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func appLogMetadata(message string) (string, string) {
+	fields := strings.Fields(message)
+	severity := ""
+	for _, field := range fields {
+		switch strings.ToUpper(strings.Trim(field, "[]:")) {
+		case "DBG", "DEBUG":
+			severity = "debug"
+		case "INF", "INFO":
+			severity = "info"
+		case "WRN", "WARN", "WARNING":
+			severity = "warning"
+		case "ERR", "ERROR":
+			severity = "error"
+		}
+		if severity != "" {
+			break
+		}
+	}
+	timestamp := ""
+	for length := 1; length <= 2 && length <= len(fields); length++ {
+		candidate := strings.Join(fields[:length], " ")
+		for _, layout := range []string{time.RFC3339Nano, "2006/01/02 15:04:05.000", "2006/01/02 15:04:05", "15:04:05.000", "15:04:05"} {
+			if _, err := time.Parse(layout, candidate); err == nil {
+				timestamp = candidate
+			}
+		}
+	}
+	return timestamp, severity
 }
 
 func (state *ingestState) addWarning(ctx context.Context, message string) error {
@@ -256,8 +349,11 @@ func readManifest(path string, options ingestOptions) (contract.Manifest, string
 		return contract.Manifest{}, "", fmt.Errorf("validate %s: %w", path, err)
 	}
 	warning := ""
-	if manifest.SchemaVersion != contract.SupportedSchemaVersion {
+	if !contract.IsSupportedSchemaVersion(manifest.SchemaVersion) {
 		warning = fmt.Sprintf("%s uses unknown schema_version=%d", path, manifest.SchemaVersion)
+	}
+	if err := contract.ValidateManifestSemantics(manifest); err != nil {
+		return contract.Manifest{}, "", fmt.Errorf("validate %s: %w", path, err)
 	}
 	return manifest, warning, nil
 }
@@ -306,36 +402,46 @@ func readBoundedFile(path string, limit int) ([]byte, error) {
 
 func eventRecord(datasetID int64, fileID int64, lineNumber int, ingestOrder int64, event contract.Event, safeFields string) workspace.EventRecord {
 	return workspace.EventRecord{
-		DatasetID:       datasetID,
-		SourceFileID:    fileID,
-		LineNumber:      lineNumber,
-		Timestamp:       event.Timestamp,
-		Sequence:        event.Sequence,
-		IngestOrder:     ingestOrder,
-		TraceKey:        traceKey(event),
-		SchemaVersion:   event.SchemaVersion,
-		AppSessionID:    event.AppSessionID,
-		TraceID:         event.TraceID,
-		SpanID:          event.SpanID,
-		ParentSpanID:    event.ParentSpanID,
-		HTTPRequestID:   event.HTTPRequestID,
-		CursorRequestID: event.CursorRequestID,
-		ConversationID:  event.ConversationID,
-		ModelCallID:     event.ModelCallID,
-		ToolCallID:      event.ToolCallID,
-		Layer:           event.Layer,
-		Event:           event.Event,
-		Route:           event.Route,
-		ExecutionTarget: event.ExecutionTarget,
-		Protocol:        event.Protocol,
-		Status:          event.Status,
-		ErrorCategory:   event.ErrorCategory,
-		DurationMS:      event.DurationMS,
-		RequestBytes:    event.RequestBytes,
-		ResponseBytes:   event.ResponseBytes,
-		DecodeError:     event.DecodeError,
-		DroppedEvents:   event.DroppedEvents,
-		SafeFieldsJSON:  safeFields,
+		DatasetID:           datasetID,
+		SourceFileID:        fileID,
+		LineNumber:          lineNumber,
+		Timestamp:           event.Timestamp,
+		Sequence:            event.Sequence,
+		IngestOrder:         ingestOrder,
+		TraceKey:            traceKey(event),
+		SchemaVersion:       event.SchemaVersion,
+		AppSessionID:        event.AppSessionID,
+		ProjectID:           event.ProjectID,
+		TraceID:             event.TraceID,
+		SpanID:              event.SpanID,
+		ParentSpanID:        event.ParentSpanID,
+		HTTPRequestID:       event.HTTPRequestID,
+		CursorRequestID:     event.CursorRequestID,
+		ConversationID:      event.ConversationID,
+		TurnID:              event.TurnID,
+		TurnSequence:        event.TurnSequence,
+		ModelCallID:         event.ModelCallID,
+		ToolCallID:          event.ToolCallID,
+		Layer:               event.Layer,
+		Event:               event.Event,
+		Capability:          event.Capability,
+		Operation:           event.Operation,
+		Direction:           event.Direction,
+		Route:               event.Route,
+		ExecutionTarget:     event.ExecutionTarget,
+		Protocol:            event.Protocol,
+		Status:              event.Status,
+		SemanticOutcome:     event.SemanticOutcome,
+		ImplementationState: event.ImplementationState,
+		Severity:            event.Severity,
+		ErrorCategory:       event.ErrorCategory,
+		DurationMS:          event.DurationMS,
+		RequestBytes:        event.RequestBytes,
+		ResponseBytes:       event.ResponseBytes,
+		DecodeError:         event.DecodeError,
+		DroppedEvents:       event.DroppedEvents,
+		SafeFieldsJSON:      safeFields,
+		PayloadRef:          event.PayloadRef,
 	}
 }
 
@@ -379,12 +485,18 @@ func allowlistedFields(input map[string]any) map[string]any {
 }
 
 func inputFileKind(path string) (workspace.FileKind, bool) {
-	switch filepath.Base(path) {
+	name := filepath.Base(path)
+	switch name {
 	case "events.jsonl":
 		return workspace.FileEvents, true
 	case "manifest.json":
 		return workspace.FileManifest, true
+	case "app.log":
+		return workspace.FileAppLog, true
 	default:
+		if strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".log") {
+			return workspace.FileAppLog, true
+		}
 		return "", false
 	}
 }
@@ -408,6 +520,7 @@ func normalizeOptions(options Options) ingestOptions {
 		batchByteLimit:     options.BatchByteLimit,
 		maxEventLineBytes:  options.MaxEventLineBytes,
 		maxManifestBytes:   options.MaxManifestBytes,
+		maxAppLogLineBytes: options.MaxAppLogLineBytes,
 	}
 	if result.batchEventLimit <= 0 {
 		result.batchEventLimit = defaultBatchEventLimit
@@ -421,15 +534,18 @@ func normalizeOptions(options Options) ingestOptions {
 	if result.maxManifestBytes <= 0 {
 		result.maxManifestBytes = defaultManifestLimit
 	}
+	if result.maxAppLogLineBytes <= 0 {
+		result.maxAppLogLineBytes = defaultAppLogLineLimit
+	}
 	return result
 }
 
 func validateVersion(version int, allowUnknown bool) error {
-	if version == contract.SupportedSchemaVersion {
+	if contract.IsSupportedSchemaVersion(version) {
 		return nil
 	}
 	if allowUnknown && version > 0 {
 		return nil
 	}
-	return fmt.Errorf("unsupported schema_version=%d (supported=%d)", version, contract.SupportedSchemaVersion)
+	return fmt.Errorf("unsupported schema_version=%d (supported=%d..%d)", version, contract.MinimumSupportedSchemaVersion, contract.SupportedSchemaVersion)
 }

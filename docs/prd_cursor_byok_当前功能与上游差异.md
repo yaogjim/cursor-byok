@@ -8,7 +8,7 @@
 - **原始上游核对基线**：`main@9e057399690bff78cd7571dba2e7a14e12767585`
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
 - **当前工作树**：安全 merge 已提交；本 PRD 与同步说明作为独立记录提交
-- **状态**：功能记录与差异基线；运行时窗口和网络零请求验收仍需按同步说明执行
+- **状态**：功能记录与差异基线；日志分析 GUI 与能力改进闭环已完成 Design，代码实施中；运行时窗口和网络零请求验收仍需按同步说明执行
 
 ## 1. 文档职责与证据口径
 
@@ -83,7 +83,8 @@
 | OpenAI 协议选择 | 原始默认行为以 Responses 为主 | 默认调整为 Chat Completions，同时保留显式 Responses/Custom | 不得静默覆盖用户已有模型配置 | 已提交；配置冲突需人工审查 |
 | Tab/Cpp/FileSync/Git 路由 | 相关 RPC 经 `tab.leokun.cn` relay | 增加脱敏审计接入，转发目标和 body 语义未改变 | 计划支持 `local_official/external_relay` 双模式，但 token 导入和官方直连尚未实现 | 已提交审计；路由变更待验证和确认 |
 | 隐私审计 | 无本项目专用字段摘要观察器 | 默认关闭，仅输出 metadata/字段 presence/大小/事件类型/host 分类 | 仅允许 synthetic canary，禁止正文和凭据落盘 | 已提交并验证；不得恢复 raw dump |
-| 原始 observability | 存在写入完整 Bidi/provider 工件的调试能力 | 本地决策维持 `log:false`，provider debug 文件已收紧为 `0600` | 后续单独治理保留期和显式导出 | 权限已收紧；其余治理待完成 |
+| 结构化 observability | 原始 debug 工件分散且保留期/配额不足 | 已实现 schema v1 basic/full session、凭据清洗、轮转/配额和独立 CLI 分析 | schema v2 的 project/turn/capability/operation/outcome/build 指纹正在实施 | v1 已实现并验证；v2 Design 已批准、代码未完成 |
+| 独立日志分析器 | 原始主线无本项目独立分析工作流 | 已实现临时 SQLite 流式 CLI、JSON/HTML/脱敏 ZIP | 规划独立 Wails GUI、多维检索、案例库、AI 证据包和客户端受限启动 | CLI 已验证；GUI 与闭环正在实施，独立于客户端发布 |
 | 工具 replay | 未覆盖该阶段的专项保护 | 修复 `ForceBackgroundShell` 无 reasoning 时的历史 replay | 保持专项门控 | 已提交；不得泛化 |
 | Commit Message | 存在精确 RPC 与 `/AiService/*` 通配 handler 的静态路由关系 | 增加精确路由优先级测试 | 真实 UI transport 未解析，不切换或删除路由 | 已调查未定性 |
 | Repository/Docs/Upload | 多个本地处理器可返回 success | 增加隔离特征测试锁定能力缺失、错误状态和部分提交 | 暂不把 success 改成 failure，先验证客户端状态机 | 已确认缺陷；修复待设计 |
@@ -102,6 +103,8 @@
 - relay、官方直连、本地实现、no-op 和禁用之间的逐 RPC 功能影响。
 - Repository/Docs/Upload 改为诚实失败或完整持久化后的 Cursor UI/状态机影响。
 - 客户端体验治理的网络零请求、旧配置迁移、窗口首屏和发布资源实机验收。
+- schema v2 的项目/轮次/能力语义采集、独立分析 GUI、多维检索、调查案例、AI 调查包和修复后复验闭环。
+- 客户端“日志分析工具”按钮对独立安装应用的跨平台检测、启动与未安装引导。
 
 未观察到请求、未命中 canary 或收到 RPC success，都不能单独推出“未发送”“未泄露”或“真实业务完成”。
 

@@ -511,6 +511,9 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	s.recordCapture(captureContext, observability.Event{
 		Layer:           "mitm",
 		Event:           "backend_forward_started",
+		Capability:      "unknown",
+		Operation:       "transport.forward",
+		Direction:       observability.DirectionCursorToProxy,
 		Route:           requestPath,
 		ExecutionTarget: "backend",
 		Protocol:        "http",
@@ -527,6 +530,9 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 		s.recordCapture(captureContext, observability.Event{
 			Layer:           "mitm",
 			Event:           "backend_forward_finished",
+			Capability:      "unknown",
+			Operation:       "transport.forward",
+			Direction:       observability.DirectionProxyInternal,
 			Route:           requestPath,
 			ExecutionTarget: "backend",
 			Protocol:        "http",
@@ -544,6 +550,9 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	s.recordCapture(captureContext, observability.Event{
 		Layer:           "mitm",
 		Event:           "backend_forward_finished",
+		Capability:      "unknown",
+		Operation:       "transport.forward",
+		Direction:       observability.DirectionProxyInternal,
 		Route:           requestPath,
 		ExecutionTarget: "backend",
 		Protocol:        "http",
