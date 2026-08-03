@@ -22,6 +22,7 @@ type ConversationFile struct {
 	ParentConversationID            string                                `json:"parent_conversation_id"`
 	ParentToolCallID                string                                `json:"parent_tool_call_id"`
 	SubagentTypeName                string                                `json:"subagent_type_name,omitempty"`
+	AgentTranscriptsFolder          string                                `json:"agent_transcripts_folder,omitempty"`
 	Mode                            string                                `json:"mode"`
 	ContextVersion                  int64                                 `json:"context_version,omitempty"`
 	CurrentLoopID                   string                                `json:"current_loop_id,omitempty"`
@@ -116,6 +117,11 @@ type StreamSubscriber struct {
 	Signal chan struct{}
 }
 
+type manualCompactionDirective struct {
+	Requested   bool
+	Instruction string
+}
+
 type ActiveStream struct {
 	mu sync.Mutex
 
@@ -126,6 +132,7 @@ type ActiveStream struct {
 	ModelName              string
 	Mode                   agentv1.AgentMode
 	LatestUserText         string
+	ManualCompaction       manualCompactionDirective
 	Status                 StreamStatus
 	ThinkingEffort         string
 	SubagentModelOverrides map[string]runtimecore.SubagentModelOverrideSelection
@@ -407,6 +414,7 @@ type InboundIntent struct {
 	HasExplicitMode          bool
 	ModeSource               ModeSource
 	StartsRun                bool
+	ManualCompaction         manualCompactionDirective
 	SubagentTypeName         string
 	SubagentModelOverrides   map[string]runtimecore.SubagentModelOverrideSelection
 	ConversationState        *agentv1.ConversationStateStructure
