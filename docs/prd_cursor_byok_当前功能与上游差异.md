@@ -7,8 +7,8 @@
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
 - **原始上游核对基线**：`main@639c452a0035de979edecc1ae2be654f5fd2383f`（最终文件树与 `release/0.0.44@0c9a07e` 一致）
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：`0.0.44` 安全 merge 已提交；本 PRD 同步记录作为独立文档提交
-- **状态**：`0.0.44` 自动化合并门禁已通过；发布资产、GitHub Release 与安装验收进入后续发布步骤
+- **当前工作树**：`0.0.44` 安全 merge 与同步记录已提交；发布资产已生成并通过静态校验
+- **状态**：`0.0.44` 自动化合并门禁与四平台资产校验已通过；GitHub Release 和安装验收进入后续发布步骤
 
 ## 1. 文档职责与证据口径
 
@@ -235,6 +235,8 @@
 - `tools/log-analyzer`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
 - 前端：当前 `package.json` 不存在 `test:config-projection` 脚本；现有 `npm run build` 通过。
 - 默认配置专项测试确认 `light / advertising=false / checkOnStartup=false` 保持不变。
+- 已生成 macOS arm64、macOS amd64、Windows amd64 和 Linux amd64 四个平台资产；`release:verify:assets` 与分析器隔离检查通过。
+- 面向 `yaogjim/cursor-byok` 生成 `update.json`，四个平台 URL、文件大小和 SHA-256 均与本地产物一致。
 
 仅观察到既有非阻断告警：macOS linker 目标版本警告与 Vite chunk 大小告警。
 
@@ -242,7 +244,8 @@
 
 - 未停止或替换运行中的 `18080/18090` 代理，因此候选实例交接、窗口首屏、`/healthz` 与真实网络目标序列未在本轮执行。
 - 调试代理仅使用单元测试和 synthetic 边界验证，未捕获或保存真实 Prompt、源码、凭据或会话正文。
-- 本记录生成时尚未构建、校验或安装 `0.0.44` 发布资产；发布产物、manifest、GitHub Release 和跨平台安装结果以随后 release 流程的实际输出为准。
+- GitHub Release 和 annotated tag 尚未创建；最终目标必须指向包含本记录的 `noad` 提交。
+- 四个平台资产已完成静态结构、大小、SHA-256 与分析器隔离校验，但尚未在各目标系统执行安装和启动验收。
 
 ## 10. 后续版本记录格式
 
