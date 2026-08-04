@@ -2,13 +2,13 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前代码合并基线**：`81be6166eca8b29ee0f51ce8446f2463d492477e`
-- **本次合并来源**：本地 `main@14f20fe654c9ad798510dad9e51f90d2d6a26b8f`
+- **当前代码合并基线**：`d240ea3e76d5ccb2d73a4bca34ffc70e3c349b85`
+- **本次合并来源**：本地 `main@a31c7ea19834607f27cf634af1e14f6a2841ccf9`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始上游核对基线**：`release/0.0.43@726f082e6b9570a6dbaf1c05cc93caf9e5e28c54`
+- **原始上游核对基线**：`main@639c452a0035de979edecc1ae2be654f5fd2383f`（最终文件树与 `release/0.0.44@0c9a07e` 一致）
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：`release/0.0.43` 安全 merge 已提交；本 PRD 同步记录作为独立文档提交
-- **状态**：`0.0.43` 自动化合并门禁已通过；真实账号登录、运行中实例交接、发布资产与安装验收仍按同步说明执行
+- **当前工作树**：`0.0.44` 安全 merge 已提交；本 PRD 同步记录作为独立文档提交
+- **状态**：`0.0.44` 自动化合并门禁已通过；发布资产、GitHub Release 与安装验收进入后续发布步骤
 
 ## 1. 文档职责与证据口径
 
@@ -30,13 +30,13 @@
 
 本次核对得到：
 
-- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次按用户确认同步 `release/0.0.43@726f082e6b9570a6dbaf1c05cc93caf9e5e28c54`；同名 tag 指向另一提交，未作为合并来源。
-- 上游目标先通过同步引用快进到本地 `main@14f20fe654c9ad798510dad9e51f90d2d6a26b8f`，再以真实双父 merge 合入 `noad`。
-- 本地同步前基线为 `noad@17659ece3f283b4fa79af7963a347d508700fcea`；安全 merge `81be6166eca8b29ee0f51ce8446f2463d492477e` 的两个父提交分别为 `17659ec` 与 `14f20fe`。
+- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次按用户确认同步 `main@639c452a0035de979edecc1ae2be654f5fd2383f`；该提交合并 `release/0.0.44`，最终文件树与 `release/0.0.44@0c9a07e` 一致。
+- 上游目标先以真实 merge 合入本地 `main@a31c7ea19834607f27cf634af1e14f6a2841ccf9`，再以真实双父 merge 合入 `noad`。
+- 本地同步前基线为 `noad@191f24c288272ed5232be80ef3e76046559ead90`；安全 merge `d240ea3e76d5ccb2d73a4bca34ffc70e3c349b85` 的两个父提交分别为 `191f24c` 与 `a31c7ea`。
 - `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `https://github.com/leookun/cursor-byok.git`，没有从 `origin/main` 推断上游状态。
 - 本次 merge 创建时尚未推送远程；推送与 release 结果由后续发布步骤单独验证和记录。
 
-本次 merge 相对 `noad@17659ec` 的差异为 **49 个文件，2665 行新增、466 行删除**。统计包含上游功能、安全整合和专项测试，只用于识别同步范围。
+本次 merge 相对 `noad@191f24c` 的差异为 **46 个文件，5368 行新增、236 行删除**。统计包含上游功能、安全整合和专项测试，只用于识别同步范围。
 
 ### 2.2 已提交工作
 
@@ -50,6 +50,7 @@
 | `74c1c38` | 以真实 merge 同步本地 `main@b438237`，整合 artifact 生命周期、Agent replay、静态 i18n 与俄语，并保留本地安全策略 | 已提交并通过完整自动化门禁；运行中实例与网络窗口验收待维护窗口完成 |
 | `17659ec` | 完善日志观测语义、分析项目生命周期、查询/诊断能力与独立分析器 GUI | 已提交并通过主模块及独立分析器门禁 |
 | `81be616` | 安全同步上游 `release/0.0.43`，整合 command/summarize/transcript、控制面账号和版本元数据，并收紧鉴权、凭据与文件写入边界 | 已提交并通过根模块、Tab relay、日志分析器和前端门禁；真实账号与发布资产验收待完成 |
+| `d240ea3` | 安全同步上游 `0.0.44`，整合 Cursor CLI、blob/checkpoint 同步和独立协议调试器，并限制调试代理只能监听回环地址 | 已提交并通过根模块、全量 race、Tab relay 和前端门禁；发布资产与安装验收待完成 |
 
 ### 2.3 已有验证证据
 
@@ -202,7 +203,48 @@
 - 本记录生成时尚未构建、校验或安装 `0.0.43` 发布资产；发布产物、manifest、GitHub Release 和跨平台安装结果必须以随后 release 流程的实际输出为准。
 - 账号凭据当前采用应用私有文件 `0600` 持久化，不宣称已接入 macOS Keychain、Windows Credential Manager 或 Linux Secret Service。
 
-## 9. 后续版本记录格式
+## 9. `0.0.44` 同步记录
+
+- **同步时间**：`2026-08-03T20:44:15-07:00`
+- **原始上游目标**：`main@639c452a0035de979edecc1ae2be654f5fd2383f`（最终文件树与 `release/0.0.44@0c9a07e` 一致）
+- **本地合并来源**：`main@a31c7ea19834607f27cf634af1e14f6a2841ccf9`
+- **本地同步前基线**：`noad@191f24c288272ed5232be80ef3e76046559ead90`
+- **merge commit**：`d240ea3e76d5ccb2d73a4bca34ffc70e3c349b85`
+
+### 9.1 实际接受与整合
+
+- 接受 `0.0.44` 版本元数据、Cursor CLI 本地兼容路由及模型详情生成能力。
+- 接受 Agent blob/checkpoint 预取、导入与同步，通过既有 broker 和客户端 blob store 保持会话状态一致。
+- 接受独立 `cursor-proxy-debugger` 及其本地 Web UI，用于合成数据下的协议帧捕获、解码与调试。
+- 接受 MiniMax 禁止 thinking 的模型兼容修复及对应专项测试。
+
+### 9.2 安全重做与边界
+
+- 保留 OpenAI 空配置默认使用 Chat Completions 的本地决策，没有被上游默认值覆盖。
+- Cursor CLI 模型详情中的 provider API key 只由 `server.Local(...)` 本地兼容路由生成；upstream 模式不执行该 builder，未新增凭据外发目标。
+- blob/checkpoint 预取内容仅在内存中处理，并通过既有 broker 写回客户端 blob store；未新增请求正文落盘路径。
+- 调试代理与 Web UI 均强制使用 loopback 地址，拒绝 `0.0.0.0` 等非回环监听，避免形成开放代理。
+- 调试指导明确禁止复制真实 Prompt、源码和凭据，验证只使用 synthetic 数据。
+- 保留 `noad` 的默认浅色、广告关闭、启动更新检查关闭，以及 local/official/relay 无隐式 fallback 的既有状态机。
+
+### 9.3 自动化证据
+
+- `git diff --check`、`git diff --cached --check`、冲突标记和高置信度凭据特征扫描通过；merge commit 双父为 `191f24c` 与 `a31c7ea`。
+- 根模块：`go test ./...`、`go test -race ./...`、`go build ./...`、`go vet ./...` 通过。
+- `cursor-tab-server`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- `tools/log-analyzer`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- 前端：当前 `package.json` 不存在 `test:config-projection` 脚本；现有 `npm run build` 通过。
+- 默认配置专项测试确认 `light / advertising=false / checkOnStartup=false` 保持不变。
+
+仅观察到既有非阻断告警：macOS linker 目标版本警告与 Vite chunk 大小告警。
+
+### 9.4 未验证边界
+
+- 未停止或替换运行中的 `18080/18090` 代理，因此候选实例交接、窗口首屏、`/healthz` 与真实网络目标序列未在本轮执行。
+- 调试代理仅使用单元测试和 synthetic 边界验证，未捕获或保存真实 Prompt、源码、凭据或会话正文。
+- 本记录生成时尚未构建、校验或安装 `0.0.44` 发布资产；发布产物、manifest、GitHub Release 和跨平台安装结果以随后 release 流程的实际输出为准。
+
+## 10. 后续版本记录格式
 
 上游更新或本地功能落地后，在本 PRD 中追加一条版本记录，至少包含：
 
