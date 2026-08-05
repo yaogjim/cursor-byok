@@ -2,13 +2,13 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前代码合并基线**：`d240ea3e76d5ccb2d73a4bca34ffc70e3c349b85`
-- **本次合并来源**：本地 `main@a31c7ea19834607f27cf634af1e14f6a2841ccf9`
+- **当前代码合并基线**：`ad50039f5bf83b8df257c5375d6f24b3a16ae31e`
+- **本次合并来源**：本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始上游核对基线**：`main@639c452a0035de979edecc1ae2be654f5fd2383f`（最终文件树与 `release/0.0.44@0c9a07e` 一致）
+- **原始上游核对基线**：`main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：`0.0.44` 安全 merge 与同步记录已提交；发布资产已生成并通过静态校验
-- **状态**：`0.0.44` 自动化合并门禁与四平台资产校验已通过；GitHub Release 和安装验收进入后续发布步骤
+- **当前工作树**：`0.0.45` 安全 merge 与同步记录已提交并通过自动化门禁
+- **状态**：`0.0.45` 自动化合并门禁已通过；会话消失修复、Windows VDI 与发布资产仍待运行时验收
 
 ## 1. 文档职责与证据口径
 
@@ -30,13 +30,13 @@
 
 本次核对得到：
 
-- 原始仓库 `https://github.com/leookun/cursor-byok.git` 本次按用户确认同步 `main@639c452a0035de979edecc1ae2be654f5fd2383f`；该提交合并 `release/0.0.44`，最终文件树与 `release/0.0.44@0c9a07e` 一致。
-- 上游目标先以真实 merge 合入本地 `main@a31c7ea19834607f27cf634af1e14f6a2841ccf9`，再以真实双父 merge 合入 `noad`。
-- 本地同步前基线为 `noad@191f24c288272ed5232be80ef3e76046559ead90`；安全 merge `d240ea3e76d5ccb2d73a4bca34ffc70e3c349b85` 的两个父提交分别为 `191f24c` 与 `a31c7ea`。
+- 原始仓库 `https://github.com/leookun/cursor-byok.git` 已同步到 `main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`。
+- 上游目标先以真实双父 merge 合入本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`，再以真实双父 merge 合入 `noad@ad50039f5bf83b8df257c5375d6f24b3a16ae31e`。
+- 本地同步前基线为 `noad@869f45f539e416b0fbe2c95c25b33f3c6350615e`；`ad50039` 的两个父提交分别为 `869f45f` 与 `d082e79`。
 - `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `https://github.com/leookun/cursor-byok.git`，没有从 `origin/main` 推断上游状态。
-- 本次 merge 创建时尚未推送远程；推送与 release 结果由后续发布步骤单独验证和记录。
+- 本次仅更新本地分支，没有执行 `git push`。
 
-本次 merge 相对 `noad@191f24c` 的差异为 **46 个文件，5368 行新增、236 行删除**。统计包含上游功能、安全整合和专项测试，只用于识别同步范围。
+本次 merge 相对 `noad@869f45f` 的差异为 **23 个文件，258 行新增、1889 行删除**。主要删除来自上游为修复会话消失而回退 blob/checkpoint 同步，不代表本地其他能力被整体移除。
 
 ### 2.2 已提交工作
 
@@ -51,6 +51,7 @@
 | `17659ec` | 完善日志观测语义、分析项目生命周期、查询/诊断能力与独立分析器 GUI | 已提交并通过主模块及独立分析器门禁 |
 | `81be616` | 安全同步上游 `release/0.0.43`，整合 command/summarize/transcript、控制面账号和版本元数据，并收紧鉴权、凭据与文件写入边界 | 已提交并通过根模块、Tab relay、日志分析器和前端门禁；真实账号与发布资产验收待完成 |
 | `d240ea3` | 安全同步上游 `0.0.44`，整合 Cursor CLI、blob/checkpoint 同步和独立协议调试器，并限制调试代理只能监听回环地址 | 已提交并通过根模块、全量 race、Tab relay 和前端门禁；发布资产与安装验收待完成 |
+| `ad50039` | 安全同步上游 `0.0.45`，为修复会话消失回退 blob/checkpoint 同步，并增加显式环境变量门控的 Windows VDI 白屏规避 | 已提交并通过根模块、forwarder race、独立模块和前端门禁；运行时会话恢复、Windows VDI 与发布资产待验收 |
 
 ### 2.3 已有验证证据
 
@@ -247,7 +248,45 @@
 - GitHub Release 和 annotated tag 尚未创建；最终目标必须指向包含本记录的 `noad` 提交。
 - 四个平台资产已完成静态结构、大小、SHA-256 与分析器隔离校验，但尚未在各目标系统执行安装和启动验收。
 
-## 10. 后续版本记录格式
+## 10. `0.0.45` 同步记录
+
+- **同步时间**：`2026-08-05T02:41:06-07:00`
+- **原始上游目标**：`main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`
+- **本地 `main` 合并提交**：`d082e79019bdb5a472003db37f09e23d083de1f2`
+- **本地同步前基线**：`noad@869f45f539e416b0fbe2c95c25b33f3c6350615e`
+- **`noad` merge commit**：`ad50039f5bf83b8df257c5375d6f24b3a16ae31e`
+- **拓扑**：`ad50039` 的两个父提交分别为 `869f45f` 与 `d082e79`；`d082e79` 的两个父提交分别为旧 `main@a31c7ea` 与 `upstream/main@c55c575`。
+
+### 10.1 实际接受与整合
+
+- 接受 `0.0.45` 版本元数据。
+- 接受上游为修复会话消失而执行的 blob/checkpoint 同步回退：删除 checkpoint blob 写入、prefetched blob 导入和相关缓存/超时状态，恢复 legacy checkpoint 发布路径。
+- 接受 Windows VDI 白屏规避能力；只有显式将 `CURSOR_BYOK_DISABLE_WEBVIEW_SANDBOX` 设为可解析的真值时才向 WebView2 传入 `--no-sandbox`，默认仍启用 sandbox。
+- `internal/app/runner.go` 的唯一内容冲突通过同时保留本地主题背景职责和上游 VDI 参数构造函数解决，没有覆盖本地广告、更新或启动状态机。
+
+### 10.2 保留与拒绝
+
+- 保留 `noad` 的默认浅色、广告关闭、启动更新检查关闭、审计边界和 local/official/relay 无隐式 fallback；本次上游差异没有新增外部目标、凭据转发或正文落盘路径。
+- 保留本地删除 `release-notes.md` 的既有决策，没有重新引入群组信息或未经本地证据验证的宣传文案。
+- 不再把 `0.0.44` 的 blob/checkpoint 同步描述为当前有效能力；该实现及其专项测试已随上游会话消失修复回退。
+
+### 10.3 自动化证据
+
+- 合并冲突全部解决，`git diff --cached --check` 通过；`ad50039` 为真实双父 merge。
+- 根模块：`go test ./...`、`go test -race ./internal/backend/forwarder`、`go build ./...`、`go vet ./...` 通过。
+- `cursor-tab-server`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- `tools/log-analyzer`：`go test ./...`、`go test -race ./...`、`go vet ./...` 通过。
+- 前端：`npm run build` 通过。
+- 仅观察到既有非阻断告警：macOS linker 目标版本警告与 Vite chunk 大小告警。
+
+### 10.4 未验证边界
+
+- 本轮没有用可复现运行时场景验证“会话消失”缺陷已消除，也没有验证回退后跨会话 fork、prefetched blob 或 checkpoint 恢复的实际降级边界。
+- 未在 Windows VDI 环境验证白屏规避；`--no-sandbox` 会降低 WebView2 隔离强度，只应在受影响环境中由用户显式启用。
+- 未停止或替换运行中的 `18080/18090` 代理，因此候选实例交接、窗口首屏、`/healthz` 与真实网络目标序列不在本次证据范围内。
+- 本轮没有生成或验证 `0.0.45` 发布资产，也没有执行 `git push`。
+
+## 11. 后续版本记录格式
 
 上游更新或本地功能落地后，在本 PRD 中追加一条版本记录，至少包含：
 
