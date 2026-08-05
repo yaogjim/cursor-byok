@@ -23,7 +23,6 @@ const (
 	TurnPhaseWaitingExternal TurnPhase = "waiting_external"
 	TurnPhaseAwaitingUser    TurnPhase = "awaiting_user"
 	TurnPhaseCompacting      TurnPhase = "compacting"
-	TurnPhaseCheckpointing   TurnPhase = "checkpointing"
 	TurnPhaseCompleted       TurnPhase = "completed"
 	TurnPhaseFailed          TurnPhase = "failed"
 	TurnPhaseCanceled        TurnPhase = "canceled"
@@ -67,7 +66,6 @@ const (
 	streamTimerNonStreamingRecovery streamTimerKind = "non_streaming_recovery"
 	streamTimerShellForeground      streamTimerKind = "shell_foreground"
 	streamTimerShellTransportClose  streamTimerKind = "shell_transport_close"
-	streamTimerCheckpointBlobs      streamTimerKind = "checkpoint_blobs"
 	streamTimerOrphanCancel         streamTimerKind = "orphan_cancel"
 )
 
@@ -320,9 +318,6 @@ func (service *Service) handleStreamCommand(stream *ActiveStream, command stream
 	case streamCommandCancel:
 		return service.handleCancelIntent(command.Intent)
 	case streamCommandMetadata:
-		if strings.TrimSpace(command.Intent.Kind) == "kv_result" {
-			return service.handleCheckpointBlobResult(stream, command.Intent.KVClientMessage)
-		}
 		return service.handleMetadataIntent(command.Intent)
 	case streamCommandExecResult:
 		return service.handleExecResult(command.Intent)
@@ -1008,8 +1003,6 @@ func (service *Service) handleTimerEvent(stream *ActiveStream, payload *streamTi
 			return nil
 		}
 		return service.recoverShellWithoutTerminal(stream, current, shellRecoveryReasonTransportClosed)
-	case streamTimerCheckpointBlobs:
-		return service.handleCheckpointBlobTimeout(stream)
 	case streamTimerOrphanCancel:
 		stream.mu.Lock()
 		subscriberCount := len(stream.Subscribers)
