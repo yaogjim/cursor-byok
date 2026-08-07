@@ -100,7 +100,10 @@ const summaryClass = computed(() => {
 </script>
 
 <template>
-  <div class="rounded-[8px] border-none px-3 py-3" :class="panelClass">
+  <div
+    class="rounded-[8px] border-none"
+    :class="[panelClass, compact ? 'px-2.5 py-2' : 'px-3 py-3']"
+  >
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1.5">
@@ -114,7 +117,10 @@ const summaryClass = computed(() => {
             <Tooltip :content="rawResponseText" copyable />
           </div>
         </div>
-        <div class="mt-1 text-sm leading-relaxed" :class="summaryClass">
+        <div
+          class="mt-1 leading-relaxed"
+          :class="[summaryClass, compact ? 'text-xs' : 'text-sm']"
+        >
           {{ summaryText }}
         </div>
       </div>

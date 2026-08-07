@@ -416,12 +416,12 @@ onBeforeUnmount(() => {
           <Card
             v-for="(adapter, index) in filteredAdapters"
             :key="adapter.id || `${adapter.baseURL}-${adapter.modelID}-${index}`"
-            class="model-sort-item group relative pb-2"
+            class="model-sort-item group relative flex h-full min-h-0 flex-col"
             :data-model-id="adapter.id"
           >
             <button
               type="button"
-              class="model-sort-handle w-[30px] h-[30px]  center-row justify-center absolute left-2 top-2 z-10  shrink-0 touch-none cursor-grab rounded-[6px] border border-transparent bg-transparent text-transparent opacity-0 outline-none transition-[opacity,color,border-color,background-color] focus-visible:border-[#10AD5D] focus-visible:bg-[#333333] focus-visible:text-white focus-visible:opacity-100 active:cursor-grabbing group-hover:border-[#454545] group-hover:bg-[#333333] group-hover:text-white group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+              class="model-sort-handle absolute left-2 top-2 z-10 center-row h-[30px] w-[30px] shrink-0 touch-none cursor-grab justify-center rounded-[6px] border border-transparent bg-transparent text-transparent opacity-0 outline-none transition-[opacity,color,border-color,background-color] focus-visible:border-[#10AD5D] focus-visible:bg-[#333333] focus-visible:text-white focus-visible:opacity-100 active:cursor-grabbing group-hover:border-[#454545] group-hover:bg-[#333333] group-hover:text-white group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
               :disabled="sortSaving || appState.configSaving || batchTesting"
               aria-label="拖拽排序"
               title="拖拽排序"
@@ -429,8 +429,8 @@ onBeforeUnmount(() => {
             >
               <span class="icon-[icon-park-outline--drag] text-[20px]"></span>
             </button>
-            <div class="flex  h-[150px] flex-col justify-between gap-3">
-              <div class="flex flex-col gap-2.5">
+            <div class="flex min-h-0 flex-1 flex-col gap-3">
+              <div class="flex min-w-0 flex-1 flex-col gap-2.5">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0 flex-1">
                     <div class="truncate text-base font-medium text-[var(--color-text)]">{{ adapter.displayName }}</div>
@@ -456,7 +456,7 @@ onBeforeUnmount(() => {
                 />
               </div>
 
-              <div class="center-row flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
+              <div class="center-row shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
                 <Button
                   variant="default"
                   :disabled="sortSaving || appState.configSaving || batchTesting || isAdapterTesting(adapter)"
