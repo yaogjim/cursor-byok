@@ -24,6 +24,34 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 	return fn(request)
 }
 
+func TestUpdateSourceUsesForkRepository(t *testing.T) {
+	const (
+		forkRepo         = "yaogjim/cursor-byok"
+		manifestURL      = "https://github.com/yaogjim/cursor-byok/releases/latest/download/update.json"
+		releasePageURL   = "https://github.com/yaogjim/cursor-byok/releases"
+		forkAssetURL     = "https://github.com/yaogjim/cursor-byok/releases/download/v1.0.0/update.tar.gz"
+		upstreamAssetURL = "https://github.com/leookun/cursor-byok/releases/download/v1.0.0/update.tar.gz"
+	)
+
+	if buildinfo.ReleaseRepo != forkRepo {
+		t.Fatalf("ReleaseRepo = %q, want %q", buildinfo.ReleaseRepo, forkRepo)
+	}
+	if got := buildinfo.UpdateBaseURL + "update.json"; got != manifestURL {
+		t.Fatalf("update manifest URL = %q, want %q", got, manifestURL)
+	}
+	if buildinfo.ReleasePageURL != releasePageURL {
+		t.Fatalf("ReleasePageURL = %q, want %q", buildinfo.ReleasePageURL, releasePageURL)
+	}
+
+	validChecksum := strings.Repeat("a", sha256.Size*2)
+	if err := validateUpdateAsset(manifestPlatform{URL: forkAssetURL, Size: 1, Checksum: validChecksum}); err != nil {
+		t.Fatalf("fork release asset rejected: %v", err)
+	}
+	if err := validateUpdateAsset(manifestPlatform{URL: upstreamAssetURL, Size: 1, Checksum: validChecksum}); err == nil {
+		t.Fatal("upstream repository release asset was accepted")
+	}
+}
+
 func TestStartWithoutStartupCheckDoesNotSendRequest(t *testing.T) {
 	var mu sync.Mutex
 	requests := 0
@@ -57,7 +85,7 @@ func TestManualCheckRequiresConfirmationBeforeDownload(t *testing.T) {
 	if err != nil {
 		t.Skipf("unsupported updater test platform %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
-	assetURL := "https://github.com/leookun/cursor-byok/releases/download/v9.9.9/update.tar.gz"
+	assetURL := "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz"
 	manifestBody, err := json.Marshal(manifest{
 		Version:   "9.9.9",
 		Mandatory: true,
@@ -147,11 +175,11 @@ func TestValidateUpdateAssetRejectsUnsafeMetadata(t *testing.T) {
 		name  string
 		asset manifestPlatform
 	}{
-		{name: "http", asset: manifestPlatform{URL: "http://github.com/leookun/cursor-byok/releases/download/v1/a.zip", Size: 1, Checksum: validChecksum}},
+		{name: "http", asset: manifestPlatform{URL: "http://github.com/yaogjim/cursor-byok/releases/download/v1/a.zip", Size: 1, Checksum: validChecksum}},
 		{name: "foreign host", asset: manifestPlatform{URL: "https://example.com/a.zip", Size: 1, Checksum: validChecksum}},
 		{name: "foreign repo", asset: manifestPlatform{URL: "https://github.com/other/repo/releases/download/v1/a.zip", Size: 1, Checksum: validChecksum}},
-		{name: "missing checksum", asset: manifestPlatform{URL: "https://github.com/leookun/cursor-byok/releases/download/v1/a.zip", Size: 1}},
-		{name: "oversized", asset: manifestPlatform{URL: "https://github.com/leookun/cursor-byok/releases/download/v1/a.zip", Size: maxUpdateArchiveBytes + 1, Checksum: validChecksum}},
+		{name: "missing checksum", asset: manifestPlatform{URL: "https://github.com/yaogjim/cursor-byok/releases/download/v1/a.zip", Size: 1}},
+		{name: "oversized", asset: manifestPlatform{URL: "https://github.com/yaogjim/cursor-byok/releases/download/v1/a.zip", Size: maxUpdateArchiveBytes + 1, Checksum: validChecksum}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -168,10 +196,10 @@ func TestValidateUpdateRedirectHosts(t *testing.T) {
 		url  string
 		want bool
 	}{
-		{name: "github release", url: "https://github.com/leookun/cursor-byok/releases/download/v1/a.tar.gz", want: true},
+		{name: "github release", url: "https://github.com/yaogjim/cursor-byok/releases/download/v1/a.tar.gz", want: true},
 		{name: "release asset CDN", url: "https://release-assets.githubusercontent.com/object", want: true},
 		{name: "github objects CDN", url: "https://objects.githubusercontent.com/object", want: true},
-		{name: "http downgrade", url: "http://github.com/leookun/cursor-byok/releases/download/v1/a.tar.gz", want: false},
+		{name: "http downgrade", url: "http://github.com/yaogjim/cursor-byok/releases/download/v1/a.tar.gz", want: false},
 		{name: "foreign host", url: "https://example.com/object", want: false},
 		{name: "custom port", url: "https://github.com:8443/object", want: false},
 	}
@@ -220,7 +248,7 @@ func TestShutdownCancelsInFlightDownloadWithoutReadyArchive(t *testing.T) {
 	manager.currentInfo = &UpdateInfo{
 		Version: "9.9.9",
 		Asset: manifestPlatform{
-			URL:      "https://github.com/leookun/cursor-byok/releases/download/v9.9.9/update.tar.gz",
+			URL:      "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz",
 			Size:     1,
 			Checksum: strings.Repeat("a", sha256.Size*2),
 		},
@@ -243,7 +271,7 @@ func TestShutdownCancelsInFlightDownloadWithoutReadyArchive(t *testing.T) {
 func TestDownloadRejectsManifestSizeMismatch(t *testing.T) {
 	payload := []byte("verified update archive")
 	checksum := sha256.Sum256(payload)
-	assetURL := "https://github.com/leookun/cursor-byok/releases/download/v9.9.9/update.tar.gz"
+	assetURL := "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz"
 	manager := NewManager(nil)
 	manager.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{
