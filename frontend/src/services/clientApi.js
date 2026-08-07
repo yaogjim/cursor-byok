@@ -19,12 +19,10 @@ import {
   GetAppVersion,
   GetFooterAuthorInfo,
   InstallReadyUpdate,
-  GetModelEditorContext,
   OpenConfigWindow,
   OpenFooterAuthorHome,
   OpenHistoryWindow,
   OpenModelConfigWindow,
-  OpenModelEditorWindow,
 } from "@bindings/cursor/internal/bridge/windowservice.js";
 import { Call } from "@wailsio/runtime";
 
@@ -144,16 +142,6 @@ export function openModelConfig() {
   return withApiLogging("OpenModelConfigWindow", () => OpenModelConfigWindow());
 }
 
-export function openModelEditor(index, adapterJSON) {
-  return withApiLogging("OpenModelEditorWindow", () =>
-    OpenModelEditorWindow(index, adapterJSON),
-  );
-}
-
-export function getModelEditorContext() {
-  return withApiLogging("GetModelEditorContext", () => GetModelEditorContext());
-}
-
 export function testModelAdapter(adapter) {
   return Call.ByName(`${PROXY_SERVICE_NAME}.TestModelAdapter`, adapter).then(
     (result) => {
@@ -170,5 +158,11 @@ export function testModelAdapter(adapter) {
 export function getModelAdapterTestResults() {
   return withApiLogging("GetModelAdapterTestResults", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.GetModelAdapterTestResults`),
+  );
+}
+
+export function fetchModelAdapterModels(payload) {
+  return withApiLogging("FetchModelAdapterModels", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, payload),
   );
 }

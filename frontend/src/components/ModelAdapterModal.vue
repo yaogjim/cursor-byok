@@ -51,7 +51,6 @@ const props = defineProps({
     type: Object,
     default: () => createEmptyModelAdapter(),
   },
-  errorMessage: { type: String, default: "" },
 });
 
 const emit = defineEmits(["cancel", "save"]);
@@ -284,13 +283,6 @@ function handleSave() {
                   class="min-h-[120px] resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
               </label>
-
-              <div
-                v-if="errorMessage"
-                class="mt-4 rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]"
-              >
-                {{ errorMessage }}
-              </div>
 
               <div class="mt-5 flex justify-end gap-2">
                 <Button variant="default" @click="handleCancel">取消</Button>

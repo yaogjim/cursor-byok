@@ -1,6 +1,18 @@
-# Cursor助手 v0.0.45
+# Cursor助手 v0.0.46
 
-- 同步上游 `0.0.45`，回退会导致会话消失的 blob/checkpoint 同步实现。
-- 增加由 `CURSOR_BYOK_DISABLE_WEBVIEW_SANDBOX` 显式控制的 Windows VDI WebView2 白屏规避选项；默认保持 sandbox。
-- 更新检查、下载资源校验和发布清单统一指向 `yaogjim/cursor-byok`。
-- 保留本地默认浅色、默认关闭广告、默认关闭启动更新检查，以及更新检查、下载、安装分阶段确认。
+- 修复检查点处理，支持 Fork Chat。
+- 修复打断对话时的上下文丢失问题。
+- 重构模型配置界面，支持拖拽排序和远程模型列表。
+- 支持非标准 Chat 端点。
+- 默认关闭广告内容，默认使用浅色主题。
+- 默认不在启动时检查更新；下载与安装分别需要用户确认。
+- 更新与发布地址固定为 https://github.com/yaogjim/cursor-byok。
+
+QQ 交流群：
+13 群 1095916242
+14 群 1094411438
+15 群 1095918002
+16 群 1094419321
+
+Tg 群组：
+https://t.me/cursor_byok

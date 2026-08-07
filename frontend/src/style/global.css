@@ -101,6 +101,42 @@ body,
   scrollbar-color: var(--color-scrollbar) transparent;
 }
 
+:root {
+  --x-maskImage: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    black 18px,
+    black calc(100% - 0px),
+    rgba(0, 0, 0, 0) 100%
+  );
+  --x-WebkitMaskImage: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    black 18px,
+    black calc(100% - 0px),
+    rgba(0, 0, 0, 0) 100%
+  );
+}
+
+.scroll-shadow {
+  -webkit-mask-image: var(--x-maskImage);
+  mask-image: var(--x-maskImage);
+}
+
+.scroll-shadow-bottom {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+}
 /* WebKit/Blink (Chrome, Safari, Edge, Opera) */
 ::-webkit-scrollbar {
   width: 6px;

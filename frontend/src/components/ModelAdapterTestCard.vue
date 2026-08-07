@@ -44,7 +44,7 @@ const summaryText = computed(() => {
     return "测试中...";
   }
   if (normalizedStatus.value === "error") {
-    return "测试失败";
+    return "测试失败,请查看原始信息";
   }
   return props.emptyText;
 });
@@ -100,7 +100,7 @@ const summaryClass = computed(() => {
 </script>
 
 <template>
-  <div class="rounded-[8px] border px-3 py-3" :class="panelClass">
+  <div class="rounded-[8px] border-none px-3 py-3" :class="panelClass">
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1.5">
