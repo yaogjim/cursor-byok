@@ -467,18 +467,6 @@
         }
       ]
     },
-    "2a24519398684ed5": {
-      "source": "访问主页",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 35,
-          "column": 24
-        }
-      ]
-    },
     "2c07de8759dc5c4c": {
       "source": "浅色为默认主题，保存后会同步应用到所有客户端窗口",
       "kind": "text",
@@ -615,7 +603,7 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 151,
+          "line": 157,
           "column": 1
         }
       ]
@@ -663,20 +651,8 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 130,
+          "line": 136,
           "column": 1
-        }
-      ]
-    },
-    "358f07b2c1445ab1": {
-      "source": "作者寄语",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 33,
-          "column": 18
         }
       ]
     },
@@ -899,11 +875,6 @@
           "column": 15
         },
         {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 36,
-          "column": 23
-        },
-        {
           "file": "src/views/Config.vue",
           "line": 28,
           "column": 12
@@ -929,7 +900,7 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 138,
+          "line": 144,
           "column": 93
         }
       ]
@@ -1133,7 +1104,7 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 125,
+          "line": 131,
           "column": 1
         }
       ]
@@ -1415,7 +1386,7 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 113,
+          "line": 116,
           "column": 19
         }
       ]
@@ -1952,7 +1923,7 @@
         {
           "file": "src/components/CursorAccountCard.vue",
           "line": 135,
-          "column": 56
+          "column": 70
         }
       ]
     },
@@ -2377,7 +2348,7 @@
       "refs": [
         {
           "file": "src/components/ModelAdapterTestCard.vue",
-          "line": 142,
+          "line": 148,
           "column": 93
         }
       ]
@@ -2609,18 +2580,6 @@
           "file": "src/views/Config.vue",
           "line": 29,
           "column": 12
-        }
-      ]
-    },
-    "ab607d54d86dc789": {
-      "source": "作者 leookun",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 32,
-          "column": 17
         }
       ]
     },
