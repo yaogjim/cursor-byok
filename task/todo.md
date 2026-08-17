@@ -2,6 +2,105 @@
 
 > 本文件是项目活动任务的唯一真值源。`.cursor/plans/*.plan.md` 的 frontmatter todo 仅作阶段索引，不代表任务已满足 Definition of Ready。
 
+## 编排任务：upstream-sync-release-0.0.47
+
+- 用户请求：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`；不提 PR。
+- 用户确认：`noad` 本地领先 2 提交（`ad285dd`、`8e0f335`）纳入发布；当前 5 个本地脏文件保留为 BASELINE/FORBIDDEN；版本升到 `0.0.47`。
+- 权威流程：`docs/cursor_byok_upstream_sync_release_runbook.md` + `docs/cursor_byok_upstream_merge_requirements.md`。
+
+## Active StageSpec
+
+STAGE_ID: none
+STATUS: none
+OWNER: orchestrator
+NOTE: `cleanup-release-worktrees-01` 已通过 verifier 门禁；当前无辅助 worktree、无进行中 Active Stage。
+
+### cleanup-release-worktrees-01
+
+- STATUS: verified
+- executor: be054fa2-3f41-4ce0-b294-cee6d231520a
+- verifier: 6aab12fd-36bb-49e3-b4a3-15c3208c5b91
+- removed:
+  - `/Users/yaogj/Downloads/works/yaogjim/cursor-byok/cursor-byok-main-sync-wt`
+  - `/Users/yaogj/Downloads/works/yaogjim/cursor-byok/cursor-byok-noad-sync-wt`
+- preserved refs: `main@d306c30`、`noad@d013961`、`sync/main-into-noad-20260810-193647@d013961`、`v0.0.47@d013961`
+- release assets: `bin/release/0.0.47` preserved
+
+
+## Orchestration Result (upstream-sync-release-0.0.47)
+
+- overall: completed（在已验证范围内）
+- verified_stages:
+  - upstream-main-mirror-01
+  - noad-acceptance-bindings-tests-01（含 merge/stabilize 产物）
+  - push-origin-noad-0.0.47-01
+  - release-0.0.47-desktop-github-01
+- aborted_or_rework_history:
+  - noad-merge-main-0.0.47-01 aborted-partial → 稳定化为 c4edab0/d013961
+  - noad-merge-stabilize-verify-01 rework-required → bindings/tests 返工通过
+- key SHAs:
+  - upstream/main: da5fa34a4d501bcc8548f1140fe91e05e0da9c77
+  - main/origin/main: d306c3019db5fa7891af508cd2ea992f198cbc3e
+  - noad/origin/noad/tag v0.0.47: d0139611d33e441ac366cd3e20704c8d0ebae2d4
+- release: https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.47
+- platforms: macos-arm64, macos-amd64, windows-amd64（无 linux）
+- not done: BASELINE 本地脏文档未提交；差异 PRD 未强制追加本节；worktree 可后续清理
+
+## Stage History
+
+### release-0.0.47-desktop-github-01
+
+- STATUS: verified
+- VERDICT: pass（verifier b826a27c-ece1-4ed1-9b9b-e07b4e1eea76）
+- executor: 071c5b03-b8f5-427f-976c-e86bbc48f3c2
+- release: https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.47
+- sha: d0139611d33e441ac366cd3e20704c8d0ebae2d4
+
+
+### push-origin-noad-0.0.47-01
+
+- STATUS: verified
+- VERDICT: pass（verifier bb867ed9-f7fe-400b-8080-53aa4e358a31）
+- executor: 9e64948b-861d-46f9-9cd0-d8d731407e17
+- origin/noad: d0139611d33e441ac366cd3e20704c8d0ebae2d4
+
+### noad-acceptance-bindings-tests-01
+
+- STATUS: verified
+- VERDICT: pass（verifier d0e18dd9-ed45-4b4b-8197-5888c72395ac）
+- executor: ef42c04f-79c4-4ad4-bbad-8024ce7f2e35
+- tip: d013961；version 0.0.47；buildinfo yaogjim
+- residual_risk: verifier 未重跑全量 go test/frontend build，采用抽样 + executor 证据
+
+### noad-merge-stabilize-verify-01
+
+- STATUS: rework-required (partial)
+- executor: f710311d-73f1-4e9d-b1ae-4e730502bfa9
+- cleanup: pass；i18n commit d013961；主工作区仅 BASELINE keep
+- acceptance: go full internal hang/timeout；frontend build missing bindings in worktree
+- root_cause_followup: bindings gitignored；copy/generate in worktree；retest with -timeout
+
+### noad-merge-main-0.0.47-01
+
+- STATUS: aborted-partial
+- note: executor 被用户中止；merge commit 已存在
+- merge: c4edab0798283e887f9e00c213d18d5916f5509e (8e0f335 + d306c30)
+- backup: backup/noad-before-upstream-20260810-193647 @ 8e0f335
+- sync/worktree: sync/main-into-noad-20260810-193647 / cursor-byok-noad-sync-wt
+- residual: 主工作区 index reverse-diff；worktree i18n 5 文件脏
+- version/buildinfo: 0.0.47 / yaogjim OK
+
+### upstream-main-mirror-01
+
+- STATUS: verified
+- VERDICT: pass（verifier agent 899f0b73-e806-4a40-817c-f67eb154c9ae）
+- executor: 14f4a309-0404-4cb2-8a77-6b84b18a0fa7
+- main/origin/main: d306c3019db5fa7891af508cd2ea992f198cbc3e
+- upstream/main: da5fa34a4d501bcc8548f1140fe91e05e0da9c77
+- backup: backup/main-before-upstream-20260810-192846 @ ab53e21
+- deviation: README.md 冲突在 main 镜像阶段取 upstream；允许
+- noad tip 未变: 8e0f335
+
 ## 当前执行队列
 
 - [completed] `semantic-design-contract`：更新 PRD、系统 Design 与任务真值源，冻结日志 v2、项目隐私、语义枚举、案例和 AI 包合同。

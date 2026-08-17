@@ -15,7 +15,7 @@
 它不承担以下职责：
 
 - 不记录完整的当前代码差异；这些内容见 [`prd_cursor_byok_当前功能与上游差异.md`](prd_cursor_byok_当前功能与上游差异.md)。
-- 不描述具体的 pull、cherry-pick、merge 命令和冲突处理步骤；这些内容见 [`cursor_byok_upstream_merge_requirements.md`](cursor_byok_upstream_merge_requirements.md)。
+- 不描述具体的 pull、cherry-pick、merge、构建与发版命令；端到端步骤见 [`cursor_byok_upstream_sync_release_runbook.md`](cursor_byok_upstream_sync_release_runbook.md)，冲突与停止条件见 [`cursor_byok_upstream_merge_requirements.md`](cursor_byok_upstream_merge_requirements.md)。
 - 不把“已决定”表述为“已实现”，每项实现状态以功能差异 PRD 和验证证据为准。
 
 决策来源：

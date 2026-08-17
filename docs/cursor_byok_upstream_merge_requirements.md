@@ -1,6 +1,9 @@
 # Cursor BYOK 上游同步与合并要求
 
-- **文档类型**：上游同步执行说明，不是 PRD
+- **文档类型**：上游同步安全策略与冲突要求，不是 PRD
+- **端到端操作手册（推荐入口）**：[`cursor_byok_upstream_sync_release_runbook.md`](cursor_byok_upstream_sync_release_runbook.md)  
+  常规流程：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`。  
+  **本文件**负责冲突分类、必须保留的本地行为与停止条件；命令级顺序与发版步骤以 Runbook 为准。
 - **原始上游仓库**：<https://github.com/leookun/cursor-byok>
 - **本地 Fork（`origin`）**：<https://github.com/yaogjim/cursor-byok>
 - **本地分支**：`noad`
@@ -11,9 +14,11 @@
 - **决策 PRD**：[`prd_cursor_byok_工作决策基线.md`](prd_cursor_byok_工作决策基线.md)
 - **功能差异 PRD**：[`prd_cursor_byok_当前功能与上游差异.md`](prd_cursor_byok_当前功能与上游差异.md)
 
-本说明供 Cursor、其他 AI code agent 或人工维护者执行后续上游同步。它只规定如何安全获取、分析、合并和验收上游变化；产品决策和当前功能事实必须回到两个 PRD，不得由本说明自行新增产品需求。
+本说明供 Cursor、其他 AI code agent 或人工维护者在合并时遵守安全边界。产品决策和当前功能事实必须回到两个 PRD，不得由本说明自行新增产品需求。
 
-`origin` 是本地 Fork，用于保存 `noad` 和推送提交；`upstream` 必须指向原始仓库，用于获取上游代码。禁止把 `origin/main` 自动当作原始上游基线。
+`origin` 是本地 Fork，用于保存 `main`/`noad` 和推送提交；`upstream` 必须指向原始仓库，用于获取上游代码。禁止把 `origin/main` 自动当作原始上游基线。
+
+**流程优化（与历史 §3.1 的关系）：** 默认不再把 `upstream/main` 直接 merge 进 `noad`。应先更新 fork 的 `main` 作为上游镜像，再语义合并进 `noad`，最后按 Runbook 做三平台发布。§3.1 保留为「仅 noad 应急直合同步」参考；`git fetch upstream` 一律加 `--no-tags`；验证优先 `go test ./internal/...` 等窄范围门禁，避免并行 `go test ./...`。
 
 ## 1. 合并前硬性约束
 
