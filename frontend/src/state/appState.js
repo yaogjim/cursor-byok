@@ -11,6 +11,7 @@ import {
   downloadAvailableUpdate,
   getAppVersion,
   getHomeMetricsSummary,
+  resetHomeMetricsSummary,
   getLogCaptureStatus,
   getModelAdapterTestResults,
   cleanupClosedLogSessions,
@@ -955,6 +956,7 @@ export const appState = reactive({
   lastAgentModelHash: cachedConfig.lastAgentModelHash,
   homeMetrics: createEmptyHomeMetrics(),
   homeMetricsLoading: false,
+  homeMetricsResetting: false,
   homeMetricsError: "",
 
   updateState: "idle",
@@ -1524,6 +1526,25 @@ export async function syncHomeMetrics() {
       await delay(HOME_METRICS_MIN_LOADING_MS - elapsed);
     }
     appState.homeMetricsLoading = false;
+  }
+}
+
+export async function resetHomeMetrics() {
+  if (appState.homeMetricsResetting) {
+    return { ok: false, error: "统计重置正在进行" };
+  }
+  appState.homeMetricsResetting = true;
+  try {
+    await resetHomeMetricsSummary();
+    return await syncHomeMetrics();
+  } catch (error) {
+    appState.homeMetricsError = toUserError(error);
+    return {
+      ok: false,
+      error: appState.homeMetricsError,
+    };
+  } finally {
+    appState.homeMetricsResetting = false;
   }
 }
 

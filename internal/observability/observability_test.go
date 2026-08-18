@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -300,6 +301,178 @@ func TestCleanupAllClosedSessionsPreservesOpenSession(t *testing.T) {
 	}
 	if _, err := os.Stat(openPath); err != nil {
 		t.Fatalf("open session was removed: %v", err)
+	}
+}
+
+func TestCleanupAllClosedSessionsPreservesRuntimeLogsAndSkipsUnsafeEntries(t *testing.T) {
+	root := t.TempDir()
+	tracesRoot := filepath.Join(root, tracesDirname)
+	if err := ensurePrivateDir(tracesRoot); err != nil {
+		t.Fatalf("create traces root: %v", err)
+	}
+
+	closedPath := writeTestSession(t, tracesRoot, "closed-basic", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "closed-basic",
+		Mode:          ModeBasic,
+		Status:        "closed",
+		StartedAt:     time.Now().UTC(),
+	})
+	if err := os.WriteFile(filepath.Join(closedPath, eventsFilename), []byte("event\n"), 0o600); err != nil {
+		t.Fatalf("write closed event: %v", err)
+	}
+	openPath := writeTestSession(t, tracesRoot, "open-full", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "open-full",
+		Mode:          ModeFull,
+		Status:        "open",
+		StartedAt:     time.Now().UTC(),
+	})
+	failedPath := writeTestSession(t, tracesRoot, "open-failed", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "open-failed",
+		Mode:          ModeBasic,
+		Status:        "open_failed",
+		StartedAt:     time.Now().UTC(),
+	})
+	badPath := filepath.Join(tracesRoot, "bad-manifest")
+	if err := ensurePrivateDir(badPath); err != nil {
+		t.Fatalf("create bad manifest session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(badPath, manifestFilename), []byte("not-json"), 0o600); err != nil {
+		t.Fatalf("write bad manifest: %v", err)
+	}
+
+	outsideClosed := writeTestSession(t, t.TempDir(), "outside-closed", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "outside-closed",
+		Mode:          ModeBasic,
+		Status:        "closed",
+		StartedAt:     time.Now().UTC(),
+	})
+	symlinkPath := filepath.Join(tracesRoot, "closed-link")
+	if err := os.Symlink(outsideClosed, symlinkPath); err != nil {
+		t.Fatalf("create closed symlink: %v", err)
+	}
+
+	appLogPath := filepath.Join(root, "app", "app.log")
+	if err := os.MkdirAll(filepath.Dir(appLogPath), 0o755); err != nil {
+		t.Fatalf("create app log dir: %v", err)
+	}
+	if err := os.WriteFile(appLogPath, []byte("runtime log\n"), 0o644); err != nil {
+		t.Fatalf("write app log: %v", err)
+	}
+
+	result, err := CleanupAllClosedSessions(root)
+	if err != nil {
+		t.Fatalf("CleanupAllClosedSessions() error = %v", err)
+	}
+	if result.RemovedSessions != 1 || result.FreedBytes <= 0 {
+		t.Fatalf("unexpected cleanup result: %+v", result)
+	}
+	if _, err := os.Stat(closedPath); !os.IsNotExist(err) {
+		t.Fatalf("closed session still exists: %v", err)
+	}
+	for _, path := range []string{openPath, failedPath, badPath, symlinkPath, outsideClosed, appLogPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("preserved path removed %s: %v", path, err)
+		}
+	}
+}
+
+func TestCleanupAllClosedSessionsNoClosedReturnsZero(t *testing.T) {
+	root := t.TempDir()
+	tracesRoot := filepath.Join(root, tracesDirname)
+	if err := ensurePrivateDir(tracesRoot); err != nil {
+		t.Fatalf("create traces root: %v", err)
+	}
+	openPath := writeTestSession(t, tracesRoot, "open-only", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "open-only",
+		Mode:          ModeBasic,
+		Status:        "open",
+		StartedAt:     time.Now().UTC(),
+	})
+
+	result, err := CleanupAllClosedSessions(root)
+	if err != nil {
+		t.Fatalf("CleanupAllClosedSessions() error = %v", err)
+	}
+	if result.RemovedSessions != 0 || result.FreedBytes != 0 {
+		t.Fatalf("unexpected empty cleanup result: %+v", result)
+	}
+	if _, err := os.Stat(openPath); err != nil {
+		t.Fatalf("open session was removed: %v", err)
+	}
+}
+
+func TestCleanupAllClosedSessionsRejectsInvalidRoot(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	for _, root := range []string{"", ".", "   ", "./."} {
+		if _, err := CleanupAllClosedSessions(root); err == nil {
+			t.Fatalf("CleanupAllClosedSessions(%q) succeeded, want error", root)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tmp, tracesDirname)); !os.IsNotExist(err) {
+		t.Fatalf("invalid root created ./traces: %v", err)
+	}
+}
+
+func TestCleanupAllClosedSessionsConcurrentCallsDoNotDoubleCount(t *testing.T) {
+	root := t.TempDir()
+	tracesRoot := filepath.Join(root, tracesDirname)
+	if err := ensurePrivateDir(tracesRoot); err != nil {
+		t.Fatalf("create traces root: %v", err)
+	}
+	closedA := writeTestSession(t, tracesRoot, "closed-a", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "closed-a",
+		Mode:          ModeBasic,
+		Status:        "closed",
+		StartedAt:     time.Now().UTC(),
+	})
+	closedB := writeTestSession(t, tracesRoot, "closed-b", Manifest{
+		SchemaVersion: SchemaVersion,
+		AppSessionID:  "closed-b",
+		Mode:          ModeBasic,
+		Status:        "closed",
+		StartedAt:     time.Now().UTC(),
+	})
+	if err := os.WriteFile(filepath.Join(closedA, eventsFilename), []byte("a\n"), 0o600); err != nil {
+		t.Fatalf("write closed-a event: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(closedB, eventsFilename), []byte("b\n"), 0o600); err != nil {
+		t.Fatalf("write closed-b event: %v", err)
+	}
+
+	const workers = 8
+	results := make([]CleanupResult, workers)
+	errs := make([]error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			results[index], errs[index] = CleanupAllClosedSessions(root)
+		}(i)
+	}
+	wg.Wait()
+
+	removed := 0
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent CleanupAllClosedSessions()[%d] error = %v", i, err)
+		}
+		removed += results[i].RemovedSessions
+	}
+	if removed != 2 {
+		t.Fatalf("concurrent removed sessions = %d, want 2 (results=%+v)", removed, results)
+	}
+	for _, path := range []string{closedA, closedB} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("closed session still exists %s: %v", path, err)
+		}
 	}
 }
 

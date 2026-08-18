@@ -28,6 +28,7 @@ import { Call } from "@wailsio/runtime";
 
 const API_LOG_PREFIX = "[clientApi]";
 const PROXY_SERVICE_NAME = "cursor/internal/bridge.ProxyService";
+const METRICS_SERVICE_NAME = "cursor/internal/bridge.MetricsService";
 
 function logSuccess(name) {
   console.debug(`${API_LOG_PREFIX} ${name} completed`);
@@ -76,6 +77,12 @@ export function getProxyState() {
 
 export function getHomeMetricsSummary() {
   return withApiLogging("GetHomeMetricsSummary", () => GetHomeMetricsSummary());
+}
+
+export function resetHomeMetricsSummary() {
+  return withApiLogging("ResetHomeMetricsSummary", () =>
+    Call.ByName(`${METRICS_SERVICE_NAME}.ResetHomeMetricsSummary`),
+  );
 }
 
 export function getAdRuntime() {

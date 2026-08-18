@@ -4,11 +4,13 @@ import Card from "@/components/ui/Card.vue";
 import HomeMetricsCard from "@/components/HomeMetricsCard.vue";
 import CursorAccountCard from "@/components/CursorAccountCard.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showModal } from "@/composables/useModal";
 import { getAdRuntime } from "@/services/clientApi";
 import {
   appState,
   appViewState,
   openModelConfigWindow,
+  resetHomeMetrics,
   syncHomeMetrics,
   syncServiceState,
   toUserError,
@@ -119,6 +121,23 @@ async function handleRefreshMetrics() {
   showActionError("刷新失败", result.error);
 }
 
+async function handleResetMetrics() {
+  const confirmed = await showModal({
+    title: "重置会话统计",
+    content: "只会清零首页会话统计，不会删除会话历史。新请求将从 0 重新累计。",
+    confirmText: "确认重置",
+  });
+  if (!confirmed) {
+    return;
+  }
+  const result = await resetHomeMetrics();
+  if (result.ok) {
+    message("统计已重置");
+    return;
+  }
+  showActionError("重置失败", result.error);
+}
+
 async function handleOpenConfig() {
   await router.push("/config");
 }
@@ -148,9 +167,11 @@ onBeforeUnmount(() => {
     <HomeMetricsCard
       :metrics="appState.homeMetrics"
       :loading="appState.homeMetricsLoading"
+      :resetting="appState.homeMetricsResetting"
       :error="appState.homeMetricsError"
       :home-ads="homeAds"
       @refresh="handleRefreshMetrics"
+      @reset="handleResetMetrics"
       @open-ad="handleOpenHomeAd"
     />
 

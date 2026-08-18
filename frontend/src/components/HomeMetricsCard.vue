@@ -6,7 +6,7 @@ import { appState, saveIncludeCacheWriteInHitRate } from "@/state/appState";
 import { formatCompactInteger, formatInteger } from "@/utils/numberFormat";
 import { computed, ref } from "vue";
 
-const emit = defineEmits(["refresh", "open-ad"]);
+const emit = defineEmits(["refresh", "reset", "open-ad"]);
 
 const TOKEN_PRICE_PER_MILLION = {
   input: 5,
@@ -21,6 +21,10 @@ const props = defineProps({
     required: true,
   },
   loading: {
+    type: Boolean,
+    default: false,
+  },
+  resetting: {
     type: Boolean,
     default: false,
   },
@@ -276,7 +280,7 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           <button
             type="button"
             class="center-row justify-center h-[24px] w-[24px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
-            :disabled="loading"
+            :disabled="loading || resetting"
             :title="loading ? '刷新中' : '刷新统计'"
             @click="emit('refresh')"
           >
@@ -284,6 +288,15 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
               class="icon-[mdi--refresh] text-[14px]"
               :class="{ '!animate-spin': loading }"
             ></span>
+          </button>
+          <button
+            type="button"
+            class="center-row justify-center h-[24px] px-[8px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[12px] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="loading || resetting"
+            :title="resetting ? '重置中' : '重置统计'"
+            @click="emit('reset')"
+          >
+            {{ resetting ? "重置中" : "重置" }}
           </button>
         </div>
       </div>

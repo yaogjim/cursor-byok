@@ -77,8 +77,8 @@ function formatBytes(value) {
 
 async function handleClearClosedSessions() {
   const confirmed = await showModal({
-    title: "清理已关闭日志",
-    content: "只会删除已关闭的采集 session；当前正在写入的 session 不会被删除。",
+    title: "清理日志",
+    content: "只会删除已关闭的采集 session，不会删除当前活跃 session 和普通运行日志。",
     confirmText: "确认清理",
   });
   if (!confirmed) {
@@ -215,7 +215,7 @@ onMounted(async () => {
               </Button>
               <Button @click="handleOpenLogsDirectory">打开日志目录</Button>
               <Button :disabled="appState.logCleanupRunning" @click="handleClearClosedSessions">
-                {{ appState.logCleanupRunning ? "清理中..." : "清理已关闭 session" }}
+                {{ appState.logCleanupRunning ? "清理中..." : "清理日志" }}
               </Button>
             </div>
           </div>

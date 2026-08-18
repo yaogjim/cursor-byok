@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"cursor/internal/appdata"
+	"cursor/internal/backend/forwarder"
 	"cursor/internal/historymetrics"
 )
 
@@ -47,4 +48,12 @@ func (service *MetricsService) GetHomeMetricsSummary() (HomeMetricsSummary, erro
 		CacheWriteTokens:   summary.CacheWriteTokens,
 		CacheHitRate:       summary.CacheHitRate,
 	}, nil
+}
+
+// ResetHomeMetricsSummary 清零首页会话统计，不删除会话历史。
+func (service *MetricsService) ResetHomeMetricsSummary() error {
+	if err := appdata.EnsureAssistantHome(); err != nil {
+		return err
+	}
+	return forwarder.NewUsageFileStore(appdata.HistoryRootPath()).Reset()
 }

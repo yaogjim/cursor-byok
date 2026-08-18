@@ -2,6 +2,129 @@
 
 > 本文件是项目活动任务的唯一真值源。`.cursor/plans/*.plan.md` 的 frontmatter todo 仅作阶段索引，不代表任务已满足 Definition of Ready。
 
+## Active Work Package
+
+WORK_PACKAGE_ID: session-metrics-log-cleanup-20260817
+STATUS: verified
+RISK_LEVEL: normal
+OWNER: orchestrator
+
+### CONTEXT
+
+- 已确认：统计重置只清空 `history/usage.json` 聚合，不删除会话历史；日志清理只删除已关闭采集 session。
+- 现状：日志清理链路已存在；统计重置缺少写 API，必须复用 `usage.json.lock` 和原子写入。
+- 设计锚点：`.cursor/plans/统计日志清理_f1f04c7f.plan.md`、`docs/agents/project.md`。
+
+### GOAL
+
+- 首页会话统计可安全重置并从零累计，配置页可安全清理已关闭采集日志，且两条链路有自动化验证和明确 UI 反馈。
+
+### NON_GOALS
+
+- 不删除会话历史、当前活跃 session、普通运行日志或坏 manifest 目录。
+- 不引入新依赖、不改变协议、不提交、不推送、不发布。
+
+### BASELINE
+
+- branch/head：`noad` / `69177ead75734bbdfac38af1fac71ec874a5206b`。
+- 相关 status/diff：工作区干净，`noad` 相对 `origin/noad` ahead 1。
+- 已有脏文件、所有者和用途：none。
+- 不可触碰改动：none；执行代理不得修改 `task/todo.md`，由中控在代理停止后汇总。
+
+### STEPS
+
+1. 在 `UsageFileStore` 中实现共锁、原子、完整 schema v2 统计重置，并补并发/旧事件测试。
+2. 暴露 `MetricsService.ResetHomeMetricsSummary`，接入 client API、app state、首页确认按钮与状态反馈。
+3. 将既有日志清理入口明确为“清理日志”，补 root 安全、并发幂等和 closed/open/普通日志测试。
+4. 补齐静态 i18n、PRD 和任务记录；重新生成 Wails bindings。
+5. 执行 Go 测试、race、vet、前端配置测试和构建；保留手工 UI 验收边界。
+
+### EXPECTED_PATHS
+
+- `internal/backend/forwarder/usage_store.go`
+- `internal/backend/forwarder/usage_store_test.go`
+- `internal/bridge/metrics.go`
+- `internal/client/service.go`
+- `internal/observability/storage.go`
+- `internal/observability/observability_test.go`
+- `frontend/src/services/clientApi.js`
+- `frontend/src/state/appState.js`
+- `frontend/src/views/Home.vue`
+- `frontend/src/components/HomeMetricsCard.vue`
+- `frontend/src/views/Config.vue`
+- `frontend/src/i18n/`
+
+### ALLOWED_ROOTS
+
+- `internal/backend/forwarder/`
+- `internal/bridge/`
+- `internal/client/`
+- `internal/observability/`
+- `frontend/src/`
+- `docs/`
+- `task/`
+
+### FORBIDDEN_PATHS
+
+- `proto/`
+- `cursor-tab-server/`
+- `tools/log-analyzer/`
+- `.git/`
+- 任何用户已有改动、凭据、发布资产和远端操作。
+
+### ALLOWED_DECISIONS
+
+- 同模块内私有辅助函数、测试夹具、按钮布局、文案措辞和结果格式化。
+- 保留现有 endpoint，使用生成 binding 或现有 `Call.ByName` 的等价接入方式。
+
+### REQUIRES_PARENT_APPROVAL
+
+- 扩大清理范围、删除会话历史或普通日志。
+- 引入依赖、修改持久化 schema、跨允许根目录、改变 Wails 公共契约语义。
+
+### DELIVERABLES
+
+- 统计 reset 的持久化/API/UI 闭环与测试。
+- 日志清理的安全边界、反馈和测试闭环。
+- 实际运行的验证命令、变更路径、未验证范围和残余风险记录。
+
+### ACCEPTANCE
+
+- `go test ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability -count=1` 通过。
+- `go test -race ./internal/backend/forwarder ./internal/observability -count=1` 通过。
+- `go vet ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability` 通过。
+- `node frontend/scripts/test-config-projection.mjs` 和 `npm run build --prefix frontend` 通过。
+- 代码行为满足统计只清聚合、日志只清 closed session 的手工验收条件。
+
+### GATES
+
+- none。
+
+### STOP_CONDITIONS
+
+- 触碰 FORBIDDEN_PATHS 或无法区分的既有改动。
+- 需要 REQUIRES_PARENT_APPROVAL 的决策。
+- 测试失败且需要削弱测试、扩展范围或改变数据语义才能继续。
+- 生成 binding 或 i18n 流程需要未批准的外部副作用。
+
+### MONITOR_POLICY
+
+- mode: event-driven；执行代理完成后停止，再启动只读 verifier。
+
+### VERIFICATION_POLICY
+
+- verifier: required。
+- package-level checks：Acceptance 中列出的 Go、race、vet、前端测试和构建，以及独立代码/范围审查。
+
+### ORCHESTRATION_RESULT
+
+- verdict: `pass`（独立只读 verifier）；目标、交付物、范围和架构边界均判定满足。
+- 已通过：普通 Go package tests、`go vet`、前端配置测试、前端生产构建、修改文件静态诊断和 `git diff --check`。
+- 未形成结论：组合 `go test -race ./internal/backend/forwarder ./internal/observability -count=1` 在大型生成 proto 包编译阶段持续超过 10 分钟，已停止，既无成功也无失败结论。
+- UI 边界：真实 Wails 开发窗口未能在原生 Go 调试构建阶段启动；纯 Vite 页面无法提供 Wails 原生 binding，因此未宣称桌面点击链路已手工通过。UI 行为以 Go/前端测试、生成 binding 和生产构建为证据，仍建议后续在可启动桌面环境补一次点击验收。
+- 进程清理：验收结束后未发现残留 `task dev`、Wails、Vite、Go build/compile 进程，端口 `1420` 无监听。
+- baseline: preserved；未提交、未推送。
+
 ## 编排任务：upstream-sync-release-0.0.47
 
 - 用户请求：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`；不提 PR。

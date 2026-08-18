@@ -294,8 +294,21 @@ type CleanupResult struct {
 	FreedBytes      int64 `json:"freed_bytes"`
 }
 
+var cleanupAllClosedSessionsMu sync.Mutex
+
 func CleanupAllClosedSessions(root string) (CleanupResult, error) {
-	root = filepath.Clean(strings.TrimSpace(root))
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return CleanupResult{}, errors.New("observability root is required")
+	}
+	root = filepath.Clean(root)
+	if root == "." {
+		return CleanupResult{}, errors.New("observability root is required")
+	}
+
+	cleanupAllClosedSessionsMu.Lock()
+	defer cleanupAllClosedSessionsMu.Unlock()
+
 	tracesRoot := filepath.Join(root, tracesDirname)
 	entries, err := os.ReadDir(tracesRoot)
 	if err != nil {

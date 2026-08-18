@@ -33,6 +33,15 @@ type usageFileDocument struct {
 	EventIndex    map[string]usageFileEvent `json:"event_index,omitempty"`
 }
 
+type usageFileResetDocument struct {
+	SchemaVersion int                       `json:"schema_version"`
+	UpdatedAt     time.Time                 `json:"updated_at"`
+	Totals        usageFileTotals           `json:"totals"`
+	Daily         []usageFileDaily          `json:"daily"`
+	RecentEvents  []usageFileEvent          `json:"recent_events"`
+	EventIndex    map[string]usageFileEvent `json:"event_index"`
+}
+
 type usageFileTotals struct {
 	ProviderCalls     int64 `json:"provider_calls"`
 	TurnsTotal        int64 `json:"turns_total"`
@@ -135,6 +144,29 @@ func (store *UsageFileStore) UpsertEvent(event usageFileEvent) error {
 	doc.SchemaVersion = usageFileSchemaVersion
 	doc.UpdatedAt = time.Now().UTC()
 	return writeJSONFileAtomic(store.path, doc)
+}
+
+func (store *UsageFileStore) Reset() error {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(store.path), 0o755); err != nil {
+		return fmt.Errorf("create usage directory: %w", err)
+	}
+	release, err := acquireConversationLock(store.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	return writeJSONFileAtomic(store.path, usageFileResetDocument{
+		SchemaVersion: usageFileSchemaVersion,
+		UpdatedAt:     time.Now().UTC(),
+		Totals:        usageFileTotals{},
+		Daily:         make([]usageFileDaily, 0),
+		RecentEvents:  make([]usageFileEvent, 0),
+		EventIndex:    map[string]usageFileEvent{},
+	})
 }
 
 func (store *UsageFileStore) LookupEvent(needle string) (usageFileEvent, bool, error) {

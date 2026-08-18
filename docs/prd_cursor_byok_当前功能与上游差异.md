@@ -296,3 +296,46 @@
 - 受影响的外部目标、凭据、审计、配置或状态机；
 - 测试与运行时证据；
 - 新增的未验证边界和用户确认项。
+
+## 12. 会话统计重置与已关闭日志清理
+
+- **工作包**：`session-metrics-log-cleanup-20260817`
+- **代码基线**：`noad@69177ead75734bbdfac38af1fac71ec874a5206b`
+- **状态**：已实现待验收
+
+### 12.1 精确边界
+
+| 能力 | 允许删除/改写的范围 | 明确不改的范围 |
+| --- | --- | --- |
+| 首页会话统计重置 | 只清零 `~/.cursor-local-assistant-v2/history/usage.json` 的 `totals`、`daily`、`recent_events`、`event_index`，并更新 `updated_at`；新请求从 0 累计 | 不删除 `history/<conversation-id>/` 会话历史，不删除 `usage.json` 文件本身 |
+| 配置页清理日志 | 只删除 `~/.cursor-local-assistant-v2/logs/traces/` 下 `manifest.status == "closed"` 的采集 session | 保留当前 open session、普通运行日志、坏 manifest、`open_failed`、symlink；空 root / `.` root 拒绝执行，避免把 `./traces` 当目标 |
+
+两项操作都保持确认弹窗，取消不调用后端。统计重置由 `UsageFileStore.Reset()` 在既有 `usage.json.lock` 下原子写回 schema v2 空文档；bridge / 前端不拼 JSON。日志清理继续走既有 `CleanupClosedLogSessions` 链路，不对同进程重复清理重复计数。
+
+### 12.2 当前实现位置
+
+- 统计写入与重置：`internal/backend/forwarder/usage_store.go`
+- 首页 Wails 接口：`internal/bridge/metrics.go` 的 `ResetHomeMetricsSummary`
+- 首页确认与按钮：`frontend/src/views/Home.vue`、`frontend/src/components/HomeMetricsCard.vue`
+- 日志清理硬化：`internal/observability/storage.go` 的 `CleanupAllClosedSessions`；配置页文案统一为“清理日志”
+
+### 12.3 验证证据与未验收项
+
+已实际跑过：
+
+- `gofmt` 已作用于本轮编辑的 Go 文件。
+- `go test ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability -count=1` 通过；`historymetrics` / `bridge` 无测试文件。
+- `go test -race ./internal/observability -count=1` 通过。
+- `go vet ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability` 通过。
+- `node frontend/scripts/test-config-projection.mjs` 通过。
+- `npm run build --prefix frontend` 通过；仅有既有 Vite chunk 大小告警。
+
+未完成：
+
+- 建议命令 `go test -race ./internal/backend/forwarder ./internal/observability` 在编译 `gen/aiserverv1/aiserverv1connect`（约 3 万行）时长时间未结束，不能写成已通过。
+
+仍待运行时验收：
+
+- 真实用户目录下点重置后，首页从 0 展示，且 `history/<conversation-id>/` 仍在。
+- 真实配置页点“清理日志”后，只少已关闭 traces session，当前采集 session 与 `logs/app` 普通日志仍在。
+- 多窗口同时点清理时，删除结果不重复计数。
