@@ -63,6 +63,79 @@ func TestOpenAIResponsesRequestsReasoningSummary(t *testing.T) {
 	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
 }
 
+func TestOpenAIResponsesOmitsReasoningWhenEffortBlank(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"grok-composer-2.5-fast\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:       "request-1",
+		RunID:           "run-1",
+		ModelCallID:     "model-call-1",
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		ProviderModelID: "grok-composer-2.5-fast",
+		OpenAIEndpoint:  "/v1/responses",
+		Messages:        []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:       128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+
+	if _, exists := requestBody["reasoning"]; exists {
+		t.Fatalf("reasoning should be omitted when effort is blank: %#v", requestBody["reasoning"])
+	}
+	if _, exists := requestBody["reasoning_effort"]; exists {
+		t.Fatalf("reasoning_effort should be omitted when effort is blank: %#v", requestBody["reasoning_effort"])
+	}
+}
+
+func TestOpenAIChatCompletionsOmitsReasoningWhenEffortBlank(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"grok-composer-2.5-fast\",\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:       "request-1",
+		RunID:           "run-1",
+		ModelCallID:     "model-call-1",
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		ProviderModelID: "grok-composer-2.5-fast",
+		OpenAIEndpoint:  "/v1/chat/completions",
+		Messages:        []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:       128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+
+	for _, field := range []string{"reasoning_effort", "reasoning", "include"} {
+		if value, exists := requestBody[field]; exists {
+			t.Fatalf("%s should be omitted when effort is blank: %#v", field, value)
+		}
+	}
+}
+
 func TestOpenAIChatCompletionsIgnoresBlankFinishReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")

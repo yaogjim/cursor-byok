@@ -1968,10 +1968,18 @@ func normalizeOpenAIResponsesInput(messages []Message) (string, []map[string]any
 		}
 		if role == "tool" && strings.TrimSpace(message.ToolCallID) != "" {
 			callID := openAIResponsesToolMessageCallID(message, responsesCallIDs)
+			var output any = openAIResponsesMessageText(message)
+			if hasImageContentParts(message.ContentParts) {
+				content, err := openAIResponsesMessageContent(message, false)
+				if err != nil {
+					return "", nil, err
+				}
+				output = content
+			}
 			items = append(items, map[string]any{
 				"type":    "function_call_output",
 				"call_id": callID,
-				"output":  openAIResponsesMessageText(message),
+				"output":  output,
 			})
 			activeAssistantReasoningKey = ""
 			continue

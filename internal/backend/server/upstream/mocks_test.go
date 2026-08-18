@@ -28,6 +28,40 @@ func TestBuildCLIModelDetailsPreservesChannelMetadata(t *testing.T) {
 	}
 }
 
+func TestDefaultThinkingEffortForOpenAIAdapterUsesDisabledWhenUnset(t *testing.T) {
+	adapter := legacyruntime.ModelAdapterConfig{Type: "openai", ReasoningEffort: ""}
+
+	if got := defaultThinkingEffortForAdapter(adapter); got != "disabled" {
+		t.Fatalf("default thinking effort = %q, want disabled", got)
+	}
+}
+
+func TestBuildAvailableModelEntriesUsesDisabledVariantWhenReasoningEffortUnset(t *testing.T) {
+	entries := buildAvailableModelEntries([]legacyruntime.ModelAdapterConfig{{
+		ID:          "channel-a",
+		DisplayName: "Model A",
+		ModelID:     "model-a",
+		Type:        "openai",
+	}})
+	if len(entries) != 1 {
+		t.Fatalf("entry count = %d, want 1", len(entries))
+	}
+
+	variants, ok := entries[0]["variants"].([]map[string]any)
+	if !ok {
+		t.Fatalf("variants type = %T, want []map[string]any", entries[0]["variants"])
+	}
+	if len(variants) == 0 {
+		t.Fatal("variants should not be empty")
+	}
+	if got := variants[0]["variantStringRepresentation"]; got != "channel-a:disabled" {
+		t.Fatalf("first variant representation = %#v, want channel-a:disabled", got)
+	}
+	if got := variants[0]["isDefaultNonMaxConfig"]; got != true {
+		t.Fatalf("disabled variant default flag = %#v, want true", got)
+	}
+}
+
 func TestEncodeCLIModelsUsesAgentModelDetailsWireFormat(t *testing.T) {
 	payload := map[string]any{"models": buildCLIModelDetails([]legacyruntime.ModelAdapterConfig{{ID: "channel-a", DisplayName: "Model A", APIKey: "provider-secret", BaseURL: "https://provider.example/v1"}})}
 	encoded, err := encodeMockProto("aiserver.v1.GetUsableModelsResponse", payload)

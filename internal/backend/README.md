@@ -97,6 +97,7 @@ internal/backend/
 
 - `~/.cursor-local-assistant-v2/config.yaml`
 - `~/.cursor-local-assistant-v2/data/ca.crt`
+- `~/.cursor-local-assistant-v2/data/ca.key`
 - `~/.cursor-local-assistant-v2/data/ads/`
 - `~/.cursor-local-assistant-v2/history/`
 - `~/.cursor-local-assistant-v2/logs/`
@@ -104,7 +105,8 @@ internal/backend/
 约定：
 
 - `config.yaml` 是用户配置
-- `data/ca.crt` 是注入给宿主的 CA 证书
+- `data/ca.crt` 是首次运行时为当前用户生成、注入给宿主的 CA 证书
+- `data/ca.key` 是与该证书配套的本地私钥，权限固定为 `0600`，不得打包或提交到仓库
 - `data/ads/` 是广告包与资源缓存目录
 - `history/` 是会话事实与全局 usage JSON 目录，不属于日志
 - `logs/` 只保留必要文本运行日志

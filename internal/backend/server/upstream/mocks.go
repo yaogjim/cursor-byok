@@ -835,7 +835,7 @@ func defaultThinkingEffortForAdapter(adapter legacyruntime.ModelAdapterConfig) s
 	if strings.EqualFold(strings.TrimSpace(adapter.Type), "anthropic") {
 		return normalizeAvailableModelThinkingEffort(adapter.AnthropicThinkingEffort, true, "xhigh")
 	}
-	return normalizeAvailableModelThinkingEffort(adapter.ReasoningEffort, true, "medium")
+	return normalizeAvailableModelThinkingEffort(adapter.ReasoningEffort, true, "disabled")
 }
 
 func normalizeAvailableModelThinkingEffort(raw string, allowMax bool, fallback string) string {
