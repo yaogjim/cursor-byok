@@ -339,3 +339,52 @@
 - 真实用户目录下点重置后，首页从 0 展示，且 `history/<conversation-id>/` 仍在。
 - 真实配置页点“清理日志”后，只少已关闭 traces session，当前采集 session 与 `logs/app` 普通日志仍在。
 - 多窗口同时点清理时，删除结果不重复计数。
+
+## 13. `0.0.48` 同步记录
+
+- **同步时间**：`2026-08-17T18:39:40-0700`
+- **原始上游目标**：`upstream/main@a3ec2a0dfc9029863dab1fd802b0545c05151a67`（`release: 0.0.48`）
+- **本地 `main` 合并提交**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
+- **本地同步前基线**：`noad@bf994d0503fab2b9355cecb9daed3d364a6ee3a1`
+- **同步分支**：`sync/main-into-noad-20260817-183443`
+- **备份分支**：`backup/noad-before-upstream-20260817-183443`
+- **`noad` merge commit**：`54d967e766eb85641dd438913b865c34eac188ad`
+- **拓扑**：`54d967e` 的两个父提交分别为 `bf994d0` 与 `cbf7cb4`。
+- **测试状态**：`not-run`（本阶段不跑完整测试套件）
+
+### 13.1 实际接受与整合
+
+- 接受 Read Image：工具读图、按内容哈希持久化 `.blobs/sha256` 图片 blob（`0600`），以及相关 projector / provider / exec bridge 测试。
+- 接受可选推理强度：OpenAI `reasoningEffort` 允许空值，请求可不携带该参数；前端新增「不设置」选项。
+- 接受每套安装独立根证书：删除仓库内共用 `ca.key`，启动时 `LoadOrCreateManager` 生成或复用本机 CA；证书修复需重启 Cursor。
+- 版本号取上游 `0.0.48`：`build/config.yml` `info.version` 已为 `0.0.48`。
+
+### 13.2 保留与拒绝
+
+- 保留 noad 会话统计重置与已关闭日志安全清理（`bf994d0`），首页重置按钮与配置页「清理日志」仍在。
+- 保留模型卡片按钮溢出修复、fork 发布身份、默认关广告、默认 light、手动更新确认、无隐式 fallback。
+- `internal/buildinfo.ReleaseRepo` 仍为 `yaogjim/cursor-byok`；更新 URL 仍指向 fork Release。
+- 拒绝把发布说明改成上游群组宣传主体；`release-notes.md` 按 noad 产品说明风格重写。
+- 本次差异未发现新增未知硬编码外发域名、local 失败静默转官方/relay、广告关闭仍请求、更新器跳过确认，或把请求正文/凭据写入日志。
+
+### 13.3 冲突裁决
+
+| 文件 | 裁决 | 理由 |
+| --- | --- | --- |
+| `internal/app/runner.go` | 手工并集 | 用上游每机 CA `caCertPEM`，保留 noad `DefaultConfig()` 与后续广告/主题启动路径 |
+| `frontend/src/i18n/locales/*` | 先并 key，再扫描 | 保留 noad 仍在用的「范围 1–90 天」；删掉源码已替换的旧推理强度文案 |
+| `frontend/src/i18n/generated/catalog.json` | 前端 build 重生 | 与上次 `d013961` 相同，不手改 line 号 |
+| `release-notes.md` | 按 noad 风格重写 | 写入 0.0.48 上游能力 + 保留策略，联系方式保留 |
+| `frontend/src/state/appState.js`、`internal/backend/forwarder/service.go`、`internal/backend/server/config/types.go` | 自动合并后人工复核 | 只并入可选推理强度与读图 blob，未改广告/更新/fallback |
+
+### 13.4 测试证据
+
+- 本阶段完整 Go 测试套件：`not-run`。
+- 已跑一次 `npm run build --prefix frontend`，用于 i18n catalog 同步；仅有既有 Vite chunk 大小告警。
+- 未跑 `go test`、`go vet`、独立 module 测试、发布资产编译。
+
+### 13.5 未验证边界
+
+- 未停止或替换运行中的 `18080/18090` 代理，因此窗口首屏、候选实例交接、`/healthz` 与真实网络零请求验收不在本次证据范围内。
+- Read Image 实机读图、独立 CA 安装后 Cursor 信任、可选推理强度对真实模型请求的省略行为，均待测试 subagent / 维护窗口验证。
+- 本轮没有生成或验证 `0.0.48` 发布资产，也没有执行 `git push`、打 tag 或发布 GitHub Release。
