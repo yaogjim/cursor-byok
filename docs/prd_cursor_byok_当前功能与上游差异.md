@@ -2,13 +2,14 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前代码合并基线**：`ad50039f5bf83b8df257c5375d6f24b3a16ae31e`
-- **本次合并来源**：本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`
+- **当前代码合并基线**：`54d967e766eb85641dd438913b865c34eac188ad`
+- **当前发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`
+- **本次合并来源**：本地 `main@cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始上游核对基线**：`main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`
+- **原始上游核对基线**：`upstream/main@a3ec2a0dfc9029863dab1fd802b0545c05151a67`
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：`0.0.45` 安全 merge 与同步记录已提交并通过自动化门禁
-- **状态**：`0.0.45` 自动化合并门禁已通过；会话消失修复、Windows VDI 与发布资产仍待运行时验收
+- **当前工作树**：`0.0.48` 已合入 `noad` 并发布到 fork Release
+- **状态**：`v0.0.48` 三平台资产已发布；运行时与跨平台安装仍待验收
 
 ## 1. 文档职责与证据口径
 
@@ -343,29 +344,35 @@
 ## 13. `0.0.48` 同步记录
 
 - **同步时间**：`2026-08-17T18:39:40-0700`
+- **发布核对时间**：`2026-08-17T20:56:44-0700`
 - **原始上游目标**：`upstream/main@a3ec2a0dfc9029863dab1fd802b0545c05151a67`（`release: 0.0.48`）
 - **本地 `main` 合并提交**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
 - **本地同步前基线**：`noad@bf994d0503fab2b9355cecb9daed3d364a6ee3a1`
 - **同步分支**：`sync/main-into-noad-20260817-183443`
-- **备份分支**：`backup/noad-before-upstream-20260817-183443`
+- **旧备份**：`backup/noad-before-upstream-20260817-183443` @ `bf994d0`
+- **新备份**：`backup/noad-before-main-20260817-205644` @ `bf994d0`（仅本地，未 push）
 - **`noad` merge commit**：`54d967e766eb85641dd438913b865c34eac188ad`
-- **拓扑**：`54d967e` 的两个父提交分别为 `bf994d0` 与 `cbf7cb4`。
-- **测试状态**：`not-run`（本阶段不跑完整测试套件）
+- **发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`
+- **拓扑**：`54d967e` 为真实双父 merge，父提交分别为 `bf994d0` 与 `cbf7cb4`；`cbf7cb4` 再以真实双父合入 `upstream/main@a3ec2a0`。
+- **远端**：`origin/noad` 已与 `93dbae6` 对齐；`origin/main` 已与 `cbf7cb4` 对齐；未 push `upstream`。
+- **Release**：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.48>，`targetCommitish=93dbae694a1cb0c8d5d312496dea3a115ed0855a`
 
 ### 13.1 实际接受与整合
 
 - 接受 Read Image：工具读图、按内容哈希持久化 `.blobs/sha256` 图片 blob（`0600`），以及相关 projector / provider / exec bridge 测试。
 - 接受可选推理强度：OpenAI `reasoningEffort` 允许空值，请求可不携带该参数；前端新增「不设置」选项。
 - 接受每套安装独立根证书：删除仓库内共用 `ca.key`，启动时 `LoadOrCreateManager` 生成或复用本机 CA；证书修复需重启 Cursor。
-- 版本号取上游 `0.0.48`：`build/config.yml` `info.version` 已为 `0.0.48`。
+- 接受上游 `0.0.48` 打包与 i18n：`build/config.yml` `info.version` 为 `0.0.48`；locale / catalog 经前端生产构建重生，见提交 `554a56a`。
 
 ### 13.2 保留与拒绝
 
-- 保留 noad 会话统计重置与已关闭日志安全清理（`bf994d0`），首页重置按钮与配置页「清理日志」仍在。
-- 保留模型卡片按钮溢出修复、fork 发布身份、默认关广告、默认 light、手动更新确认、无隐式 fallback。
-- `internal/buildinfo.ReleaseRepo` 仍为 `yaogjim/cursor-byok`；更新 URL 仍指向 fork Release。
+- 保留 noad 的 Chat Completions 默认 Endpoint：空 `openAIEndpoint` 归一化为 `/v1/chat/completions`，不覆盖用户已显式选择的 Responses / Custom。
+- 保留 local / official / relay **无隐式 fallback**；local 失败不会静默转官方或 relay。
+- 保留默认 `light`、广告关闭、启动更新检查关闭，以及检查 / 下载 / 安装分阶段确认。
+- 保留 fork 发布身份：`internal/buildinfo.ReleaseRepo=yaogjim/cursor-byok`，更新 URL 只指向该 fork Release。
+- 保留隐私边界：审计默认关、不落敏感正文/凭据；本次差异未发现新增未知硬编码外发域名、广告关闭仍请求、更新器跳过确认，或把请求正文/凭据写入日志。
+- 保留 noad 会话统计重置与已关闭日志安全清理（`bf994d0`），以及模型卡片按钮溢出修复。
 - 拒绝把发布说明改成上游群组宣传主体；`release-notes.md` 按 noad 产品说明风格重写。
-- 本次差异未发现新增未知硬编码外发域名、local 失败静默转官方/relay、广告关闭仍请求、更新器跳过确认，或把请求正文/凭据写入日志。
 
 ### 13.3 冲突裁决
 
@@ -377,14 +384,40 @@
 | `release-notes.md` | 按 noad 风格重写 | 写入 0.0.48 上游能力 + 保留策略，联系方式保留 |
 | `frontend/src/state/appState.js`、`internal/backend/forwarder/service.go`、`internal/backend/server/config/types.go` | 自动合并后人工复核 | 只并入可选推理强度与读图 blob，未改广告/更新/fallback |
 
-### 13.4 测试证据
+### 13.4 测试与构建证据
 
-- 本阶段完整 Go 测试套件：`not-run`。
-- 已跑一次 `npm run build --prefix frontend`，用于 i18n catalog 同步；仅有既有 Vite chunk 大小告警。
-- 未跑 `go test`、`go vet`、独立 module 测试、发布资产编译。
+只记录已实际观察到的结果，不把缺失命令或未跑完的门禁写成通过。
+
+**`main@cbf7cb4` 合入上游时已跑过：**
+
+- `git diff --check`
+- `go test ./internal/...`
+- `go vet ./internal/...`
+- `npm run build --prefix frontend`
+- `cursor-tab-server`：`go test ./...`、`go test -race ./...`、`go vet ./...`
+
+当时 `main` 树里 **没有** `frontend/scripts/test-config-projection.mjs`；`tools/log-analyzer` 在 `main` / `upstream/main` 都没有受 Git 管理的包，`go test ./...` 返回 “matched no packages” 并以退出码 1 结束。这两项 **不能** 记为通过。
+
+**`noad` 发版线已核实：**
+
+- 合并提交前已跑一次 `npm run build --prefix frontend`，用于 i18n catalog 同步；仅有既有 Vite chunk 大小告警。
+- 发布后复查：`git diff --check` 通过；`go test ./internal/...` 通过（多数包为缓存结果）。
+- 当前 `noad` 树里 `frontend/scripts/test-config-projection.mjs` 与 `tools/log-analyzer` 源码/测试文件都在，但本轮 **没有** 完整跑 `node frontend/scripts/test-config-projection.mjs`，也 **没有** 完整跑 `tools/log-analyzer` 的 `go test ./...` / race / vet。不得把“文件存在”写成“测试通过”。
+- `go test -race ./internal/backend/forwarder ./internal/backend/agent/model ./internal/certs ./internal/runtime` 曾启动，编译时间长，**没有**拿到完成退出码，不能记为通过。
+
+**发布资产（已核验，无 Linux）：**
+
+| 资产 | size | SHA-256 |
+| --- | --- | --- |
+| `cursor-byok-0.0.48-macos-arm64.tar.gz` | `20596523` | `f96a985894a3bf979d7a3a24ec0885c177d41b33b037589b36c25cc9c7b2cbff` |
+| `cursor-byok-0.0.48-macos-amd64.tar.gz` | `21591405` | `350a8070caa20464dfe807e1259368837bbf1c1aa779aae1beeb57e89a089048` |
+| `cursor-byok-0.0.48-windows-amd64.zip` | `21447142` | `f84b8483b0da87794b218b3dcddfa3193190d94d1caa045618f7b87edd894588` |
+
+`update.json` 三个平台 URL 均指向 `https://github.com/yaogjim/cursor-byok/releases/download/v0.0.48/...`，无 `linux-amd64`。本地文件 size/SHA-256 与 `update.json`、GitHub Release digest 一致。
 
 ### 13.5 未验证边界
 
 - 未停止或替换运行中的 `18080/18090` 代理，因此窗口首屏、候选实例交接、`/healthz` 与真实网络零请求验收不在本次证据范围内。
-- Read Image 实机读图、独立 CA 安装后 Cursor 信任、可选推理强度对真实模型请求的省略行为，均待测试 subagent / 维护窗口验证。
-- 本轮没有生成或验证 `0.0.48` 发布资产，也没有执行 `git push`、打 tag 或发布 GitHub Release。
+- Read Image 实机读图、独立 CA 安装后 Cursor 信任、可选推理强度对真实模型请求的省略行为，均未做运行时验收。
+- 三平台安装包已上传，但 **没有** 在 macOS / Windows 目标机执行安装和启动验收；Linux 资产按 fork 策略未构建。
+- `frontend test-config-projection` 与 `tools/log-analyzer` 完整门禁、以及 targeted race 的完成结果，均不在本记录的通过范围内。
