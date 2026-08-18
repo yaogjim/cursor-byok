@@ -5,6 +5,7 @@ import (
 	goruntime "runtime"
 
 	"cursor/internal/cursor"
+	"cursor/internal/logger"
 )
 
 // ApplyCursorSettings 用于处理与 ApplyCursorSettings 相关的逻辑。
@@ -20,6 +21,9 @@ func (s *ProxyService) ApplyCursorSettings() error {
 	s.caFileMu.Unlock()
 	if err != nil {
 		return fmt.Errorf("ensure ca cert file: %w", err)
+	}
+	if err := cursor.EnsureLegacySharedCACertRemoved(); err != nil {
+		logger.Errorf("remove legacy shared ca cert failed, continuing with installation CA: %v", err)
 	}
 
 	switch goruntime.GOOS {

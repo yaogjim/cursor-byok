@@ -20,6 +20,7 @@ const (
 	windowsCertutilExe    = "certutil.exe"
 	windowsPowerShellExe  = "powershell.exe"
 	windowsUserCancelCode = 1223
+	legacySharedCASHA1    = "C14B7488C5AB83F098BEB2603F1135595A381FC0"
 )
 
 // getCertThumbprint 获取证书的SHA1指纹，用于唯一标识证书
@@ -51,7 +52,10 @@ func isCACertInstalled(certPEM []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("获取证书指纹失败: %w", err)
 	}
+	return isCACertThumbprintInstalled(thumbprint)
+}
 
+func isCACertThumbprintInstalled(thumbprint string) (bool, error) {
 	cmd := exec.Command(windowsCertutilExe, "-verifystore", windowsRootStoreName, thumbprint)
 	cmd.SysProcAttr = hideWindow()
 	output, err := cmd.CombinedOutput()
@@ -74,6 +78,29 @@ func isCACertInstalled(certPEM []byte) (bool, error) {
 	// 某些 Windows 语言环境下 certutil 的文本不同，这里仍然按未找到处理。
 	logger.Infof("isCACertInstalled: cert not found in certutil output, thumbprint=%s", thumbprint)
 	return false, nil
+}
+
+// EnsureLegacySharedCACertRemoved removes the compromised CA shipped by older versions.
+func EnsureLegacySharedCACertRemoved() error {
+	installed, err := isCACertThumbprintInstalled(legacySharedCASHA1)
+	if err != nil {
+		return fmt.Errorf("检查旧版共享 CA 失败: %w", err)
+	}
+	if !installed {
+		return nil
+	}
+	if err := runElevatedCertutil("-delstore", windowsRootStoreName, legacySharedCASHA1); err != nil {
+		return fmt.Errorf("从 Windows 系统信任存储删除旧版共享 CA 失败: %w", err)
+	}
+	installed, err = isCACertThumbprintInstalled(legacySharedCASHA1)
+	if err != nil {
+		return fmt.Errorf("验证旧版共享 CA 删除状态失败: %w", err)
+	}
+	if installed {
+		return fmt.Errorf("删除命令已执行，但 Windows 系统信任存储中仍存在旧版共享 CA")
+	}
+	logger.Infof("ensureLegacySharedCACertRemoved: legacy shared CA removed from Windows system store")
+	return nil
 }
 
 func quotePowerShellLiteral(value string) string {

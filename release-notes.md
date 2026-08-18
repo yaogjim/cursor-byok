@@ -8,9 +8,6 @@ QQ交流群：
 Tg群组:
 https://t.me/cursor_byok
 
-- 修复对话中断时回复内容丢失
-- 重构检查点压缩，提升稳定性
-- 修复OpenAI推理摘要显示
-- 修复Anthropic思考块缺失
-- 支持Shell工具流式输出
-- 修复CLI模型名称显示
+- 修复Read Image
+- 支持不设置思考强度
+- 修复证书安全问题,需要重启一下cursor生效

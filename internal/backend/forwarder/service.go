@@ -248,6 +248,7 @@ func subagentModelOverrideSummaries(overrides map[string]runtimecore.SubagentMod
 
 type Service struct {
 	store              *ConversationFileStore
+	contentBlobs       *ContentBlobStore
 	usageStore         *UsageFileStore
 	codebaseIndexStore *CodebaseIndexStore
 	docsIndexStore     *DocsIndexStore
@@ -274,6 +275,7 @@ type agentModelMemory interface {
 func NewService(historyRoot string, resolver modeladapter.ChannelResolver) *Service {
 	projector := NewHistoryProjector()
 	store := NewConversationFileStore(historyRoot)
+	contentBlobs := NewContentBlobStore(historyRoot)
 	broker := NewStreamBroker()
 	rules := NewUserRuleStore(appdata.RulesRootPath())
 	var modelMemory agentModelMemory
@@ -287,12 +289,13 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver) *Serv
 	debug := newDebugRecorder(historyRoot, broker, debugConfig)
 	service := &Service{
 		store:              store,
+		contentBlobs:       contentBlobs,
 		usageStore:         NewUsageFileStore(historyRoot),
 		codebaseIndexStore: NewCodebaseIndexStore(appdata.CodebaseIndexRootPath()),
 		docsIndexStore:     NewDocsIndexStore(appdata.DocsIndexRootPath()),
 		rules:              rules,
 		projector:          projector,
-		compiler:           NewPromptCompiler(projector, NewToolCatalog(), NewReminderInjector(), rules),
+		compiler:           NewPromptCompiler(projector, NewToolCatalog(), NewReminderInjector(), rules, contentBlobs),
 		provider:           NewProviderGateway(resolver),
 		resolver:           resolver,
 		modelMemory:        modelMemory,
@@ -317,6 +320,7 @@ func newServiceWithDependencies(store *ConversationFileStore, projector *History
 	debug := newDebugRecorder(historyRoot, broker, nil)
 	return &Service{
 		store:              store,
+		contentBlobs:       NewContentBlobStore(historyRoot),
 		rules:              NewUserRuleStore(appdata.RulesRootPath()),
 		projector:          projector,
 		compiler:           compiler,
@@ -1014,6 +1018,9 @@ func (service *Service) handleExecResult(intent InboundIntent) error {
 	if !result.IsTerminal {
 		return nil
 	}
+	if err := service.persistExecContentBlobs(result.ContentBlobs); err != nil {
+		return err
+	}
 	markExecCompleted(stream, pending)
 	backgroundShellToolCallID := ""
 	if strings.TrimSpace(pending.ExecKind) == "shell" && shellToolCallIsBackgrounded(result.ToolCall) {
@@ -1050,6 +1057,21 @@ func (service *Service) handleExecResult(intent InboundIntent) error {
 		return err
 	}
 	return service.reconcileStream(stream)
+}
+
+func (service *Service) persistExecContentBlobs(blobs []execbridge.ContentBlob) error {
+	if len(blobs) == 0 {
+		return nil
+	}
+	if service == nil || service.contentBlobs == nil {
+		return fmt.Errorf("content blob store is not initialized")
+	}
+	for _, blob := range blobs {
+		if err := service.contentBlobs.Put(blob.ID, blob.Data); err != nil {
+			return fmt.Errorf("persist exec content blob: %w", err)
+		}
+	}
+	return nil
 }
 
 // handleExecControl 处理执行桥控制面结果，例如 stream_close 或 throw。

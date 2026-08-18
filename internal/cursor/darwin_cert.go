@@ -16,6 +16,7 @@ import (
 const (
 	darwinSecurityExe       = "security"
 	darwinLoginKeychainName = "login.keychain-db"
+	legacySharedCASHA1      = "C14B7488C5AB83F098BEB2603F1135595A381FC0"
 )
 
 func getCertSHA1Fingerprint(certPEM []byte) (string, error) {
@@ -36,7 +37,10 @@ func isCACertInstalled(certPEM []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("获取证书指纹失败: %w", err)
 	}
+	return isCACertFingerprintInstalled(fingerprint)
+}
 
+func isCACertFingerprintInstalled(fingerprint string) (bool, error) {
 	out, err := exec.Command(darwinSecurityExe, "find-certificate", "-a", "-Z", darwinLoginKeychainName).CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("检查 macOS 登录钥匙串失败: %w: %s", err, strings.TrimSpace(string(out)))
@@ -48,6 +52,36 @@ func isCACertInstalled(certPEM []byte) (bool, error) {
 		logger.Infof("isCACertInstalled: cert not found in macOS login keychain, fingerprint=%s", fingerprint)
 	}
 	return installed, nil
+}
+
+// EnsureLegacySharedCACertRemoved removes the compromised CA shipped by older versions.
+func EnsureLegacySharedCACertRemoved() error {
+	installed, err := isCACertFingerprintInstalled(legacySharedCASHA1)
+	if err != nil {
+		return fmt.Errorf("检查旧版共享 CA 失败: %w", err)
+	}
+	if !installed {
+		return nil
+	}
+	out, err := exec.Command(
+		darwinSecurityExe,
+		"delete-certificate",
+		"-Z", legacySharedCASHA1,
+		"-t",
+		darwinLoginKeychainName,
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("从 macOS 登录钥匙串删除旧版共享 CA 失败: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	installed, err = isCACertFingerprintInstalled(legacySharedCASHA1)
+	if err != nil {
+		return fmt.Errorf("验证旧版共享 CA 删除状态失败: %w", err)
+	}
+	if installed {
+		return fmt.Errorf("删除命令已执行，但 macOS 登录钥匙串中仍存在旧版共享 CA")
+	}
+	logger.Infof("ensureLegacySharedCACertRemoved: legacy shared CA removed from macOS login keychain")
+	return nil
 }
 
 func installCACertToDarwinKeychain(certPEM []byte, certPath string) error {
