@@ -31,12 +31,14 @@ func TestToolImageProviderEncodings(t *testing.T) {
 		if err != nil {
 			t.Fatalf("normalizeOpenAIResponsesInput() error = %v", err)
 		}
-		if len(items) != 1 || items[0]["type"] != "function_call_output" {
+		// 孤儿 tool 结果（无前置 assistant 调用）会补一个占位 function_call，
+		// 保证每个 function_call_output 都有配对调用。
+		if len(items) != 2 || items[0]["type"] != "function_call" || items[0]["call_id"] != "call-1" || items[1]["type"] != "function_call_output" {
 			t.Fatalf("openai responses items = %#v", items)
 		}
-		content, ok := items[0]["output"].([]map[string]any)
+		content, ok := items[1]["output"].([]map[string]any)
 		if !ok || len(content) != 2 {
-			t.Fatalf("openai responses output = %#v", items[0]["output"])
+			t.Fatalf("openai responses output = %#v", items[1]["output"])
 		}
 		if content[0]["type"] != "input_text" || content[1]["type"] != "input_image" {
 			t.Fatalf("openai responses content = %#v", content)

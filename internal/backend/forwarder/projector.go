@@ -1196,57 +1196,82 @@ func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapt
 	}
 }
 
+// replayToolResponseWindowEnd 返回 assistant tool-call 消息的响应收集窗口右边界（不含）。
+// 窗口内除了 tool 结果消息，还允许出现同轮穿插的纯文本 assistant 消息：
+// 部分模型（如 gpt-5.3-codex-spark）会在同一条响应里先输出 function_call 再输出说明文本，
+// 落盘顺序为 tool_call → assistant_text → tool_result，若只收集紧邻的 tool 消息，
+// 会把有结果回放的调用误判为悬空。
+func replayToolResponseWindowEnd(messages []modeladapter.Message, index int) int {
+	end := index + 1
+	for end < len(messages) {
+		candidate := messages[end]
+		switch {
+		case strings.TrimSpace(candidate.Role) == "tool":
+			end++
+		case strings.TrimSpace(candidate.Role) == "assistant" && len(candidate.ToolCalls) == 0:
+			end++
+		default:
+			return end
+		}
+	}
+	return end
+}
+
 func trimReplayDanglingAssistantToolCalls(messages []modeladapter.Message) []modeladapter.Message {
 	if len(messages) == 0 {
 		return nil
 	}
-	trimmed := make([]modeladapter.Message, 0, len(messages))
-	for index := 0; index < len(messages); index++ {
-		message := cloneReplayModelMessage(messages[index])
+	survivingToolCallIDs := make(map[string]struct{})
+	for index, message := range messages {
 		if strings.TrimSpace(message.Role) != "assistant" || len(message.ToolCalls) == 0 {
+			continue
+		}
+		responded := make(map[string]struct{}, len(message.ToolCalls))
+		for scan := index + 1; scan < replayToolResponseWindowEnd(messages, index); scan++ {
+			if strings.TrimSpace(messages[scan].Role) != "tool" {
+				continue
+			}
+			if toolCallID := strings.TrimSpace(messages[scan].ToolCallID); toolCallID != "" {
+				responded[toolCallID] = struct{}{}
+			}
+		}
+		for _, toolCall := range message.ToolCalls {
+			if toolCallID := strings.TrimSpace(toolCall.ID); toolCallID != "" {
+				if _, ok := responded[toolCallID]; ok {
+					survivingToolCallIDs[toolCallID] = struct{}{}
+				}
+			}
+		}
+	}
+	trimmed := make([]modeladapter.Message, 0, len(messages))
+	for _, item := range messages {
+		message := cloneReplayModelMessage(item)
+		if strings.TrimSpace(message.Role) == "assistant" && len(message.ToolCalls) > 0 {
+			nextToolCalls := make([]modeladapter.ToolCallDescriptor, 0, len(message.ToolCalls))
+			for _, toolCall := range message.ToolCalls {
+				if _, ok := survivingToolCallIDs[strings.TrimSpace(toolCall.ID)]; !ok {
+					continue
+				}
+				toolCall.Index = len(nextToolCalls)
+				nextToolCalls = append(nextToolCalls, toolCall)
+			}
+			if len(nextToolCalls) == 0 {
+				if strings.TrimSpace(message.Content) == "" && len(message.ContentParts) == 0 && !hasReplayableReasoningPayload(message.ReasoningContent, message.ReasoningSignature, message.ReasoningSignatureSource) {
+					continue
+				}
+				message.ToolCalls = nil
+			} else {
+				message.ToolCalls = nextToolCalls
+			}
 			trimmed = append(trimmed, message)
 			continue
 		}
-
-		end := index + 1
-		responded := make(map[string]struct{}, len(message.ToolCalls))
-		for end < len(messages) && strings.TrimSpace(messages[end].Role) == "tool" {
-			toolCallID := strings.TrimSpace(messages[end].ToolCallID)
-			if toolCallID != "" {
-				responded[toolCallID] = struct{}{}
-			}
-			end++
-		}
-
-		nextToolCalls := make([]modeladapter.ToolCallDescriptor, 0, len(message.ToolCalls))
-		allowedToolCallIDs := make(map[string]struct{}, len(message.ToolCalls))
-		for _, toolCall := range message.ToolCalls {
-			toolCallID := strings.TrimSpace(toolCall.ID)
-			if _, ok := responded[toolCallID]; !ok {
+		if strings.TrimSpace(message.Role) == "tool" && strings.TrimSpace(message.ToolCallID) != "" {
+			if _, ok := survivingToolCallIDs[strings.TrimSpace(message.ToolCallID)]; !ok {
 				continue
 			}
-			item := toolCall
-			item.Index = len(nextToolCalls)
-			nextToolCalls = append(nextToolCalls, item)
-			allowedToolCallIDs[toolCallID] = struct{}{}
 		}
-
-		if len(nextToolCalls) > 0 {
-			message.ToolCalls = nextToolCalls
-			trimmed = append(trimmed, message)
-			for toolIndex := index + 1; toolIndex < end; toolIndex++ {
-				toolMessage := cloneReplayModelMessage(messages[toolIndex])
-				if _, ok := allowedToolCallIDs[strings.TrimSpace(toolMessage.ToolCallID)]; !ok {
-					continue
-				}
-				trimmed = append(trimmed, toolMessage)
-			}
-		} else if strings.TrimSpace(message.Content) != "" || len(message.ContentParts) > 0 || hasReplayableReasoningPayload(message.ReasoningContent, message.ReasoningSignature, message.ReasoningSignatureSource) {
-			message.ToolCalls = nil
-			trimmed = append(trimmed, message)
-		}
-
-		index = end - 1
+		trimmed = append(trimmed, message)
 	}
 	return trimmed
 }

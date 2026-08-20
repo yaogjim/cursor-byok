@@ -2,14 +2,15 @@
 
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
-- **当前代码合并基线**：`54d967e766eb85641dd438913b865c34eac188ad`
-- **当前发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`
-- **本次合并来源**：本地 `main@cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
+- **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
+- **当前发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`（仍为 `v0.0.48`）
+- **本次合并来源**：本地 `main@305b108e8cb44f68c15672809fc579acc65a9835`（含本地 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
+- **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
-- **原始上游核对基线**：`upstream/main@a3ec2a0dfc9029863dab1fd802b0545c05151a67`
+- **原始上游核对基线**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`；最终 `git fetch upstream --prune --no-tags` 已通过，远端仍为此 SHA
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **当前工作树**：`0.0.48` 已合入 `noad` 并发布到 fork Release
-- **状态**：`v0.0.48` 三平台资产已发布；运行时与跨平台安装仍待验收
+- **当前工作树**：`0.0.49` 已在隔离 worktree 语义合入并完成可执行门禁；用户已确认创建本地 merge commit 并推进 `noad`；**仍未 push**
+- **状态**：即将在 `sync/main-305b108-into-noad-20260820-004943` 创建本地 merge commit，并把本地 `noad` 推进到该提交；**仍未 push**；运行时未验证边界仍成立
 
 ## 1. 文档职责与证据口径
 
@@ -421,3 +422,95 @@
 - Read Image 实机读图、独立 CA 安装后 Cursor 信任、可选推理强度对真实模型请求的省略行为，均未做运行时验收。
 - 三平台安装包已上传，但 **没有** 在 macOS / Windows 目标机执行安装和启动验收；Linux 资产按 fork 策略未构建。
 - `frontend test-config-projection` 与 `tools/log-analyzer` 完整门禁、以及 targeted race 的完成结果，均不在本记录的通过范围内。
+
+## 14. `0.0.49` 受控同步记录（用户已确认本地 merge）
+
+- **同步时间**：`2026-08-20T02:40:22-0700`
+- **原始上游目标**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`（包含于 `main@305b108`）
+- **本地 `main` 来源**：`305b108e8cb44f68c15672809fc579acc65a9835`
+- **本地同步前基线 / 目标 `noad`**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
+- **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
+- **同步分支**：`sync/main-305b108-into-noad-20260820-004943`
+- **备份分支**：`backup/noad-before-main-20260820-004943` @ `9e6936f`（仅本地，未 push）
+- **隔离 worktree**：`/Users/yaogj/Downloads/works/yaogjim/cursor-byok/cursor-byok-sync-main-305b108-20260820-004943`
+- **merge commit**：即将创建；用户已确认。当前仍为 `git merge --no-ff --no-commit main` 已解决 index；即将以 `9e6936f` 与 `305b108` 为双父创建本地 merge，不预填未知 commit SHA；**仍未 push**。
+- **待提交 index**：`git diff --cached --name-only` 当前 **59** 个文件。
+- **拓扑意图**：用户已确认创建以 `9e6936f` 与 `305b108` 为双父的本地 merge，并把本地 `noad` 推进到该提交。
+
+### 14.1 实际接受与整合
+
+- 接受 `IsConnected` schema：`proto/aiserver_v1.proto` 重建生成物，并在 `internal/backend/server/upstream/client.go`、`internal/backend/host.go`、`internal/cursor/state_db.go` 接入精确 mock 与 statsig gate。
+- 接受 OpenAI Responses 孤儿 `output` 修复及专项测试。
+- 接受交错 tool-call replay 与 projector replay trim。
+- 接受 transcript 新语义；删除启动回填测试，**不恢复**已移除的启动回填行为。
+- 接受配置导入导出（`config_transfer` 及平台原子替换）和 client 锁分层；导入后仍以后端 YAML 为事实源。
+- 接受前端导入导出 composable / API / 配置页 UI，以及四个 locale 与 catalog 的扫描并集。
+- 接受 main 的 `prompt/` 更新和 `0.0.49` 版本元数据。
+
+### 14.2 保留与拒绝
+
+- 保留 noad 首包前安全重试、流截断检测、审计默认关、日志脱敏、MITM 只读观测、observability basic 默认、`ForceBackgroundShell` 专项放行和路径沙箱。
+- 保留 YAML 事实源与默认值：`light / advertising=false / checkOnStartup=false / observability=basic`。
+- 保留广告关闭零请求、手动三阶段更新、local/official/relay **无隐式 fallback**。
+- 保留 fork 发布身份：`yaogjim/cursor-byok`；更新资源只指向该 fork。
+- 保留 Windows `WAILS_INSTALL_SCOPE` user/machine 双 scope，仅同步版本号到 `0.0.49`。
+- 删除 prompt 中的 `leookun` 身份覆盖；既有作者署名与 updater 负向 fixture 不改。
+- 拒绝含糊上游 release note；`release-notes.md` 按 noad 风格重写为 v0.0.49。
+- 修复导入导出中的 duplicated `routing` YAML key，以及旧 `Config.Log` 测试断言。
+- 本轮 merge 曾把 Windows 安装器覆盖成固定 admin/HKLM，已恢复 dual scope。
+- 最终代码 review 发现并修复 P1：`frontend/src/services/clientApi.js` 里 noad 两参数 `withApiLogging(name, runner)` 被三参数导出调用误用，导出在打到后端前就会 TypeError；已改回两参数契约。review 其余范围无阻塞问题。
+
+### 14.3 冲突裁决
+
+MERGE_MSG 记录的 **8 个文本冲突**：
+
+| 文件 | 裁决 | 理由 |
+| --- | --- | --- |
+| `frontend/src/i18n/generated/catalog.json` | 前端扫描构建重生 | 不手改；连续两次生产构建后 SHA-256 稳定 |
+| `frontend/src/i18n/locales/en-US.json` | key/译文并集 | 保留 noad 文案，接入导入导出等新 key |
+| `frontend/src/i18n/locales/ja-JP.json` | key/译文并集 | 同上 |
+| `frontend/src/i18n/locales/ru-RU.json` | key/译文并集 | 同上 |
+| `frontend/src/i18n/locales/zh-CN.json` | key/译文并集 | 同上 |
+| `frontend/src/state/appState.js` | 以 noad 配置投影为底接入导入导出 | 后端 YAML 仍是事实源；默认偏好不变 |
+| `internal/backend/forwarder/transcript_adapter_test.go` | 按最终契约改写 | 接受新 transcript 语义，删除启动回填断言 |
+| `release-notes.md` | 按 noad 风格重写 | 写 0.0.49 能力 + 保留策略，拒绝含糊宣传 |
+
+关键 **无文本冲突标记、但必须人工裁决** 的语义冲突：
+
+| 主题 | 文件 | 裁决 |
+| --- | --- | --- |
+| Agent 主链路 | `openai.go`、`router.go`、`projector.go`、`transcript_adapter.go`、`service.go` | 并集：接受 orphan output / 交错 tool-call / replay trim / transcript 新语义；保留 retry、截断、审计、observability、`ForceBackgroundShell`、路径沙箱 |
+| 配置导入导出与 routing | `config_transfer.go`、`config.go`、`lifecycle.go`、`service.go` | 接受导入导出与锁分层；以 noad schema 为准，去掉 legacy 重复 `routing` 键 |
+| 前端导出 API 日志契约 | `frontend/src/services/clientApi.js` | 最终 review 修复：导出调用必须遵守 noad 两参数封装，不得沿用三参数写法 |
+| Windows 安装 scope | `build/windows/nsis/wails_tools.nsh` | 拒绝固定 admin/HKLM；恢复 `WAILS_INSTALL_SCOPE` 双模式，只升版本 |
+| prompt 身份 | `prompt/**` | 接受 prompt 更新与 `FAKE_MODEL_NAME` 渲染；删除 `@leookun` 身份覆盖 |
+| 发布身份 | `internal/buildinfo/buildinfo.go`、`Taskfile.yml` | 保持 `yaogjim/cursor-byok`，不回写上游 Release |
+
+### 14.4 测试与构建证据
+
+只记录本轮实际跑过的结果。未生成 `0.0.49` 发布归档，因此 **没有** 运行 `task release:verify:analyzer-isolation`，不得记为通过。本地 `task build` 只产出 ignored DMG，不能代替发布归档。
+
+- proto 生成成功：`gen/aiserverv1` 含 `IsConnectedRequest` / `IsConnectedResponse`。
+- 官方 Wails bindings 生成成功：`frontend/bindings/{cursor,github.com,log}`。
+- 协议 / Agent、配置、产品不变量专项通过。
+- `node frontend/scripts/test-config-projection.mjs` PASS。
+- `npm run build --prefix frontend` 连续两次 PASS；catalog SHA-256 `3aea2eec12cde08f5b791defffab23455545d3b85c7edbbd3bfb4cc4f9ffed31` 两次稳定。四个 locale 与 catalog 均由扫描生成，不手改。
+- 新增 `frontend/scripts/test-client-api-logging.mjs` 静态契约检查：24 个调用点全部为两参数；该检查 PASS。P1 修复后 `test-config-projection` 与 frontend build 重新 PASS，catalog SHA-256 不变。
+- 根模块：`GOPACKAGESDRIVER=off go test -p=1 ./internal/...` PASS；`GOPACKAGESDRIVER=off go vet -p=1 ./internal/...` PASS。
+- `cursor-tab-server`：`go test -p=1 ./...`、`go test -p=1 -race ./...`、`go vet ./...` PASS。
+- `tools/log-analyzer`：`go test -p=1 ./...`、`go test -p=1 -race ./...`、`go vet ./...` PASS。`cmd/log-analyzer-gui` 带 `//go:build gui`，默认 `./...` 不含该包；GUI 逻辑由 `internal/gui` 覆盖。
+- macOS 正式构建 `task build` PASS，约 8m12s。产物仅本地 ignored `bin/macos-arm64.dmg`：`23577563` bytes，SHA-256 `6105a69a0d1ea48fa4b822a5ea90fc496e5c2d5e75efaed04939e9662e46cd7b`；Mach-O arm64、non-fat/非 universal；Info.plist 版本 `0.0.49`、Bundle ID `com.cursor.wuxianxubei`；adhoc 签名且 `codesign --verify --deep --strict` PASS。该 DMG 不进入 index。
+- `git diff --check` 与 `git diff --cached --check` 通过；无 unmerged。
+
+仅观察到既有非阻断告警：macOS linker 目标版本警告、Vite chunk 大小告警。
+
+### 14.5 未验证边界
+
+- 最终 `git fetch upstream --prune --no-tags` 已通过；`upstream/main` 仍为锁定 SHA `564f2bdcaec790863aca86403cedbfc77191bd43`。此前一次 fetch 曾因 `Could not resolve host: github.com` 失败，不得再写成待 fetch。
+- 未做广告零请求、更新完整交互、Windows 安装/启动、Wails 实机运行时验收。
+- 未停止或替换运行中的 `18080/18090` 代理，未影响这两个端口。
+- 本地 `task build` 仅产出 ignored `bin/macos-arm64.dmg`，**未** notarize、**未** 生成 release 归档、**未** 做 Gatekeeper 首次启动实机验收；不得把该 DMG 写成已发布资产。`task release:verify:analyzer-isolation` 仍未运行。
+- 仍缺 Wails runtime mock 下的真实导出调用单测；当前只有静态两参数契约检查。
+- 非阻塞残余测试风险：缺少 `IsConnected` 精确路由测试；缺少 `ForceBackgroundShell` × replay trim 交叉测试。
+- 未用 `-tags gui` 专项编译 `tools/log-analyzer/cmd/log-analyzer-gui`。
+- 用户已确认创建本地 merge commit 并推进 `noad`。本记录仍不宣称已 push；运行时未验证边界仍成立。

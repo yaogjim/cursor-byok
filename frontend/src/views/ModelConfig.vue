@@ -5,6 +5,7 @@ import ContentModal from "@/components/ui/ContentModal.vue";
 import ModelAdapterTestCard from "@/components/ModelAdapterTestCard.vue";
 import ModelEditor from "@/components/ModelEditor.vue";
 import { useMessage } from "@/composables/useMessage";
+import { useConfigTransfer } from "@/composables/useConfigTransfer";
 import Sortable from "sortablejs";
 import {
   appState,
@@ -86,6 +87,12 @@ function showActionError(title, error) {
   const detail = String(error || "服务错误").trim() || "服务错误";
   message(`${title}：${detail}`);
 }
+
+const {
+  configTransferBusy,
+  handleExportConfig,
+  handleImportConfig,
+} = useConfigTransfer({ message, showActionError });
 
 function maskSecret(value) {
   const text = String(value || "").trim();
@@ -392,12 +399,26 @@ onBeforeUnmount(() => {
         <div class="center-row gap-2">
           <Button
             variant="default"
-            :disabled="sortSaving || appState.configSaving || (!batchTesting && filteredAdapters.length === 0)"
+            :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy || appState.serviceRunning || appState.backendRunning || appState.proxyRunning"
+            @click="handleImportConfig"
+          >
+            导入配置
+          </Button>
+          <Button
+            variant="default"
+            :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy"
+            @click="handleExportConfig"
+          >
+            导出配置
+          </Button>
+          <Button
+            variant="default"
+            :disabled="sortSaving || appState.configSaving || configTransferBusy || (!batchTesting && filteredAdapters.length === 0)"
             @click="handleTestAllModelAdapters"
           >
             {{ batchButtonText }}
           </Button>
-          <Button variant="primary" :disabled="sortSaving || appState.configSaving || batchTesting" @click="openEditor()">新增模型</Button>
+          <Button variant="primary" :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy" @click="openEditor()">新增模型</Button>
         </div>
       </div>
     </div>

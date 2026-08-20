@@ -7,9 +7,12 @@
 - **原始上游仓库**：<https://github.com/leookun/cursor-byok>
 - **本地 Fork（`origin`）**：<https://github.com/yaogjim/cursor-byok>
 - **本地分支**：`noad`
-- **当前代码合并基线**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
-- **本次合并来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
-- **原始上游核对基线**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
+- **本次合并来源**：本地 `main@305b108e8cb44f68c15672809fc579acc65a9835`（含本地 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
+- **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
+- **原始上游核对基线**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`；最终 `git fetch upstream --prune --no-tags` 已通过，远端仍为此 SHA
+- **当前同步状态**：隔离 worktree `sync/main-305b108-into-noad-20260820-004943` 已解决冲突并完成可执行门禁；用户已确认创建本地 merge commit 并推进 `noad`；**仍未 push**
+- **待提交 index**：`git diff --cached --name-only` 当前 **59** 个文件；即将创建本地 merge，**仍未 push**
 - **原始主线历史基线**：`main@799dbda`
 - **决策 PRD**：[`prd_cursor_byok_工作决策基线.md`](prd_cursor_byok_工作决策基线.md)
 - **功能差异 PRD**：[`prd_cursor_byok_当前功能与上游差异.md`](prd_cursor_byok_当前功能与上游差异.md)
@@ -411,3 +414,69 @@ cd frontend && yarn test:config-projection && yarn build
 - 本轮未停止或替换正在使用的 `18080/18090` 代理，因此没有执行候选实例交接、窗口首屏、`/healthz` 或真实网络零请求验收。
 - 广告关闭零请求、更新完整交互序列、旧配置实机迁移和发布资源实机安装仍需在明确维护窗口验证；本记录不把这些事项声明为已完成。
 - 本轮只更新本地分支，不执行 `git push`。
+
+## 9. `0.0.49` 冲突分类（用户已确认本地 merge）
+
+- **同步时间**：`2026-08-20T02:40:22-0700`
+- **源**：`main@305b108e8cb44f68c15672809fc579acc65a9835`（包含本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
+- **目标**：`noad@9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
+- **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
+- **同步分支**：`sync/main-305b108-into-noad-20260820-004943`
+- **备份**：`backup/noad-before-main-20260820-004943` @ `9e6936f`
+- **方式**：`git merge --no-ff --no-commit main`；无 `ours/theirs` 批量裁决。
+- **状态**：冲突已解决，自动化门禁已跑完，最终 review 已修 P1；用户已确认创建本地 merge commit 并推进 `noad`。`git diff --cached --name-only` 当前 **59** 个文件；即将创建本地 merge，**仍未 push**。
+
+### 9.1 八个文本冲突
+
+`MERGE_MSG` 列出的文本冲突及裁决：
+
+| 文件 | 分类 | 裁决 | 验证 |
+| --- | --- | --- | --- |
+| `frontend/src/i18n/locales/zh-CN.json` | B 人工审查 | 与 en/ja/ru 做 key/译文并集，保留 noad 仍在用的文案 | 前端扫描构建；catalog 两次哈希稳定 |
+| `frontend/src/i18n/locales/en-US.json` | B | 同上 | 同上 |
+| `frontend/src/i18n/locales/ja-JP.json` | B | 同上 | 同上 |
+| `frontend/src/i18n/locales/ru-RU.json` | B | 同上 | 同上 |
+| `frontend/src/i18n/generated/catalog.json` | B | 不手改；由 `npm run build --prefix frontend` 扫描重生 | 连续两次 PASS，SHA-256 `3aea2eec12cde08f5b791defffab23455545d3b85c7edbbd3bfb4cc4f9ffed31` |
+| `frontend/src/state/appState.js` | B | 以 noad 配置投影为底，接入导入导出 API/状态 | `test-config-projection` PASS；默认 `light/false/false/basic` |
+| `internal/backend/forwarder/transcript_adapter_test.go` | B | 按最终 transcript 契约改写；删除启动回填断言 | Agent/forwarder 专项与根 `go test ./internal/...` PASS |
+| `release-notes.md` | B | 拒绝含糊上游说明，按 noad 风格重写 v0.0.49 | 人工核对发布身份与保留策略 |
+
+### 9.2 关键无文本语义冲突
+
+这些文件不一定出现冲突标记，但属于第 2 节 B 类，禁止按任一侧覆盖。
+
+| 主题 | 主要文件 | 停止条件风险 | 裁决 |
+| --- | --- | --- | --- |
+| Agent 主链路 | `openai.go`、`router.go`、`projector.go`、`transcript_adapter.go`、`service.go`、`host.go`、`upstream/client.go` | replay/retry/截断、审计、路径沙箱、`ForceBackgroundShell` | 接受 orphan output、交错 tool-call、replay trim、transcript 新语义与 `IsConnected` mock/statsig；保留 noad retry/截断/审计/MITM/observability/路径沙箱；**不恢复** transcript 启动回填 |
+| 配置导入导出与 routing | `config_transfer.go*`、`config.go`、`lifecycle.go`、`service.go`、`bridge/proxy.go` | legacy `routing` 重复键、配置事实源被前端覆盖 | 接受导入导出与锁分层；YAML 为事实源；去掉 duplicated routing key；修复旧 `Config.Log` 测试 |
+| 前端导出 API 日志契约 | `frontend/src/services/clientApi.js` | 三参数导出调用把 noad 两参数 `withApiLogging(name, runner)` 打成 TypeError，导出到不了后端 | 最终 review 发现并修复为两参数；新增静态契约检查覆盖 24 个调用点 |
+| Windows 安装 scope | `build/windows/nsis/wails_tools.nsh` | 固定 `RequestExecutionLevel admin` / 只写 HKLM | 拒绝上游固定管理员安装；恢复 `WAILS_INSTALL_SCOPE` user/machine 双模式，仅升到 `0.0.49` |
+| prompt 身份 | `prompt/**` | 把运行时身份改写成 `leookun/cursor-byok` | 接受 prompt 更新；删除 leookun 身份覆盖；作者署名与 updater 负向 fixture 不改 |
+| 发布身份 | `internal/buildinfo/buildinfo.go`、`Taskfile.yml`、updater 测试 | 更新 URL 回写上游 Release | 保持 `yaogjim/cursor-byok` |
+
+### 9.3 验证门禁（本轮已执行）
+
+- proto / 官方 bindings 生成成功。
+- 协议/Agent、配置、产品专项通过。
+- `node frontend/scripts/test-config-projection.mjs` PASS。
+- `npm run build --prefix frontend` 连续两次 PASS；catalog SHA-256 `3aea2eec12cde08f5b791defffab23455545d3b85c7edbbd3bfb4cc4f9ffed31` 两次稳定。四个 locale 与 catalog 均由扫描生成。
+- 新增 `frontend/scripts/test-client-api-logging.mjs`：24 个调用点全部为两参数，PASS。P1 修复后 `test-config-projection` 与 frontend build 重新 PASS，catalog SHA-256 不变。
+- `GOPACKAGESDRIVER=off go test -p=1 ./internal/...` PASS。
+- `GOPACKAGESDRIVER=off go vet -p=1 ./internal/...` PASS。
+- `cursor-tab-server`：`go test -p=1 ./...`、`go test -p=1 -race ./...`、`go vet ./...` PASS。
+- `tools/log-analyzer`：`go test -p=1 ./...`、`go test -p=1 -race ./...`、`go vet ./...` PASS。该独立模块本轮无 merge diff。
+- macOS 正式构建 `task build` PASS，约 8m12s。本地 ignored `bin/macos-arm64.dmg`：`23577563` bytes，SHA-256 `6105a69a0d1ea48fa4b822a5ea90fc496e5c2d5e75efaed04939e9662e46cd7b`；Mach-O arm64、non-fat/非 universal；Info.plist `0.0.49`、Bundle ID `com.cursor.wuxianxubei`；adhoc 签名且 `codesign --verify --deep --strict` PASS。DMG 不进入 index。
+- 最终代码 review 其余范围无阻塞问题。
+- `git diff --check`、`git diff --cached --check` 通过；无 unmerged。
+
+**未运行 / 不得写成通过：** `task release:verify:analyzer-isolation`（无真实 `0.0.49` release 归档；本地 ignored DMG 不能代替发布资产）。
+
+### 9.4 未验证边界与确认点
+
+- 最终 `git fetch upstream --prune --no-tags` 已通过；`upstream/main` 仍为锁定 SHA `564f2bdcaec790863aca86403cedbfc77191bd43`。此前一次 fetch 曾因 `Could not resolve host: github.com` 失败，不得再写成待 fetch。
+- 未做广告零请求、更新交互、Windows 安装/启动、Wails 实机验收；未影响 `18080/18090`。
+- 本地 `task build` 仅产出 ignored `bin/macos-arm64.dmg`，**未** notarize、**未** 生成 release 归档、**未** 做 Gatekeeper 首次启动实机验收。
+- 仍缺 Wails runtime mock 下的真实导出调用单测；当前只有静态两参数契约检查。
+- 非阻塞残余测试风险：缺少 `IsConnected` 精确路由测试；缺少 `ForceBackgroundShell` × replay trim 交叉测试。
+- 未用 `-tags gui` 编译分析器 GUI 入口。
+- 用户已确认创建本地 merge commit 并推进 `noad`。仍未 push；运行时未验证边界仍成立。

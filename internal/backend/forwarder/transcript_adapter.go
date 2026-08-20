@@ -68,10 +68,6 @@ type cursorTranscriptContent struct {
 // projectCursorTranscriptJSONL projects the local semantic history into Cursor's
 // current agent transcript JSONL contract. context.json remains the source of truth.
 func projectCursorTranscriptJSONL(conversation *ConversationFile) ([]byte, error) {
-	return projectCursorTranscriptJSONLWithLatestStatus(conversation, false)
-}
-
-func projectCursorTranscriptJSONLWithLatestStatus(conversation *ConversationFile, includeLatestStatus bool) ([]byte, error) {
 	if conversation == nil {
 		return nil, nil
 	}
@@ -85,7 +81,7 @@ func projectCursorTranscriptJSONLWithLatestStatus(conversation *ConversationFile
 	currentTurnSeq := int64(0)
 	pendingTurnStatus := cursorTranscriptLine{}
 	flushTurnStatus := func() {
-		if currentTurnSeq > 0 && (includeLatestStatus || currentTurnSeq < maxTurnSeq) && pendingTurnStatus.Type != "" {
+		if currentTurnSeq > 0 && currentTurnSeq < maxTurnSeq && pendingTurnStatus.Type != "" {
 			lines = append(lines, pendingTurnStatus)
 		}
 		pendingTurnStatus = cursorTranscriptLine{}

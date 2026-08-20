@@ -17,6 +17,12 @@ func (s *ProxyService) LoadUserConfig() (UserConfig, error) {
 	if s == nil {
 		return serverconfig.DefaultConfig(), nil
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	return s.loadUserConfig()
+}
+
+func (s *ProxyService) loadUserConfig() (UserConfig, error) {
 	app := application.Get()
 	ctx := context.Background()
 	if app != nil {
@@ -36,6 +42,12 @@ func (s *ProxyService) SaveUserConfig(cfg UserConfig) error {
 	if s == nil {
 		return nil
 	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	return s.saveUserConfig(cfg)
+}
+
+func (s *ProxyService) saveUserConfig(cfg UserConfig) error {
 	app := application.Get()
 	ctx := context.Background()
 	if app != nil {

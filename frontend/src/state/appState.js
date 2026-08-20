@@ -9,6 +9,7 @@ import {
 import {
   checkForUpdates,
   downloadAvailableUpdate,
+  exportUserConfig as exportUserConfigFile,
   getAppVersion,
   getHomeMetricsSummary,
   resetHomeMetricsSummary,
@@ -17,6 +18,7 @@ import {
   cleanupClosedLogSessions,
   installReadyUpdate,
   getProxyState,
+  importUserConfig as importUserConfigFile,
   openConfigWindow as openConfig,
   loadUserConfig,
   openLogsDirectory,
@@ -693,6 +695,9 @@ async function loadPersistedUserConfig() {
 }
 
 async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) {
+  if (appState.configSaving) {
+    return { ok: false, error: "已有配置操作正在进行，请稍后再试" };
+  }
   const payload = buildConfigPayload(config);
   const validationError = validateModelAdapters(payload.modelAdapters);
   if (validationError) {
@@ -1275,6 +1280,27 @@ export async function persistUserConfig() {
       checkOnStartup: asBoolean(appState.updateCheckOnStartup),
     },
   });
+}
+
+export async function exportUserConfigToFile(path) {
+  return exportUserConfigFile(path);
+}
+
+export async function importUserConfigFromFile(path) {
+  if (appState.serviceRunning || appState.backendRunning || appState.proxyRunning) {
+    throw new Error("服务运行中不能导入完整配置，请先停止服务");
+  }
+  if (appState.configSaving) {
+    throw new Error("已有配置操作正在进行，请稍后再试");
+  }
+  appState.configSaving = true;
+  try {
+    const imported = normalizeConfig(await importUserConfigFile(path));
+    applyConfigToState(imported);
+    return imported;
+  } finally {
+    appState.configSaving = false;
+  }
 }
 
 export async function saveIncludeCacheWriteInHitRate(value) {

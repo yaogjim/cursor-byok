@@ -59,6 +59,28 @@ export function saveUserConfig(payload) {
   return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
 }
 
+export function exportUserConfig(path) {
+  return withApiLogging("ExportUserConfig", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ExportUserConfig`, path),
+  );
+}
+
+export function importUserConfig(path) {
+  return Call.ByName(`${PROXY_SERVICE_NAME}.ImportUserConfig`, path).then(
+    (result) => {
+      console.log(`${API_LOG_PREFIX} ImportUserConfig response`, {
+        path,
+        modelCount: Array.isArray(result?.modelAdapters) ? result.modelAdapters.length : 0,
+      });
+      return result;
+    },
+    (error) => {
+      logError("ImportUserConfig", { path }, error);
+      throw error;
+    },
+  );
+}
+
 export function getCursorAccountStatus() {
   return withApiLogging("GetCursorAccountStatus", () => GetCursorAccountStatus());
 }

@@ -97,42 +97,6 @@ func TestConversationFileStoreSyncsCursorTranscript(t *testing.T) {
 	}
 }
 
-func TestConversationFileStoreBackfillsTranscriptOnStartup(t *testing.T) {
-	historyRoot := filepath.Join(t.TempDir(), "history")
-	transcriptsFolder := transcriptTestFolder(t)
-	if err := os.MkdirAll(transcriptsFolder, 0o755); err != nil {
-		t.Fatalf("create transcript root: %v", err)
-	}
-	store := NewConversationFileStore(historyRoot)
-	conversation := transcriptTestConversation(nil)
-	conversation.AgentTranscriptsFolder = transcriptsFolder
-	_, err := store.SaveConversationWithEntries(conversation.ConversationID, conversation, []HistoryEntry{
-		transcriptTestUserMessageEntry(t, 1, "request-1", "hello"),
-		newAssistantTextEntry(1, "request-1", "hi", "", ""),
-		newMetadataEntry(1, "request-1", "turn_completed", nil),
-	})
-	if err != nil {
-		t.Fatalf("SaveConversationWithEntries() error = %v", err)
-	}
-	path := filepath.Join(transcriptsFolder, conversation.ConversationID, conversation.ConversationID+".jsonl")
-	if err := os.RemoveAll(filepath.Dir(path)); err != nil {
-		t.Fatalf("remove generated transcript: %v", err)
-	}
-	if err := os.MkdirAll(transcriptsFolder, 0o755); err != nil {
-		t.Fatalf("restore transcript root: %v", err)
-	}
-
-	store.SyncAllCursorTranscriptsBestEffort()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read backfilled transcript: %v", err)
-	}
-	lines := decodeCursorTranscriptLines(t, data)
-	if len(lines) != 3 || lines[2].Type != "turn_ended" || lines[2].Status != "success" {
-		t.Fatalf("backfilled transcript = %s", data)
-	}
-}
-
 func TestNormalizeAgentTranscriptsFolderRejectsUnexpectedPaths(t *testing.T) {
 	root := t.TempDir()
 	projectsRoot := filepath.Join(root, ".cursor", "projects")

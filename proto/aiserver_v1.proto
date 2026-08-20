@@ -17785,6 +17785,14 @@ message IsAllowedFreeTrialUsageResponse {
   bool is_allowed = 1;
 }
 
+// Copied from: local:aiserver.v1.IsConnectedRequest
+message IsConnectedRequest {
+}
+
+// Copied from: local:aiserver.v1.IsConnectedResponse
+message IsConnectedResponse {
+}
+
 // Copied from: local:aiserver.v1.IsCursorPredictionEnabledRequest (var: An)
 message IsCursorPredictionEnabledRequest {
 }
@@ -36917,6 +36925,11 @@ service MetricsService {
   rpc ReportDecrement(ReportMetricsRequest) returns (ReportMetricsResponse) {}
   rpc ReportDistribution(ReportMetricsRequest) returns (ReportMetricsResponse) {}
   rpc ReportGauge(ReportMetricsRequest) returns (ReportMetricsResponse) {}
+}
+
+// Source: aiserver.v1.NetworkService
+service NetworkService {
+  rpc IsConnected(IsConnectedRequest) returns (IsConnectedResponse) {}
 }
 
 // Source: aiserver.v1.PerformanceEventService (var: i)
