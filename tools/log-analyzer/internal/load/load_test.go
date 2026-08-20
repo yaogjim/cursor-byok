@@ -3,6 +3,7 @@ package load
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -223,6 +224,37 @@ func TestIntoWorkspaceRejectsOversizedEventLine(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("EventCount after oversized line = %d, want 0", count)
+	}
+}
+
+func TestIntoWorkspaceKeepsMitmFieldsAndDropsSecrets(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(`{"schema_version":2,"timestamp":"2026-03-14T00:00:00Z","sequence":1,"app_session_id":"s","layer":"mitm","event":"connect_decided","fields":{"authorization":"Bearer sk","query":"token=1","body":"{}","cookie":"a=b","header":"x","token":"t","key":"k","host":"api2.cursor.sh:443","connection_id":"conn-1","traffic_class":"unknown","action":"mitm","tls_role":"server","path":"/aiserver.v1.BidiService/Run?token=sk-secret"}}`+"\n"))
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	payloads := queryStrings(t, ws.DBPath(), `SELECT safe_fields_json FROM events WHERE dataset_id = ?`, currentID)
+	if len(payloads) != 1 {
+		t.Fatalf("safe fields rows = %#v", payloads)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(payloads[0]), &fields); err != nil {
+		t.Fatalf("decode safe fields: %v", err)
+	}
+	for _, forbidden := range []string{"authorization", "query", "body", "cookie", "header", "token", "key"} {
+		if _, ok := fields[forbidden]; ok {
+			t.Fatalf("secret field %s leaked: %#v", forbidden, fields)
+		}
+	}
+	if fields["host"] != "api2.cursor.sh" || fields["connection_id"] != "conn-1" || fields["action"] != "mitm" || fields["tls_role"] != "server" {
+		t.Fatalf("mitm fields missing: %#v", fields)
+	}
+	path, _ := fields["path"].(string)
+	if strings.Contains(path, "token") || strings.Contains(path, "?") {
+		t.Fatalf("path not sanitized: %q", path)
 	}
 }
 

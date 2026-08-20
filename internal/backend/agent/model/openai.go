@@ -579,6 +579,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	firstEventAt := time.Time{}
 	finishReason := ""
 	turnFinishedPending := false
+	sawCompletionMarker := false
 	thinkingStarted := time.Time{}
 	thinkingActive := false
 	thinkParser := &openAIThinkTagParser{}
@@ -755,6 +756,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		}
 		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
 			}
@@ -848,6 +850,9 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 				return fail(err)
 			}
 			for _, accumulator := range tools {
+				if !openAIToolArgsComplete(accumulator.Args.String()) {
+					continue
+				}
 				if err := sink(ModelEvent{
 					Kind:       ModelEventKindToolLikeCompleted,
 					OccurredAt: time.Now().UTC(),
@@ -866,9 +871,22 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			tools = make(map[int]*openAIToolAccumulator)
 			finishReason = strings.TrimSpace(*choice.FinishReason)
 			turnFinishedPending = true
+			sawCompletionMarker = true
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		if idleErr := streamIdle.Err(); idleErr != nil {
+			return fail(idleErr)
+		}
+		return fail(newStreamTruncatedError("openai", err))
+	}
+	if !sawCompletionMarker {
+		return fail(newStreamTruncatedError("openai", nil))
+	}
 	for _, accumulator := range tools {
+		if !openAIToolArgsComplete(accumulator.Args.String()) {
+			continue
+		}
 		if err := sink(ModelEvent{
 			Kind:       ModelEventKindToolLikeCompleted,
 			OccurredAt: time.Now().UTC(),
@@ -883,12 +901,6 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			return fail(err)
 		}
 		streamIdle.MarkEffectiveContent()
-	}
-	if err := scanner.Err(); err != nil {
-		if idleErr := streamIdle.Err(); idleErr != nil {
-			return fail(idleErr)
-		}
-		return fail(err)
 	}
 	if err := flushTaggedContentTail(); err != nil {
 		return fail(err)
@@ -1083,6 +1095,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	firstEventAt := time.Time{}
 	finishReason := ""
 	turnFinishedPending := false
+	sawCompletionMarker := false
 	emittedToolInvocation := false
 	emittedText := false
 	thinkingStarted := time.Time{}
@@ -1240,6 +1253,9 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			if _, ok := completedTools[strings.TrimSpace(accumulator.CallID)]; ok {
 				return nil
 			}
+		}
+		if !openAIToolArgsComplete(accumulator.Args.String()) {
+			return nil
 		}
 		completedTools[completionKey] = struct{}{}
 		if strings.TrimSpace(accumulator.CallID) != "" {
@@ -1464,6 +1480,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
 			}
@@ -1607,9 +1624,19 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 				}
 			}
 			turnFinishedPending = true
+			sawCompletionMarker = true
 		case "response.failed", "error":
 			return fail(errorFromEvent(event))
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		if idleErr := streamIdle.Err(); idleErr != nil {
+			return fail(idleErr)
+		}
+		return fail(newStreamTruncatedError("openai", err))
+	}
+	if !sawCompletionMarker {
+		return fail(newStreamTruncatedError("openai", nil))
 	}
 	for key, accumulator := range tools {
 		if err := completeTool(key, accumulator); err != nil {
@@ -1620,12 +1647,6 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		if err := completeImageGeneration(key, accumulator); err != nil {
 			return fail(err)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		if idleErr := streamIdle.Err(); idleErr != nil {
-			return fail(idleErr)
-		}
-		return fail(err)
 	}
 	if err := flushTaggedContentTail(); err != nil {
 		return fail(err)
@@ -1639,6 +1660,15 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	finishedAt = time.Now().UTC()
 	recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, effectiveFinishReason(), inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil))
 	return nil
+}
+
+func openAIToolArgsComplete(raw string) bool {
+	// 空参数视为无参工具已收口；非空则必须是完整 JSON，避免把截断参数当完成。
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return true
+	}
+	return json.Valid([]byte(trimmed))
 }
 
 func trailingTagPrefixLength(text string, tag string) int {

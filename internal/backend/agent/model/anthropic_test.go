@@ -1,8 +1,13 @@
 package modeladapter
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -45,4 +50,81 @@ func mustMarshalAnthropicMessagesForTest(t *testing.T, messages []anthropicMessa
 		t.Fatalf("marshal anthropic messages: %v", err)
 	}
 	return string(payload)
+}
+
+func TestAnthropicEOFWithoutMessageStop(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: content_block_delta\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n")
+	}))
+	defer server.Close()
+
+	events, err := collectAnthropicStreamEvents(t, server)
+	if err == nil {
+		t.Fatal("expected truncated stream error, got nil")
+	}
+	var truncated *StreamTruncatedError
+	if !errors.As(err, &truncated) {
+		t.Fatalf("error type = %T (%v), want StreamTruncatedError", err, err)
+	}
+	if ClassifyProviderError(err) != ProviderErrorStreamDecode {
+		t.Fatalf("category = %q, want %q", ClassifyProviderError(err), ProviderErrorStreamDecode)
+	}
+	if !strings.Contains(err.Error(), "missing completion marker") {
+		t.Fatalf("error = %q, want missing completion marker", err)
+	}
+	assertAnthropicEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestAnthropicNormalCompletionStillSucceeds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: content_block_delta\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "event: message_stop\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	events, err := collectAnthropicStreamEvents(t, server)
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	assertAnthropicEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+}
+
+func collectAnthropicStreamEvents(t *testing.T, server *httptest.Server) ([]ModelEvent, error) {
+	t.Helper()
+	adapter := &AnthropicAdapter{client: server.Client()}
+	events := make([]ModelEvent, 0, 8)
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:       "request-1",
+		RunID:           "run-1",
+		ModelCallID:     "model-call-1",
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		ProviderModelID: "claude-test",
+		Messages:        []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:       128,
+	}, func(event ModelEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func assertAnthropicEventKindCount(t *testing.T, events []ModelEvent, kind ModelEventKind, want int) {
+	t.Helper()
+	got := 0
+	for _, event := range events {
+		if event.Kind == kind {
+			got++
+		}
+	}
+	if got != want {
+		t.Fatalf("event kind %s count = %d, want %d; events=%#v", kind, got, want, events)
+	}
 }

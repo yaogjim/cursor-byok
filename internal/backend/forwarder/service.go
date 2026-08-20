@@ -2147,7 +2147,7 @@ func (service *Service) closeStreamWithProviderError(
 		errorText = "provider error"
 	}
 	modelCallID := strings.TrimSpace(stream.CurrentModelCallID)
-	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, allowReasoningOnly); err != nil {
+	if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, currentProviderPass(stream), accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, allowReasoningOnly); err != nil {
 		return fmt.Errorf("flush provider error assistant output: %w", err)
 	}
 	if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "provider_error", usage, errorText, false); err != nil {
@@ -2406,6 +2406,17 @@ func (service *Service) flushAssistantText(stream *ActiveStream, conversationID 
 	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{
 		newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary),
 	})
+	return err
+}
+
+// flushFailedProviderOutput 在 provider 失败时落盘累计输出，复用 cancel/interrupted 的幂等键避免重复写入。
+func (service *Service) flushFailedProviderOutput(stream *ActiveStream, conversationID string, turnSeq int64, requestID string, modelCallID string, providerPass int, text string, reasoningContent string, reasoningSignature string, reasoningSignatureSource string, reasoningItemID string, reasoningStatus string, reasoningSummary json.RawMessage, allowReasoningOnly bool) error {
+	if strings.TrimSpace(text) == "" && (!allowReasoningOnly || !hasReplayableReasoningPayload(reasoningContent, reasoningSignature, reasoningSignatureSource)) {
+		return nil
+	}
+	entry := newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary)
+	entry.IdempotencyKey = interruptedProviderOutputIdempotencyKey(turnSeq, requestID, modelCallID, providerPass)
+	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{entry})
 	return err
 }
 

@@ -50,12 +50,20 @@ func TestDiagnosticBundleRemovesSensitiveContent(t *testing.T) {
 	var reportDocument struct {
 		SchemaVersion     int                        `json:"schema_version"`
 		DiagnosticMetrics []analyze.DiagnosticMetric `json:"diagnostic_metrics"`
+		MitmDiagnostics   *analyze.MitmDiagnostics   `json:"mitm_diagnostics"`
 	}
 	if err := json.Unmarshal(reportPayload, &reportDocument); err != nil {
 		t.Fatalf("decode report.json: %v", err)
 	}
-	if reportDocument.SchemaVersion != 1 || len(reportDocument.DiagnosticMetrics) == 0 {
+	if reportDocument.SchemaVersion != 1 || len(reportDocument.DiagnosticMetrics) == 0 || reportDocument.MitmDiagnostics == nil {
 		t.Fatalf("report compatibility or diagnostic metrics missing: %+v", reportDocument)
+	}
+	htmlPayload, err := os.ReadFile(filepath.Join(output, "report.html"))
+	if err != nil {
+		t.Fatalf("read report.html: %v", err)
+	}
+	if !strings.Contains(string(htmlPayload), "已观测") || !strings.Contains(string(htmlPayload), "相关但未证实") || !strings.Contains(string(htmlPayload), "未知") {
+		t.Fatalf("report.html missing evidence tiers: %s", htmlPayload)
 	}
 
 	archive, err := zip.OpenReader(filepath.Join(output, "diagnostic-bundle.zip"))

@@ -19,6 +19,7 @@ import (
 
 	"cursor-log-analyzer/internal/analyze"
 	"cursor-log-analyzer/internal/contract"
+	"cursor-log-analyzer/internal/sanitize"
 	"cursor-log-analyzer/internal/workspace"
 )
 
@@ -271,6 +272,16 @@ func writeReportJSON(ctx context.Context, writer io.Writer, store *workspace.Wor
 		}); err != nil {
 			return err
 		}
+	}
+	mitm, err := analyze.MitmFromWorkspace(ctx, store, currentID)
+	if err != nil {
+		return err
+	}
+	if options.Safe {
+		mitm = analyze.RedactMitmDiagnostics(mitm, pseudonym)
+	}
+	if err := object.scalar("mitm_diagnostics", mitm); err != nil {
+		return err
 	}
 	if _, err := buffered.WriteString("\n}\n"); err != nil {
 		return err
@@ -585,10 +596,66 @@ func writeHTML(ctx context.Context, path string, store *workspace.Workspace, cur
 	}); err != nil {
 		return closeWith(err)
 	}
-	if _, err := buffered.WriteString(`</tbody></table></section></body></html>`); err != nil {
+	if _, err := buffered.WriteString(`</tbody></table></section>`); err != nil {
+		return closeWith(err)
+	}
+	mitm, err := analyze.MitmFromWorkspace(ctx, store, currentID)
+	if err != nil {
+		return closeWith(err)
+	}
+	if err := writeMitmHTML(buffered, mitm); err != nil {
+		return closeWith(err)
+	}
+	if _, err := buffered.WriteString(`</body></html>`); err != nil {
 		return closeWith(err)
 	}
 	return closeWith(nil)
+}
+
+func writeMitmHTML(writer *bufio.Writer, mitm analyze.MitmDiagnostics) error {
+	connect := mitm.Observed.ConnectDecided
+	unknown := mitm.Unknown
+	if _, err := fmt.Fprintf(writer, `<section><h2>MITM 诊断</h2><p class="muted">结论分层：已观测 / 相关但未证实 / 未知。时间邻近不等于因果。</p><div class="cards"><div class="card"><div class="value">%d</div><div class="muted">CONNECT MITM</div></div><div class="card"><div class="value">%d</div><div class="muted">CONNECT 透传</div></div><div class="card"><div class="value">%s</div><div class="muted">MITM 比例</div></div><div class="card"><div class="value">%s</div><div class="muted">unknown HTTP 占比</div></div></div>`, connect.Mitm, connect.Passthrough, percent(connect.MitmRatio), percent(mitm.Observed.UnknownTraffic.UnknownRatio)); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(`<h3>已观测</h3><table><thead><tr><th>TLS host</th><th>方向</th><th>角色</th><th>错误类</th><th>次数</th></tr></thead><tbody>`); err != nil {
+		return err
+	}
+	if len(mitm.Observed.TLSHandshakeFailed) == 0 {
+		if _, err := writer.WriteString(`<tr><td colspan="5">无 tls_handshake_failed</td></tr>`); err != nil {
+			return err
+		}
+	}
+	for _, item := range mitm.Observed.TLSHandshakeFailed {
+		if _, err := fmt.Fprintf(writer, `<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td></tr>`, html.EscapeString(item.Host), html.EscapeString(item.Direction), html.EscapeString(item.TLSRole), html.EscapeString(item.ErrorCategory), item.Count); err != nil {
+			return err
+		}
+	}
+	if _, err := writer.WriteString(`</tbody></table><h3>相关但未证实</h3><p class="muted">`); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(html.EscapeString(firstNonEmptyHTML(mitm.RelatedUnconfirmed.Note, "仅时间邻近，不能据此归因。"))); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(`</p><h3>未知</h3><p class="muted">缺字段或 CONNECT/TLS 无 HTTP path 的事件计入未知，不回填伪造关联。</p><p class="muted">`); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, `handshake 无 path=%d，CONNECT unknown=%d，缺新字段=%d，不完整关联=%d`, unknown.HandshakeWithoutHTTPPath, unknown.ConnectUnknownClass, unknown.EventsMissingNewFields, unknown.IncompleteChains); err != nil {
+		return err
+	}
+	if _, err := writer.WriteString(`</p></section>`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func firstNonEmptyHTML(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func writeTraceLabelsHTML(writer *bufio.Writer, produce func(func(string) error) error) error {
@@ -733,55 +800,15 @@ func sanitizeEvent(event contract.Event) (contract.Event, error) {
 func percent(value float64) string { return fmt.Sprintf("%.1f%%", value*100) }
 func millis(value float64) string  { return fmt.Sprintf("%.1f ms", value) }
 
-var identifierSegment = regexp.MustCompile(`(?i)^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f-]{27,}|\d{8,})$`)
 var urlPattern = regexp.MustCompile(`(?i)https?://[^\s]+`)
 var pathPattern = regexp.MustCompile(`(?:[A-Za-z]:[\\/][^\s]+|/(?:[^/\s]+/)+[^\s]+)`)
 
 func sanitizeRoute(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	if strings.Contains(value, "://") {
-		if index := strings.Index(value, "://"); index >= 0 {
-			remainder := value[index+3:]
-			if slash := strings.IndexByte(remainder, '/'); slash >= 0 {
-				value = remainder[slash:]
-			} else {
-				return "/"
-			}
-		}
-	}
-	if query := strings.IndexByte(value, '?'); query >= 0 {
-		value = value[:query]
-	}
-	segments := strings.Split(value, "/")
-	for index, segment := range segments {
-		if identifierSegment.MatchString(segment) {
-			segments[index] = ":id"
-		}
-	}
-	return strings.Join(segments, "/")
+	return sanitize.Path(value)
 }
 
 func allowlistedFields(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	allowed := map[string]struct{}{
-		"method": {}, "status_code": {}, "client_kind": {}, "message_case": {},
-		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "append_seqno": {},
-	}
-	output := make(map[string]any)
-	for key, value := range input {
-		if _, ok := allowed[key]; ok {
-			output[key] = value
-		}
-	}
-	if len(output) == 0 {
-		return nil
-	}
-	return output
+	return sanitize.AllowlistedFields(input)
 }
 
 func sanitizeText(value string) string {

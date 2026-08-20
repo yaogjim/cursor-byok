@@ -286,7 +286,7 @@ func (s *ProxyServer) Start() error {
 	httpServer := &http.Server{
 		Addr:     s.addr,
 		Handler:  s.proxy,
-		ErrorLog: stdlog.New(&httpErrorFilterWriter{}, "", stdlog.LstdFlags),
+		ErrorLog: stdlog.New(&httpErrorFilterWriter{capture: s.capture}, "", stdlog.LstdFlags),
 	}
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -375,7 +375,7 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 	proxy.AllowHTTP2 = true
-	proxy.Logger = &goproxyLogAdapter{}
+	proxy.Logger = &goproxyLogAdapter{capture: s.capture}
 	proxy.CertStore = newMITMCertStore()
 	proxy.Tr = netproxy.NewTransport(&http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -395,6 +395,16 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 		if suppressed, ok := proxyLogLimiter.ShouldLog(key); ok {
 			logSuppressedProxyMessages("proxy connect error", suppressed)
 			logger.Errorf("%s", msg)
+		}
+		if isTLSRelated(err, "") {
+			recordMitmCapture(s.capture, requestContext(ctx), handshakeEvent(handshakeObservation{
+				Source:  handshakeSourceUpstream,
+				Host:    host,
+				Remote:  remoteAddr,
+				Action:  connectActionNameFromState(ctx),
+				Err:     err,
+				ErrText: errorText(err),
+			}, connectStateFromCtx(ctx)))
 		}
 	}
 
@@ -421,6 +431,14 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 							ua,
 							err,
 						)
+						recordMitmCapture(s.capture, requestContext(ctx), handshakeEvent(handshakeObservation{
+							Source:  handshakeSourceTLSConfig,
+							Host:    connectHost,
+							Remote:  remoteAddr,
+							Action:  actionMITM,
+							Err:     err,
+							ErrText: errorText(err),
+						}, connectStateFromCtx(ctx)))
 						return nil, err
 					}
 
@@ -430,14 +448,13 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 		}
 	}
 	proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(func(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
-		if mitmAction == nil || !isWhitelistedRelayHost(host) {
-			return goproxy.OkConnect, host
-		}
-		return mitmAction, host
+		action := selectConnectAction(host, mitmAction)
+		s.recordConnectDecided(ctx, host, connectActionName(action))
+		return action, host
 	}))
 
 	// MITM 解密后：Cursor 白名单域名转发到 backend server，其余请求由 goproxy 直连回源。
-	proxy.OnRequest().DoFunc(func(req *http.Request, _ *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		req.Header.Del(HeaderServerUpstreamURL)
 
 		host := hostFromHTTPRequest(req)
@@ -449,7 +466,7 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 			if parsedRaw, rawErr := rawURLForRelay(req); rawErr == nil {
 				raw = parsedRaw
 			}
-			resp, err := s.forwardToServer(req)
+			resp, err := s.forwardToServer(req, connectStateFromCtx(ctx))
 			if err != nil {
 				logger.Errorf("转发失败： %s %s %v", req.Method, raw, err)
 				return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "bad gateway")
@@ -463,8 +480,15 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 	return proxy
 }
 
+func connectActionNameFromState(ctx *goproxy.ProxyCtx) string {
+	if state := connectStateFromCtx(ctx); state != nil && state.Action != "" {
+		return state.Action
+	}
+	return actionPassthrough
+}
+
 // forwardToServer 用于处理与 forwardToServer 相关的逻辑。
-func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, error) {
+func (s *ProxyServer) forwardToServer(incoming *http.Request, state *connectState) (*http.Response, error) {
 	if incoming == nil {
 		return nil, errors.New("nil request")
 	}
@@ -482,6 +506,11 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	requestPath := "/"
 	if incoming.URL != nil && strings.TrimSpace(incoming.URL.Path) != "" {
 		requestPath = incoming.URL.Path
+	}
+	redactedPath := redactObservabilityPath(requestPath)
+	targetHost := incoming.Host
+	if strings.TrimSpace(targetHost) == "" && incoming.URL != nil {
+		targetHost = incoming.URL.Host
 	}
 
 	rawURL, err := rawURLForRelay(incoming)
@@ -509,37 +538,54 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 	serverReq.Header.Set(HeaderParentSpanID, correlation.SpanID)
 	removeHopByHop(serverReq.Header)
 	s.recordCapture(captureContext, observability.Event{
-		Layer:           "mitm",
-		Event:           "backend_forward_started",
-		Capability:      "unknown",
-		Operation:       "transport.forward",
-		Direction:       observability.DirectionCursorToProxy,
-		Route:           requestPath,
-		ExecutionTarget: "backend",
-		Protocol:        "http",
-		Status:          "started",
-		RequestBytes:    requestBytes,
-		Fields: map[string]any{
+		Layer:               "mitm",
+		Event:               "backend_forward_started",
+		Capability:          "unknown",
+		Operation:           "transport.forward",
+		Direction:           observability.DirectionCursorToProxy,
+		Route:               redactedPath,
+		ExecutionTarget:     "backend",
+		Protocol:            "http",
+		Status:              "started",
+		SemanticOutcome:     observability.OutcomeStarted,
+		ImplementationState: observability.ImplementationImplemented,
+		RequestBytes:        requestBytes,
+		Fields: backendForwardFields(targetHost, incoming.Method, requestPath, actionBackendForward, state, map[string]any{
 			"method":      incoming.Method,
-			"target_host": incoming.Host,
-		},
+			"target_host": hostOnly(targetHost),
+		}),
 	})
 
 	resp, err := s.upstreamClient.Do(serverReq)
 	if err != nil {
+		if isTLSRelated(err, "") {
+			s.recordCapture(captureContext, handshakeEvent(handshakeObservation{
+				Source:  handshakeSourceUpstream,
+				Host:    targetHost,
+				Action:  actionBackendForward,
+				Err:     err,
+				ErrText: errorText(err),
+			}, state))
+		}
 		s.recordCapture(captureContext, observability.Event{
-			Layer:           "mitm",
-			Event:           "backend_forward_finished",
-			Capability:      "unknown",
-			Operation:       "transport.forward",
-			Direction:       observability.DirectionProxyInternal,
-			Route:           requestPath,
-			ExecutionTarget: "backend",
-			Protocol:        "http",
-			Status:          "error",
-			ErrorCategory:   "backend_unavailable",
-			DurationMS:      time.Since(startedAt).Milliseconds(),
-			RequestBytes:    requestBytes,
+			Layer:               "mitm",
+			Event:               "backend_forward_finished",
+			Capability:          "unknown",
+			Operation:           "transport.forward",
+			Direction:           observability.DirectionProxyInternal,
+			Route:               redactedPath,
+			ExecutionTarget:     "backend",
+			Protocol:            "http",
+			Status:              "error",
+			SemanticOutcome:     observability.OutcomeFailed,
+			ImplementationState: observability.ImplementationImplemented,
+			ErrorCategory:       "backend_unavailable",
+			DurationMS:          time.Since(startedAt).Milliseconds(),
+			RequestBytes:        requestBytes,
+			Fields: backendForwardFields(targetHost, incoming.Method, requestPath, actionBackendForward, state, map[string]any{
+				"method":      incoming.Method,
+				"target_host": hostOnly(targetHost),
+			}),
 		})
 		return nil, fmt.Errorf("forward to backend server: %w", err)
 	}
@@ -548,32 +594,48 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request) (*http.Response, e
 		responseBytes = 0
 	}
 	s.recordCapture(captureContext, observability.Event{
-		Layer:           "mitm",
-		Event:           "backend_forward_finished",
-		Capability:      "unknown",
-		Operation:       "transport.forward",
-		Direction:       observability.DirectionProxyInternal,
-		Route:           requestPath,
-		ExecutionTarget: "backend",
-		Protocol:        "http",
-		Status:          httpStatus(resp.StatusCode),
-		ErrorCategory:   httpErrorCategory(resp.StatusCode),
-		DurationMS:      time.Since(startedAt).Milliseconds(),
-		RequestBytes:    requestBytes,
-		ResponseBytes:   responseBytes,
-		Fields: map[string]any{
+		Layer:               "mitm",
+		Event:               "backend_forward_finished",
+		Capability:          "unknown",
+		Operation:           "transport.forward",
+		Direction:           observability.DirectionProxyInternal,
+		Route:               redactedPath,
+		ExecutionTarget:     "backend",
+		Protocol:            "http",
+		Status:              httpStatus(resp.StatusCode),
+		SemanticOutcome:     forwardSemanticOutcome(resp.StatusCode),
+		ImplementationState: observability.ImplementationImplemented,
+		ErrorCategory:       httpErrorCategory(resp.StatusCode),
+		DurationMS:          time.Since(startedAt).Milliseconds(),
+		RequestBytes:        requestBytes,
+		ResponseBytes:       responseBytes,
+		Fields: backendForwardFields(targetHost, incoming.Method, requestPath, actionBackendForward, state, map[string]any{
 			"status_code": resp.StatusCode,
-		},
+			"method":      incoming.Method,
+			"target_host": hostOnly(targetHost),
+		}),
 	})
 	removeHopByHop(resp.Header)
 	return resp, nil
 }
 
+func hostOnly(hostport string) string {
+	host, _ := splitConnectHostPort(hostport)
+	return host
+}
+
+func forwardSemanticOutcome(statusCode int) string {
+	if statusCode >= http.StatusBadRequest {
+		return observability.OutcomeFailed
+	}
+	return observability.OutcomeSucceeded
+}
+
 func (s *ProxyServer) recordCapture(ctx context.Context, event observability.Event) {
-	if s == nil || s.capture == nil {
+	if s == nil {
 		return
 	}
-	s.capture.Record(ctx, observability.Capture{Event: event})
+	recordMitmCapture(s.capture, ctx, event)
 }
 
 func httpStatus(statusCode int) string {
@@ -842,7 +904,9 @@ func buildLocalCORSPreflightResponse(req *http.Request) *http.Response {
 }
 
 // httpErrorFilterWriter 定义了当前模块中的 httpErrorFilterWriter 类型。
-type httpErrorFilterWriter struct{}
+type httpErrorFilterWriter struct {
+	capture captureRecorder
+}
 
 // Write 用于处理与 Write 相关的逻辑。
 func (w *httpErrorFilterWriter) Write(p []byte) (int, error) {
@@ -854,10 +918,12 @@ func (w *httpErrorFilterWriter) Write(p []byte) (int, error) {
 	lower := strings.ToLower(msg)
 	if strings.Contains(lower, "tls: first record does not look like a tls handshake") {
 		logger.Infof("proxy ignore handshake mismatch: %s", msg)
+		observeHTTPServerLog(captureFromWriter(w), msg)
 		return len(p), nil
 	}
 	if strings.Contains(lower, "tls handshake error") {
 		logger.Errorf("proxy tls handshake error: %s", msg)
+		observeHTTPServerLog(captureFromWriter(w), msg)
 		return len(p), nil
 	}
 
@@ -865,8 +931,17 @@ func (w *httpErrorFilterWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func captureFromWriter(w *httpErrorFilterWriter) captureRecorder {
+	if w == nil {
+		return nil
+	}
+	return w.capture
+}
+
 // goproxyLogAdapter 定义了当前模块中的 goproxyLogAdapter 类型。
-type goproxyLogAdapter struct{}
+type goproxyLogAdapter struct {
+	capture captureRecorder
+}
 
 // Printf 用于处理与 Printf 相关的逻辑。
 func (l *goproxyLogAdapter) Printf(format string, args ...interface{}) {
@@ -875,6 +950,7 @@ func (l *goproxyLogAdapter) Printf(format string, args ...interface{}) {
 		return
 	}
 	lower := strings.ToLower(msg)
+	observeGoproxyLog(captureFromAdapter(l), msg)
 	if strings.Contains(lower, "tls: first record does not look like a tls handshake") {
 		// logger.Infof("goproxy ignore handshake mismatch: %s", msg)
 		return
@@ -887,6 +963,13 @@ func (l *goproxyLogAdapter) Printf(format string, args ...interface{}) {
 		logSuppressedProxyMessages("goproxy", suppressed)
 		logger.Infof("goproxy: %s", msg)
 	}
+}
+
+func captureFromAdapter(l *goproxyLogAdapter) captureRecorder {
+	if l == nil {
+		return nil
+	}
+	return l.capture
 }
 
 func errorRateLimitKey(err error) string {

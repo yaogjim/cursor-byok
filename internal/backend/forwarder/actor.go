@@ -703,6 +703,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	hadToolInvocation := stream.ToolInvocationCount > 0
 	terminalToolInvocation := stream.ProviderTerminalToolInvocation
 	existingCompletion := stream.PendingProviderCompletion
+	providerPass := stream.ProviderPassCount
 	stream.ProviderActive = false
 	stream.ProviderCancel = nil
 	stream.PendingProviderAction = providerActionNone
@@ -730,7 +731,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 			service.setTurnPhase(stream, TurnPhaseFailed)
 			return service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation)
 		}
-		if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+		if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
 			return service.failStream(stream, "unknown", fmt.Errorf("flush failed provider output: %w", err))
 		}
 		service.setTurnPhase(stream, TurnPhaseFailed)

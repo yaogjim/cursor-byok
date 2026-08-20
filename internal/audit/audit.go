@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,13 +18,22 @@ import (
 )
 
 const (
-	defaultTTL        = 10 * time.Minute
-	defaultMaxEvents  = 100
-	enableEnvironment = "CURSOR_BYOK_PRIVACY_AUDIT"
-	fileEnvironment   = "CURSOR_BYOK_PRIVACY_AUDIT_FILE"
-	ttlEnvironment    = "CURSOR_BYOK_PRIVACY_AUDIT_TTL_SECONDS"
-	maxEnvironment    = "CURSOR_BYOK_PRIVACY_AUDIT_MAX_EVENTS"
-	canaryEnvironment = "CURSOR_BYOK_PRIVACY_AUDIT_CANARY"
+	defaultTTL            = 10 * time.Minute
+	defaultMaxEvents      = 100
+	enableEnvironment     = "CURSOR_BYOK_PRIVACY_AUDIT"
+	fileEnvironment       = "CURSOR_BYOK_PRIVACY_AUDIT_FILE"
+	ttlEnvironment        = "CURSOR_BYOK_PRIVACY_AUDIT_TTL_SECONDS"
+	maxEnvironment        = "CURSOR_BYOK_PRIVACY_AUDIT_MAX_EVENTS"
+	canaryEnvironment     = "CURSOR_BYOK_PRIVACY_AUDIT_CANARY"
+	redactedMetadataValue = "[REDACTED]"
+	maxMetadataTextRunes  = 512
+)
+
+var (
+	bearerCredentialPattern  = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;"']+`)
+	queryCredentialPattern   = regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth(?:orization)?|cookie|password|secret|token)=([^&\s"']+)`)
+	labeledCredentialPattern = regexp.MustCompile(`(?i)\b(api[_ -]?key|access[_ -]?token|auth(?:orization)?|cookie|password|secret|token)(\s+provided)?(\s*[:=]\s*)([^\s,;"']+)`)
+	urlQueryPattern          = regexp.MustCompile(`(?i)(https?://[^?\s"'<>]+)\?[^?\s"'<>]*`)
 )
 
 // Options controls an explicitly enabled audit session.
@@ -60,6 +70,11 @@ type Event struct {
 	CanaryMatched       bool              `json:"canary_matched,omitempty"`
 	ScopeMatched        bool              `json:"-"`
 	ErrorCategory       string            `json:"error_category,omitempty"`
+	ErrorMessage        string            `json:"error_message,omitempty"`
+	Attempt             int               `json:"attempt,omitempty"`
+	MaxAttempts         int               `json:"max_attempts,omitempty"`
+	RetryDecision       string            `json:"retry_decision,omitempty"`
+	RetryAfterPresent   bool              `json:"retry_after_present,omitempty"`
 }
 
 // ProtoSummary is a content-free description of a protobuf request.
@@ -161,6 +176,7 @@ func (observer *Observer) Record(event Event) {
 	event.Timestamp = time.Now().UTC()
 	event.SessionID = observer.sessionID
 	event.Sequence = observer.sequence
+	event.ErrorMessage = SanitizeMetadataText(event.ErrorMessage)
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -249,6 +265,30 @@ func EndpointKind(rawURL string) string {
 	default:
 		return "custom"
 	}
+}
+
+// SanitizeMetadataText removes credentials and URL queries from metadata-only text.
+func SanitizeMetadataText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sanitized := bearerCredentialPattern.ReplaceAllString(value, "Bearer "+redactedMetadataValue)
+	sanitized = queryCredentialPattern.ReplaceAllString(sanitized, "$1="+redactedMetadataValue)
+	sanitized = labeledCredentialPattern.ReplaceAllString(sanitized, "$1$2$3"+redactedMetadataValue)
+	sanitized = urlQueryPattern.ReplaceAllString(sanitized, "$1")
+	return limitMetadataText(sanitized)
+}
+
+func limitMetadataText(value string) string {
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxMetadataTextRunes {
+		return value
+	}
+	return string(runes[:maxMetadataTextRunes]) + "..."
 }
 
 func newSessionID() string {

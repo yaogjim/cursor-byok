@@ -52,6 +52,54 @@ func TestObserverIsClosedByDefaultAndWritesRestrictedMetadata(t *testing.T) {
 	}
 }
 
+func TestSanitizeMetadataTextRemovesCredentialsAndQueries(t *testing.T) {
+	input := `Post "https://example.test/v1/messages?api_key=query-secret&model=safe": Authorization: Bearer bearer-secret cookie=cookie-secret`
+	output := SanitizeMetadataText(input)
+	for _, secret := range []string{"query-secret", "bearer-secret", "cookie-secret", "api_key=query-secret"} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("sanitized metadata retained %q: %s", secret, output)
+		}
+	}
+	if strings.Contains(output, "?") {
+		t.Fatalf("sanitized metadata retained query: %s", output)
+	}
+	if !strings.Contains(output, "https://example.test/v1/messages") {
+		t.Fatalf("sanitized metadata dropped host/path: %s", output)
+	}
+}
+
+func TestRecordSanitizesErrorMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	observer, err := New(Options{FilePath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer.Record(Event{
+		Kind:          "provider_response",
+		ErrorCategory: "transport",
+		ErrorMessage:  `Post "https://example.test/v1/messages?token=query-secret": Authorization: Bearer bearer-secret`,
+		Attempt:       1,
+		MaxAttempts:   1,
+		RetryDecision: "single_request",
+	})
+	if err := observer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	for _, secret := range []string{"query-secret", "bearer-secret", "token=query-secret"} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("audit file retained %q: %s", secret, output)
+		}
+	}
+	if !strings.Contains(output, `"error_category":"transport"`) || !strings.Contains(output, `"attempt":1`) {
+		t.Fatalf("audit file missing structured error fields: %s", output)
+	}
+}
+
 func TestObserverExpires(t *testing.T) {
 	observer, err := New(Options{FilePath: filepath.Join(t.TempDir(), "audit.jsonl"), TTL: time.Millisecond})
 	if err != nil {

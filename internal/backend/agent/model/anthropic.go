@@ -389,6 +389,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	cacheWritePresent := false
 	finishReason := "message_stop"
 	firstEventAt := time.Time{}
+	sawCompletionMarker := false
 	fail := func(streamErr error) error {
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
@@ -534,6 +535,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		payloadLine := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
 		if strings.TrimSpace(payloadLine) == "[DONE]" {
+			sawCompletionMarker = true
 			return nil
 		}
 
@@ -640,6 +642,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			// 当前 MVP 阶段只在 message_stop 时统一收口，不在这里重复发 turn finished。
 			return nil
 		case "message_stop":
+			sawCompletionMarker = true
 			if err := flushTaggedTextTail(); err != nil {
 				return err
 			}
@@ -695,7 +698,10 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		if idleErr := streamIdle.Err(); idleErr != nil {
 			return fail(idleErr)
 		}
-		return fail(err)
+		return fail(newStreamTruncatedError("anthropic", err))
+	}
+	if !sawCompletionMarker {
+		return fail(newStreamTruncatedError("anthropic", nil))
 	}
 	if err := flushTaggedTextTail(); err != nil {
 		return fail(err)

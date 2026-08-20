@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cursor-log-analyzer/internal/contract"
+	"cursor-log-analyzer/internal/sanitize"
 	"cursor-log-analyzer/internal/workspace"
 )
 
@@ -465,23 +466,7 @@ func safeFieldsJSON(input map[string]any) (string, error) {
 }
 
 func allowlistedFields(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	allowed := map[string]struct{}{
-		"method": {}, "status_code": {}, "client_kind": {}, "message_case": {},
-		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "append_seqno": {},
-	}
-	output := make(map[string]any)
-	for key, value := range input {
-		if _, ok := allowed[key]; ok {
-			output[key] = value
-		}
-	}
-	if len(output) == 0 {
-		return nil
-	}
-	return output
+	return sanitize.AllowlistedFields(input)
 }
 
 func inputFileKind(path string) (workspace.FileKind, bool) {

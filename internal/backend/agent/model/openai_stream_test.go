@@ -3,9 +3,11 @@ package modeladapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -197,6 +199,168 @@ func TestOpenAIChatCompletionsIgnoresBlankFinishReason(t *testing.T) {
 	}
 	if finished.InputTokens != 12 || finished.OutputTokens != 7 {
 		t.Fatalf("usage = input:%d output:%d, want input:12 output:7", finished.InputTokens, finished.OutputTokens)
+	}
+}
+
+func TestOpenAIChatCompletionsScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
+	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"Ls\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":\"\"}]}\n\n"
+	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload, errors.New("connection reset"))}
+	events, err := collectOpenAIStreamEvents(t, adapter, "/v1/chat/completions")
+	assertOpenAIStreamTruncated(t, err, "connection reset")
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 0)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestOpenAIResponsesScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
+	payload := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Ls","arguments":""}}`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"path\":"}`,
+		"",
+	}, "\n\n")
+	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload+"\n", errors.New("connection reset"))}
+	events, err := collectOpenAIStreamEvents(t, adapter, "/v1/responses")
+	assertOpenAIStreamTruncated(t, err, "connection reset")
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 0)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestOpenAIChatCompletionsEOFWithoutFinishMarker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"\"}]}\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	assertOpenAIStreamTruncated(t, err, "missing completion marker")
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestOpenAIResponsesEOFWithoutFinishMarker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	assertOpenAIStreamTruncated(t, err, "missing completion marker")
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestOpenAIChatCompletionsNormalCompletionStillSucceeds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+}
+
+func TestOpenAIResponsesNormalCompletionStillSucceeds(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-test\",\"status\":\"completed\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+}
+
+func collectOpenAIStreamEvents(t *testing.T, adapter *OpenAIAdapter, endpoint string) ([]ModelEvent, error) {
+	t.Helper()
+	return collectOpenAIStreamEventsWithServer(t, adapter, "https://example.test", endpoint)
+}
+
+func collectOpenAIStreamEventsWithServer(t *testing.T, adapter *OpenAIAdapter, baseURL string, endpoint string) ([]ModelEvent, error) {
+	t.Helper()
+	events := make([]ModelEvent, 0, 8)
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:       "request-1",
+		RunID:           "run-1",
+		ModelCallID:     "model-call-1",
+		BaseURL:         baseURL,
+		APIKey:          "test-key",
+		ProviderModelID: "gpt-test",
+		OpenAIEndpoint:  endpoint,
+		Messages:        []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:       128,
+	}, func(event ModelEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func newOpenAIStreamErrorClient(t *testing.T, payload string, readErr error) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: streamErrorRoundTripper{payload: payload, err: readErr}}
+}
+
+type streamErrorRoundTripper struct {
+	payload string
+	err     error
+}
+
+func (transport streamErrorRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       &errorAfterReader{data: []byte(transport.payload), err: transport.err},
+		Request:    request,
+	}, nil
+}
+
+type errorAfterReader struct {
+	data []byte
+	err  error
+}
+
+func (reader *errorAfterReader) Read(p []byte) (int, error) {
+	if len(reader.data) == 0 {
+		return 0, reader.err
+	}
+	n := copy(p, reader.data)
+	reader.data = reader.data[n:]
+	return n, nil
+}
+
+func (reader *errorAfterReader) Close() error { return nil }
+
+func assertOpenAIStreamTruncated(t *testing.T, err error, wantSubstring string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected truncated stream error, got nil")
+	}
+	var truncated *StreamTruncatedError
+	if !errors.As(err, &truncated) {
+		t.Fatalf("error type = %T (%v), want StreamTruncatedError", err, err)
+	}
+	if ClassifyProviderError(err) != ProviderErrorStreamDecode {
+		t.Fatalf("category = %q, want %q", ClassifyProviderError(err), ProviderErrorStreamDecode)
+	}
+	if wantSubstring != "" && !strings.Contains(err.Error(), wantSubstring) {
+		t.Fatalf("error = %q, want substring %q", err.Error(), wantSubstring)
 	}
 }
 
