@@ -100,6 +100,16 @@ func (s *ProxyService) SaveUserConfig(cfg UserConfig) error {
 	return s.core.SaveUserConfig(cfg)
 }
 
+// ExportUserConfig 将当前完整配置导出为 YAML 文件。
+func (s *ProxyService) ExportUserConfig(path string) (string, error) {
+	return s.core.ExportUserConfig(path)
+}
+
+// ImportUserConfig 从 YAML 文件校验并替换当前完整配置。
+func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
+	return s.core.ImportUserConfig(path)
+}
+
 // GetCursorAccountStatus 返回 cursor-byok 独立 Cursor 账号的脱敏状态。
 func (s *ProxyService) GetCursorAccountStatus() CursorAccountStatus {
 	return s.core.GetCursorAccountStatus()

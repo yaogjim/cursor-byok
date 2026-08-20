@@ -451,6 +451,8 @@ func newProtoMessage(typeName string) (proto.Message, error) {
 		return &aiserverv1.SubmitLogsResponse{}, nil
 	case "aiserver.v1.TrackEventsResponse":
 		return &aiserverv1.TrackEventsResponse{}, nil
+	case "aiserver.v1.IsConnectedResponse":
+		return &aiserverv1.IsConnectedResponse{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported proto message type %q", typeName)
 	}

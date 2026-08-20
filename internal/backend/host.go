@@ -691,6 +691,20 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 				return nil
 			}),
 		),
+		// The always-local extension probes NetworkService/IsConnected roughly 10s
+		// after any slow request starts. A 404 here is treated as "network
+		// disconnected" and aborts in-flight work (e.g. commit message
+		// generation) even while the model is still streaming. Always answer OK.
+		server.POST("/aiserver.v1.NetworkService/IsConnected",
+			server.Name("network_is_connected"),
+			server.ConnectUnary(),
+			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
+				Name:          "network_is_connected",
+				StatusCode:    http.StatusOK,
+				MockProtoType: "aiserver.v1.IsConnectedResponse",
+				MockBuilder:   upstream.EmptyMockBuilder,
+			})),
+		),
 		server.Any("/aiserver.v1.NetworkService/*",
 			server.Name("network_service"),
 			server.HTTP(),

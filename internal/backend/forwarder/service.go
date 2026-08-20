@@ -307,7 +307,6 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver) *Serv
 		appendSeq:          newAppendSequenceTracker(),
 	}
 	service.startHistoryMaintenance()
-	store.SyncAllCursorTranscriptsBestEffort()
 	return service
 }
 

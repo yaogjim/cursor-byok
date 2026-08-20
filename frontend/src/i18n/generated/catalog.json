@@ -1,5 +1,22 @@
 {
   "entries": {
+    "01aaebc96af187a9": {
+      "source": "导入失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 51,
+          "column": 23
+        },
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 81,
+          "column": 23
+        }
+      ]
+    },
     "02216368edc68816": {
       "source": "无更新说明",
       "kind": "text",
@@ -7,7 +24,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1007,
+          "line": 1012,
           "column": 14
         }
       ]
@@ -31,7 +48,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 443,
+          "line": 445,
           "column": 14
         }
       ]
@@ -43,7 +60,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 464,
+          "line": 485,
           "column": 152
         }
       ]
@@ -72,7 +89,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 451,
+          "line": 472,
           "column": 19
         }
       ]
@@ -96,7 +113,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 479,
+          "line": 481,
           "column": 14
         }
       ]
@@ -197,7 +214,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 299,
+          "line": 301,
           "column": 14
         }
       ]
@@ -209,7 +226,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 984,
+          "line": 989,
           "column": 47
         }
       ]
@@ -245,7 +262,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 64,
+          "line": 65,
           "column": 73
         }
       ]
@@ -296,8 +313,25 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 325,
+          "line": 327,
           "column": 36
+        }
+      ]
+    },
+    "23353f7d54f291af": {
+      "source": "已有配置操作正在进行，请稍后再试",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 613,
+          "column": 32
+        },
+        {
+          "file": "src/state/appState.js",
+          "line": 1136,
+          "column": 21
         }
       ]
     },
@@ -342,7 +376,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 975,
+          "line": 980,
           "column": 12
         }
       ]
@@ -354,7 +388,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 482,
+          "line": 484,
           "column": 14
         }
       ]
@@ -402,6 +436,16 @@
           "column": 40
         },
         {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 21,
+          "column": 19
+        },
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 70,
+          "column": 21
+        },
+        {
           "file": "src/composables/useModal.js",
           "line": 8,
           "column": 15
@@ -413,7 +457,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1049,
+          "line": 1054,
           "column": 12
         }
       ]
@@ -437,7 +481,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 467,
+          "line": 488,
           "column": 94
         }
       ]
@@ -461,17 +505,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 463,
+          "line": 465,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 469,
+          "line": 471,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 475,
+          "line": 477,
           "column": 16
         }
       ]
@@ -536,6 +580,18 @@
         }
       ]
     },
+    "361ea3efbffac8ba": {
+      "source": "继续导出",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 20,
+          "column": 20
+        }
+      ]
+    },
     "37d23612f78a2e63": {
       "source": "立即重启更新",
       "kind": "text",
@@ -543,8 +599,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1041,
+          "line": 1046,
           "column": 14
+        }
+      ]
+    },
+    "392bd7c9d0ffcad8": {
+      "source": "覆盖当前配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 67,
+          "column": 16
         }
       ]
     },
@@ -628,7 +696,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 428,
+          "line": 430,
           "column": 14
         }
       ]
@@ -674,7 +742,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1005,
+          "line": 1010,
           "column": 5
         }
       ]
@@ -700,6 +768,18 @@
           "file": "src/components/ui/ContentModal.vue",
           "line": 125,
           "column": 15
+        }
+      ]
+    },
+    "429ea3af443dd80b": {
+      "source": "导出配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 412,
+          "column": 1
         }
       ]
     },
@@ -770,7 +850,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 440,
+          "line": 442,
           "column": 14
         }
       ]
@@ -784,6 +864,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 61,
           "column": 12
+        }
+      ]
+    },
+    "4a8d6841b4023edf": {
+      "source": "确认导入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 69,
+          "column": 22
         }
       ]
     },
@@ -830,7 +922,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 117,
+          "line": 119,
           "column": 12
         }
       ]
@@ -864,6 +956,18 @@
         }
       ]
     },
+    "4ff5e6073183ced5": {
+      "source": "YAML 配置文件",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 11,
+          "column": 42
+        }
+      ]
+    },
     "5205125c0e91d346": {
       "source": "Anthropic 模型单次回复允许生成的最大 Token 数。留空时使用默认值。",
       "kind": "text",
@@ -883,12 +987,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 232,
+          "line": 239,
           "column": 23
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 236,
+          "line": 243,
           "column": 21
         }
       ]
@@ -946,7 +1050,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 302,
+          "line": 304,
           "column": 12
         }
       ]
@@ -982,7 +1086,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 27,
+          "line": 28,
           "column": 12
         }
       ]
@@ -994,7 +1098,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 57,
+          "line": 58,
           "column": 12
         }
       ]
@@ -1069,7 +1173,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 426,
+          "line": 428,
           "column": 20
         }
       ]
@@ -1081,7 +1185,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 465,
+          "line": 486,
           "column": 169
         }
       ]
@@ -1093,7 +1197,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 318,
+          "line": 320,
           "column": 14
         }
       ]
@@ -1117,7 +1221,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 973,
+          "line": 978,
           "column": 14
         }
       ]
@@ -1129,7 +1233,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 434,
+          "line": 436,
           "column": 14
         }
       ]
@@ -1194,12 +1298,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 450,
+          "line": 471,
           "column": 19
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 462,
+          "line": 483,
           "column": 22
         }
       ]
@@ -1221,7 +1325,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 27,
+          "line": 29,
           "column": 31
         },
         {
@@ -1246,12 +1350,12 @@
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 86,
+          "line": 87,
           "column": 34
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 86,
+          "line": 87,
           "column": 52
         }
       ]
@@ -1265,6 +1369,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 189,
           "column": 5
+        }
+      ]
+    },
+    "6e4445df69575d79": {
+      "source": "导出失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 43,
+          "column": 23
         }
       ]
     },
@@ -1311,7 +1427,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1220,
+          "line": 1246,
           "column": 14
         }
       ]
@@ -1335,7 +1451,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 62,
+          "line": 63,
           "column": 10
         }
       ]
@@ -1347,12 +1463,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 273,
+          "line": 280,
           "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 278,
+          "line": 285,
           "column": 21
         }
       ]
@@ -1415,13 +1531,25 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 203,
+          "line": 205,
           "column": 12
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 462,
+          "line": 483,
           "column": 22
+        }
+      ]
+    },
+    "7cd744da6bc8c0f1": {
+      "source": "导入 cursor-byok 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 56,
+          "column": 16
         }
       ]
     },
@@ -1461,7 +1589,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1026,
+          "line": 1031,
           "column": 16
         }
       ]
@@ -1574,8 +1702,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 970,
+          "line": 975,
           "column": 14
+        }
+      ]
+    },
+    "877b27aa9c9c2691": {
+      "source": "配置已导出到 {0}",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 41,
+          "column": 15
         }
       ]
     },
@@ -1666,6 +1806,18 @@
         }
       ]
     },
+    "8d828cb97168d7cd": {
+      "source": "配置导入成功，共导入 {0} 个模型",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 79,
+          "column": 15
+        }
+      ]
+    },
     "8f6f8d979c981ced": {
       "source": "已复制",
       "kind": "text",
@@ -1709,7 +1861,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 458,
+          "line": 460,
           "column": 14
         }
       ]
@@ -1738,7 +1890,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 60,
+          "line": 61,
           "column": 12
         }
       ]
@@ -1810,12 +1962,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1325,
+          "line": 1351,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1346,
+          "line": 1372,
           "column": 32
         }
       ]
@@ -1875,7 +2027,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1047,
+          "line": 1052,
           "column": 14
         }
       ]
@@ -1899,7 +2051,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 486,
+          "line": 488,
           "column": 14
         }
       ]
@@ -1923,7 +2075,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 452,
+          "line": 454,
           "column": 14
         }
       ]
@@ -1935,12 +2087,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 993,
+          "line": 998,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1036,
+          "line": 1041,
           "column": 87
         }
       ]
@@ -1969,12 +2121,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1270,
+          "line": 1296,
           "column": 14
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 273,
+          "line": 280,
           "column": 29
         }
       ]
@@ -2105,7 +2257,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1022,
+          "line": 1027,
           "column": 16
         }
       ]
@@ -2141,7 +2293,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 67,
+          "line": 68,
           "column": 7
         }
       ]
@@ -2194,6 +2346,18 @@
           "file": "src/components/ModelEditor.vue",
           "line": 49,
           "column": 12
+        }
+      ]
+    },
+    "b48b6518293a604e": {
+      "source": "导入配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 405,
+          "column": 1
         }
       ]
     },
@@ -2348,7 +2512,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 446,
+          "line": 448,
           "column": 14
         }
       ]
@@ -2384,12 +2548,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 261,
+          "line": 268,
           "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 266,
+          "line": 273,
           "column": 21
         }
       ]
@@ -2425,7 +2589,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 68,
+          "line": 69,
           "column": 7
         }
       ]
@@ -2439,6 +2603,18 @@
           "file": "src/views/Home.vue",
           "line": 186,
           "column": 63
+        }
+      ]
+    },
+    "c733ec1c8af53c9a": {
+      "source": "导出完整配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 18,
+          "column": 14
         }
       ]
     },
@@ -2473,17 +2649,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1241,
+          "line": 1267,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 1243,
+          "line": 1269,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 1278,
+          "line": 1304,
           "column": 93
         }
       ]
@@ -2507,7 +2683,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 982,
+          "line": 987,
           "column": 51
         }
       ]
@@ -2543,8 +2719,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 294,
+          "line": 296,
           "column": 12
+        }
+      ]
+    },
+    "cf14b829486f866e": {
+      "source": "导入会替换当前完整配置，包括模型、API Key、服务地址和其他设置。建议先导出备份，是否继续？",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 68,
+          "column": 18
         }
       ]
     },
@@ -2579,7 +2767,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 437,
+          "line": 439,
           "column": 14
         }
       ]
@@ -2591,7 +2779,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 64,
+          "line": 65,
           "column": 62
         }
       ]
@@ -2603,12 +2791,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1189,
+          "line": 1215,
           "column": 14
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 261,
+          "line": 268,
           "column": 29
         }
       ]
@@ -2632,12 +2820,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 206,
+          "line": 208,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 236,
+          "line": 238,
           "column": 50
         }
       ]
@@ -2654,7 +2842,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 308,
+          "line": 310,
           "column": 49
         }
       ]
@@ -2683,7 +2871,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 329,
+          "line": 331,
           "column": 36
         }
       ]
@@ -2741,7 +2929,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 258,
+          "line": 260,
           "column": 18
         }
       ]
@@ -2753,7 +2941,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 431,
+          "line": 433,
           "column": 14
         }
       ]
@@ -2765,7 +2953,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1004,
+          "line": 1009,
           "column": 5
         }
       ]
@@ -2782,6 +2970,18 @@
         }
       ]
     },
+    "df5e382e16994c53": {
+      "source": "导出 cursor-byok 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 30,
+          "column": 16
+        }
+      ]
+    },
     "e01c5dae36cf8c35": {
       "source": "开启后会把 JSON 对象覆盖到 OpenAI 请求体。同名字段以这里为准。OpenAI service_tier 支持 auto、default、flex、scale、priority。",
       "kind": "text",
@@ -2791,6 +2991,23 @@
           "file": "src/components/ModelEditor.vue",
           "line": 157,
           "column": 22
+        }
+      ]
+    },
+    "e09a2127af23b1d6": {
+      "source": "服务运行中不能导入完整配置，请先停止服务",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 51,
+          "column": 31
+        },
+        {
+          "file": "src/state/appState.js",
+          "line": 1133,
+          "column": 21
         }
       ]
     },
@@ -2866,8 +3083,8 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 400,
-          "column": 123
+          "line": 421,
+          "column": 145
         }
       ]
     },
@@ -2880,6 +3097,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 177,
           "column": 5
+        }
+      ]
+    },
+    "e899a318b5cf571e": {
+      "source": "导出文件会包含全部模型配置、API Key 和自定义请求头。请将文件保存在安全位置，避免泄露；Windows 上的访问权限取决于目标文件夹的安全设置。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/composables/useConfigTransfer.js",
+          "line": 19,
+          "column": 16
         }
       ]
     },
@@ -2926,7 +3155,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 212,
+          "line": 214,
           "column": 10
         }
       ]
@@ -2938,7 +3167,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1024,
+          "line": 1029,
           "column": 16
         }
       ]
@@ -2974,12 +3203,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 426,
+          "line": 447,
           "column": 15
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 427,
+          "line": 448,
           "column": 15
         }
       ]
@@ -3015,7 +3244,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 315,
+          "line": 317,
           "column": 14
         }
       ]
@@ -3027,7 +3256,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 984,
+          "line": 989,
           "column": 38
         }
       ]
@@ -3115,12 +3344,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 449,
+          "line": 451,
           "column": 14
         },
         {
           "file": "src/state/appState.js",
-          "line": 455,
+          "line": 457,
           "column": 14
         }
       ]
@@ -3164,7 +3393,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1043,
+          "line": 1048,
           "column": 12
         }
       ]
@@ -3176,7 +3405,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 982,
+          "line": 987,
           "column": 40
         }
       ]

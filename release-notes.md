@@ -8,6 +8,4 @@ QQ交流群：
 Tg群组:
 https://t.me/cursor_byok
 
-- 修复Read Image
-- 支持不设置思考强度
-- 修复证书安全问题,需要重启一下cursor生效
+- 修复许多问题比如子代理数量等

@@ -49,6 +49,8 @@ type ProxyService struct {
 
 	// configMu 表示当前声明中的 configMu。
 	configMu sync.Mutex
+	// lifecycleMu 串行化服务启停与完整配置导入，避免过渡状态下切换配置。
+	lifecycleMu sync.Mutex
 	// configPath 表示当前声明中的 configPath。
 	configPath string
 	// store 表示统一的配置存储。
