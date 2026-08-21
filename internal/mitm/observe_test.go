@@ -10,9 +10,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"cursor/internal/observability"
 
@@ -361,4 +364,292 @@ func eventContainsSensitivePayload(event observability.Event, secrets ...string)
 		}
 	}
 	return false
+}
+
+func TestGoproxyHandshakeCorrelatesConnectionID(t *testing.T) {
+	capture := &recordingCapture{}
+	server, err := NewProxyServer("127.0.0.1:0", "http://127.0.0.1:9", "", "", nil, capture)
+	if err != nil {
+		t.Fatalf("NewProxyServer() error = %v", err)
+	}
+	ctx := &goproxy.ProxyCtx{Session: 9}
+	server.recordConnectDecided(ctx, "api2.cursor.sh:443", actionMITM)
+	server.proxy.Logger.Printf("[%03d] WARN: Cannot handshake client %v %v\n", 9, "api2.cursor.sh:443", "remote error: tls: unknown certificate")
+
+	events := capture.snapshot()
+	var decided, handshake observability.Event
+	for _, event := range events {
+		switch event.Event {
+		case "connect_decided":
+			decided = event
+		case "tls_handshake_failed":
+			handshake = event
+		}
+	}
+	connectionID := fieldString(decided, "connection_id")
+	if connectionID == "" {
+		t.Fatalf("connect_decided missing connection_id: %#v", decided.Fields)
+	}
+	if fieldString(handshake, "connection_id") != connectionID {
+		t.Fatalf("handshake connection_id = %q, want %q", fieldString(handshake, "connection_id"), connectionID)
+	}
+	if handshake.Direction != observability.DirectionCursorToProxy || handshake.ErrorCategory != errorClientUnknownCA {
+		t.Fatalf("handshake event = %+v", handshake)
+	}
+}
+
+func TestTypedNilCaptureFallsBackToProcessSink(t *testing.T) {
+	previous := observability.ProcessSink()
+	t.Cleanup(func() { observability.SetProcessSink(previous) })
+
+	recorder, err := observability.NewRecorder(t.TempDir(), observability.Settings{Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	observability.SetProcessSink(recorder)
+	status := recorder.Status()
+
+	var typedNil *observability.Controller
+	var capture captureRecorder = typedNil
+	recordMitmCapture(capture, context.Background(), observability.Event{
+		Layer:     "mitm",
+		Event:     "connect_decided",
+		Direction: observability.DirectionCursorToProxy,
+		Fields:    mitmFields(map[string]any{"action": actionPassthrough, "host": "example.com"}),
+	})
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	events := readTraceEvents(t, status.SessionPath)
+	if len(events) != 1 || events[0].Event != "connect_decided" {
+		t.Fatalf("events = %+v", events)
+	}
+	if fieldString(events[0], "action") != actionPassthrough {
+		t.Fatalf("fields = %#v", events[0].Fields)
+	}
+}
+
+func TestExplicitCaptureIsPreferredOverProcessSink(t *testing.T) {
+	previous := observability.ProcessSink()
+	t.Cleanup(func() { observability.SetProcessSink(previous) })
+
+	recorder, err := observability.NewRecorder(t.TempDir(), observability.Settings{Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	observability.SetProcessSink(recorder)
+	status := recorder.Status()
+
+	memory := &recordingCapture{}
+	server := &ProxyServer{capture: memory, sessions: newConnectSessionStore()}
+	server.recordConnectDecided(&goproxy.ProxyCtx{Session: 1}, "api2.cursor.sh:443", actionMITM)
+	if events := memory.snapshot(); len(events) != 1 || events[0].Event != "connect_decided" {
+		t.Fatalf("explicit capture events = %+v", events)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if payload := readTraceFile(t, status.SessionPath); strings.Contains(payload, "connect_decided") {
+		t.Fatalf("process sink received duplicate event: %s", payload)
+	}
+}
+
+func TestHandshakeCountSamplerBoundsDuplicateAppText(t *testing.T) {
+	sampler := newHandshakeCountSampler(time.Hour, 2)
+	first := sampler.Observe("goproxy_client_handshake|api2.cursor.sh:443|client_unknown_ca")
+	if !first.ShouldLog || first.Summary || first.Total != 1 || first.Sampled != 1 {
+		t.Fatalf("first sample = %+v", first)
+	}
+	second := sampler.Observe("goproxy_client_handshake|api2.cursor.sh:443|client_unknown_ca")
+	if !second.ShouldLog || second.Summary || second.Total != 2 {
+		t.Fatalf("second sample = %+v", second)
+	}
+	third := sampler.Observe("goproxy_client_handshake|api2.cursor.sh:443|client_unknown_ca")
+	if third.ShouldLog || third.Total != 3 {
+		t.Fatalf("third sample should be suppressed: %+v", third)
+	}
+}
+
+func TestProductionTraceRecorderReceivesMitmEventsWithoutExplicitCapture(t *testing.T) {
+	previous := observability.ProcessSink()
+	t.Cleanup(func() { observability.SetProcessSink(previous) })
+
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer secret-token" {
+			t.Errorf("backend missing original authorization")
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(writer, "ok")
+	}))
+	t.Cleanup(backend.Close)
+
+	server, err := NewProxyServer("127.0.0.1:0", backend.URL, "", "", nil)
+	if err != nil {
+		t.Fatalf("NewProxyServer() error = %v", err)
+	}
+	if selectConnectAction("api2.cursor.sh:443", &goproxy.ConnectAction{Action: goproxy.ConnectMitm}) == goproxy.OkConnect {
+		t.Fatal("whitelist CONNECT action changed")
+	}
+	if selectConnectAction("example.com:443", &goproxy.ConnectAction{Action: goproxy.ConnectMitm}) != goproxy.OkConnect {
+		t.Fatal("non-whitelist CONNECT action changed")
+	}
+
+	controller, err := observability.NewController(t.TempDir(), observability.Settings{
+		Mode:          observability.ModeBasic,
+		RetentionDays: 7,
+		MaxDiskMB:     64,
+	})
+	if err != nil {
+		t.Fatalf("NewController() error = %v", err)
+	}
+	t.Cleanup(func() { _ = controller.Close() })
+	status := controller.Status()
+
+	mitmCtx := &goproxy.ProxyCtx{Session: 42}
+	server.recordConnectDecided(mitmCtx, "api2.cursor.sh:443", actionMITM)
+	passCtx := &goproxy.ProxyCtx{Session: 43}
+	server.recordConnectDecided(passCtx, "example.com:443", actionPassthrough)
+	server.proxy.Logger.Printf("[%03d] WARN: Cannot handshake client %v %v\n", 42, "api2.cursor.sh:443", "remote error: tls: unknown certificate")
+	server.proxy.Logger.Printf("[%03d] WARN: Cannot handshake client %v %v\n", 7, "api3.cursor.sh:443", "x509: certificate signed by unknown authority")
+
+	req := httptest.NewRequest(http.MethodPost, "https://api2.cursor.sh/aiserver.v1.BidiService/BidiAppend?token=query-secret", strings.NewReader(`{"prompt":"body-secret"}`))
+	req.Host = "api2.cursor.sh"
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Cookie", "session=cookie-secret")
+	resp, err := server.forwardToServer(req, connectStateFromCtx(mitmCtx))
+	if err != nil {
+		t.Fatalf("forwardToServer() error = %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	events := readTraceEvents(t, status.SessionPath)
+	payload := readTraceFile(t, status.SessionPath)
+	secrets := []string{"secret-token", "query-secret", "cookie-secret", "body-secret", "Authorization", "Cookie", "token="}
+	for _, secret := range secrets {
+		if strings.Contains(payload, secret) {
+			t.Fatalf("events.jsonl leaked %q: %s", secret, payload)
+		}
+	}
+
+	var (
+		mitmConnect, passConnect, handshake observability.Event
+		forwardStart, forwardFinish         int
+	)
+	for _, event := range events {
+		switch {
+		case event.Event == "connect_decided" && fieldString(event, "action") == actionMITM:
+			mitmConnect = event
+		case event.Event == "connect_decided" && fieldString(event, "action") == actionPassthrough:
+			passConnect = event
+		case event.Event == "tls_handshake_failed" && fieldString(event, "host") == "api2.cursor.sh":
+			handshake = event
+		case event.Event == "backend_forward_started":
+			forwardStart++
+		case event.Event == "backend_forward_finished":
+			forwardFinish++
+		}
+	}
+	if mitmConnect.Event == "" || fieldString(mitmConnect, "connection_id") == "" {
+		t.Fatalf("missing mitm connect_decided: %+v", events)
+	}
+	if passConnect.Event == "" || fieldString(passConnect, "action") != actionPassthrough {
+		t.Fatalf("missing passthrough connect_decided: %+v", events)
+	}
+	if handshake.Direction != observability.DirectionCursorToProxy || handshake.ErrorCategory != errorClientUnknownCA {
+		t.Fatalf("client handshake = %+v", handshake)
+	}
+	if fieldString(handshake, "tls_role") != tlsRoleServer {
+		t.Fatalf("handshake tls_role = %q", fieldString(handshake, "tls_role"))
+	}
+	if fieldString(handshake, "connection_id") != fieldString(mitmConnect, "connection_id") {
+		t.Fatalf("handshake connection_id = %q, connect = %q", fieldString(handshake, "connection_id"), fieldString(mitmConnect, "connection_id"))
+	}
+	if forwardStart != 1 || forwardFinish != 1 {
+		t.Fatalf("backend_forward start=%d finish=%d events=%+v", forwardStart, forwardFinish, events)
+	}
+
+	var upstreamUnknownCA bool
+	for _, event := range events {
+		if event.Event == "tls_handshake_failed" && event.ErrorCategory == errorUpstreamUnknownCA {
+			upstreamUnknownCA = true
+		}
+		if event.Event == "tls_handshake_failed" && fieldString(event, "host") == "api3.cursor.sh" {
+			if event.Direction != observability.DirectionCursorToProxy || event.ErrorCategory != errorClientUnknownCA {
+				t.Fatalf("goproxy client unknown CA on api3 = %+v", event)
+			}
+		}
+	}
+	if upstreamUnknownCA {
+		t.Fatal("client handshake was labeled upstream_unknown_ca")
+	}
+}
+
+func TestUpstreamTLSHandshakeStaysDistinctInTrace(t *testing.T) {
+	previous := observability.ProcessSink()
+	t.Cleanup(func() { observability.SetProcessSink(previous) })
+
+	recorder, err := observability.NewRecorder(t.TempDir(), observability.Settings{Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	observability.SetProcessSink(recorder)
+	status := recorder.Status()
+
+	recordMitmCapture(nil, context.Background(), handshakeEvent(handshakeObservation{
+		Source: handshakeSourceUpstream,
+		Host:   "api2.cursor.sh:443",
+		Action: actionBackendForward,
+		Err:    x509.UnknownAuthorityError{Cert: &x509.Certificate{}},
+	}, &connectState{ConnectionID: "conn-up", Action: actionBackendForward, Host: "api2.cursor.sh:443"}))
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	events := readTraceEvents(t, status.SessionPath)
+	if len(events) != 1 {
+		t.Fatalf("events = %+v", events)
+	}
+	event := events[0]
+	if event.Event != "tls_handshake_failed" || event.Direction != observability.DirectionProxyToUpstream || event.ErrorCategory != errorUpstreamUnknownCA {
+		t.Fatalf("upstream event = %+v", event)
+	}
+	if fieldString(event, "tls_role") != tlsRoleClient || fieldString(event, "connection_id") != "conn-up" {
+		t.Fatalf("fields = %#v", event.Fields)
+	}
+}
+
+func readTraceEvents(t *testing.T, sessionPath string) []observability.Event {
+	t.Helper()
+	payload := strings.TrimSpace(readTraceFile(t, sessionPath))
+	if payload == "" {
+		return nil
+	}
+	lines := strings.Split(payload, "\n")
+	events := make([]observability.Event, 0, len(lines))
+	for _, line := range lines {
+		var event observability.Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("decode event %q: %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func readTraceFile(t *testing.T, sessionPath string) string {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(sessionPath, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	return string(payload)
 }

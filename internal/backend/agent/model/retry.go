@@ -171,7 +171,7 @@ func doProviderRequest(
 
 		httpReq, err := buildRequest(ctx)
 		if err != nil {
-			observer.Record(audit.Event{
+			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 				Kind:          "provider_request",
 				Provider:      provider,
 				ErrorCategory: "request_build",
@@ -190,7 +190,7 @@ func doProviderRequest(
 			endpointKind = audit.EndpointKind(httpReq.URL.String())
 		}
 		canaryMatched := matchProviderRequestCanary(observer, httpReq)
-		observer.Record(audit.Event{
+		recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 			Kind:          "provider_request",
 			Provider:      provider,
 			Endpoint:      endpointKind,
@@ -240,7 +240,7 @@ func doProviderRequest(
 			responseEvent.ErrorCategory = ClassifyHTTPStatus(resp.StatusCode)
 			responseEvent.ErrorMessage = audit.SanitizeMetadataText(httpStatusErrorMessage(resp.StatusCode))
 		}
-		observer.Record(responseEvent)
+		recordProviderAttempt(ctx, observer, requestID, modelCallID, responseEvent)
 
 		if !outcome.retryable {
 			if err != nil {
@@ -252,7 +252,7 @@ func doProviderRequest(
 
 		closeResponseBody(resp)
 		if sleepErr := retry.sleep(ctx, delay); sleepErr != nil {
-			observer.Record(audit.Event{
+			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 				Kind:          "provider_response",
 				Provider:      provider,
 				Endpoint:      endpointKind,

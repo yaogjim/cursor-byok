@@ -52,6 +52,7 @@ type ProxyServer struct {
 	// upstreamClient 表示当前声明中的 upstreamClient。
 	upstreamClient *http.Client
 	capture        captureRecorder
+	sessions       *connectSessionStore
 
 	// proxy 表示当前声明中的 proxy。
 	proxy *goproxy.ProxyHttpServer
@@ -93,7 +94,10 @@ const (
 	proxyLogRateLimitMaxKeys = 1024
 )
 
-var proxyLogLimiter = newLogLimiter(proxyLogRateLimitWindow)
+var (
+	proxyLogLimiter     = newLogLimiter(proxyLogRateLimitWindow)
+	handshakeAppSampler = newHandshakeCountSampler(handshakeAppLogWindow, handshakeAppSampleLimit)
+)
 
 type logLimiter struct {
 	mu      sync.Mutex
@@ -202,6 +206,7 @@ func NewProxyServer(addr, baseURL, _ string, _ string, certManager *certs.Manage
 		certManager:  certManager,
 		baseEndpoint: u,
 		capture:      capture,
+		sessions:     newConnectSessionStore(),
 		upstreamClient: &http.Client{
 			Transport: &http.Transport{
 				DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -375,7 +380,7 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 	proxy.AllowHTTP2 = true
-	proxy.Logger = &goproxyLogAdapter{capture: s.capture}
+	proxy.Logger = &goproxyLogAdapter{capture: s.capture, sessions: s.sessions}
 	proxy.CertStore = newMITMCertStore()
 	proxy.Tr = netproxy.NewTransport(&http.Transport{
 		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -940,7 +945,8 @@ func captureFromWriter(w *httpErrorFilterWriter) captureRecorder {
 
 // goproxyLogAdapter 定义了当前模块中的 goproxyLogAdapter 类型。
 type goproxyLogAdapter struct {
-	capture captureRecorder
+	capture  captureRecorder
+	sessions *connectSessionStore
 }
 
 // Printf 用于处理与 Printf 相关的逻辑。
@@ -950,13 +956,14 @@ func (l *goproxyLogAdapter) Printf(format string, args ...interface{}) {
 		return
 	}
 	lower := strings.ToLower(msg)
-	observeGoproxyLog(captureFromAdapter(l), msg)
+	if observation, ok := observeGoproxyLog(captureFromAdapter(l), sessionsFromAdapter(l), msg); ok {
+		logSampledGoproxyHandshake(observation, msg)
+		return
+	}
 	if strings.Contains(lower, "tls: first record does not look like a tls handshake") {
-		// logger.Infof("goproxy ignore handshake mismatch: %s", msg)
 		return
 	}
 	if strings.Contains(lower, "broken pipe") || strings.Contains(lower, "connection reset by peer") {
-		// logger.Infof("goproxy transient network error: %s", msg)
 		return
 	}
 	if suppressed, ok := proxyLogLimiter.ShouldLog("goproxy|" + goproxyMessageRateLimitKey(msg)); ok {
@@ -970,6 +977,33 @@ func captureFromAdapter(l *goproxyLogAdapter) captureRecorder {
 		return nil
 	}
 	return l.capture
+}
+
+func sessionsFromAdapter(l *goproxyLogAdapter) *connectSessionStore {
+	if l == nil {
+		return nil
+	}
+	return l.sessions
+}
+
+func logSampledGoproxyHandshake(observation handshakeObservation, msg string) {
+	decision := handshakeAppSampler.Observe(handshakeAppLogKey(observation))
+	if !decision.ShouldLog {
+		return
+	}
+	if !decision.Summary {
+		logger.Infof("goproxy: %s", msg)
+		return
+	}
+	classified := classifyHandshake(observation)
+	logger.Infof(
+		"goproxy tls_handshake_failed: host=%s category=%s direction=%s total=%d sampled=%d",
+		firstNonEmpty(observation.Host, "-"),
+		firstNonEmpty(classified.ErrorCategory, "-"),
+		firstNonEmpty(classified.Direction, "-"),
+		decision.Total,
+		decision.Sampled,
+	)
 }
 
 func errorRateLimitKey(err error) string {

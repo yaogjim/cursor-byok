@@ -29,12 +29,14 @@ func NewControllerWithHumanSink(root string, settings Settings, humanSink HumanS
 			return nil, err
 		}
 	}
-	return &Controller{
+	controller := &Controller{
 		root:      root,
 		settings:  normalized,
 		humanSink: humanSink,
 		recorder:  recorder,
-	}, nil
+	}
+	SetProcessSink(controller)
+	return controller, nil
 }
 
 func (controller *Controller) Record(ctx context.Context, capture Capture) bool {
@@ -106,6 +108,7 @@ func (controller *Controller) Close() error {
 	}
 	controller.updateMu.Lock()
 	defer controller.updateMu.Unlock()
+	ClearProcessSink(controller)
 	controller.mu.Lock()
 	recorder := controller.recorder
 	controller.recorder = nil

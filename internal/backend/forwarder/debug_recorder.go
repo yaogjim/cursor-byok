@@ -541,6 +541,45 @@ func (recorder *debugRecorder) correlationForRequest(requestID string) observabi
 	return recorder.correlations[strings.TrimSpace(requestID)]
 }
 
+func (recorder *debugRecorder) contextWithRequestCorrelation(ctx context.Context, requestID string, conversationID string, modelCallID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if recorder == nil {
+		return ctx
+	}
+	correlation := observability.CorrelationFromContext(ctx)
+	stored := recorder.correlationForRequest(requestID)
+	if stored.TraceID != "" {
+		useStoredTrace := stored.HTTPRequestID != "" || correlation.HTTPRequestID == ""
+		if useStoredTrace {
+			correlation.TraceID = stored.TraceID
+			if correlation.SpanID == "" {
+				correlation.SpanID = stored.SpanID
+				correlation.ParentSpanID = stored.ParentSpanID
+			}
+		}
+		correlation.HTTPRequestID = firstNonEmpty(correlation.HTTPRequestID, stored.HTTPRequestID)
+	}
+	correlation.ProjectID = firstNonEmpty(correlation.ProjectID, stored.ProjectID)
+	correlation.CursorRequestID = firstNonEmpty(correlation.CursorRequestID, strings.TrimSpace(requestID))
+	correlation.ConversationID = firstNonEmpty(
+		correlation.ConversationID,
+		strings.TrimSpace(conversationID),
+		recorder.conversationIDForRequest(requestID),
+		stored.ConversationID,
+	)
+	correlation.ModelCallID = firstNonEmpty(strings.TrimSpace(modelCallID), correlation.ModelCallID, stored.ModelCallID)
+	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
+	if correlation.TurnSequence == 0 {
+		correlation.TurnSequence = stored.TurnSequence
+	}
+	if correlation.TraceID == "" && correlation.CursorRequestID == "" && correlation.ModelCallID == "" && correlation.TurnID == "" {
+		return ctx
+	}
+	return observability.WithCorrelation(ctx, correlation)
+}
+
 func (recorder *debugRecorder) rememberCorrelation(requestID string, correlation observability.Correlation) {
 	if recorder == nil || strings.TrimSpace(requestID) == "" {
 		return

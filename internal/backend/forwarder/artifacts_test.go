@@ -147,6 +147,35 @@ func TestHTTPTraceReplacesPrematureBackgroundCorrelation(t *testing.T) {
 	}
 }
 
+func TestProviderHTTPContextSharesStoredCorrelation(t *testing.T) {
+	capture, err := observability.NewRecorder(t.TempDir(), observability.Settings{
+		Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	debug := newDebugRecorder(t.TempDir(), nil, enabledDebugLogConfig{}, capture)
+	t.Cleanup(debug.Close)
+	authoritative := observability.Correlation{
+		TraceID: "trace-from-bidi", SpanID: "bidi-span", HTTPRequestID: "http-request-9", TurnID: "conversation-1:4", TurnSequence: 4,
+	}
+	httpContext := observability.WithCorrelation(context.Background(), authoritative)
+	debug.LogBidiRaw(httpContext, "request-shared", "conversation-1", 1, "00", "accepted", nil)
+	debug.LogProvider(context.Background(), "request-shared", "conversation-1", "provider_request_prepared", map[string]any{
+		"model_call_id": "model-call-9",
+		"turn_seq":      4,
+	})
+	providerCtx := debug.contextWithRequestCorrelation(context.Background(), "request-shared", "conversation-1", "model-call-9")
+	got := observability.CorrelationFromContext(providerCtx)
+	if got.TraceID != authoritative.TraceID || got.HTTPRequestID != authoritative.HTTPRequestID || got.ModelCallID != "model-call-9" || got.TurnID != "conversation-1:4" {
+		t.Fatalf("provider http context correlation = %+v", got)
+	}
+	empty := debug.contextWithRequestCorrelation(context.Background(), "unknown-request", "", "")
+	if observability.CorrelationFromContext(empty).TraceID != "" {
+		t.Fatal("missing stored correlation forged a trace_id")
+	}
+}
+
 func TestArtifactRecorderRetainsOnlyRequestPrefixUntilCleared(t *testing.T) {
 	recorder := newArtifactRecorder(nil, nil, nil)
 	const sensitivePayload = "complete replay payload must not remain in memory"

@@ -1437,6 +1437,7 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	thinkingEffort := stream.ThinkingEffort
 	mode := stream.Mode
 	latestUserText := stream.LatestUserText
+	turnSeq := stream.TurnSeq
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 	log.Printf("forwarder provider pass started request_id=%s model_call_id=%s provider_pass=%d", strings.TrimSpace(requestID), strings.TrimSpace(modelCallID), currentPass)
@@ -1534,7 +1535,9 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 		"message_count":          len(compiled.Messages),
 		"tool_count":             len(compiled.Tools),
 		"compile_summary_length": len(compiled.CompileSummary),
+		"turn_seq":               turnSeq,
 	})
+	ctx = service.debug.contextWithRequestCorrelation(ctx, requestID, conversationID, modelCallID)
 	go service.runProviderStream(stream, currentToken, ctx, providerRequest)
 	return nil
 }

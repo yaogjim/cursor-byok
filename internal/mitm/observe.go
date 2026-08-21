@@ -5,8 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
+	"reflect"
 	"strings"
+	"sync"
+	"time"
 
 	"cursor/internal/observability"
 
@@ -38,6 +42,12 @@ const (
 	errorMITMTLSConfigFailed        = "mitm_tls_config_failed"
 
 	maxErrorMessageRunes = 240
+
+	connectSessionStoreLimit = 2048
+	handshakeAppSampleLimit  = 2
+	handshakeAppLogWindow    = 30 * time.Second
+	handshakeAppLogTTL       = 5 * time.Minute
+	handshakeAppLogMaxKeys   = 1024
 )
 
 type connectState struct {
@@ -95,6 +105,7 @@ func newConnectionID() string {
 }
 
 func recordMitmCapture(capture captureRecorder, ctx context.Context, event observability.Event) {
+	capture = resolveCapture(capture)
 	if capture == nil {
 		return
 	}
@@ -105,9 +116,35 @@ func recordMitmCapture(capture captureRecorder, ctx context.Context, event obser
 	capture.Record(ctx, observability.Capture{Event: sanitizeMitmEvent(event)})
 }
 
+func resolveCapture(capture captureRecorder) captureRecorder {
+	if !isNilCapture(capture) {
+		return capture
+	}
+	if sink := observability.ProcessSink(); !isNilCapture(sink) {
+		return sink
+	}
+	return nil
+}
+
+func isNilCapture(capture captureRecorder) bool {
+	if capture == nil {
+		return true
+	}
+	value := reflect.ValueOf(capture)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func (s *ProxyServer) recordConnectDecided(ctx *goproxy.ProxyCtx, host, action string) {
 	defer func() { _ = recover() }()
 	state := attachConnectState(ctx, host, action)
+	if s != nil && ctx != nil {
+		s.sessions.Remember(ctx.Session, state)
+	}
 	hostname, port := splitConnectHostPort(host)
 	tlsRole := ""
 	if action == actionMITM {
@@ -358,12 +395,13 @@ func splitHostAndRemainder(value string) (host, remainder string) {
 	return strings.TrimRight(host, ":"), strings.TrimSpace(remainder)
 }
 
-func observeGoproxyLog(capture captureRecorder, msg string) {
+func observeGoproxyLog(capture captureRecorder, sessions *connectSessionStore, msg string) (handshakeObservation, bool) {
 	observation, ok := parseGoproxyTLSLog(msg)
 	if !ok {
-		return
+		return handshakeObservation{}, false
 	}
-	recordMitmCapture(capture, context.Background(), handshakeEvent(observation, nil))
+	recordMitmCapture(capture, context.Background(), handshakeEvent(observation, sessions.Lookup(observation.Session, observation.Host)))
+	return observation, true
 }
 
 func observeHTTPServerLog(capture captureRecorder, msg string) {
@@ -518,4 +556,169 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+type connectSessionStore struct {
+	mu      sync.Mutex
+	entries map[string]*connectState
+	order   []string
+}
+
+func newConnectSessionStore() *connectSessionStore {
+	return &connectSessionStore{entries: make(map[string]*connectState)}
+}
+
+func goproxySessionLabel(session int64) string {
+	return fmt.Sprintf("%03d", session&0xFFFF)
+}
+
+func connectSessionKey(session, host string) string {
+	session = strings.TrimSpace(session)
+	if session == "" {
+		return ""
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	return session + "|" + host
+}
+
+func (store *connectSessionStore) Remember(session int64, state *connectState) {
+	if store == nil || state == nil {
+		return
+	}
+	key := connectSessionKey(goproxySessionLabel(session), state.Host)
+	if key == "" {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, exists := store.entries[key]; !exists {
+		store.order = append(store.order, key)
+	}
+	store.entries[key] = state
+	for len(store.entries) > connectSessionStoreLimit && len(store.order) > 0 {
+		oldest := store.order[0]
+		store.order = store.order[1:]
+		delete(store.entries, oldest)
+	}
+}
+
+func (store *connectSessionStore) Lookup(session, host string) *connectState {
+	if store == nil {
+		return nil
+	}
+	key := connectSessionKey(session, host)
+	if key == "" {
+		return nil
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.entries[key]
+}
+
+type handshakeSampleDecision struct {
+	Total     int
+	Sampled   int
+	ShouldLog bool
+	Summary   bool
+}
+
+type handshakeCountSampler struct {
+	mu      sync.Mutex
+	window  time.Duration
+	limit   int
+	entries map[string]*handshakeSampleEntry
+}
+
+type handshakeSampleEntry struct {
+	total       int
+	sampled     int
+	nextSummary time.Time
+	lastSeen    time.Time
+}
+
+func newHandshakeCountSampler(window time.Duration, limit int) *handshakeCountSampler {
+	if window <= 0 {
+		window = handshakeAppLogWindow
+	}
+	if limit <= 0 {
+		limit = handshakeAppSampleLimit
+	}
+	return &handshakeCountSampler{
+		window:  window,
+		limit:   limit,
+		entries: make(map[string]*handshakeSampleEntry),
+	}
+}
+
+func (sampler *handshakeCountSampler) Observe(key string) handshakeSampleDecision {
+	if sampler == nil {
+		return handshakeSampleDecision{Total: 1, Sampled: 1, ShouldLog: true}
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return handshakeSampleDecision{Total: 1, Sampled: 1, ShouldLog: true}
+	}
+	now := time.Now()
+	sampler.mu.Lock()
+	defer sampler.mu.Unlock()
+	sampler.pruneLocked(now)
+
+	entry := sampler.entries[key]
+	if entry == nil {
+		entry = &handshakeSampleEntry{}
+		sampler.entries[key] = entry
+	}
+	entry.total++
+	entry.lastSeen = now
+	decision := handshakeSampleDecision{Total: entry.total, Sampled: entry.sampled}
+	if entry.sampled < sampler.limit {
+		entry.sampled++
+		decision.Sampled = entry.sampled
+		decision.ShouldLog = true
+		entry.nextSummary = now.Add(sampler.window)
+		return decision
+	}
+	if !now.Before(entry.nextSummary) {
+		decision.ShouldLog = true
+		decision.Summary = true
+		entry.nextSummary = now.Add(sampler.window)
+		return decision
+	}
+	return decision
+}
+
+func (sampler *handshakeCountSampler) pruneLocked(now time.Time) {
+	if len(sampler.entries) == 0 {
+		return
+	}
+	cutoff := now.Add(-handshakeAppLogTTL)
+	for key, entry := range sampler.entries {
+		if entry == nil || entry.lastSeen.Before(cutoff) {
+			delete(sampler.entries, key)
+		}
+	}
+	for len(sampler.entries) >= handshakeAppLogMaxKeys {
+		oldestKey := ""
+		var oldestSeen time.Time
+		for key, entry := range sampler.entries {
+			if entry == nil {
+				oldestKey = key
+				break
+			}
+			if oldestKey == "" || entry.lastSeen.Before(oldestSeen) {
+				oldestKey = key
+				oldestSeen = entry.lastSeen
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(sampler.entries, oldestKey)
+	}
+}
+
+func handshakeAppLogKey(observation handshakeObservation) string {
+	classified := classifyHandshake(observation)
+	host := strings.ToLower(strings.TrimSpace(observation.Host))
+	return classified.Source + "|" + host + "|" + classified.ErrorCategory
 }

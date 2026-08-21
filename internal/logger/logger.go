@@ -156,9 +156,21 @@ type standardLogWriter struct{}
 func (standardLogWriter) Write(payload []byte) (int, error) {
 	message := observability.SanitizeText(strings.TrimSpace(string(payload)))
 	if message != "" {
-		slog.Warn(message, "source", "stdlib")
+		slog.Log(context.Background(), stdlibLogLevel(message), message, "source", "stdlib")
 	}
 	return len(payload), nil
+}
+
+func stdlibLogLevel(message string) slog.Level {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "panic"), strings.Contains(lower, "fatal"):
+		return slog.LevelError
+	case strings.Contains(lower, "error"), strings.Contains(lower, "fail"):
+		return slog.LevelWarn
+	default:
+		return slog.LevelInfo
+	}
 }
 
 type multiHandler struct {

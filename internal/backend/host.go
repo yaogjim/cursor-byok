@@ -322,7 +322,7 @@ func observabilitySettings(cfg serverconfig.Config) observability.Settings {
 }
 
 func logObservabilityEvent(event observability.Event) {
-	logger.Info("链路事件",
+	args := []any{
 		"layer", event.Layer,
 		"event", event.Event,
 		"trace_id", event.TraceID,
@@ -330,7 +330,15 @@ func logObservabilityEvent(event observability.Event) {
 		"execution_target", event.ExecutionTarget,
 		"status", event.Status,
 		"duration_ms", event.DurationMS,
-	)
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Severity)) {
+	case observability.SeverityError:
+		logger.Error("链路事件", args...)
+	case observability.SeverityWarning:
+		logger.Warn("链路事件", args...)
+	default:
+		logger.Info("链路事件", args...)
+	}
 }
 
 func newLoopbackHTTPClient() *http.Client {
