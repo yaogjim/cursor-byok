@@ -81,11 +81,11 @@ func providerObservabilityOutcome(auditEvent audit.Event) (string, string) {
 	switch decision {
 	case retryDecisionSuccess, retryDecisionSuccessAfterRetry:
 		return "completed", observability.OutcomeSucceeded
-	case retryDecisionRetry:
+	case retryDecisionRetry, retryDecisionStreamPreEventEOF:
 		return "retrying", observability.OutcomeDegraded
-	case retryDecisionExhausted, retryDecisionNoRetryStatus, retryDecisionNoRetryBuild, retryDecisionNoRetryWaitBudget:
+	case retryDecisionExhausted, retryDecisionNoRetryStatus, retryDecisionNoRetryBuild, retryDecisionNoRetryWaitBudget, retryDecisionNoRetryStreamError, retryDecisionNoRetryStreamEvent, retryDecisionNoRetryStreamExhausted, retryDecisionNoRetryStreamRawBytes:
 		return "error", observability.OutcomeFailed
-	case retryDecisionNoRetryContext:
+	case retryDecisionNoRetryContext, retryDecisionNoRetryStreamContext:
 		return "canceled", observability.OutcomeCanceled
 	}
 	if strings.TrimSpace(auditEvent.ErrorCategory) != "" {

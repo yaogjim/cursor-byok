@@ -1,7 +1,5 @@
 # Cursor 协议调试器
 
-[中文](README.md) | [English](README.en.md)
-
 这是一个独立运行的本地 HTTPS 调试代理，用于观察 Cursor 的 `BidiAppend`、`RunSSE` 和 Fork Chat 相关通信。它不会修改 Cursor、系统代理或已安装客户端。
 
 ## 启动

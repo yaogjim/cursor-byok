@@ -385,3 +385,49 @@ func firstOpenAIEventForTest(events []ModelEvent, kind ModelEventKind) *ModelEve
 	}
 	return nil
 }
+
+func TestOpenAIChatPreEventEOFRetriesAndDeadlineDoesNot(t *testing.T) {
+	t.Run("retries before first event", func(t *testing.T) {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			hits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+			if hits == 2 {
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}
+		}))
+		defer server.Close()
+		adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+		_, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+		if err != nil || hits != 2 {
+			t.Fatalf("err=%v hits=%d, want nil/2", err, hits)
+		}
+	})
+	t.Run("deadline does not retry", func(t *testing.T) {
+		hits := 0
+		ctx, cancel := context.WithCancel(context.Background())
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { hits++; cancel() }))
+		defer server.Close()
+		adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+		err := adapter.Stream(ctx, StreamRequest{RequestID: "request-1", ModelCallID: "model-call-1", BaseURL: server.URL, APIKey: "test-key", ProviderModelID: "gpt-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128}, func(ModelEvent) error { return nil })
+		if !errors.Is(err, context.Canceled) || hits != 1 {
+			t.Fatalf("err=%v hits=%d, want canceled/1", err, hits)
+		}
+	})
+}
+
+func TestOpenAIHalfFrameDoesNotRetryOrConcatResponses(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, `data: {"choices":[]}`+"\n\n")
+	}))
+	defer server.Close()
+	adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+	_, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	assertOpenAIStreamTruncated(t, err, "missing completion marker")
+	if hits != 1 {
+		t.Fatalf("hits=%d, want 1", hits)
+	}
+}

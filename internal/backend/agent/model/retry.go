@@ -4,11 +4,13 @@ package modeladapter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cursor/internal/audit"
@@ -17,14 +19,20 @@ import (
 const (
 	providerRequestMaxAttempts = 3
 
-	retryDecisionRetry             = "retry"
-	retryDecisionSuccess           = "success"
-	retryDecisionSuccessAfterRetry = "success_after_retry"
-	retryDecisionExhausted         = "exhausted"
-	retryDecisionNoRetryStatus     = "no_retry_status"
-	retryDecisionNoRetryContext    = "no_retry_context"
-	retryDecisionNoRetryBuild      = "no_retry_request_build"
-	retryDecisionNoRetryWaitBudget = "no_retry_wait_budget"
+	retryDecisionRetry                  = "retry"
+	retryDecisionSuccess                = "success"
+	retryDecisionSuccessAfterRetry      = "success_after_retry"
+	retryDecisionExhausted              = "exhausted"
+	retryDecisionNoRetryStatus          = "no_retry_status"
+	retryDecisionNoRetryContext         = "no_retry_context"
+	retryDecisionNoRetryBuild           = "no_retry_request_build"
+	retryDecisionNoRetryWaitBudget      = "no_retry_wait_budget"
+	retryDecisionStreamPreEventEOF      = "retry_stream_pre_event_eof"
+	retryDecisionNoRetryStreamError     = "no_retry_stream_error"
+	retryDecisionNoRetryStreamEvent     = "no_retry_stream_event_observed"
+	retryDecisionNoRetryStreamContext   = "no_retry_stream_context"
+	retryDecisionNoRetryStreamExhausted = "no_retry_stream_exhausted"
+	retryDecisionNoRetryStreamRawBytes  = "no_retry_stream_raw_bytes"
 
 	defaultRetryBaseDelay    = 200 * time.Millisecond
 	defaultRetryMaxDelay     = 2 * time.Second
@@ -40,6 +48,31 @@ type providerRetry struct {
 	sleep        func(context.Context, time.Duration) error
 	jitter       func(time.Duration) time.Duration
 	now          func() time.Time
+}
+
+type providerAttemptContextKey struct{}
+
+type providerRetryState struct {
+	attempt int
+	waited  time.Duration
+}
+
+func responseRetryState(resp *http.Response) providerRetryState {
+	if resp == nil || resp.Request == nil {
+		return providerRetryState{attempt: 1}
+	}
+	state, _ := resp.Request.Context().Value(providerAttemptContextKey{}).(providerRetryState)
+	if state.attempt < 1 {
+		state.attempt = 1
+	}
+	return state
+}
+
+func setResponseRetryState(resp *http.Response, state providerRetryState) {
+	if resp == nil || resp.Request == nil {
+		return
+	}
+	resp.Request = resp.Request.WithContext(context.WithValue(resp.Request.Context(), providerAttemptContextKey{}, state))
 }
 
 type retryOutcome struct {
@@ -129,6 +162,10 @@ func doProviderRequestWithRetry(
 	buildRequest func(context.Context) (*http.Request, error),
 ) (*http.Response, error) {
 	return doProviderRequestWithAudit(ctx, client, provider, requestID, modelCallID, buildRequest, audit.Default())
+}
+
+func doProviderStreamRequestWithRetry(ctx context.Context, client *http.Client, provider string, requestID string, modelCallID string, buildRequest func(context.Context) (*http.Request, error), retry providerRetry) (*http.Response, error) {
+	return doProviderRequest(ctx, client, provider, requestID, modelCallID, buildRequest, audit.Default(), retry)
 }
 
 func doProviderRequestWithAudit(
@@ -247,6 +284,7 @@ func doProviderRequest(
 				closeResponseBody(resp)
 				return nil, err
 			}
+			setResponseRetryState(resp, providerRetryState{attempt: attempt, waited: waited})
 			return resp, nil
 		}
 
@@ -268,6 +306,284 @@ func doProviderRequest(
 		waited += delay
 	}
 	return nil, errors.New("provider request retry exhausted")
+}
+
+// retryingStreamBody retries a 2xx stream only when the body ends before the
+// adapter observes or publishes any event. It owns every abandoned response body.
+type retryingStreamBody struct {
+	ctx          context.Context
+	client       *http.Client
+	provider     string
+	requestID    string
+	modelCallID  string
+	buildRequest func(context.Context) (*http.Request, error)
+	observer     *audit.Observer
+	retry        providerRetry
+
+	mu       sync.Mutex
+	body     io.ReadCloser
+	state    providerRetryState
+	canRetry func() bool
+	rawBytes bool
+	closed   bool
+}
+
+func newRetryingStreamBody(ctx context.Context, client *http.Client, provider, requestID, modelCallID string, buildRequest func(context.Context) (*http.Request, error), body io.ReadCloser, state providerRetryState, observer *audit.Observer, retry providerRetry, canRetry func() bool) io.ReadCloser {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if observer == nil {
+		observer = audit.Default()
+	}
+	if state.attempt < 1 {
+		state.attempt = 1
+	}
+	return &retryingStreamBody{ctx: ctx, client: client, provider: provider, requestID: requestID, modelCallID: modelCallID, buildRequest: buildRequest, observer: observer, retry: normalizeProviderRetry(retry), body: body, state: state, canRetry: canRetry}
+}
+
+func (body *retryingStreamBody) Read(p []byte) (int, error) {
+	for {
+		inner, err := body.activeBody()
+		if err != nil {
+			return 0, err
+		}
+		n, err := inner.Read(p)
+		if n > 0 {
+			body.markRawBytes()
+			if err != nil && !errors.Is(err, io.EOF) {
+				body.recordDecision(retryDecisionNoRetryStreamRawBytes, newStreamTruncatedError(body.provider, err))
+			}
+			// Never retry after any raw bytes: Scanner could otherwise combine a
+			// partial SSE frame from this body with bytes from the next response.
+			return n, err
+		}
+		if err == nil {
+			return 0, nil
+		}
+		if body.hasRawBytes() {
+			if errors.Is(err, io.EOF) {
+				return 0, io.EOF
+			}
+			body.recordDecision(retryDecisionNoRetryStreamRawBytes, newStreamTruncatedError(body.provider, err))
+			return 0, err
+		}
+		if !isRetryableStreamReadError(err) {
+			if ctxErr := body.ctx.Err(); ctxErr != nil {
+				body.recordDecision(retryDecisionNoRetryStreamContext, ctxErr)
+				return 0, ctxErr
+			}
+			body.recordDecision(retryDecisionNoRetryStreamError, newStreamTruncatedError(body.provider, err))
+			return 0, err
+		}
+		if retryErr := body.retryAfterPreEventFailure(err); retryErr != nil {
+			return 0, retryErr
+		}
+	}
+}
+
+func isRetryableStreamReadError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func (body *retryingStreamBody) activeBody() (io.ReadCloser, error) {
+	body.mu.Lock()
+	defer body.mu.Unlock()
+	if body.closed || body.body == nil {
+		return nil, io.ErrClosedPipe
+	}
+	return body.body, nil
+}
+
+func (body *retryingStreamBody) markRawBytes() {
+	body.mu.Lock()
+	body.rawBytes = true
+	body.mu.Unlock()
+}
+
+func (body *retryingStreamBody) hasRawBytes() bool {
+	body.mu.Lock()
+	defer body.mu.Unlock()
+	return body.rawBytes
+}
+
+func (body *retryingStreamBody) Close() error {
+	body.mu.Lock()
+	body.closed = true
+	current := body.body
+	body.body = nil
+	body.mu.Unlock()
+	if current == nil {
+		return nil
+	}
+	return current.Close()
+}
+
+func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
+	truncatedErr := newStreamTruncatedError(body.provider, cause)
+	body.mu.Lock()
+	if body.closed {
+		body.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if body.rawBytes {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryStreamRawBytes, truncatedErr)
+		if errors.Is(cause, io.EOF) {
+			return io.EOF
+		}
+		return cause
+	}
+	if err := body.ctx.Err(); err != nil {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryStreamContext, err)
+		return err
+	}
+	if body.canRetry == nil || !body.canRetry() {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryStreamEvent, truncatedErr)
+		return truncatedErr
+	}
+	if body.state.attempt >= body.retry.maxAttempts {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryStreamExhausted, truncatedErr)
+		return truncatedErr
+	}
+	delay, canWait := body.retry.retryWait(body.state.attempt, nil, body.state.waited)
+	if !canWait {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryWaitBudget, truncatedErr)
+		return truncatedErr
+	}
+	old := body.body
+	body.body = nil
+	body.mu.Unlock()
+	body.recordDecision(retryDecisionStreamPreEventEOF, truncatedErr)
+	closeResponseBody(&http.Response{Body: old})
+	if err := body.retry.sleep(body.ctx, delay); err != nil {
+		body.recordDecision(retryDecisionNoRetryStreamContext, err)
+		return err
+	}
+	body.mu.Lock()
+	body.state.waited += delay
+	body.mu.Unlock()
+
+	for {
+		body.mu.Lock()
+		if body.closed {
+			body.mu.Unlock()
+			return io.ErrClosedPipe
+		}
+		if body.state.attempt >= body.retry.maxAttempts {
+			body.mu.Unlock()
+			return fmt.Errorf("provider stream retry exhausted")
+		}
+		body.state.attempt++
+		attempt := body.state.attempt
+		waited := body.state.waited
+		body.mu.Unlock()
+
+		request, err := body.buildRequest(body.ctx)
+		if err != nil {
+			body.recordRequestBuildFailure(err)
+			return err
+		}
+		startedAt := time.Now()
+		endpoint, targetHost, canaryMatched := body.recordRequest(request)
+		resp, err := body.client.Do(request)
+		outcome := classifyAttempt(err, resp, attempt, body.retry.maxAttempts)
+		var nextDelay time.Duration
+		if outcome.retryable {
+			nextDelay, canWait = body.retry.retryWait(attempt, resp, waited)
+			if !canWait {
+				outcome.retryable = false
+				outcome.decision = retryDecisionNoRetryWaitBudget
+			}
+		}
+		if resp != nil {
+			setResponseRetryState(resp, providerRetryState{attempt: attempt, waited: waited})
+		}
+		body.recordHTTPResponse(endpoint, targetHost, canaryMatched, startedAt, resp, err, outcome.decision)
+		if !outcome.retryable {
+			if err != nil {
+				closeResponseBody(resp)
+				return err
+			}
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				statusErr := buildHTTPStatusError(body.provider+" adapter", resp)
+				closeResponseBody(resp)
+				return statusErr
+			}
+			body.mu.Lock()
+			if body.closed {
+				body.mu.Unlock()
+				closeResponseBody(resp)
+				return io.ErrClosedPipe
+			}
+			body.body = resp.Body
+			body.mu.Unlock()
+			return nil
+		}
+		closeResponseBody(resp)
+		if err := body.retry.sleep(body.ctx, nextDelay); err != nil {
+			body.recordDecision(retryDecisionNoRetryStreamContext, err)
+			return err
+		}
+		body.mu.Lock()
+		body.state.waited += nextDelay
+		body.mu.Unlock()
+	}
+}
+
+func (body *retryingStreamBody) recordRequest(request *http.Request) (endpoint, targetHost string, canaryMatched bool) {
+	endpoint = "custom"
+	if request != nil && request.URL != nil {
+		targetHost = audit.HostFromURL(request.URL.String())
+		endpoint = audit.EndpointKind(request.URL.String())
+	}
+	canaryMatched = matchProviderRequestCanary(body.observer, request)
+	body.mu.Lock()
+	attempt := body.state.attempt
+	body.mu.Unlock()
+	recordProviderAttempt(body.ctx, body.observer, body.requestID, body.modelCallID, audit.Event{Kind: "provider_request", Provider: body.provider, Endpoint: endpoint, TargetHost: targetHost, RequestBytes: requestContentLength(request), CanaryMatched: canaryMatched, ScopeMatched: canaryMatched, Attempt: attempt, MaxAttempts: body.retry.maxAttempts})
+	return endpoint, targetHost, canaryMatched
+}
+
+func (body *retryingStreamBody) recordRequestBuildFailure(err error) {
+	body.recordDecision(retryDecisionNoRetryBuild, err)
+}
+
+func (body *retryingStreamBody) recordHTTPResponse(endpoint, targetHost string, canaryMatched bool, startedAt time.Time, resp *http.Response, err error, decision string) {
+	body.mu.Lock()
+	attempt := body.state.attempt
+	body.mu.Unlock()
+	event := audit.Event{Kind: "provider_response", Provider: body.provider, Endpoint: endpoint, TargetHost: targetHost, DurationMS: time.Since(startedAt).Milliseconds(), ScopeMatched: canaryMatched, Attempt: attempt, MaxAttempts: body.retry.maxAttempts, RetryDecision: decision}
+	if resp != nil {
+		event.Status = resp.StatusCode
+		event.RetryAfterPresent = retryAfterPresent(resp)
+		if resp.ContentLength > 0 {
+			event.ResponseBytes = resp.ContentLength
+		}
+	}
+	if err != nil {
+		event.ErrorCategory = ClassifyProviderError(err)
+		event.ErrorMessage = audit.SanitizeMetadataText(err.Error())
+	} else if resp != nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		event.ErrorCategory = ClassifyHTTPStatus(resp.StatusCode)
+		event.ErrorMessage = audit.SanitizeMetadataText(httpStatusErrorMessage(resp.StatusCode))
+	}
+	recordProviderAttempt(body.ctx, body.observer, body.requestID, body.modelCallID, event)
+}
+
+func (body *retryingStreamBody) recordDecision(decision string, err error) {
+	body.mu.Lock()
+	attempt := body.state.attempt
+	body.mu.Unlock()
+	event := audit.Event{Kind: "provider_response", Provider: body.provider, Attempt: attempt, MaxAttempts: body.retry.maxAttempts, RetryDecision: decision}
+	if err != nil {
+		event.ErrorCategory = ClassifyProviderError(err)
+		event.ErrorMessage = audit.SanitizeMetadataText(err.Error())
+	}
+	recordProviderAttempt(body.ctx, body.observer, body.requestID, body.modelCallID, event)
 }
 
 func classifyAttempt(err error, resp *http.Response, attempt, maxAttempts int) retryOutcome {

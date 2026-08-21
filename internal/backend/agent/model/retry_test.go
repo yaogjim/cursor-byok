@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -554,4 +555,330 @@ func mustFindAuditEvents(t *testing.T, data []byte, kind string) []audit.Event {
 		t.Fatalf("missing %s audit event in %s", kind, data)
 	}
 	return events
+}
+
+func TestRetryingStreamBodyDeadlineDoesNotRetry(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	calls := 0
+	body := newRetryingStreamBody(ctx, &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("unexpected retry")
+	})}, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, io.NopCloser(strings.NewReader("")), providerRetryState{attempt: 1}, nil, instantRetry(), func() bool { return true })
+	_, err := io.ReadAll(body)
+	_ = body.Close()
+	if !errors.Is(err, context.DeadlineExceeded) || calls != 0 {
+		t.Fatalf("err=%v calls=%d, want deadline exceeded/0", err, calls)
+	}
+}
+
+func TestRetryingStreamBodyRawBytesSuppressRetryAndCloseBodies(t *testing.T) {
+	first := &countedBody{ReadCloser: io.NopCloser(strings.NewReader(`data: {"choices":[]}`))}
+	calls := 0
+	observer, auditPath := newRetryAuditObserver(t)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("must not retry after raw bytes")
+	})}
+	body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, first, providerRetryState{attempt: 1}, observer, instantRetry(), func() bool { return true })
+	payload, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || string(payload) != `data: {"choices":[]}` || calls != 0 || first.closes != 1 {
+		t.Fatalf("payload=%q err=%v calls=%d closes=%d", payload, err, calls, first.closes)
+	}
+	if data := readClosedAudit(t, observer, auditPath); len(strings.TrimSpace(string(data))) != 0 {
+		t.Fatalf("normal EOF after raw bytes recorded a failed retry decision: %s", data)
+	}
+}
+
+func TestRetryStateCarriesInitialWaitIntoStreamBudget(t *testing.T) {
+	var bodies []*countedBody
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("retry")), Request: request}, nil
+		}
+		body := &countedBody{ReadCloser: io.NopCloser(strings.NewReader(""))}
+		bodies = append(bodies, body)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body, Request: request}, nil
+	})}
+	retry := instantRetry()
+	retry.baseDelay, retry.maxDelay, retry.maxTotalWait = time.Second, time.Second, time.Second
+	resp, err := doProviderRequest(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, nil, retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := responseRetryState(resp)
+	if state.attempt != 2 || state.waited != time.Second {
+		t.Fatalf("state=%+v", state)
+	}
+	stream := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, resp.Body, state, nil, retry, func() bool { return true })
+	_, err = io.ReadAll(stream)
+	_ = stream.Close()
+	if err == nil || calls != 2 || len(bodies) != 1 || bodies[0].closes != 1 {
+		t.Fatalf("err=%v calls=%d bodies=%d closes=%d", err, calls, len(bodies), bodies[0].closes)
+	}
+}
+
+func TestRetryingStreamBodyRetriesOnlyZeroByteEOF(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "EOF", err: io.EOF},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := &countedBody{ReadCloser: &errorAfterReader{err: test.err}}
+			calls := 0
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("recovered")), Request: request}, nil
+			})}
+			body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+				return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+			}, first, providerRetryState{attempt: 1}, nil, instantRetry(), func() bool { return true })
+			payload, err := io.ReadAll(body)
+			_ = body.Close()
+			if err != nil || string(payload) != "recovered" || calls != 1 || first.closes != 1 {
+				t.Fatalf("payload=%q err=%v calls=%d closes=%d", payload, err, calls, first.closes)
+			}
+		})
+	}
+}
+
+func TestRetryingStreamBodyZeroByteNonEOFErrorDoesNotRetry(t *testing.T) {
+	first := &countedBody{ReadCloser: &errorAfterReader{err: errors.New("connection reset by peer")}}
+	calls := 0
+	observer, auditPath := newRetryAuditObserver(t)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("unexpected retry")
+	})}
+	body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, first, providerRetryState{attempt: 1}, observer, instantRetry(), func() bool { return true })
+	_, err := io.ReadAll(body)
+	_ = body.Close()
+	if err == nil || !strings.Contains(err.Error(), "connection reset by peer") || calls != 0 || first.closes != 1 {
+		t.Fatalf("err=%v calls=%d closes=%d", err, calls, first.closes)
+	}
+	decision := mustFindAuditEvent(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if decision.RetryDecision != retryDecisionNoRetryStreamError || decision.Attempt != 1 {
+		t.Fatalf("retry decision = %+v", decision)
+	}
+}
+
+func TestRetryingStreamBodyRawBytesWithReadErrorNeverRetries(t *testing.T) {
+	first := &countedBody{ReadCloser: &singleReadErrorBody{data: []byte("data: partial"), err: io.ErrUnexpectedEOF}}
+	calls := 0
+	observer, auditPath := newRetryAuditObserver(t)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("unexpected retry")
+	})}
+	body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, first, providerRetryState{attempt: 1}, observer, instantRetry(), func() bool { return true })
+	payload, err := io.ReadAll(body)
+	_ = body.Close()
+	if !errors.Is(err, io.ErrUnexpectedEOF) || string(payload) != "data: partial" || calls != 0 || first.closes != 1 {
+		t.Fatalf("payload=%q err=%v calls=%d closes=%d", payload, err, calls, first.closes)
+	}
+	decision := mustFindAuditEvent(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if decision.RetryDecision != retryDecisionNoRetryStreamRawBytes || decision.Attempt != 1 {
+		t.Fatalf("retry decision = %+v", decision)
+	}
+}
+
+func TestHTTPAndStreamRetryShareMaximumAttempts(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		switch calls {
+		case 1:
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("retry")), Request: request}, nil
+		case 2:
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("recovered")), Request: request}, nil
+		}
+	})}
+	retry := instantRetry()
+	resp, err := doProviderRequest(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, nil, retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, resp.Body, responseRetryState(resp), nil, retry, func() bool { return true })
+	payload, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || string(payload) != "recovered" || calls != providerRequestMaxAttempts {
+		t.Fatalf("payload=%q err=%v calls=%d, want calls=%d", payload, err, calls, providerRequestMaxAttempts)
+	}
+}
+
+type singleReadErrorBody struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (body *singleReadErrorBody) Read(p []byte) (int, error) {
+	if body.done {
+		return 0, io.EOF
+	}
+	body.done = true
+	return copy(p, body.data), body.err
+}
+
+func (body *singleReadErrorBody) Close() error { return nil }
+
+func TestRetryingStreamBodyClosesWrapperAfterRetry(t *testing.T) {
+	// 验证首个空 body 重试成功后，最终的 wrapper body 在 Stream 返回时被关闭
+	originalClosed := false
+	retryClosed := false
+	attempt := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			// 首次返回空 body，触发重试
+			return
+		}
+		// 第二次返回正常完成
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{
+		client: server.Client(),
+		retry:  instantRetry(),
+	}
+
+	// 包装客户端以跟踪 body 关闭
+	wrappedClient := &http.Client{
+		Transport: &trackingTransport{
+			base: server.Client().Transport,
+			onResponse: func(resp *http.Response, attemptNum int) {
+				// 包装 body 以跟踪关闭
+				originalBody := resp.Body
+				resp.Body = &trackingReadCloser{
+					ReadCloser: originalBody,
+					onClose: func() error {
+						if attemptNum == 1 {
+							originalClosed = true
+						} else if attemptNum == 2 {
+							retryClosed = true
+						}
+						return originalBody.Close()
+					},
+				}
+			},
+			attempt: &attempt,
+		},
+	}
+	adapter.client = wrappedClient
+
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:       "test-req",
+		RunID:           "test-run",
+		ModelCallID:     "test-call",
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		ProviderModelID: "gpt-test",
+		Messages:        []Message{{Role: "user", Content: "test"}},
+		MaxTokens:       100,
+	}, func(ModelEvent) error { return nil })
+
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if !originalClosed {
+		t.Error("original body was not closed after retry")
+	}
+	if !retryClosed {
+		t.Error("retry wrapper body was not closed after stream completed")
+	}
+	if attempt != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempt)
+	}
+}
+
+type trackingTransport struct {
+	base       http.RoundTripper
+	onResponse func(*http.Response, int)
+	attempt    *int
+}
+
+func (t *trackingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.base == nil {
+		t.base = http.DefaultTransport
+	}
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && t.onResponse != nil {
+		t.onResponse(resp, *t.attempt)
+	}
+	return resp, err
+}
+
+type trackingReadCloser struct {
+	io.ReadCloser
+	onClose func() error
+}
+
+func (t *trackingReadCloser) Close() error {
+	if t.onClose != nil {
+		return t.onClose()
+	}
+	return t.ReadCloser.Close()
+}
+
+func TestRetryingStreamBodyCloseDuringRetryDoesNotLeakOrRetryAfterClose(t *testing.T) {
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls++
+		close(started)
+		<-unblock
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("late")), Request: request}, nil
+	})}
+	first := &countedBody{ReadCloser: &errorAfterReader{err: io.EOF}}
+	body := newRetryingStreamBody(context.Background(), client, "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test", nil)
+	}, first, providerRetryState{attempt: 1}, nil, instantRetry(), func() bool { return true })
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := io.ReadAll(body)
+		errCh <- err
+	}()
+	<-started
+	if err := body.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(unblock)
+	if err := <-errCh; !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Read after close = %v, want closed pipe", err)
+	}
+	if first.closes != 1 {
+		t.Fatalf("original body closes = %d, want 1", first.closes)
+	}
+	if calls != 1 {
+		t.Fatalf("retry calls = %d, want 1", calls)
+	}
 }

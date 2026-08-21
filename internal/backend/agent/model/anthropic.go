@@ -24,6 +24,8 @@ import (
 type AnthropicAdapter struct {
 	// client 负责发送 HTTP 请求。
 	client *http.Client
+	// retry 仅供同包测试注入；零值使用默认预算。
+	retry providerRetry
 }
 
 type anthropicToolAccumulator struct {
@@ -317,7 +319,8 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		return httpReq, nil
 	}
 
-	resp, err := doProviderRequestWithRetry(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest)
+	sawStreamEvent := false
+	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, adapter.retry)
 	if err != nil {
 		if idleErr := streamIdle.Err(); idleErr != nil {
 			err = idleErr
@@ -326,8 +329,13 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
-	streamIdle.AttachBody(resp.Body)
-	defer resp.Body.Close()
+	// 使用闭包变量确保 defer 关闭最终的 body（可能是原始或重试后的 wrapper）
+	bodyToClose := resp.Body
+	defer func() {
+		if bodyToClose != nil {
+			_ = bodyToClose.Close()
+		}
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = buildHTTPStatusError("anthropic adapter", resp)
@@ -335,6 +343,9 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
+	bodyToClose = newRetryingStreamBody(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, resp.Body, responseRetryState(resp), nil, adapter.retry, func() bool { return !sawStreamEvent })
+	resp.Body = bodyToClose
+	streamIdle.AttachBody(resp.Body)
 
 	type anthropicUsage struct {
 		InputTokens              *int64 `json:"input_tokens,omitempty"`
@@ -681,6 +692,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			continue
 		}
 		if firstEventAt.IsZero() {
+			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
 		if strings.HasPrefix(line, "event:") {

@@ -128,3 +128,52 @@ func assertAnthropicEventKindCount(t *testing.T, events []ModelEvent, kind Model
 		t.Fatalf("event kind %s count = %d, want %d; events=%#v", kind, got, want, events)
 	}
 }
+
+func TestAnthropicPreEventEOFRetriesAndPostEventDoesNot(t *testing.T) {
+	t.Run("retries before first event", func(t *testing.T) {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			hits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+			if hits == 2 {
+				_, _ = fmt.Fprint(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			}
+		}))
+		defer server.Close()
+		adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+		err := adapter.Stream(context.Background(), anthropicTestRequest(server.URL), func(ModelEvent) error { return nil })
+		if err != nil || hits != 2 {
+			t.Fatalf("err=%v hits=%d, want nil/2", err, hits)
+		}
+	})
+	t.Run("does not retry after partial tool", func(t *testing.T) {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			hits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(writer, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool-1\",\"name\":\"x\"}}\n\n")
+		}))
+		defer server.Close()
+		adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+		err := adapter.Stream(context.Background(), anthropicTestRequest(server.URL), func(ModelEvent) error { return nil })
+		if err == nil || hits != 1 {
+			t.Fatalf("err=%v hits=%d, want error/1", err, hits)
+		}
+	})
+}
+
+func TestAnthropicPreEventContextCanceledDoesNotRetry(t *testing.T) {
+	hits := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) { hits++; cancel() }))
+	defer server.Close()
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	err := adapter.Stream(ctx, anthropicTestRequest(server.URL), func(ModelEvent) error { return nil })
+	if !errors.Is(err, context.Canceled) || hits != 1 {
+		t.Fatalf("err=%v hits=%d, want canceled/1", err, hits)
+	}
+}
+
+func anthropicTestRequest(baseURL string) StreamRequest {
+	return StreamRequest{RequestID: "request-1", RunID: "run-1", ModelCallID: "model-call-1", BaseURL: baseURL, APIKey: "test-key", ProviderModelID: "claude-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128}
+}

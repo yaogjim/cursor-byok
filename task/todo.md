@@ -4,126 +4,160 @@
 
 ## Active Work Package
 
-WORK_PACKAGE_ID: session-metrics-log-cleanup-20260817
-STATUS: verified
-RISK_LEVEL: normal
+WORK_PACKAGE_ID: provider-disconnect-recovery-20260821
+STATUS: in_progress
+RISK_LEVEL: high
 OWNER: orchestrator
+DESIGN_READINESS: approved (P0)
+DELIVERY_STATUS: implemented (P0)
 
 ### CONTEXT
 
-- 已确认：统计重置只清空 `history/usage.json` 聚合，不删除会话历史；日志清理只删除已关闭采集 session。
-- 现状：日志清理链路已存在；统计重置缺少写 API，必须复用 `usage.json.lock` 和原子写入。
-- 设计锚点：`.cursor/plans/统计日志清理_f1f04c7f.plan.md`、`docs/agents/project.md`。
+- 用户已确认按 P0/P1/P2 优先级实施 Provider 断连改进，并授权主控使用 subagent 执行编码与验证。
+- 重点 trace `20260820T104843.414858000Z-5f93b537521a` 重新解析 241,852 条事件：21 个 `provider_stream_finished=error` 全部先出现 `llm_summary succeeded`；4 个失败调用已有 chunk，3 个存在 tool-call 关联元数据。
+- 已确认根因之一：basic artifact 使用 `payload_summary`，归一化只读取 `payload`，导致失败摘要被默认投影为成功。
+- 当前 HTTP retry 包围 `client.Do` 与 status；OpenAI/Anthropic 已校验 completion marker，但 2xx 后首个 model event 前的截断未进入请求重试。
+- 设计锚点：`docs/prd_cursor_byok_工作决策基线.md#62-agent工具链与-provider-断连`、`docs/prd_cursor_byok_系统架构与核心业务数据流.md#145-design-provider-disconnect-001provider-断连终态与安全恢复`。
 
 ### GOAL
 
-- 首页会话统计可安全重置并从零累计，配置页可安全清理已关闭采集日志，且两条链路有自动化验证和明确 UI 反馈。
+- 修复 basic/full 的 model-call 成功/失败语义冲突，建立可审计的 provider 协议终态和唯一业务终态。
+- 仅在首个 model event、下游发布、工具和 checkpoint 均未发生时，对可重试的流前截断执行有限重试。
+- 保持已有输出幂等保存、工具副作用保护、RunSSE 结构化失败和日志隐私边界。
 
 ### NON_GOALS
 
-- 不删除会话历史、当前活跃 session、普通运行日志或坏 manifest 目录。
-- 不引入新依赖、不改变协议、不提交、不推送、不发布。
+- 不实现已有输出后的 SSE 续传或答案拼接。
+- 不实现跨 provider fallback、熔断或自动模型切换。
+- 不在本工作包内临场设计 subagent checkpoint/result/parent commit 的原子持久化协议；该项进入后续 P1 独立设计与实施。
+- 不修改 MITM whitelist、CONNECT/直通决策、proto 公共契约、前端、发布资产，不提交、不推送、不发布。
 
 ### BASELINE
 
-- branch/head：`noad` / `69177ead75734bbdfac38af1fac71ec874a5206b`。
-- 相关 status/diff：工作区干净，`noad` 相对 `origin/noad` ahead 1。
-- 已有脏文件、所有者和用途：none。
-- 不可触碰改动：none；执行代理不得修改 `task/todo.md`，由中控在代理停止后汇总。
+- branch/head：`noad` / `eed4ca6898a3a6a5222ab188c72b209f1534175c`。
+- 开工时工作区干净；本工作包首先产生的修改仅为已确认的 PRD/Design/Todo 同步。
+- 运行中唯一代理实例受保护；测试不得停止或替换 `127.0.0.1:18080` / `127.0.0.1:18090` 的服务。
+- `task/todo.md` 仅由主控修改；subagent 不得修改活动任务真值源。
 
-### STEPS
+### SLICES
 
-1. 在 `UsageFileStore` 中实现共锁、原子、完整 schema v2 统计重置，并补并发/旧事件测试。
-2. 暴露 `MetricsService.ResetHomeMetricsSummary`，接入 client API、app state、首页确认按钮与状态反馈。
-3. 将既有日志清理入口明确为“清理日志”，补 root 安全、并发幂等和 closed/open/普通日志测试。
-4. 补齐静态 i18n、PRD 和任务记录；重新生成 Wails bindings。
-5. 执行 Go 测试、race、vet、前端配置测试和构建；保留手工 UI 验收边界。
+#### provider-terminal-contract
 
-### EXPECTED_PATHS
+- priority: P0
+- status: completed
+- owner: coding-subagent
+- size: S
+- depends_on: none
+- scope: basic/full artifact error 投影、`llm_summary` 非业务终态语义、回归测试。
+- expected paths: `internal/backend/forwarder/debug_recorder.go`、同包测试、必要的 `internal/observability/` 契约测试。
+- acceptance: basic/full 的失败摘要均为 failed；同一 model call 不再因 basic omission 被错误标为 succeeded。
 
-- `internal/backend/forwarder/usage_store.go`
-- `internal/backend/forwarder/usage_store_test.go`
-- `internal/bridge/metrics.go`
-- `internal/client/service.go`
-- `internal/observability/storage.go`
-- `internal/observability/observability_test.go`
-- `frontend/src/services/clientApi.js`
-- `frontend/src/state/appState.js`
-- `frontend/src/views/Home.vue`
-- `frontend/src/components/HomeMetricsCard.vue`
-- `frontend/src/views/Config.vue`
-- `frontend/src/i18n/`
+#### provider-stream-final
+
+- priority: P0
+- status: completed
+- owner: coding-subagent
+- size: M
+- depends_on: provider-terminal-contract contract
+- scope: pass 进度状态、`provider_stream_finished` 结构化字段、唯一 `model_call_final`、RunSSE 一致性、脱敏错误。
+- expected paths: `internal/backend/forwarder/types.go`、`actor.go`、`service.go`、`provider.go`、相关测试；可选扩展 `internal/observability/contract.go`。
+- acceptance: success/error/cancel/truncated 均有唯一一致 final；已有输出幂等；partial/completed/dispatched tool 状态可审计且不重复执行。
+
+#### provider-stream-safe-retry
+
+- priority: P0
+- status: completed
+- owner: coding-subagent
+- size: M
+- depends_on: provider-terminal-contract contract
+- scope: OpenAI/Anthropic 2xx 后首 model event 前的可重试截断；保持同一 model call、重建 request、关闭 body、复用 attempts/退避预算。
+- expected paths: `internal/backend/agent/model/retry.go`、`openai.go`、`anthropic.go`、相关测试；如需共享 helper 仅限同包。
+- acceptance: 首事件前 EOF/transport 按预算重试；任意 model event/tool progress 后零重试；context cancel 不重试。
+
+#### provider-p0-integration-verification
+
+- priority: P0
+- status: completed
+- owner: orchestrator + readonly-verifier
+- size: M
+- depends_on: three P0 coding slices
+- scope: 集成、差异审查、测试/race/vet、真实或近真实 basic trace fixture 验证、文档收口。
+- acceptance: 相关 package tests/race/vet 与 `git diff --check` 通过；无 secret；无 whitelist/provider fallback 行为变化；残余 gap 分类记录。
+
+#### provider-parent-correlation
+
+- priority: P1
+- status: pending
+- owner: orchestrator
+- size: M
+- depends_on: provider-p0-integration-verification
+- scope: root/parent conversation、parent tool、subagent task/run、model call、attempt 的可选关联字段与入口接线；不含原子结果提交。
+- acceptance: 父子调用可从入口关联到 terminal，缺失字段明确为 unknown。
+
+#### subagent-atomic-result
+
+- priority: P1
+- status: blocked
+- owner: orchestrator
+- size: L，必须继续拆分
+- depends_on: provider-parent-correlation
+- block_reason: 需要独立实施级 Design 固化 child checkpoint/result、parent tool-result、事务/CAS、恢复和兼容合同。
 
 ### ALLOWED_ROOTS
 
+- `internal/backend/agent/model/`
 - `internal/backend/forwarder/`
-- `internal/bridge/`
-- `internal/client/`
 - `internal/observability/`
-- `frontend/src/`
+- `internal/audit/`（仅必要的 typed/sanitized 字段）
 - `docs/`
 - `task/`
 
 ### FORBIDDEN_PATHS
 
 - `proto/`
-- `cursor-tab-server/`
+- `internal/mitm/`
 - `tools/log-analyzer/`
+- `cursor-tab-server/`
+- `frontend/`
+- `bin/release/`
 - `.git/`
-- 任何用户已有改动、凭据、发布资产和远端操作。
+- 用户凭据、真实日志内容和运行中代理配置。
 
 ### ALLOWED_DECISIONS
 
-- 同模块内私有辅助函数、测试夹具、按钮布局、文案措辞和结果格式化。
-- 保留现有 endpoint，使用生成 binding 或现有 `Call.ByName` 的等价接入方式。
+- 同包私有 helper、结构体内部字段、事件 fields 的向后兼容可选扩展、测试夹具和错误类型组合。
+- 保持既有最大 attempts、退避预算和 provider/model 选择不变。
+- 对当前已确认的 basic 假成功、completion marker、幂等输出和副作用门禁做根因修复。
 
 ### REQUIRES_PARENT_APPROVAL
 
-- 扩大清理范围、删除会话历史或普通日志。
-- 引入依赖、修改持久化 schema、跨允许根目录、改变 Wails 公共契约语义。
-
-### DELIVERABLES
-
-- 统计 reset 的持久化/API/UI 闭环与测试。
-- 日志清理的安全边界、反馈和测试闭环。
-- 实际运行的验证命令、变更路径、未验证范围和残余风险记录。
+- 修改 public proto/API、持久化 schema 或 subagent 原子提交语义。
+- 新增跨 provider fallback、熔断、模型切换或已有输出后的自动续传。
+- 修改 MITM whitelist/CA/路由、引入依赖、停止运行中代理、提交、推送或发布。
 
 ### ACCEPTANCE
 
-- `go test ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability -count=1` 通过。
-- `go test -race ./internal/backend/forwarder ./internal/observability -count=1` 通过。
-- `go vet ./internal/backend/forwarder ./internal/historymetrics ./internal/bridge ./internal/client ./internal/observability` 通过。
-- `node frontend/scripts/test-config-projection.mjs` 和 `npm run build --prefix frontend` 通过。
-- 代码行为满足统计只清聚合、日志只清 closed session 的手工验收条件。
-
-### GATES
-
-- none。
+- `go test ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability -count=1` 通过。
+- `go test -race ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability -count=1` 在可接受时间内通过；若环境超时，只能记录 env-gap，不宣称通过。
+- `go vet ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability` 通过。
+- `git diff --check` 通过。
+- basic/full summary 失败语义一致；每个 model call 最多一个业务 final；首事件前可安全重试，已有事件/工具/checkpoint 后禁止重试；错误输出完成脱敏。
 
 ### STOP_CONDITIONS
 
-- 触碰 FORBIDDEN_PATHS 或无法区分的既有改动。
-- 需要 REQUIRES_PARENT_APPROVAL 的决策。
-- 测试失败且需要削弱测试、扩展范围或改变数据语义才能继续。
-- 生成 binding 或 i18n 流程需要未批准的外部副作用。
+- 需要修改公共协议、持久化 schema、MITM 路由或 provider fallback 语义。
+- 无法在不重复下游输出/工具副作用的情况下实现流前重试。
+- 测试发现已有 history replay、tool result、compaction 或 commit-message 链路回归且需要扩大范围才能修复。
+- 发现用户已有未归属改动或需要停止运行中的唯一代理实例。
 
 ### MONITOR_POLICY
 
-- mode: event-driven；执行代理完成后停止，再启动只读 verifier。
+- mode: event-driven；三个 P0 编码切片可在冻结合同后并行，主控负责集成；随后启动独立只读 verifier。
 
 ### VERIFICATION_POLICY
 
 - verifier: required。
-- package-level checks：Acceptance 中列出的 Go、race、vet、前端测试和构建，以及独立代码/范围审查。
-
-### ORCHESTRATION_RESULT
-
-- verdict: `pass`（独立只读 verifier）；目标、交付物、范围和架构边界均判定满足。
-- 已通过：普通 Go package tests、`go vet`、前端配置测试、前端生产构建、修改文件静态诊断和 `git diff --check`。
-- 未形成结论：组合 `go test -race ./internal/backend/forwarder ./internal/observability -count=1` 在大型生成 proto 包编译阶段持续超过 10 分钟，已停止，既无成功也无失败结论。
-- UI 边界：真实 Wails 开发窗口未能在原生 Go 调试构建阶段启动；纯 Vite 页面无法提供 Wails 原生 binding，因此未宣称桌面点击链路已手工通过。UI 行为以 Go/前端测试、生成 binding 和生产构建为证据，仍建议后续在可启动桌面环境补一次点击验收。
-- 进程清理：验收结束后未发现残留 `task dev`、Wails、Vite、Go build/compile 进程，端口 `1420` 无监听。
-- baseline: preserved；未提交、未推送。
+- 先相关测试，再 package tests/race/vet，最后差异、安全、文档和任务状态反向审计。
 
 ## 编排任务：upstream-sync-release-0.0.47
 

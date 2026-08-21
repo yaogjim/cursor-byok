@@ -16,6 +16,7 @@ onboarded: 2026-03-14
 - **任务真值源**：`task/todo.md`（单文件）
 - **Context7 MCP**：未接入；本项目明确禁用
 - **浏览器验证工具**：无固定工具；任务需要 UI 验证时按当前环境能力选择并记录降级边界
+- **仓库 README**：`noad` 与 `main` 均使用中文版，唯一入口为根目录 `README.md`；不保留英文版，不使用 `README-CN.md` 双语分流
 
 ## 文档路径映射
 
@@ -34,7 +35,7 @@ onboarded: 2026-03-14
 
 | 类型 | 路径 / 命令 / 入口 | 权威范围与备注 |
 |------|--------------------|----------------|
-| 项目定位与业务规则 | `README.md`；`docs/prd_cursor_byok_工作决策基线.md` | 产品定位、长期边界与已确认工作决策 |
+| 项目定位与业务规则 | `README.md`；`docs/prd_cursor_byok_工作决策基线.md` | 产品定位、长期边界与已确认工作决策；仓库入口 README 仅中文 |
 | PRD / 验收标准 | `docs/prd_cursor_byok_工作决策基线.md`；`docs/prd_cursor_byok_当前功能与上游差异.md` | 产品约束、当前功能事实、上游差异及验收口径 |
 | Design / ADR | `docs/prd_cursor_byok_系统架构与核心业务数据流.md`；ADR 未登记 | 系统架构、模块职责和核心数据流；重大新决策需补稳定 Design/ADR 锚点 |
 | 代码 / 配置入口 | `main.go`；`internal/`；`frontend/`；`Taskfile.yml`；`build/config.yml` | 客户端主流程、后端模块、前端、构建与运行配置 |
@@ -46,3 +47,4 @@ onboarded: 2026-03-14
 ## 项目覆盖规则
 
 - **覆盖母版 AGENTS.md §4「子代理策略」**：未经用户当次明确要求，不使用 subagent。原因：本项目要求主对话保持单 owner、范围可控，避免并行探索扩大修改边界。
+- **仓库 README 内容边界**：`noad` 与 `main` 的 README 只写本仓库产品事实。禁止写入上游项目信息、讨论组 / 交流群，以及其他在 `noad` README 中不存在的内容。同步 `main` 时若上游 README 带回英文版、上游主页、Trendshift、Telegram、QQ 群等内容，必须在合入前删除，不得保留为对照页。

@@ -885,10 +885,20 @@ func (service *Service) handleCancelIntent(intent InboundIntent) error {
 	clearPendingProviderCompletion(stream)
 	stream.mu.Lock()
 	stream.PendingProviderAction = providerActionNone
+	stream.ProviderStreamStats.FinishedAt = time.Now().UTC()
+	if !stream.ProviderStreamStats.StartedAt.IsZero() {
+		stream.ProviderStreamStats.StreamDuration = stream.ProviderStreamStats.FinishedAt.Sub(stream.ProviderStreamStats.StartedAt)
+	}
+	stream.ProviderStreamStats.ProtocolFinalStatus = "canceled"
+	stream.ProviderStreamStats.ModelCallFinalStatus = "not_finalized"
+	stream.ProviderStreamStats.Attribution = "client"
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
+	service.recordProviderTerminal(stream)
 	service.setTurnPhase(stream, TurnPhaseCanceled)
-	return service.broker.Cancel(intent.RequestID, firstNonEmpty(intent.CancelReason, "[canceled] User aborted request"))
+	cancelErr := service.broker.Cancel(intent.RequestID, firstNonEmpty(intent.CancelReason, "[canceled] User aborted request"))
+	service.recordModelCallFinal(stream, "canceled")
+	return cancelErr
 }
 
 func checkpointTurnHasReplayActivity(stream *ActiveStream) bool {
@@ -1428,6 +1438,23 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	}
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
+	stream.ProviderStreamStats = ProviderStreamStats{
+		Provider:               "unknown",
+		Model:                  firstNonEmpty(strings.TrimSpace(stream.ModelName), strings.TrimSpace(stream.ModelID), "unknown"),
+		Attempt:                currentPass,
+		HTTPAttempt:            0,
+		HTTPStatus:             "not_recorded",
+		Attribution:            "unknown",
+		Retryable:              "unknown",
+		RetryReason:            "not_recorded",
+		RetrySuppressionReason: "not_recorded",
+		ToolDispatchState:      "not_dispatched",
+		PotentialSideEffect:    "none",
+		ProtocolFinalStatus:    "streaming",
+		ModelCallFinalStatus:   "not_finalized",
+		StartedAt:              time.Now().UTC(),
+	}
+	stream.ProviderTerminalRecorded = false
 	stream.ToolInvocationCount = 0
 	modelCallID := stream.CurrentModelCallID
 	conversationID := stream.ConversationID
@@ -1729,32 +1756,8 @@ func (service *Service) runProviderStream(stream *ActiveStream, token uint64, ct
 			Err:   err,
 		},
 	}); postErr != nil && !errors.Is(postErr, errProviderLoopInterrupted) {
-		service.debug.LogProvider(context.Background(), request.RequestID, request.ConversationID, "provider_completion_post_error", map[string]any{
-			"model_call_id":  strings.TrimSpace(request.ModelCallID),
-			"provider_token": token,
-			"error":          postErr.Error(),
-		})
-		log.Printf(
-			"forwarder provider completion post failed request_id=%s model_call_id=%s provider_token=%d err=%v",
-			strings.TrimSpace(request.RequestID),
-			strings.TrimSpace(request.ModelCallID),
-			token,
-			postErr,
-		)
 		_ = service.failStreamIfNonTerminal(stream, "unknown", postErr)
 	}
-	if err != nil {
-		service.debug.LogProvider(context.Background(), request.RequestID, request.ConversationID, "provider_stream_finished", map[string]any{
-			"model_call_id":  strings.TrimSpace(request.ModelCallID),
-			"provider_token": token,
-			"error":          err.Error(),
-		})
-		return
-	}
-	service.debug.LogProvider(context.Background(), request.RequestID, request.ConversationID, "provider_stream_finished", map[string]any{
-		"model_call_id":  strings.TrimSpace(request.ModelCallID),
-		"provider_token": token,
-	})
 }
 
 // handleToolInvocation 把模型产生的工具意图转成 exec/interaction 请求并下发给客户端。
@@ -2124,6 +2127,19 @@ func (service *Service) applyExecControlProgress(stream *ActiveStream, pending r
 	return current
 }
 
+func safeProviderTerminalMessage(err error) string {
+	category := modeladapter.ClassifyProviderError(err)
+	if category == "" {
+		category = "provider_error"
+	}
+	status := "not_recorded"
+	var httpErr *modeladapter.HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
+		status = fmt.Sprintf("%d", httpErr.StatusCode)
+	}
+	return category + " status=" + status
+}
+
 // closeStreamWithProviderError 在真实 LLM/provider 出错时通过 RunSSE 传回错误，并正常结束流。
 func (service *Service) closeStreamWithProviderError(
 	stream *ActiveStream,
@@ -2144,10 +2160,7 @@ func (service *Service) closeStreamWithProviderError(
 	if stream == nil {
 		return nil
 	}
-	errorText := strings.TrimSpace(providerErr.Error())
-	if errorText == "" {
-		errorText = "provider error"
-	}
+	errorText := safeProviderTerminalMessage(providerErr)
 	modelCallID := strings.TrimSpace(stream.CurrentModelCallID)
 	if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, currentProviderPass(stream), accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, allowReasoningOnly); err != nil {
 		return fmt.Errorf("flush provider error assistant output: %w", err)
@@ -2276,6 +2289,7 @@ func (service *Service) finishSuccessfulTurnAfterCheckpoint(stream *ActiveStream
 		return err
 	}
 	service.setTurnPhase(stream, TurnPhaseCompleted)
+	service.recordModelCallFinal(stream, "succeeded")
 	return nil
 }
 
@@ -2442,7 +2456,7 @@ func (service *Service) failStream(stream *ActiveStream, terminalCode string, ca
 			"error": errorText,
 		}),
 	})
-	return service.failActiveStream(
+	terminalErr := service.failActiveStream(
 		stream,
 		stream.ConversationID,
 		stream.RequestID,
@@ -2450,6 +2464,14 @@ func (service *Service) failStream(stream *ActiveStream, terminalCode string, ca
 		resolvedTerminalCode,
 		errorText,
 	)
+	stream.mu.Lock()
+	providerTerminalRecorded := stream.ProviderTerminalRecorded
+	businessOutcome := providerFailureBusinessOutcome(stream.ProviderStreamStats)
+	stream.mu.Unlock()
+	if providerTerminalRecorded {
+		service.recordModelCallFinal(stream, businessOutcome)
+	}
+	return terminalErr
 }
 
 func resolveTerminalCode(fallback string, cause error) string {

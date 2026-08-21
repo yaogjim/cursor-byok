@@ -163,6 +163,9 @@ type ActiveStream struct {
 	ProviderSyntheticThinkingPublished          bool
 	ProviderFinishReason                        string
 	ProviderUsage                               turnUsageSnapshot
+	ProviderStreamStats                         ProviderStreamStats
+	ProviderTerminalRecorded                    bool
+	FinalizedModelCallIDs                       map[string]struct{}
 	ProviderTerminalToolInvocation              bool
 	PendingCompaction                           *PendingCompaction
 	PendingCheckpointBlobWrites                 map[uint32]string
@@ -267,6 +270,37 @@ type PendingCompaction struct {
 	HookMessage               string
 	SummaryModelCallID        string
 	StartedAt                 time.Time
+}
+
+type ProviderStreamStats struct {
+	Provider               string
+	Model                  string
+	Attempt                int
+	HTTPAttempt            int
+	HTTPStatus             string
+	Attribution            string
+	CompletionMarker       bool
+	ModelEventCount        int
+	ChunkCount             int
+	VisibleTextBytes       int
+	ReasoningBytes         int
+	PartialToolCount       int
+	CompletedToolCount     int
+	DispatchedToolCount    int
+	ToolDispatchState      string
+	DownstreamPublished    bool
+	PotentialSideEffect    string
+	FirstEventAt           time.Time
+	StartedAt              time.Time
+	FinishedAt             time.Time
+	StreamDuration         time.Duration
+	Retryable              string
+	RetryReason            string
+	RetrySuppressionReason string
+	ProtocolFinalStatus    string
+	ModelCallFinalStatus   string
+	FailureStage           string
+	ErrorCategory          string
 }
 
 type ProviderRequest struct {

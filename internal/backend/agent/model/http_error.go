@@ -36,6 +36,8 @@ const (
 type HTTPStatusError struct {
 	Provider          string
 	StatusCode        int
+	Attempt           int
+	MaxAttempts       int
 	Body              string
 	BodyReadError     error
 	BodySummaryType   string
@@ -182,6 +184,8 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 	statusError := &HTTPStatusError{
 		Provider:          provider,
 		StatusCode:        resp.StatusCode,
+		Attempt:           responseRetryState(resp).attempt,
+		MaxAttempts:       normalizeProviderRetry(providerRetry{}).maxAttempts,
 		RetrySummary:      ProviderRetryAttemptSummary(resp),
 		RetryAfterPresent: retryAfterPresent(resp),
 	}

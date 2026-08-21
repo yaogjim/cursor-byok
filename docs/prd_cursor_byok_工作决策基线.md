@@ -151,9 +151,19 @@ RPC 返回 success 不自动代表真实业务完成。后续能力报告必须�
 
 Repository/Docs/Upload 的 success 语义在未完成客户端影响实验前，不直接改成 failure；后续修复必须先定义不会错误推进 Cursor 状态机的诚实语义。
 
-### 6.2 Agent 与工具链
+### 6.2 Agent、工具链与 Provider 断连
 
 Agent 的 `context.json`、`state.json`、tool replay、reasoning signature、RunSSE 终态、取消和重试行为属于受保护主链路。`ForceBackgroundShell` 的无 reasoning replay 只允许在明确专项条件下生效，不得泛化为所有孤立 `tool_result` 放行。
+
+Provider 断连与重试遵循以下已确认规则：
+
+1. HTTP transport/状态成功、provider 协议完整结束、model call 业务成功是三种不同事实，任何指标和终态不得相互代替。
+2. `llm_summary` 只作为调用摘要工件，不是业务成功事实源；每个 `model_call_id` 必须由唯一、幂等的最终事件表达业务结果。
+3. 自动重试只允许发生在尚未产生 model event、尚未向下游发布内容、尚未形成或派发工具、尚未提交 checkpoint 的安全窗口；已有文本、reasoning、partial/completed tool 或副作用不明时禁止自动重放。
+4. 缺失 provider 明确完成标记的 EOF、scanner/decoder 错误和半帧必须归类为截断失败，不得记录协议成功或业务成功。
+5. 部分输出失败时保留已产生内容并明确终结当前 turn；本阶段不实现 SSE 断点续传，也不把新请求伪装为原流续传。
+6. provider 原始错误与响应只能形成脱敏诊断摘要；Authorization、Cookie、API key、完整 query、请求体和未经清洗的 provider 正文不得进入 basic 日志、history 或用户终态。
+7. subagent 后续恢复必须使用稳定父子关联、独立 checkpoint 和原子结果提交；在该合同完成前，不以 provider fallback 或整轮自动重放替代局部恢复。
 
 ## 7. 客户端体验决策
 

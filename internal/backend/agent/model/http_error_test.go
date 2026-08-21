@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -41,6 +42,27 @@ func TestBuildHTTPStatusErrorIsTypedAndKeepsLegacyText(t *testing.T) {
 	}
 	if got := err.Error(); got != "openai adapter status=502 body=upstream unavailable" {
 		t.Fatalf("Error() = %q", got)
+	}
+}
+
+func TestBuildHTTPStatusErrorCapturesRetryAttempt(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader("rate limited")),
+		Request:    req,
+	}
+	setResponseRetryState(resp, providerRetryState{attempt: 2, waited: time.Second})
+	statusErr := buildHTTPStatusError("openai adapter", resp)
+	var httpErr *HTTPStatusError
+	if !errors.As(statusErr, &httpErr) {
+		t.Fatalf("error is not HTTPStatusError: %v", statusErr)
+	}
+	if httpErr.StatusCode != http.StatusTooManyRequests || httpErr.Attempt != 2 || httpErr.MaxAttempts != providerRequestMaxAttempts {
+		t.Fatalf("typed http error = %+v", httpErr)
 	}
 }
 

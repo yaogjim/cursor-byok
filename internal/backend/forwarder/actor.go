@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -455,6 +456,268 @@ func (service *Service) handleProviderEvent(stream *ActiveStream, payload *strea
 	return service.applyProviderModelEvent(stream, payload.Event)
 }
 
+func streamProviderCompletionMarker(stream *ActiveStream) bool {
+	if stream == nil {
+		return false
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	return stream.ProviderStreamStats.CompletionMarker
+}
+
+func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.ModelEvent) {
+	if stats == nil {
+		return
+	}
+	stats.ModelEventCount++
+	if stats.FirstEventAt.IsZero() {
+		stats.FirstEventAt = providerEventTime(event.OccurredAt, time.Now().UTC())
+	}
+	if strings.TrimSpace(event.Provider) != "" {
+		stats.Provider = strings.TrimSpace(event.Provider)
+	}
+	if strings.TrimSpace(event.Model) != "" {
+		stats.Model = strings.TrimSpace(event.Model)
+	}
+	switch event.Kind {
+	case modeladapter.ModelEventKindTextDelta:
+		stats.ChunkCount++
+		stats.VisibleTextBytes += len(event.Text)
+	case modeladapter.ModelEventKindThinkingDelta:
+		stats.ChunkCount++
+		stats.ReasoningBytes += len(event.Text)
+	case modeladapter.ModelEventKindPartialToolCall:
+		stats.PartialToolCount++
+		if stats.ToolDispatchState == "not_dispatched" {
+			stats.ToolDispatchState = "partial_not_dispatched"
+		}
+	case modeladapter.ModelEventKindToolLikeCompleted:
+		stats.CompletedToolCount++
+		if stats.ToolDispatchState == "not_dispatched" || stats.ToolDispatchState == "partial_not_dispatched" {
+			stats.ToolDispatchState = "completed_not_dispatched"
+		}
+	case modeladapter.ModelEventKindTurnFinished:
+		stats.CompletionMarker = true
+	}
+}
+
+func markProviderDownstreamPublished(stream *ActiveStream) {
+	if stream == nil {
+		return
+	}
+	stream.mu.Lock()
+	stream.ProviderStreamStats.DownstreamPublished = true
+	stream.mu.Unlock()
+}
+
+func providerEventTime(value time.Time, fallback time.Time) time.Time {
+	if value.IsZero() {
+		return fallback
+	}
+	return value.UTC()
+}
+
+func providerTerminalAttribution(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), modeladapter.ClassifyProviderError(err) == modeladapter.ProviderErrorStreamIdleTimeout:
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "client"
+	default:
+		return "provider"
+	}
+}
+
+func applyProviderTerminalErrorStats(stats *ProviderStreamStats, err error) {
+	if stats == nil {
+		return
+	}
+	stats.ErrorCategory = firstNonEmpty(modeladapter.ClassifyProviderError(err), "not_recorded")
+	if httpStatus := providerHTTPStatusFromError(err); httpStatus != "" {
+		stats.HTTPStatus = httpStatus
+	}
+	if httpAttempt := providerHTTPAttemptFromError(err); httpAttempt > 0 {
+		stats.HTTPAttempt = httpAttempt
+	}
+	retryable, reason, suppression := providerRetryObservation(err, *stats)
+	stats.Retryable = retryable
+	stats.RetryReason = reason
+	stats.RetrySuppressionReason = suppression
+}
+
+func providerHTTPStatusFromError(err error) string {
+	var httpErr *modeladapter.HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
+		return fmt.Sprintf("%d", httpErr.StatusCode)
+	}
+	return ""
+}
+
+func providerHTTPAttemptFromError(err error) int {
+	var httpErr *modeladapter.HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil && httpErr.Attempt > 0 {
+		return httpErr.Attempt
+	}
+	return 0
+}
+
+func providerRetryObservation(err error, stats ProviderStreamStats) (retryable string, reason string, suppression string) {
+	if stats.DownstreamPublished || stats.VisibleTextBytes > 0 || stats.ReasoningBytes > 0 || stats.PartialToolCount > 0 || stats.CompletedToolCount > 0 || stats.DispatchedToolCount > 0 || stats.ModelEventCount > 0 {
+		return "false", "not_recorded", "output_or_tool_progress"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "false", "not_recorded", "context_canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || modeladapter.ClassifyProviderError(err) == modeladapter.ProviderErrorStreamIdleTimeout {
+		return "false", "not_recorded", "deadline"
+	}
+	var truncated *modeladapter.StreamTruncatedError
+	if errors.As(err, &truncated) {
+		if truncated != nil && truncated.Err == nil {
+			return "false", "not_recorded", "missing_completion_marker"
+		}
+		if stats.ChunkCount > 0 || stats.CompletionMarker {
+			return "false", "not_recorded", "stream_raw_bytes"
+		}
+		return "false", "pre_event_eof", "not_recorded"
+	}
+	category := modeladapter.ClassifyProviderError(err)
+	switch category {
+	case modeladapter.ProviderErrorRateLimited:
+		return "true", "http_429", "not_recorded"
+	case modeladapter.ProviderErrorServer5xx:
+		return "true", "http_5xx", "not_recorded"
+	case modeladapter.ProviderErrorTransport:
+		return "true", "transport", "not_recorded"
+	case modeladapter.ProviderErrorStatus4xx:
+		return "false", "not_recorded", "http_status"
+	default:
+		return "unknown", "not_recorded", "not_recorded"
+	}
+}
+
+func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[string]any {
+	firstEventAt := any("not_recorded")
+	if !stats.FirstEventAt.IsZero() {
+		firstEventAt = stats.FirstEventAt.UTC().Format(time.RFC3339Nano)
+	}
+	duration := stats.StreamDuration
+	if duration <= 0 && !stats.StartedAt.IsZero() && !stats.FinishedAt.IsZero() {
+		duration = stats.FinishedAt.Sub(stats.StartedAt)
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	return map[string]any{
+		"model_call_id": modelCallID, "provider_pass": stats.Attempt,
+		"status":       providerProtocolStatus(stats.ProtocolFinalStatus),
+		"http_attempt": providerHTTPAttemptField(stats.HTTPAttempt), "http_status": firstNonEmpty(stats.HTTPStatus, "not_recorded"),
+		"provider": firstNonEmpty(stats.Provider, "unknown"), "model": firstNonEmpty(stats.Model, "unknown"), "attribution": firstNonEmpty(stats.Attribution, "unknown"),
+		"completion_marker": stats.CompletionMarker, "model_event_count": stats.ModelEventCount,
+		"chunk_count": stats.ChunkCount, "visible_text_bytes": stats.VisibleTextBytes,
+		"reasoning_bytes": stats.ReasoningBytes, "partial_tool_count": stats.PartialToolCount,
+		"completed_tool_count": stats.CompletedToolCount, "dispatched_tool_count": stats.DispatchedToolCount,
+		"tool_dispatch_state": firstNonEmpty(stats.ToolDispatchState, "not_recorded"), "downstream_published": stats.DownstreamPublished,
+		"potential_side_effect": firstNonEmpty(stats.PotentialSideEffect, "unknown"), "first_event_at": firstEventAt,
+		"duration_ms": duration.Milliseconds(), "retryable": firstNonEmpty(stats.Retryable, "unknown"),
+		"retry_reason": firstNonEmpty(stats.RetryReason, "not_recorded"), "retry_suppression_reason": firstNonEmpty(stats.RetrySuppressionReason, "not_recorded"),
+		"protocol_final_status": firstNonEmpty(stats.ProtocolFinalStatus, "unknown"), "model_call_final_status": firstNonEmpty(stats.ModelCallFinalStatus, "not_recorded"),
+		"failure_stage":  firstNonEmpty(stats.FailureStage, "not_recorded"),
+		"error_category": firstNonEmpty(stats.ErrorCategory, "not_recorded"), "error_summary": safeProviderErrorSummary(stats),
+	}
+}
+
+func providerHTTPAttemptField(attempt int) any {
+	if attempt < 1 {
+		return "not_recorded"
+	}
+	return attempt
+}
+
+func providerProtocolStatus(protocolStatus string) string {
+	switch strings.TrimSpace(protocolStatus) {
+	case "completed":
+		return "completed"
+	case "canceled":
+		return "canceled"
+	case "timeout":
+		return "timeout"
+	case "truncated", "provider_failed":
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+func (service *Service) recordProviderTerminal(stream *ActiveStream) {
+	if service == nil || stream == nil || service.debug == nil {
+		return
+	}
+	stream.mu.Lock()
+	if stream.ProviderTerminalRecorded || strings.TrimSpace(stream.CurrentModelCallID) == "" || stream.ProviderStreamStats.Attempt < 1 {
+		stream.mu.Unlock()
+		return
+	}
+	stream.ProviderTerminalRecorded = true
+	stats := stream.ProviderStreamStats
+	requestID, conversationID, modelCallID := stream.RequestID, stream.ConversationID, stream.CurrentModelCallID
+	stream.mu.Unlock()
+	service.debug.LogProvider(context.Background(), requestID, conversationID, "provider_stream_finished", providerTerminalFields(modelCallID, stats))
+}
+
+func (service *Service) recordModelCallFinal(stream *ActiveStream, businessOutcome string) {
+	if service == nil || stream == nil || service.debug == nil {
+		return
+	}
+	businessOutcome = strings.TrimSpace(businessOutcome)
+	if businessOutcome == "" {
+		businessOutcome = "failed"
+	}
+	stream.mu.Lock()
+	modelCallID := strings.TrimSpace(stream.CurrentModelCallID)
+	if modelCallID == "" || stream.ProviderStreamStats.Attempt < 1 {
+		stream.mu.Unlock()
+		return
+	}
+	// Check per-model_call_id deduplication map instead of stream-level bool
+	if stream.FinalizedModelCallIDs == nil {
+		stream.FinalizedModelCallIDs = make(map[string]struct{})
+	}
+	if _, alreadyFinalized := stream.FinalizedModelCallIDs[modelCallID]; alreadyFinalized {
+		stream.mu.Unlock()
+		return
+	}
+	stream.FinalizedModelCallIDs[modelCallID] = struct{}{}
+	stream.ProviderStreamStats.ModelCallFinalStatus = businessOutcome
+	stats := stream.ProviderStreamStats
+	requestID, conversationID := stream.RequestID, stream.ConversationID
+	stream.mu.Unlock()
+	fields := providerTerminalFields(modelCallID, stats)
+	fields["status"] = businessOutcome
+	fields["business_outcome"] = businessOutcome
+	service.debug.LogRuntime(context.Background(), requestID, conversationID, "model_call_final", fields)
+}
+
+func safeProviderErrorSummary(stats ProviderStreamStats) string {
+	if strings.TrimSpace(stats.ErrorCategory) == "" {
+		return "not_recorded"
+	}
+	return strings.TrimSpace(stats.ErrorCategory) + " status=" + firstNonEmpty(strings.TrimSpace(stats.HTTPStatus), "not_recorded")
+}
+
+func providerFailureBusinessOutcome(stats ProviderStreamStats) string {
+	if stats.ModelEventCount > 0 || stats.DownstreamPublished || stats.VisibleTextBytes > 0 || stats.ReasoningBytes > 0 || stats.PartialToolCount > 0 || stats.CompletedToolCount > 0 || stats.DispatchedToolCount > 0 {
+		return "partial"
+	}
+	if stats.ProtocolFinalStatus == "timeout" {
+		return "timeout"
+	}
+	if stats.ProtocolFinalStatus == "canceled" {
+		return "canceled"
+	}
+	return "failed"
+}
+
 func providerTokenMatches(stream *ActiveStream, token uint64) bool {
 	if stream == nil || token == 0 {
 		return false
@@ -480,6 +743,7 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 	accumulatedReasoningItemID := stream.ProviderAccumulatedReasoningItemID
 	accumulatedReasoningStatus := stream.ProviderAccumulatedReasoningStatus
 	accumulatedReasoningSummary := append([]byte(nil), stream.ProviderAccumulatedReasoningSummary...)
+	observeProviderModelEvent(&stream.ProviderStreamStats, event)
 	stream.mu.Unlock()
 
 	switch event.Kind {
@@ -488,13 +752,21 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		stream.ProviderAccumulatedText += event.Text
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
-		return service.broker.Publish(requestID, StreamEvent{Message: buildTextDeltaMessage(event.Text)})
+		if err := service.broker.Publish(requestID, StreamEvent{Message: buildTextDeltaMessage(event.Text)}); err != nil {
+			return err
+		}
+		markProviderDownstreamPublished(stream)
+		return nil
 	case modeladapter.ModelEventKindThinkingDelta:
 		stream.mu.Lock()
 		stream.ProviderAccumulatedReasoning += event.Text
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
-		return service.broker.Publish(requestID, StreamEvent{Message: buildThinkingDeltaMessage(event.Text, event.ThinkingStyle)})
+		if err := service.broker.Publish(requestID, StreamEvent{Message: buildThinkingDeltaMessage(event.Text, event.ThinkingStyle)}); err != nil {
+			return err
+		}
+		markProviderDownstreamPublished(stream)
+		return nil
 	case modeladapter.ModelEventKindThinkingCompleted:
 		shouldEmitSyntheticThinking := false
 		suppressThinkingCompleted := false
@@ -532,11 +804,16 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 			if err := service.broker.Publish(requestID, StreamEvent{Message: buildThinkingDeltaMessage("The reasoning process is encrypted. Please wait a moment. (This message does not affect any functionality; it only indicates the current reasoning status.)", event.ThinkingStyle)}); err != nil {
 				return err
 			}
+			markProviderDownstreamPublished(stream)
 		}
 		if suppressThinkingCompleted {
 			return nil
 		}
-		return service.broker.Publish(requestID, StreamEvent{Message: buildThinkingCompletedMessage(completedDuration)})
+		if err := service.broker.Publish(requestID, StreamEvent{Message: buildThinkingCompletedMessage(completedDuration)}); err != nil {
+			return err
+		}
+		markProviderDownstreamPublished(stream)
+		return nil
 	case modeladapter.ModelEventKindPartialToolCall:
 		toolCallID := strings.TrimSpace(event.ToolCallID)
 		if toolCallID == "" || event.ToolCall == nil {
@@ -550,21 +827,32 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		stream.PartialToolCallIDs[toolCallID] = struct{}{}
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
+		var publishErr error
 		if inferToolName(displayToolCall) == "GenerateImage" {
-			return service.broker.Publish(requestID, StreamEvent{
+			publishErr = service.broker.Publish(requestID, StreamEvent{
 				Message: buildToolCallStartedMessage(toolCallID, modelCallID, displayToolCall),
 			})
+		} else {
+			publishErr = service.broker.Publish(requestID, StreamEvent{
+				Message: buildPartialToolCallMessage(toolCallID, modelCallID, displayToolCall, event.ArgsTextDelta),
+			})
 		}
-		return service.broker.Publish(requestID, StreamEvent{
-			Message: buildPartialToolCallMessage(toolCallID, modelCallID, displayToolCall, event.ArgsTextDelta),
-		})
+		if publishErr != nil {
+			return publishErr
+		}
+		markProviderDownstreamPublished(stream)
+		return nil
 	case modeladapter.ModelEventKindToolCallDelta:
 		if strings.TrimSpace(event.ToolCallID) == "" || event.ToolCallDelta == nil {
 			return nil
 		}
-		return service.broker.Publish(requestID, StreamEvent{
+		if err := service.broker.Publish(requestID, StreamEvent{
 			Message: buildToolCallDeltaMessage(event.ToolCallID, modelCallID, event.ToolCallDelta),
-		})
+		}); err != nil {
+			return err
+		}
+		markProviderDownstreamPublished(stream)
+		return nil
 	case modeladapter.ModelEventKindToolLikeCompleted:
 		reasoningForTool := accumulatedReasoning
 		reasoningSignatureForTool := accumulatedReasoningSignature
@@ -592,7 +880,15 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		stream.ProviderAccumulatedText = ""
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
-		return service.handleToolInvocation(stream, invocation)
+		if err := service.handleToolInvocation(stream, invocation); err != nil {
+			return err
+		}
+		stream.mu.Lock()
+		stream.ProviderStreamStats.DispatchedToolCount++
+		stream.ProviderStreamStats.ToolDispatchState = "dispatched"
+		stream.ProviderStreamStats.PotentialSideEffect = "possible"
+		stream.mu.Unlock()
+		return nil
 	case modeladapter.ModelEventKindTurnFinished:
 		stream.mu.Lock()
 		stream.ProviderFinishReason = strings.TrimSpace(event.FinishReason)
@@ -682,11 +978,15 @@ func effectiveTaskDisplayModelID(subagentType string, parentModelID string, over
 }
 
 func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *streamProviderEvent) error {
-	if stream == nil || payload == nil {
+	if stream == nil || payload == nil || errors.Is(payload.Err, errProviderLoopInterrupted) {
 		return nil
 	}
 
 	stream.mu.Lock()
+	if isTerminalStreamStatus(stream.Status) {
+		stream.mu.Unlock()
+		return nil
+	}
 	requestID := stream.RequestID
 	conversationID := stream.ConversationID
 	turnSeq := stream.TurnSeq
@@ -704,6 +1004,36 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	terminalToolInvocation := stream.ProviderTerminalToolInvocation
 	existingCompletion := stream.PendingProviderCompletion
 	providerPass := stream.ProviderPassCount
+	stream.ProviderStreamStats.FinishedAt = time.Now().UTC()
+	if !stream.ProviderStreamStats.StartedAt.IsZero() {
+		stream.ProviderStreamStats.StreamDuration = stream.ProviderStreamStats.FinishedAt.Sub(stream.ProviderStreamStats.StartedAt)
+	}
+	if payload.Err != nil {
+		stream.ProviderStreamStats.Attribution = providerTerminalAttribution(payload.Err)
+		stream.ProviderStreamStats.FailureStage = "provider_stream"
+		applyProviderTerminalErrorStats(&stream.ProviderStreamStats, payload.Err)
+		switch stream.ProviderStreamStats.Attribution {
+		case "client":
+			stream.ProviderStreamStats.ProtocolFinalStatus = "canceled"
+		case "deadline":
+			stream.ProviderStreamStats.ProtocolFinalStatus = "timeout"
+		default:
+			stream.ProviderStreamStats.ProtocolFinalStatus = "provider_failed"
+		}
+	} else if stream.ProviderStreamStats.CompletionMarker {
+		stream.ProviderStreamStats.ProtocolFinalStatus = "completed"
+		stream.ProviderStreamStats.Attribution = "provider"
+		stream.ProviderStreamStats.Retryable = "false"
+		stream.ProviderStreamStats.RetryReason = "not_recorded"
+		stream.ProviderStreamStats.RetrySuppressionReason = "not_recorded"
+	} else {
+		stream.ProviderStreamStats.ProtocolFinalStatus = "truncated"
+		stream.ProviderStreamStats.Attribution = "protocol"
+		stream.ProviderStreamStats.ErrorCategory = "stream_decode"
+		stream.ProviderStreamStats.FailureStage = "provider_protocol"
+		applyProviderTerminalErrorStats(&stream.ProviderStreamStats, &modeladapter.StreamTruncatedError{Provider: firstNonEmpty(stream.ProviderStreamStats.Provider, "provider")})
+	}
+	stream.ProviderStreamStats.ModelCallFinalStatus = "not_finalized"
 	stream.ProviderActive = false
 	stream.ProviderCancel = nil
 	stream.PendingProviderAction = providerActionNone
@@ -722,20 +1052,32 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 
-	if errors.Is(payload.Err, errProviderLoopInterrupted) || isTerminalStreamStatus(status) {
+	if isTerminalStreamStatus(status) {
 		return nil
 	}
+	if payload.Err == nil && !streamProviderCompletionMarker(stream) {
+		payload.Err = providerTerminalError{cause: &modeladapter.StreamTruncatedError{Provider: "provider"}}
+	}
+	service.recordProviderTerminal(stream)
 	if payload.Err != nil {
+		stream.mu.Lock()
+		businessOutcome := providerFailureBusinessOutcome(stream.ProviderStreamStats)
+		stream.mu.Unlock()
+		var terminalErr error
 		var providerErr providerTerminalError
 		if errors.As(payload.Err, &providerErr) {
 			service.setTurnPhase(stream, TurnPhaseFailed)
-			return service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation)
+			terminalErr = service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation)
+		} else {
+			if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+				terminalErr = service.failStream(stream, "unknown", fmt.Errorf("flush failed provider output: %w", err))
+			} else {
+				service.setTurnPhase(stream, TurnPhaseFailed)
+				terminalErr = service.failStream(stream, "unknown", payload.Err)
+			}
 		}
-		if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
-			return service.failStream(stream, "unknown", fmt.Errorf("flush failed provider output: %w", err))
-		}
-		service.setTurnPhase(stream, TurnPhaseFailed)
-		return service.failStream(stream, "unknown", payload.Err)
+		service.recordModelCallFinal(stream, businessOutcome)
+		return terminalErr
 	}
 	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
 		return service.failStreamIfNonTerminal(stream, "unknown", err)
@@ -754,6 +1096,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	if pendingCount > 0 {
 		awaitingUser := hasPendingAwaitingUserInteraction(stream)
 		forceComplete := awaitingUser
+		disposition := completionDispositionForExternalResults(finishReason, forceComplete, hadToolInvocation)
 		rememberPendingProviderCompletion(stream, pendingTurnCompletion{
 			ConversationID: conversationID,
 			RequestID:      requestID,
@@ -761,7 +1104,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 			ModelCallID:    modelCallID,
 			ProviderPass:   currentProviderPass(stream),
 			Usage:          usage,
-			Disposition:    completionDispositionForExternalResults(finishReason, forceComplete, hadToolInvocation),
+			Disposition:    disposition,
 		})
 		if awaitingUser {
 			service.setTurnPhase(stream, TurnPhaseAwaitingUser)
@@ -770,6 +1113,11 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		}
 		if err := service.publishCheckpoint(requestID, conversationID); err != nil {
 			return service.failStreamIfNonTerminal(stream, "unknown", err)
+		}
+		// For terminal disposition, model_call_final recorded in finishSuccessfulTurnAfterCheckpoint
+		// For resume disposition, current model call succeeded before next pass
+		if disposition == completionDispositionResumeAfterExternal {
+			service.recordModelCallFinal(stream, "succeeded")
 		}
 		return nil
 	}
@@ -780,6 +1128,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 			return service.failStreamIfNonTerminal(stream, "unknown", err)
 		}
 		if handled {
+			// Subagent empty stop: either failed (model_call_final in failStream) or resumed (not final yet)
 			return nil
 		}
 	}
@@ -801,8 +1150,11 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 			if err := service.requestProviderAction(stream, providerActionResume); err != nil {
 				return service.failStreamIfNonTerminal(stream, "unknown", err)
 			}
+			// Current model call completed successfully before next pass starts
+			service.recordModelCallFinal(stream, "succeeded")
 			return nil
 		}
+		// Terminal completion: delegate to completeSuccessfulTurn which will queue checkpoint and finalize in finishSuccessfulTurnAfterCheckpoint
 		if err := service.completeSuccessfulTurn(stream, completion); err != nil {
 			return service.failStreamIfNonTerminal(stream, "unknown", err)
 		}
@@ -816,6 +1168,8 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		if err := service.requestProviderAction(stream, providerActionResume); err != nil {
 			return service.failStreamIfNonTerminal(stream, "unknown", err)
 		}
+		// Current model call completed successfully before next pass starts
+		service.recordModelCallFinal(stream, "succeeded")
 		return nil
 	}
 
@@ -865,6 +1219,8 @@ func (service *Service) handleSubagentEmptyStopAfterToolResult(stream *ActiveStr
 	if err := service.requestProviderAction(stream, providerActionResume); err != nil {
 		return true, err
 	}
+	// Current model call (empty stop) completed, recovery prompt injected, next pass will start
+	service.recordModelCallFinal(stream, "succeeded")
 	return true, nil
 }
 

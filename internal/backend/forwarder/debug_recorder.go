@@ -277,9 +277,13 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	if value := debugString(rawEvent, "event"); value != "" {
 		eventName = value
 	}
-	status := debugString(rawEvent, "status")
 	errorCategory := ""
 	payloadFields, _ := rawEvent["payload"].(map[string]any)
+	if payloadFields == nil {
+		payloadFields, _ = rawEvent["payload_summary"].(map[string]any)
+	}
+	errorCategory = firstNonEmpty(debugString(rawEvent, "error_category"), debugString(payloadFields, "error_category"))
+	status := firstNonEmpty(debugString(rawEvent, "status"), debugString(payloadFields, "status"))
 	if correlation.TurnSequence == 0 {
 		turnSequence = readInt64Value(payloadFields["turn_seq"])
 		if turnSequence <= 0 {
@@ -300,6 +304,19 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	}
 	if status == "" {
 		switch eventName {
+		case "provider_stream_finished":
+			switch debugString(rawEvent, "protocol_final_status") {
+			case "completed":
+				status = "completed"
+			case "canceled":
+				status = "canceled"
+			case "timeout":
+				status = "timeout"
+			case "truncated", "provider_failed":
+				status = "error"
+			}
+		case "model_call_final":
+			status = debugString(rawEvent, "business_outcome")
 		case "terminal", "terminal_after_context_done":
 			if debugString(rawEvent, "terminal_error_code") == "" {
 				status = "completed"
@@ -314,7 +331,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		}
 	}
 	fields := make(map[string]any)
-	for _, key := range []string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms"} {
+	for _, key := range []string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome"} {
 		if value, ok := rawEvent[key]; ok {
 			fields[key] = value
 		} else if value, ok := payloadFields[key]; ok {
@@ -340,7 +357,10 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	if layer == "provider" && eventName == "llm_response_chunk" {
 		responseBytes = readInt64Value(payloadFields["byte_len"])
 	}
-	durationMS := readInt64Value(payloadFields["duration_ms"])
+	durationMS := readInt64Value(rawEvent["duration_ms"])
+	if durationMS == 0 {
+		durationMS = readInt64Value(payloadFields["duration_ms"])
+	}
 	payloadData := any(rawEvent)
 	decodeError := false
 	if layer == "bidi_raw" {
@@ -361,7 +381,11 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	} else {
 		projectPaths = recorder.projectPathsForRequest(requestID)
 	}
-	semantics := classifyDebugSemantics(layer, eventName, status, errorCategory, rawEvent)
+	semanticErrorCategory := strings.TrimSpace(errorCategory)
+	if semanticErrorCategory == "unknown" || semanticErrorCategory == "not_recorded" {
+		semanticErrorCategory = ""
+	}
+	semantics := classifyDebugSemantics(layer, eventName, status, semanticErrorCategory, rawEvent)
 	recorder.capture.Record(observability.WithCorrelation(ctx, correlation), observability.Capture{
 		Event: observability.Event{
 			Layer:               layer,
@@ -375,7 +399,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 			ExecutionTarget:     executionTarget,
 			Protocol:            protocol,
 			Status:              status,
-			ErrorCategory:       errorCategory,
+			ErrorCategory:       semanticErrorCategory,
 			DurationMS:          durationMS,
 			RequestBytes:        requestBytes,
 			ResponseBytes:       responseBytes,
@@ -419,21 +443,21 @@ func classifyDebugSemantics(layer string, eventName string, status string, error
 		Implementation: observability.ImplementationImplemented,
 	}
 	switch {
+	case status == "canceled", status == "cancelled":
+		semantics.Outcome = observability.OutcomeCanceled
+	case status == "timeout":
+		semantics.Outcome = observability.OutcomeTimeout
+	case status == "partial":
+		semantics.Outcome = observability.OutcomePartial
+		semantics.Implementation = observability.ImplementationPartial
 	case strings.TrimSpace(errorCategory) != "", status == "error", status == "failed":
 		semantics.Outcome = observability.OutcomeFailed
 	case status == "started", status == "accepted":
 		semantics.Outcome = observability.OutcomeStarted
 	case status == "completed", status == "success", status == "succeeded", status == "ok":
 		semantics.Outcome = observability.OutcomeSucceeded
-	case status == "canceled", status == "cancelled":
-		semantics.Outcome = observability.OutcomeCanceled
-	case status == "timeout":
-		semantics.Outcome = observability.OutcomeTimeout
 	case status == "degraded":
 		semantics.Outcome = observability.OutcomeDegraded
-	case status == "partial":
-		semantics.Outcome = observability.OutcomePartial
-		semantics.Implementation = observability.ImplementationPartial
 	case status == "compat", status == "compat_only":
 		semantics.Outcome = observability.OutcomeCompatOnly
 		semantics.Implementation = observability.ImplementationCompat
@@ -774,6 +798,7 @@ func summarizeDebugArtifactPayload(payload map[string]any) map[string]any {
 		"first_event_at",
 		"finished_at",
 		"finish_reason",
+		"status",
 		"input_tokens",
 		"output_tokens",
 		"cache_read_tokens",

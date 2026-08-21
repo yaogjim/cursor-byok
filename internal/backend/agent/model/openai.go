@@ -22,6 +22,8 @@ import (
 type OpenAIAdapter struct {
 	// client 负责发送 HTTP 请求。
 	client *http.Client
+	// retry 仅供同包测试注入；零值使用默认预算。
+	retry providerRetry
 }
 
 type openAIRequestBody struct {
@@ -514,7 +516,8 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		return httpReq, nil
 	}
 
-	resp, err := doProviderRequestWithRetry(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest)
+	sawStreamEvent := false
+	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest, adapter.retry)
 	if err != nil {
 		if idleErr := streamIdle.Err(); idleErr != nil {
 			err = idleErr
@@ -523,8 +526,13 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
-	streamIdle.AttachBody(resp.Body)
-	defer resp.Body.Close()
+	// 使用闭包变量确保 defer 关闭最终的 body（可能是原始或重试后的 wrapper）
+	bodyToClose := resp.Body
+	defer func() {
+		if bodyToClose != nil {
+			_ = bodyToClose.Close()
+		}
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = buildHTTPStatusError("openai adapter", resp)
@@ -532,6 +540,9 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
+	bodyToClose = newRetryingStreamBody(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest, resp.Body, responseRetryState(resp), nil, adapter.retry, func() bool { return !sawStreamEvent })
+	resp.Body = bodyToClose
+	streamIdle.AttachBody(resp.Body)
 
 	type openAIToolCallDelta struct {
 		Index    int    `json:"index"`
@@ -579,6 +590,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	firstEventAt := time.Time{}
 	finishReason := ""
 	turnFinishedPending := false
+	turnFinishedEmitted := false
 	sawCompletionMarker := false
 	thinkingStarted := time.Time{}
 	thinkingActive := false
@@ -605,11 +617,11 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		return nil
 	}
 	flushTurnFinished := func() error {
-		if !turnFinishedPending {
+		if !turnFinishedPending || turnFinishedEmitted {
 			return nil
 		}
 		turnFinishedPending = false
-		return sink(ModelEvent{
+		err := sink(ModelEvent{
 			Kind:              ModelEventKindTurnFinished,
 			OccurredAt:        time.Now().UTC(),
 			Provider:          "openai",
@@ -623,6 +635,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			CacheWritePresent: cacheWritePresent,
 			FinishReason:      finishReason,
 		})
+		if err == nil {
+			turnFinishedEmitted = true
+		}
+		return err
 	}
 	emitTextDelta := func(text string) error {
 		if text == "" {
@@ -752,6 +768,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			continue
 		}
 		if firstEventAt.IsZero() {
+			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
 		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -1005,7 +1022,8 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		return httpReq, nil
 	}
 
-	resp, err := doProviderRequestWithRetry(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest)
+	sawStreamEvent := false
+	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest, adapter.retry)
 	if err != nil {
 		if idleErr := streamIdle.Err(); idleErr != nil {
 			err = idleErr
@@ -1014,8 +1032,13 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
-	streamIdle.AttachBody(resp.Body)
-	defer resp.Body.Close()
+	// 使用闭包变量确保 defer 关闭最终的 body（可能是原始或重试后的 wrapper）
+	bodyToClose := resp.Body
+	defer func() {
+		if bodyToClose != nil {
+			_ = bodyToClose.Close()
+		}
+	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		err = buildHTTPStatusError("openai adapter", resp)
@@ -1023,6 +1046,10 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return err
 	}
+
+	bodyToClose = newRetryingStreamBody(streamCtx, adapter.client, "openai", req.RequestID, req.ModelCallID, buildHTTPRequest, resp.Body, responseRetryState(resp), nil, adapter.retry, func() bool { return !sawStreamEvent })
+	resp.Body = bodyToClose
+	streamIdle.AttachBody(resp.Body)
 
 	type openAIResponsesUsage struct {
 		InputTokens        int64 `json:"input_tokens"`
@@ -1095,6 +1122,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	firstEventAt := time.Time{}
 	finishReason := ""
 	turnFinishedPending := false
+	turnFinishedEmitted := false
 	sawCompletionMarker := false
 	emittedToolInvocation := false
 	emittedText := false
@@ -1137,11 +1165,11 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		return nil
 	}
 	flushTurnFinished := func() error {
-		if !turnFinishedPending {
+		if !turnFinishedPending || turnFinishedEmitted {
 			return nil
 		}
 		turnFinishedPending = false
-		return sink(ModelEvent{
+		err := sink(ModelEvent{
 			Kind:              ModelEventKindTurnFinished,
 			OccurredAt:        time.Now().UTC(),
 			Provider:          "openai",
@@ -1155,6 +1183,10 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			CacheWritePresent: cacheWritePresent,
 			FinishReason:      effectiveFinishReason(),
 		})
+		if err == nil {
+			turnFinishedEmitted = true
+		}
+		return err
 	}
 	emitTextDelta := func(text string) error {
 		if text == "" {
@@ -1476,6 +1508,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			continue
 		}
 		if firstEventAt.IsZero() {
+			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
 		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
