@@ -82,9 +82,8 @@ func (recorder *artifactRecorder) AppendLLMResponseChunk(requestID string, runID
 		return "", err
 	}
 	recorder.debug.LogProviderArtifact(context.Background(), requestID, session.conversationID, modelCallID, "llm_response_chunk", map[string]any{
-		"run_id":    strings.TrimSpace(runID),
-		"raw_chunk": chunk,
-		"byte_len":  len([]byte(chunk)),
+		"run_id":   strings.TrimSpace(runID),
+		"byte_len": len([]byte(chunk)),
 	})
 	return "", nil
 }
@@ -139,8 +138,13 @@ func (recorder *artifactRecorder) ClearActiveArtifacts(requestID string, modelCa
 	if recorder == nil {
 		return
 	}
+	baseKey := artifactSessionKey(requestID, modelCallID)
 	recorder.mu.Lock()
-	delete(recorder.sessions, artifactSessionKey(requestID, modelCallID))
+	for key := range recorder.sessions {
+		if key == baseKey || strings.HasPrefix(key, baseKey+"_fb") {
+			delete(recorder.sessions, key)
+		}
+	}
 	recorder.mu.Unlock()
 }
 

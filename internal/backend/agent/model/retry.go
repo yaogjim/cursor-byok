@@ -48,6 +48,9 @@ type providerRetry struct {
 	sleep        func(context.Context, time.Duration) error
 	jitter       func(time.Duration) time.Duration
 	now          func() time.Time
+	// fallbackSafety/fallbackBudget 仅由启用 fallback 的请求设置；普通路径为 nil。
+	fallbackSafety *FallbackSafetyInfo
+	fallbackBudget *FallbackRetryBudget
 }
 
 type providerAttemptContextKey struct{}
@@ -115,6 +118,26 @@ func normalizeProviderRetry(retry providerRetry) providerRetry {
 		retry.now = time.Now
 	}
 	return retry
+}
+
+func (retry providerRetry) consumeFallbackAttempt() bool {
+	if retry.fallbackBudget != nil && !retry.fallbackBudget.TryConsumeAttempt() {
+		return false
+	}
+	if retry.fallbackSafety != nil {
+		retry.fallbackSafety.markHTTPAttempt()
+	}
+	return true
+}
+
+func (retry providerRetry) reserveFallbackWait(delay time.Duration) bool {
+	if retry.fallbackBudget != nil && !retry.fallbackBudget.TryReserveWait(delay) {
+		return false
+	}
+	if retry.fallbackSafety != nil {
+		retry.fallbackSafety.markWaited(delay)
+	}
+	return true
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {
@@ -208,6 +231,9 @@ func doProviderRequest(
 
 		httpReq, err := buildRequest(ctx)
 		if err != nil {
+			if retry.fallbackSafety != nil {
+				retry.fallbackSafety.MarkRequestBuildFailed()
+			}
 			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 				Kind:          "provider_request",
 				Provider:      provider,
@@ -239,6 +265,9 @@ func doProviderRequest(
 			MaxAttempts:   retry.maxAttempts,
 		})
 
+		if !retry.consumeFallbackAttempt() {
+			return nil, fmt.Errorf("provider fallback HTTP attempt budget exhausted")
+		}
 		resp, err := client.Do(httpReq)
 		outcome := classifyAttempt(err, resp, attempt, retry.maxAttempts)
 		var delay time.Duration
@@ -288,6 +317,15 @@ func doProviderRequest(
 			return resp, nil
 		}
 
+		if !retry.reserveFallbackWait(delay) {
+			if err != nil {
+				closeResponseBody(resp)
+				return nil, err
+			}
+			statusErr := buildHTTPStatusError(provider+" adapter", resp)
+			closeResponseBody(resp)
+			return nil, statusErr
+		}
 		closeResponseBody(resp)
 		if sleepErr := retry.sleep(ctx, delay); sleepErr != nil {
 			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
@@ -398,12 +436,29 @@ func (body *retryingStreamBody) markRawBytes() {
 	body.mu.Lock()
 	body.rawBytes = true
 	body.mu.Unlock()
+	if body.retry.fallbackSafety != nil {
+		body.retry.fallbackSafety.MarkRawBytesObserved()
+	}
 }
 
 func (body *retryingStreamBody) hasRawBytes() bool {
 	body.mu.Lock()
 	defer body.mu.Unlock()
 	return body.rawBytes
+}
+
+// HasRawBytes 报告此流是否已向调用方返回过任意原始字节。
+// 供适配器的 fail 闭包在构造 StreamTruncatedError 时设置 RawBytesObserved，
+// 以便 FallbackAwareRouter 精确检测"有字节但无 model event"的非法/不完整 SSE 场景。
+func (body *retryingStreamBody) HasRawBytes() bool {
+	return body.hasRawBytes()
+}
+
+// RawBytesReporter 是对外暴露"是否已返回过原始字节"状态的接口。
+// retryingStreamBody 实现此接口；适配器通过接口访问，无需依赖具体类型。
+// FallbackAwareRouter 通过 StreamTruncatedError.RawBytesObserved 消费该状态。
+type RawBytesReporter interface {
+	HasRawBytes() bool
 }
 
 func (body *retryingStreamBody) Close() error {
@@ -449,7 +504,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 		return truncatedErr
 	}
 	delay, canWait := body.retry.retryWait(body.state.attempt, nil, body.state.waited)
-	if !canWait {
+	if !canWait || !body.retry.reserveFallbackWait(delay) {
 		body.mu.Unlock()
 		body.recordDecision(retryDecisionNoRetryWaitBudget, truncatedErr)
 		return truncatedErr
@@ -484,11 +539,17 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 
 		request, err := body.buildRequest(body.ctx)
 		if err != nil {
+			if body.retry.fallbackSafety != nil {
+				body.retry.fallbackSafety.MarkRequestBuildFailed()
+			}
 			body.recordRequestBuildFailure(err)
 			return err
 		}
 		startedAt := time.Now()
 		endpoint, targetHost, canaryMatched := body.recordRequest(request)
+		if !body.retry.consumeFallbackAttempt() {
+			return fmt.Errorf("provider fallback HTTP attempt budget exhausted")
+		}
 		resp, err := body.client.Do(request)
 		outcome := classifyAttempt(err, resp, attempt, body.retry.maxAttempts)
 		var nextDelay time.Duration
@@ -522,6 +583,16 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			body.body = resp.Body
 			body.mu.Unlock()
 			return nil
+		}
+		if !body.retry.reserveFallbackWait(nextDelay) {
+			body.recordDecision(retryDecisionNoRetryWaitBudget, truncatedErr)
+			if err != nil {
+				closeResponseBody(resp)
+				return err
+			}
+			statusErr := buildHTTPStatusError(body.provider+" adapter", resp)
+			closeResponseBody(resp)
+			return statusErr
 		}
 		closeResponseBody(resp)
 		if err := body.retry.sleep(body.ctx, nextDelay); err != nil {

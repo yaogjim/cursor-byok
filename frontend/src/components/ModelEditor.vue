@@ -159,6 +159,7 @@ const fieldTips = {
   anthropicExtraParams: "开启后会把 JSON 对象覆盖到 Anthropic 请求体。同名字段以这里为准。",
   anthropicMaxTokens: "Anthropic 模型单次回复允许生成的最大 Token 数。留空时使用默认值。",
   anthropicThinkingEffort: "Anthropic adaptive thinking 的思考强度。请求会固定使用新版 thinking.type=adaptive。",
+  providerFallback: "启用后，此模型路由的请求将依次尝试主渠道和备选渠道，而非使用当前渠道本身。所有渠道共享同一总 attempt 与等待预算；仅在零原始字节、零 model event 时才允许渠道切换；一旦开始输出则禁止回退。",
   tooltipData: "模型列表 hover 时显示的备注说明。",
 };
 
@@ -204,7 +205,7 @@ async function refreshModelList() {
 async function persistDraft() {
   const adapter = normalizeModelAdapter(draft);
 
-  const singleCheck = validateModelAdapters([adapter]);
+  const singleCheck = validateModelAdapters([adapter], { allAdapters: appState.modelAdapters });
   if (singleCheck) {
     message(singleCheck);
     return { ok: false, error: singleCheck, adapter: null };
@@ -344,6 +345,91 @@ watch(
 
 onBeforeUnmount(() => {
   window.clearTimeout(modelListDebounceTimer);
+});
+
+// ── providerFallback UI 支持 ──
+
+// 其他已保存渠道（排除当前编辑中的适配器）
+const otherAdapters = computed(() =>
+  appState.modelAdapters.filter((a) => a.id && a.id !== draft.id),
+);
+
+// 渠道下拉基础选项，含空"不选择"项
+const fallbackChannelBaseOptions = computed(() => [
+  { label: "── 不选择 ──", value: "", icon: "icon-[mdi--minus-circle-outline]" },
+  ...otherAdapters.value.map((a) => ({
+    label: a.displayName ? `${a.displayName}（${a.modelID}）` : (a.modelID || a.id),
+    value: a.id,
+    icon: a.type === "anthropic" ? "icon-[logos--claude-icon]" : "icon-[bxl--openai]",
+  })),
+]);
+
+// 主渠道选项：排除已选候选
+const fallbackPrimaryOptions = computed(() =>
+  fallbackChannelBaseOptions.value.filter(
+    (o) => !o.value || !draft.providerFallback.candidateChannelIDs.includes(o.value),
+  ),
+);
+
+// 候选渠道1选项：排除主渠道 + 候选2
+const fallbackCandidate1Options = computed(() =>
+  fallbackChannelBaseOptions.value.filter(
+    (o) => !o.value
+      || (o.value !== draft.providerFallback.primaryChannelID
+        && o.value !== (draft.providerFallback.candidateChannelIDs[1] || "")),
+  ),
+);
+
+// 候选渠道2选项：排除主渠道 + 候选1
+const fallbackCandidate2Options = computed(() =>
+  fallbackChannelBaseOptions.value.filter(
+    (o) => !o.value
+      || (o.value !== draft.providerFallback.primaryChannelID
+        && o.value !== (draft.providerFallback.candidateChannelIDs[0] || "")),
+  ),
+);
+
+// 是否跨 Provider（OpenAI/Anthropic 混用）
+const isCrossProviderFallback = computed(() => {
+  if (!draft.providerFallback.enabled) return false;
+  const ids = [
+    draft.providerFallback.primaryChannelID,
+    ...(draft.providerFallback.candidateChannelIDs || []),
+  ].filter(Boolean);
+  if (ids.length < 2) return false;
+  const types = new Set(
+    ids.map((id) => appState.modelAdapters.find((x) => x.id === id)?.type || "").filter(Boolean),
+  );
+  return types.size > 1;
+});
+
+// 启用时无其他渠道可选
+const fallbackNoChannels = computed(() =>
+  draft.providerFallback.enabled && otherAdapters.value.length === 0,
+);
+
+// 候选渠道1（双向绑定槽位0，清空时同步清槽位1）
+const candidate1 = computed({
+  get() {
+    return draft.providerFallback.candidateChannelIDs[0] ?? "";
+  },
+  set(val) {
+    const v = String(val || "").trim();
+    const c2 = draft.providerFallback.candidateChannelIDs[1] ?? "";
+    draft.providerFallback.candidateChannelIDs = v ? (c2 ? [v, c2] : [v]) : [];
+  },
+});
+
+// 候选渠道2（双向绑定槽位1）
+const candidate2 = computed({
+  get() {
+    return draft.providerFallback.candidateChannelIDs[1] ?? "";
+  },
+  set(val) {
+    const v = String(val || "").trim();
+    const c1 = draft.providerFallback.candidateChannelIDs[0] ?? "";
+    draft.providerFallback.candidateChannelIDs = c1 ? (v ? [c1, v] : [c1]) : [];
+  },
 });
 </script>
 
@@ -590,6 +676,61 @@ onBeforeUnmount(() => {
             spellcheck="false"
             class="mt-3 min-h-[120px] w-full resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
           />
+        </div>
+
+        <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+              <Tooltip :content="fieldTips.providerFallback" />
+              <span>渠道 Fallback</span>
+            </span>
+            <label class="center-row gap-2 text-xs text-[var(--color-text)]">
+              <input
+                v-model="draft.providerFallback.enabled"
+                type="checkbox"
+                class="size-4 accent-[var(--color-primary)]"
+              />
+              <span>启用</span>
+            </label>
+          </div>
+          <div v-if="draft.providerFallback.enabled" class="mt-3 flex flex-col gap-3">
+            <p class="text-xs text-[var(--color-text-secondary)]">
+              启用后，此模型路由的请求将按顺序使用主渠道和备选渠道，不再使用当前渠道本身。所有渠道共享总 attempt 预算；仅在零输出时允许切换。
+            </p>
+            <div
+              v-if="fallbackNoChannels"
+              class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
+            >
+              当前没有其他已保存的渠道，请先新增并保存其他模型配置后再配置 Fallback。
+            </div>
+            <div
+              v-if="isCrossProviderFallback"
+              class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
+            >
+              检测到跨 Provider 配置（OpenAI / Anthropic 混用）。请确认工具 schema、模型语义与上下文格式兼容，不兼容时该渠道将被跳过而非降级。
+            </div>
+            <label v-if="!fallbackNoChannels" class="flex flex-col gap-1">
+              <span class="text-xs text-[var(--color-text-secondary)]">主渠道（第 1 优先）</span>
+              <Select
+                v-model="draft.providerFallback.primaryChannelID"
+                :options="fallbackPrimaryOptions"
+              />
+            </label>
+            <label v-if="!fallbackNoChannels && draft.providerFallback.primaryChannelID" class="flex flex-col gap-1">
+              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 1（第 2 优先，必填）</span>
+              <Select
+                v-model="candidate1"
+                :options="fallbackCandidate1Options"
+              />
+            </label>
+            <label v-if="!fallbackNoChannels && candidate1" class="flex flex-col gap-1">
+              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 2（第 3 优先，可选）</span>
+              <Select
+                v-model="candidate2"
+                :options="fallbackCandidate2Options"
+              />
+            </label>
+          </div>
         </div>
 
         <label class="flex flex-col gap-1">

@@ -25,6 +25,13 @@ type ChannelResolver interface {
 	ProviderStreamIdleTimeout(context.Context) time.Duration
 }
 
+// ChannelPlanResolver 扩展 ChannelResolver，增加多渠道 fallback 计划解析能力。
+// config.Manager 同时实现两个接口；FallbackAwareRouter 需要此接口。
+type ChannelPlanResolver interface {
+	ChannelResolver
+	SelectChannelPlanForModel(context.Context, string) (*legacyruntime.ChannelPlan, error)
+}
+
 // NewRouter 创建模型适配路由器。
 func NewRouter(resolver ChannelResolver) *Router {
 	return &Router{
@@ -47,7 +54,43 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 		return fmt.Errorf("no available channel for model %q", req.ModelID)
 	}
 
+	resolved := applyChannelToRequest(req, channel, router.resolver.ProviderStreamIdleTimeout(ctx))
+
+	switch resolved.Provider {
+	case "anthropic":
+		return router.anthropic.Stream(ctx, resolved, sink)
+	case "openai":
+		return router.openai.Stream(ctx, resolved, sink)
+	default:
+		return fmt.Errorf("unsupported provider %q", resolved.Provider)
+	}
+}
+
+// streamPreResolved 使用已完整填充的 StreamRequest（Provider 字段已设置）直接选择适配器。
+// 供 FallbackAwareRouter 使用，跳过 SelectChannelForModel 解析步骤。
+func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	switch strings.TrimSpace(req.Provider) {
+	case "anthropic":
+		return router.anthropic.Stream(ctx, req, sink)
+	case "openai":
+		return router.openai.Stream(ctx, req, sink)
+	default:
+		return fmt.Errorf("unsupported provider %q", req.Provider)
+	}
+}
+
+// applyChannelToRequest 将 ResolvedChannel 的字段映射到 StreamRequest 副本中并返回。
+// 深拷贝 RequestKnobs，以确保 fallback 多渠道循环中各次调用互不污染同一 map。
+func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedChannel, idleTimeout time.Duration) StreamRequest {
 	resolved := req
+	// 深拷贝 RequestKnobs，防止 fallback 循环中多个渠道共享同一 map 造成互相覆盖。
+	if req.RequestKnobs != nil {
+		newKnobs := make(map[string]any, len(req.RequestKnobs))
+		for k, v := range req.RequestKnobs {
+			newKnobs[k] = v
+		}
+		resolved.RequestKnobs = newKnobs
+	}
 	resolved.Provider = strings.TrimSpace(channel.Provider)
 	resolved.BaseURL = strings.TrimSpace(channel.BaseURL)
 	resolved.APIKey = strings.TrimSpace(channel.APIKey)
@@ -66,7 +109,7 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 	resolved.AnthropicMaxTokens = channel.AnthropicMaxTokens
 	resolved.AnthropicThinkingEffort = strings.TrimSpace(channel.AnthropicThinkingEffort)
 	resolved.ThinkingBudgetTokens = channel.ThinkingBudgetTokens
-	resolved.ProviderStreamIdleTimeout = router.resolver.ProviderStreamIdleTimeout(ctx)
+	resolved.ProviderStreamIdleTimeout = idleTimeout
 	runtimeThinkingEffort := normalizeRuntimeThinkingEffort(req.ThinkingEffort)
 	if runtimeThinkingEffort != "" {
 		resolved.ThinkingEffort = runtimeThinkingEffort
@@ -123,15 +166,7 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 			}
 		}
 	}
-
-	switch resolved.Provider {
-	case "anthropic":
-		return router.anthropic.Stream(ctx, resolved, sink)
-	case "openai":
-		return router.openai.Stream(ctx, resolved, sink)
-	default:
-		return fmt.Errorf("unsupported provider %q", resolved.Provider)
-	}
+	return resolved
 }
 
 // sanitizeProviderMessages removes replay-only placeholders and trims trailing

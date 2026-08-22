@@ -24,6 +24,8 @@ const (
 	ProviderErrorContextCanceled   = "context_canceled"
 	ProviderErrorStreamDecode      = "stream_decode"
 	ProviderErrorStreamIdleTimeout = "stream_idle_timeout"
+	// ProviderErrorRequestBuild 表示请求序列化/构建阶段失败，此类错误禁止跨渠道 fallback。
+	ProviderErrorRequestBuild = "request_build"
 
 	bodySummaryEmpty         = "empty"
 	bodySummaryJSONError     = "json_error"
@@ -89,9 +91,76 @@ func (err *HTTPStatusError) Category() string {
 }
 
 // StreamTruncatedError 表示 SSE 在没有明确 completion marker 时结束，或底层流读取失败。
+// RawBytesObserved=true 表示在截断之前 provider 已经返回过至少一个原始字节；
+// 此时 fallback 路由器禁止切换到其他渠道，即使尚未产生任何 model event。
 type StreamTruncatedError struct {
-	Provider string
-	Err      error
+	Provider         string
+	Err              error
+	RawBytesObserved bool
+}
+
+// RequestBuildError 表示在发送 HTTP 请求之前的序列化/构建阶段出错。
+// 包括 JSON marshal、extra params 解析、自定义 header 构建失败等。
+// 此类错误来自本地逻辑，不可能通过切换 provider 渠道解决，因此禁止 fallback。
+type RequestBuildError struct {
+	Err error
+}
+
+// FallbackSafetyError 把一次渠道尝试的 typed 安全快照与原始错误绑定。
+// Error/Unwrap 保持原错误分类与对外文本；fallback router 只读取 Safety。
+type FallbackSafetyError struct {
+	Err    error
+	Safety FallbackSafetySnapshot
+}
+
+func (e *FallbackSafetyError) Error() string {
+	if e == nil || e.Err == nil {
+		return "provider fallback safety error"
+	}
+	return e.Err.Error()
+}
+
+func (e *FallbackSafetyError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func WrapFallbackSafetyError(err error, safety *FallbackSafetyInfo) error {
+	if err == nil || safety == nil {
+		return err
+	}
+	var existing *FallbackSafetyError
+	if errors.As(err, &existing) {
+		return err
+	}
+	return &FallbackSafetyError{Err: err, Safety: safety.Snapshot()}
+}
+
+func fallbackSafetyFromError(err error) (FallbackSafetySnapshot, bool) {
+	var safetyErr *FallbackSafetyError
+	if errors.As(err, &safetyErr) && safetyErr != nil {
+		return safetyErr.Safety, true
+	}
+	return FallbackSafetySnapshot{}, false
+}
+
+func (e *RequestBuildError) Error() string {
+	if e == nil {
+		return "request build error"
+	}
+	if e.Err == nil {
+		return "request build error"
+	}
+	return "request build error: " + e.Err.Error()
+}
+
+func (e *RequestBuildError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 func (err *StreamTruncatedError) Error() string {
@@ -155,6 +224,12 @@ func ClassifyProviderError(err error) string {
 	var truncated *StreamTruncatedError
 	if errors.As(err, &truncated) && truncated != nil {
 		return ProviderErrorStreamDecode
+	}
+	// RequestBuildError 是本地序列化/构建错误，不可通过切换渠道解决，
+	// 必须在 StreamTruncatedError 之后检查，防止被误分类为 transport。
+	var buildErr *RequestBuildError
+	if errors.As(err, &buildErr) && buildErr != nil {
+		return ProviderErrorRequestBuild
 	}
 	return ProviderErrorTransport
 }

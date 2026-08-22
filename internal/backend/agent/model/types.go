@@ -4,6 +4,7 @@ package modeladapter
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"cursor/gen/agentv1"
@@ -134,6 +135,158 @@ type StreamRequest struct {
 	RequestBodyOverride map[string]any
 	// ProviderStreamIdleTimeout 表示 provider 流式响应无有效内容时的空闲超时。
 	ProviderStreamIdleTimeout time.Duration
+	// FallbackMaxAttempts 表示 FallbackAwareRouter 分配给当前渠道的最大尝试次数（共享预算）。
+	// 0 表示使用适配器默认值（providerRequestMaxAttempts）。非零值将覆盖适配器默认 maxAttempts，
+	// 以确保所有渠道共用同一总 attempt 预算，防止 fallback 链无限放大重试次数。
+	FallbackMaxAttempts int
+	// FallbackRemainingWait 表示 FallbackAwareRouter 分配给当前渠道的共享 sleep/backoff 预算剩余量。
+	// 0 表示使用适配器默认值（defaultRetryMaxTotalWait）。非零值将覆盖 effectiveRetry.maxTotalWait，
+	// 以确保整条 fallback 链的 sleep 总量不超过 fallbackChainMaxWait。
+	// 注意：不得将此值用于 context.WithTimeout，仅作为 providerRetry 的 maxTotalWait 上限。
+	FallbackRemainingWait time.Duration
+	// FallbackArtifactSuffix 表示 FallbackAwareRouter 为非最后渠道注入的工件写入后缀。
+	// 设置后，适配器将 req.ModelCallID+req.FallbackArtifactSuffix 作为工件标识写入，
+	// 防止多渠道 fallback 链中各渠道失败摘要与最终成功摘要共用同一 model_call_id 产生语义冲突。
+	// 空字符串时行为与原单渠道路径完全一致。
+	FallbackArtifactSuffix string
+	// FallbackSafety 由 fallback router 为每个渠道尝试创建，适配器与 retry 层
+	// 只通过 typed 方法更新。nil 表示普通单渠道路径，不改变既有行为。
+	FallbackSafety *FallbackSafetyInfo
+	// FallbackBudget 是整条 fallback chain 共享的 HTTP attempt 与退避等待预算。
+	// nil 表示普通单渠道路径，仍使用原有 providerRetry 本地预算。
+	FallbackBudget *FallbackRetryBudget
+}
+
+// FallbackSafetyInfo 是单个渠道尝试的 typed 安全状态。Router 不根据错误
+// 文本推断是否允许切换，只读取这些由 adapter/retry 层设置的事实。
+type FallbackSafetyInfo struct {
+	mu                 sync.Mutex
+	rawBytesObserved   bool
+	modelEventObserved bool
+	requestBuildFailed bool
+	httpAttempts       int
+	waited             time.Duration
+}
+
+type FallbackSafetySnapshot struct {
+	RawBytesObserved   bool
+	ModelEventObserved bool
+	RequestBuildFailed bool
+	HTTPAttempts       int
+	Waited             time.Duration
+}
+
+func (s *FallbackSafetyInfo) MarkRawBytesObserved() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.rawBytesObserved = true
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) MarkModelEventObserved() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.modelEventObserved = true
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) MarkRequestBuildFailed() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.requestBuildFailed = true
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) markHTTPAttempt() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.httpAttempts++
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) markWaited(delay time.Duration) {
+	if s == nil || delay <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.waited += delay
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) Snapshot() FallbackSafetySnapshot {
+	if s == nil {
+		return FallbackSafetySnapshot{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return FallbackSafetySnapshot{
+		RawBytesObserved:   s.rawBytesObserved,
+		ModelEventObserved: s.modelEventObserved,
+		RequestBuildFailed: s.requestBuildFailed,
+		HTTPAttempts:       s.httpAttempts,
+		Waited:             s.waited,
+	}
+}
+
+// FallbackRetryBudget 对同一 fallback chain 的所有渠道共享计数。每次真正
+// client.Do 前消费一个 attempt；每次 retry sleep 前预留等待预算。
+type FallbackRetryBudget struct {
+	mu                sync.Mutex
+	remainingAttempts int
+	remainingWait     time.Duration
+}
+
+func NewFallbackRetryBudget(maxAttempts int, maxWait time.Duration) *FallbackRetryBudget {
+	if maxAttempts < 0 {
+		maxAttempts = 0
+	}
+	if maxWait < 0 {
+		maxWait = 0
+	}
+	return &FallbackRetryBudget{remainingAttempts: maxAttempts, remainingWait: maxWait}
+}
+
+func (b *FallbackRetryBudget) TryConsumeAttempt() bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.remainingAttempts <= 0 {
+		return false
+	}
+	b.remainingAttempts--
+	return true
+}
+
+func (b *FallbackRetryBudget) TryReserveWait(delay time.Duration) bool {
+	if b == nil || delay <= 0 {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if delay > b.remainingWait {
+		return false
+	}
+	b.remainingWait -= delay
+	return true
+}
+
+func (b *FallbackRetryBudget) Remaining() (int, time.Duration) {
+	if b == nil {
+		return 0, 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.remainingAttempts, b.remainingWait
 }
 
 // LLMArtifactPaths 表示一次模型调用相关工件路径。

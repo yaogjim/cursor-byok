@@ -2,6 +2,9 @@ package modeladapter
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -11,10 +14,12 @@ func recordLLMRequestArtifact(req StreamRequest, provider string, model string, 
 	if req.Observer == nil {
 		return
 	}
-	path, err := req.Observer.RecordLLMRequest(req.RequestID, req.RunID, req.ModelCallID, map[string]any{
+	artifactCallID := req.ModelCallID + req.FallbackArtifactSuffix
+	bodyBytes, _ := json.Marshal(body)
+	path, err := req.Observer.RecordLLMRequest(req.RequestID, req.RunID, artifactCallID, map[string]any{
 		"request_id":                     req.RequestID,
 		"run_id":                         req.RunID,
-		"model_call_id":                  req.ModelCallID,
+		"model_call_id":                  artifactCallID,
 		"provider":                       strings.TrimSpace(provider),
 		"openai_endpoint":                strings.TrimSpace(req.OpenAIEndpoint),
 		"model":                          firstNonEmptyString(model, req.ModelID),
@@ -22,9 +27,9 @@ func recordLLMRequestArtifact(req StreamRequest, provider string, model string, 
 		"resolved_channel_id":            strings.TrimSpace(req.ResolvedChannelID),
 		"resolved_channel_name":          strings.TrimSpace(req.ResolvedChannelName),
 		"resolved_context_window_tokens": req.ResolvedContextWindowTokens,
-		"url":                            url,
+		"url":                            sanitizeModelArtifactURL(url),
 		"method":                         method,
-		"body":                           body,
+		"body_byte_len":                  len(bodyBytes),
 		"request_knobs":                  req.RequestKnobs,
 		"compile_summary":                req.CompileSummary,
 		"stable_message_count":           req.StableMessageCount,
@@ -76,12 +81,13 @@ func buildLLMSummaryPayload(
 	}
 }
 
-// appendLLMResponseArtifact 追加模型调用的原始响应文本。
+// appendLLMResponseArtifact 只记录响应分块大小；Provider 原始响应正文不得进入工件或观测日志。
 func appendLLMResponseArtifact(req StreamRequest, chunk string) (string, error) {
 	if req.Observer == nil {
 		return "", nil
 	}
-	path, err := req.Observer.AppendLLMResponseChunk(req.RequestID, req.RunID, req.ModelCallID, chunk)
+	artifactCallID := req.ModelCallID + req.FallbackArtifactSuffix
+	path, err := req.Observer.AppendLLMResponseChunk(req.RequestID, req.RunID, artifactCallID, chunk)
 	if err == nil && req.ArtifactPaths != nil {
 		req.ArtifactPaths.ResponsePath = path
 	}
@@ -93,7 +99,8 @@ func recordLLMSummaryArtifact(req StreamRequest, payload map[string]any) {
 	if req.Observer == nil {
 		return
 	}
-	path, err := req.Observer.RecordLLMSummary(req.RequestID, req.RunID, req.ModelCallID, payload)
+	artifactCallID := req.ModelCallID + req.FallbackArtifactSuffix
+	path, err := req.Observer.RecordLLMSummary(req.RequestID, req.RunID, artifactCallID, payload)
 	if err == nil && req.ArtifactPaths != nil {
 		req.ArtifactPaths.SummaryPath = path
 	}
@@ -122,7 +129,7 @@ func summarizeTools(items []json.RawMessage) []string {
 func summarizeMessages(items []Message) []map[string]any {
 	result := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		content := truncateArtifactText(item.Content, 120)
+		contentLength := len([]rune(strings.TrimSpace(item.Content)))
 		imageCount := 0
 		for _, part := range item.ContentParts {
 			if normalizeContentPartType(part.Type) == contentPartTypeImage {
@@ -131,8 +138,7 @@ func summarizeMessages(items []Message) []map[string]any {
 		}
 		result = append(result, map[string]any{
 			"role":            item.Role,
-			"content_preview": content,
-			"content_length":  len([]rune(content)),
+			"content_length":  contentLength,
 			"image_count":     imageCount,
 			"tool_call_count": len(item.ToolCalls),
 			"tool_call_id":    item.ToolCallID,
@@ -140,18 +146,6 @@ func summarizeMessages(items []Message) []map[string]any {
 		})
 	}
 	return result
-}
-
-func truncateArtifactText(text string, maxRunes int) string {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || maxRunes <= 0 {
-		return ""
-	}
-	runes := []rune(trimmed)
-	if len(runes) <= maxRunes {
-		return trimmed
-	}
-	return string(runes[:maxRunes]) + "..."
 }
 
 // normalizeModelArtifactTime 把时间格式化为 RFC3339Nano。
@@ -186,12 +180,39 @@ func computeDurationMS(startedAt time.Time, finishedAt time.Time) int64 {
 	return value
 }
 
-// summarizeModelArtifactError 返回可安全落盘的错误文本。
+// summarizeModelArtifactError 返回不含 Provider 响应正文和凭证的结构化错误摘要。
 func summarizeModelArtifactError(err error) string {
 	if err == nil {
 		return ""
 	}
-	return strings.TrimSpace(err.Error())
+	category := strings.TrimSpace(ClassifyProviderError(err))
+	if category == "" {
+		category = "provider_error"
+	}
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
+		return fmt.Sprintf("%s status=%d", category, httpErr.StatusCode)
+	}
+	return category
+}
+
+// sanitizeModelArtifactURL 保留定位所需的 scheme/host/path，但绝不记录 query 或 fragment。
+func sanitizeModelArtifactURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err == nil {
+		parsed.RawQuery = ""
+		parsed.ForceQuery = false
+		parsed.Fragment = ""
+		return parsed.String()
+	}
+	if index := strings.IndexAny(trimmed, "?#"); index >= 0 {
+		return trimmed[:index]
+	}
+	return trimmed
 }
 
 // firstNonEmptyString 返回第一个非空字符串。

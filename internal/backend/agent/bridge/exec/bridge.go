@@ -53,6 +53,7 @@ type ContentBlob struct {
 // OpenExecContext 表示执行桥打开请求时需要的最小上下文。
 type OpenExecContext struct {
 	ConversationID         string
+	RootConversationID     string
 	ModelID                string
 	SubagentModelOverrides map[string]runtimecore.SubagentModelOverrideSelection
 }
@@ -793,6 +794,10 @@ func (bridge *Bridge) openTask(openContext OpenExecContext, toolCall runtimecore
 	execID := fmt.Sprintf("exec-subagent-%d", now.UnixNano())
 	readonly := readBoolArg(args, "readonly", "readOnly")
 	parentConversationID := strings.TrimSpace(openContext.ConversationID)
+	rootParentConversationID := strings.TrimSpace(openContext.RootConversationID)
+	if rootParentConversationID == "" {
+		rootParentConversationID = parentConversationID
+	}
 	taskRequestedModelID := strings.TrimSpace(readStringArg(args, "model", "model_id", "modelId"))
 	modelID := taskRequestedModelID
 	if override, _, ok := runtimecore.LookupSubagentModelOverride(openContext.SubagentModelOverrides, subagentType); ok {
@@ -815,14 +820,15 @@ func (bridge *Bridge) openTask(openContext OpenExecContext, toolCall runtimecore
 				ExecId: execID,
 				Message: &agentv1.ExecServerMessage_SubagentArgs{
 					SubagentArgs: &agentv1.SubagentArgs{
-						ToolCallId:           toolCall.CallID,
-						SubagentType:         subagentType,
-						ModelId:              modelID,
-						Prompt:               strings.TrimSpace(readStringArg(args, "prompt")),
-						Readonly:             readonly,
-						ResumeAgentId:        stringPtr(strings.TrimSpace(readStringArg(args, "resume"))),
-						ParentConversationId: stringPtrIfNonEmpty(parentConversationID),
-						Mode:                 taskModeFromReadonly(readonly),
+						ToolCallId:               toolCall.CallID,
+						SubagentType:             subagentType,
+						ModelId:                  modelID,
+						Prompt:                   strings.TrimSpace(readStringArg(args, "prompt")),
+						Readonly:                 readonly,
+						ResumeAgentId:            stringPtr(strings.TrimSpace(readStringArg(args, "resume"))),
+						ParentConversationId:     stringPtrIfNonEmpty(parentConversationID),
+						RootParentConversationId: stringPtrIfNonEmpty(rootParentConversationID),
+						Mode:                     taskModeFromReadonly(readonly),
 					},
 				},
 			},

@@ -179,3 +179,124 @@ func TestNormalizeModelAdapterConfigsRejectsUnknownReasoningEffort(t *testing.T)
 		t.Fatal("NormalizeModelAdapterConfigs should reject an unknown reasoning effort")
 	}
 }
+
+// ──── ProviderFallback 校验测试 ────────────────────────────────────────────────
+
+func testFallbackAdapters() []ModelAdapterConfig {
+	a := testModelAdapter("ch-a", 1)
+	b := testModelAdapter("ch-b", 2)
+	b.BaseURL = "https://api2.example.com/v1"
+	return []ModelAdapterConfig{a, b}
+}
+
+func TestProviderFallbackDisabledPassesThrough(t *testing.T) {
+	adapters := testFallbackAdapters()
+	// ProviderFallback.Enabled=false（默认）不做任何校验，直接通过
+	result, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("disabled fallback should pass: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 adapters, got %d", len(result))
+	}
+}
+
+func TestProviderFallbackValidPrimaryAndCandidate(t *testing.T) {
+	adapters := testFallbackAdapters()
+	// 计算 ch-a 和 ch-b 的 ID（NormalizeModelAdapterConfigs 会计算 ID）
+	normalized, _ := NormalizeModelAdapterConfigs(adapters)
+	idA := normalized[0].ID
+	idB := normalized[1].ID
+
+	// ch-a 启用 fallback，primary=ch-b（另一个渠道），candidate=[ch-b] 是合法的
+	// 但不能 primary == 自身，也不能 primary 在 candidates 里重复。
+	// 简化：primary=ch-b，候选 = 另建第三个渠道
+	c := testModelAdapter("ch-c", 3)
+	c.BaseURL = "https://api3.example.com/v1"
+	allAdapters := append(adapters, c)
+	normalizedAll, _ := NormalizeModelAdapterConfigs(allAdapters)
+	idA = normalizedAll[0].ID
+	idB = normalizedAll[1].ID
+	idC := normalizedAll[2].ID
+	_ = idB
+
+	allAdapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idA, // 自引用 → 应报错
+		CandidateChannelIDs: []string{idC},
+	}
+	if _, err := NormalizeModelAdapterConfigs(allAdapters); err == nil {
+		t.Fatal("self-referential primaryChannelID should be rejected")
+	}
+
+	// 有效配置：primary=ch-b, candidate=[ch-c]
+	allAdapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	if _, err := NormalizeModelAdapterConfigs(allAdapters); err != nil {
+		t.Fatalf("valid fallback config should pass: %v", err)
+	}
+}
+
+func TestProviderFallbackRejectsDanglingRef(t *testing.T) {
+	adapters := testFallbackAdapters()
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    "nonexistent-id",
+		CandidateChannelIDs: []string{"also-nonexistent"},
+	}
+	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
+		t.Fatal("dangling primaryChannelID should be rejected")
+	}
+}
+
+func TestProviderFallbackRejectsDuplicateCandidates(t *testing.T) {
+	c := testModelAdapter("ch-c", 3)
+	c.BaseURL = "https://api3.example.com/v1"
+	allAdapters := append(testFallbackAdapters(), c)
+	normalizedAll, _ := NormalizeModelAdapterConfigs(allAdapters)
+	idB := normalizedAll[1].ID
+	idC := normalizedAll[2].ID
+
+	allAdapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC, idC}, // 重复
+	}
+	if _, err := NormalizeModelAdapterConfigs(allAdapters); err == nil {
+		t.Fatal("duplicate candidateChannelIDs should be rejected")
+	}
+}
+
+func TestProviderFallbackRejectsTooManyCandidates(t *testing.T) {
+	adapters := testFallbackAdapters()
+	normalizedAll, _ := NormalizeModelAdapterConfigs(adapters)
+	idB := normalizedAll[1].ID
+
+	// 3 个候选（超过最大 2 个）
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idB, idB, idB},
+	}
+	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
+		t.Fatal("more than 2 candidateChannelIDs should be rejected")
+	}
+}
+
+func TestProviderFallbackRejectsEmptyCandidates(t *testing.T) {
+	adapters := testFallbackAdapters()
+	normalizedAll, _ := NormalizeModelAdapterConfigs(adapters)
+	idB := normalizedAll[1].ID
+
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{}, // 空列表
+	}
+	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
+		t.Fatal("empty candidateChannelIDs should be rejected when fallback enabled")
+	}
+}

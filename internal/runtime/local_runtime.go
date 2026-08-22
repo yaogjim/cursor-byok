@@ -34,6 +34,23 @@ const (
 	configurableChannelAnthropicThinkingEffort = "xhigh"
 )
 
+// ProviderFallbackConfig 定义显式有序 fallback 链。默认关闭（Enabled=false）。
+// 启用后，路由器按 PrimaryChannelID → CandidateChannelIDs 顺序尝试，
+// 仅在零字节/零事件的安全窗口内切换；所有渠道共用总 attempt 预算。
+type ProviderFallbackConfig struct {
+	Enabled             bool     `json:"enabled"`
+	PrimaryChannelID    string   `json:"primaryChannelID"`
+	CandidateChannelIDs []string `json:"candidateChannelIDs"`
+}
+
+// ChannelPlan 表示一次请求所有候选渠道（按优先顺序）。
+// Channels[0] 为首选，Channels[1:] 为依次尝试的候选。
+// FallbackEnabled=false 时始终只有一个渠道（现有路径不变）。
+type ChannelPlan struct {
+	Channels        []ResolvedChannel
+	FallbackEnabled bool
+}
+
 // ModelAdapterConfig 定义了当前模块中的 ModelAdapterConfig 类型。
 type ModelAdapterConfig struct {
 	ID string `json:"id,omitempty"`
@@ -459,6 +476,20 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 	}
 	resolved := s.channel
 	return &resolved, nil
+}
+
+// SelectChannelPlanForModel 为指定模型构建渠道计划。
+// 运行时层不持有 ProviderFallback 配置，始终返回单渠道计划（FallbackEnabled=false）。
+// 实际 fallback 多渠道计划由 config.Manager.SelectChannelPlanForModel 构建。
+func (s *FixedChannelService) SelectChannelPlanForModel(ctx context.Context, modelID string) (*ChannelPlan, error) {
+	ch, err := s.SelectChannelForModel(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	return &ChannelPlan{
+		Channels:        []ResolvedChannel{*ch},
+		FallbackEnabled: false,
+	}, nil
 }
 
 // RecordRunRequestUsage 用于处理与 RecordRunRequestUsage 相关的逻辑。

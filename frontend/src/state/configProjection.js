@@ -110,3 +110,18 @@ export function buildClientPreferencesFromState(source = {}) {
     updates: { checkOnStartup: raw.updateCheckOnStartup },
   });
 }
+
+// normalizeProviderFallback 归一化单条 providerFallback 配置（纯函数，无副作用）。
+// 默认关闭；启用时必须有 primaryChannelID 和至少一个 candidateChannelID。
+export function normalizeProviderFallback(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const enabled = asBoolean(raw.enabled);
+  if (!enabled) {
+    return { enabled: false, primaryChannelID: "", candidateChannelIDs: [] };
+  }
+  const primaryChannelID = asString(raw.primaryChannelID ?? raw.primary_channel_id ?? "");
+  const candidateChannelIDs = Array.isArray(raw.candidateChannelIDs)
+    ? raw.candidateChannelIDs.map((id) => asString(id)).filter(Boolean)
+    : [];
+  return { enabled: true, primaryChannelID, candidateChannelIDs };
+}

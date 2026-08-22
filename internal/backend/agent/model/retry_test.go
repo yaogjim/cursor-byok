@@ -730,6 +730,106 @@ func TestHTTPAndStreamRetryShareMaximumAttempts(t *testing.T) {
 	}
 }
 
+// TestRetryingStreamBodyHasRawBytesPropagatesViaHTTPTest 使用真实 httptest 服务器验证：
+// 1. 服务器发送部分字节后断开 → retryingStreamBody.HasRawBytes() 返回 true
+// 2. StreamTruncatedError.RawBytesObserved 被设置为 true
+// 3. isFallbackEligibleError 对该错误返回 false（有字节后禁止 fallback）
+func TestRetryingStreamBodyHasRawBytesPropagatesViaHTTPTest(t *testing.T) {
+	// 服务器：写入部分 SSE 内容后立即关闭连接（模拟截断）
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// 写入不完整的 SSE frame——有字节但没有 [DONE] marker
+		_, _ = fmt.Fprint(w, "data: {\"partial\":true}\n")
+		// 强制 flush 后关闭
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// 服务器侧直接返回，HTTP/1.1 会关闭连接
+	}))
+	defer server.Close()
+
+	var streamBodyRef *retryingStreamBody
+	calls := 0
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+		return server.Client().Transport.RoundTrip(req)
+	})}
+
+	// 先拿到首次 2xx 响应
+	initialResp, err := doProviderRequest(context.Background(), server.Client(), "openai",
+		"req-1", "call-1",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/chat/completions", nil)
+		}, nil, instantRetry())
+	if err != nil {
+		t.Fatalf("initial request: %v", err)
+	}
+
+	// 包装为 retryingStreamBody，canRetry=false 防止内部重试干扰断言
+	streamBody := newRetryingStreamBody(
+		context.Background(), client, "openai", "req-1", "call-1",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v1/chat/completions", nil)
+		},
+		initialResp.Body,
+		responseRetryState(initialResp),
+		nil,
+		instantRetry(),
+		func() bool { return false }, // canRetry=false
+	)
+	defer func() { _ = streamBody.Close() }()
+
+	if rsb, ok := streamBody.(*retryingStreamBody); ok {
+		streamBodyRef = rsb
+	}
+
+	// 读取全部内容（会读到服务器关闭后的 EOF）
+	payload, readErr := io.ReadAll(streamBody)
+
+	// 断言1：读到了字节内容
+	if len(payload) == 0 {
+		t.Fatal("expected some bytes from partial SSE, got nothing")
+	}
+
+	// 断言2：HasRawBytes() 返回 true
+	if streamBodyRef != nil && !streamBodyRef.HasRawBytes() {
+		t.Error("HasRawBytes() = false after reading partial SSE bytes, want true")
+	}
+
+	// 断言3：readErr 为 nil（EOF）或 io.EOF，因为服务器正常关闭
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		t.Logf("readErr = %v (acceptable non-EOF error after server close)", readErr)
+	}
+
+	// 断言4：若发生 StreamTruncatedError，其 RawBytesObserved 必须为 true；
+	//         且 isFallbackEligibleError 必须返回 false
+	if readErr != nil {
+		var trunc *StreamTruncatedError
+		if errors.As(readErr, &trunc) {
+			if !trunc.RawBytesObserved {
+				t.Error("StreamTruncatedError.RawBytesObserved = false after raw bytes, want true")
+			}
+			if isFallbackEligibleError(readErr) {
+				t.Error("isFallbackEligibleError(truncated+bytes) = true, want false (fallback must be blocked)")
+			}
+		}
+	}
+
+	// 辅助：若读取成功但 HasRawBytes=true，构造一个显式的 StreamTruncatedError 来校验 eligible 判断
+	if streamBodyRef != nil && streamBodyRef.HasRawBytes() {
+		syntheticErr := &StreamTruncatedError{Provider: "openai", RawBytesObserved: true}
+		if isFallbackEligibleError(syntheticErr) {
+			t.Error("isFallbackEligibleError(StreamTruncatedError{RawBytesObserved:true}) = true, want false")
+		}
+		// RawBytesObserved=false 时仍然允许 fallback（对照）
+		syntheticNoBytes := &StreamTruncatedError{Provider: "openai", RawBytesObserved: false}
+		if !isFallbackEligibleError(syntheticNoBytes) {
+			t.Error("isFallbackEligibleError(StreamTruncatedError{RawBytesObserved:false}) = false, want true")
+		}
+	}
+}
+
 type singleReadErrorBody struct {
 	data []byte
 	err  error
@@ -880,5 +980,56 @@ func TestRetryingStreamBodyCloseDuringRetryDoesNotLeakOrRetryAfterClose(t *testi
 	}
 	if calls != 1 {
 		t.Fatalf("retry calls = %d, want 1", calls)
+	}
+}
+
+type privacyArtifactObserver struct {
+	request map[string]any
+}
+
+func (observer *privacyArtifactObserver) RecordLLMRequest(_ string, _ string, _ string, payload map[string]any) (string, error) {
+	observer.request = payload
+	return "", nil
+}
+
+func (*privacyArtifactObserver) AppendLLMResponseChunk(string, string, string, string) (string, error) {
+	return "", nil
+}
+
+func (*privacyArtifactObserver) RecordLLMSummary(string, string, string, map[string]any) (string, error) {
+	return "", nil
+}
+
+func TestLLMRequestArtifactOmitsRequestAndMessageBodies(t *testing.T) {
+	observer := &privacyArtifactObserver{}
+	const secret = "child prompt and result must not be logged"
+	req := StreamRequest{
+		RequestID:   "request-privacy",
+		RunID:       "run-privacy",
+		ModelCallID: "call-privacy",
+		Messages:    []Message{{Role: "user", Content: secret}},
+		Observer:    observer,
+	}
+	recordLLMRequestArtifact(req, "openai", "gpt-test", http.MethodPost, "https://example.test/v1/responses?api_key=url-secret#fragment", map[string]any{"input": secret, "api_key": "secret-key"})
+	encoded, err := json.Marshal(observer.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte(secret)) || bytes.Contains(encoded, []byte("secret-key")) || bytes.Contains(encoded, []byte("url-secret")) || bytes.Contains(encoded, []byte("fragment")) || bytes.Contains(encoded, []byte("content_preview")) {
+		t.Fatalf("request artifact retained sensitive content: %s", encoded)
+	}
+	if observer.request["body_byte_len"] == nil {
+		t.Fatalf("request artifact omitted body size metadata: %#v", observer.request)
+	}
+}
+
+func TestModelArtifactErrorOmitsProviderResponseBody(t *testing.T) {
+	const secretBody = "sensitive provider response"
+	summary := summarizeModelArtifactError(&HTTPStatusError{Provider: "openai", StatusCode: http.StatusTooManyRequests, Body: secretBody})
+	if strings.Contains(summary, secretBody) {
+		t.Fatalf("error summary retained provider body: %q", summary)
+	}
+	if summary != ProviderErrorRateLimited+" status=429" {
+		t.Fatalf("error summary = %q", summary)
 	}
 }

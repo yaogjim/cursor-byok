@@ -24,7 +24,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1148,
+          "line": 1202,
           "column": 14
         }
       ]
@@ -36,7 +36,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 381,
+          "line": 467,
           "column": 21
         }
       ]
@@ -60,7 +60,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 479,
+          "line": 497,
           "column": 14
         }
       ]
@@ -84,12 +84,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 478,
+          "line": 564,
           "column": 15
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 506,
+          "line": 592,
           "column": 15
         }
       ]
@@ -142,6 +142,30 @@
         }
       ]
     },
+    "099502eb67f4717b": {
+      "source": "{0} 的 Fallback 主渠道 ID \"{1}\" 引用了不存在的渠道",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 558,
+          "column": 14
+        }
+      ]
+    },
+    "09bc5c2a9ba6a820": {
+      "source": "当前没有其他已保存的渠道，请先新增并保存其他模型配置后再配置 Fallback。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 704,
+          "column": 1
+        }
+      ]
+    },
     "09e7b98edc4d443a": {
       "source": "清理失败",
       "kind": "text",
@@ -173,7 +197,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 515,
+          "line": 533,
           "column": 14
         }
       ]
@@ -231,6 +255,18 @@
         }
       ]
     },
+    "11c2dc70bd76efc9": {
+      "source": "{0} 的 Fallback 候选渠道包含重复或自引用 ID \"{1}\"",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 575,
+          "column": 16
+        }
+      ]
+    },
     "124be3f86f197802": {
       "source": "Token 消耗",
       "kind": "text",
@@ -274,7 +310,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 335,
+          "line": 352,
           "column": 14
         }
       ]
@@ -286,7 +322,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1115,
+          "line": 1169,
           "column": 47
         }
       ]
@@ -298,7 +334,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 429,
+          "line": 515,
           "column": 15
         }
       ]
@@ -380,12 +416,12 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 527,
+          "line": 613,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 361,
+          "line": 378,
           "column": 36
         }
       ]
@@ -397,7 +433,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1513,
+          "line": 1567,
           "column": 32
         }
       ]
@@ -409,12 +445,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 699,
+          "line": 753,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1294,
+          "line": 1348,
           "column": 21
         }
       ]
@@ -460,7 +496,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1106,
+          "line": 1160,
           "column": 12
         }
       ]
@@ -472,7 +508,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 518,
+          "line": 536,
           "column": 14
         }
       ]
@@ -518,7 +554,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 611,
+          "line": 752,
           "column": 89
         },
         {
@@ -553,7 +589,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1199,
+          "line": 1253,
           "column": 12
         }
       ]
@@ -601,7 +637,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 603,
+          "line": 744,
           "column": 13
         }
       ]
@@ -613,17 +649,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 499,
+          "line": 517,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 505,
+          "line": 523,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 511,
+          "line": 529,
           "column": 16
         }
       ]
@@ -719,7 +755,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1188,
+          "line": 1242,
           "column": 14
         }
       ]
@@ -840,7 +876,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 464,
+          "line": 482,
           "column": 14
         }
       ]
@@ -915,7 +951,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1145,
+          "line": 1199,
           "column": 5
         }
       ]
@@ -1076,7 +1112,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1163,
+          "line": 1217,
           "column": 43
         }
       ]
@@ -1088,7 +1124,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 476,
+          "line": 494,
           "column": 14
         }
       ]
@@ -1136,7 +1172,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 428,
+          "line": 514,
           "column": 15
         }
       ]
@@ -1283,6 +1319,18 @@
         }
       ]
     },
+    "556f441872ea0344": {
+      "source": "{0} 的 Fallback 主渠道 ID 不能为空",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 555,
+          "column": 14
+        }
+      ]
+    },
     "56627c94a9decee6": {
       "source": "最大输出 Token",
       "kind": "text",
@@ -1290,12 +1338,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 472,
+          "line": 558,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 500,
+          "line": 586,
           "column": 21
         }
       ]
@@ -1336,7 +1384,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 338,
+          "line": 355,
           "column": 12
         }
       ]
@@ -1413,6 +1461,18 @@
         }
       ]
     },
+    "60a8b7901f014034": {
+      "source": "{0} 的 Fallback 候选渠道 ID 不能为空",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 569,
+          "column": 16
+        }
+      ]
+    },
     "6106f0a12583a334": {
       "source": "刷新失败",
       "kind": "text",
@@ -1437,7 +1497,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1194,
+          "line": 1248,
           "column": 14
         }
       ]
@@ -1500,7 +1560,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 462,
+          "line": 480,
+          "column": 20
+        },
+        {
+          "file": "src/state/appState.js",
+          "line": 549,
           "column": 20
         }
       ]
@@ -1524,7 +1589,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 354,
+          "line": 371,
           "column": 14
         }
       ]
@@ -1548,7 +1613,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1104,
+          "line": 1158,
           "column": 14
         }
       ]
@@ -1560,7 +1625,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 470,
+          "line": 488,
           "column": 14
         }
       ]
@@ -1613,7 +1678,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1137,
+          "line": 1191,
           "column": 9
         }
       ]
@@ -1625,7 +1690,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 400,
+          "line": 486,
           "column": 15
         }
       ]
@@ -1783,6 +1848,18 @@
         }
       ]
     },
+    "6fd08a1f1481bf6c": {
+      "source": "── 不选择 ──",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 359,
+          "column": 12
+        }
+      ]
+    },
     "72f6c3525c0192a7": {
       "source": "开启后把缓存创建纳入分母",
       "kind": "text",
@@ -1814,7 +1891,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1414,
+          "line": 1468,
           "column": 14
         }
       ]
@@ -1891,12 +1968,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 354,
+          "line": 440,
           "column": 18
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 354,
+          "line": 440,
           "column": 18
         }
       ]
@@ -1925,7 +2002,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 613,
+          "line": 754,
           "column": 12
         },
         {
@@ -1976,6 +2053,18 @@
         }
       ]
     },
+    "7e3f6650aad803d6": {
+      "source": "备选渠道 1（第 2 优先，必填）",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 720,
+          "column": 72
+        }
+      ]
+    },
     "7e9e334aeb0bdc07": {
       "source": "服务操作失败",
       "kind": "text",
@@ -2000,7 +2089,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1169,
+          "line": 1223,
           "column": 16
         }
       ]
@@ -2048,7 +2137,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 394,
+          "line": 480,
           "column": 21
         }
       ]
@@ -2120,7 +2209,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 438,
+          "line": 524,
           "column": 25
         }
       ]
@@ -2149,7 +2238,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1101,
+          "line": 1155,
           "column": 14
         }
       ]
@@ -2332,7 +2421,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 494,
+          "line": 512,
           "column": 14
         }
       ]
@@ -2344,7 +2433,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 616,
+          "line": 757,
           "column": 12
         },
         {
@@ -2385,7 +2474,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 421,
+          "line": 507,
           "column": 21
         }
       ]
@@ -2445,7 +2534,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1165,
+          "line": 1219,
           "column": 16
         }
       ]
@@ -2457,12 +2546,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1584,
+          "line": 1638,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1605,
+          "line": 1659,
           "column": 32
         }
       ]
@@ -2510,7 +2599,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 486,
+          "line": 572,
           "column": 21
         }
       ]
@@ -2522,7 +2611,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1197,
+          "line": 1251,
           "column": 14
         }
       ]
@@ -2558,7 +2647,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 522,
+          "line": 540,
           "column": 14
         }
       ]
@@ -2582,7 +2671,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 488,
+          "line": 506,
           "column": 14
         }
       ]
@@ -2594,12 +2683,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1124,
+          "line": 1178,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1180,
+          "line": 1234,
           "column": 87
         }
       ]
@@ -2616,7 +2705,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 616,
+          "line": 757,
           "column": 12
         }
       ]
@@ -2628,7 +2717,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1464,
+          "line": 1518,
           "column": 14
         },
         {
@@ -2708,7 +2797,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 613,
+          "line": 754,
           "column": 12
         }
       ]
@@ -2732,8 +2821,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1185,
+          "line": 1239,
           "column": 14
+        }
+      ]
+    },
+    "a8ccc40b4eb34201": {
+      "source": "主渠道（第 1 优先）",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 713,
+          "column": 72
         }
       ]
     },
@@ -2749,7 +2850,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 408,
+          "line": 494,
           "column": 21
         }
       ]
@@ -2812,7 +2913,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1163,
+          "line": 1217,
           "column": 54
         }
       ]
@@ -2829,6 +2930,18 @@
         }
       ]
     },
+    "ae38277cc76fdb02": {
+      "source": "{0} 的 Fallback 候选渠道 ID \"{1}\" 引用了不存在的渠道",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 572,
+          "column": 16
+        }
+      ]
+    },
     "ae5a738238463a92": {
       "source": "隐藏访问密钥",
       "kind": "text",
@@ -2838,6 +2951,18 @@
           "file": "src/components/ui/Input.vue",
           "line": 67,
           "column": 20
+        }
+      ]
+    },
+    "aeab9763e2354cfa": {
+      "source": "检测到跨 Provider 配置（OpenAI / Anthropic 混用）。请确认工具 schema、模型语义与上下文格式兼容，不兼容时该渠道将被跳过而非降级。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 710,
+          "column": 1
         }
       ]
     },
@@ -2901,7 +3026,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1565,
+          "line": 1619,
           "column": 32
         }
       ]
@@ -2942,6 +3067,18 @@
           "file": "src/components/ModelEditor.vue",
           "line": 49,
           "column": 12
+        }
+      ]
+    },
+    "b3db7f9cf3559515": {
+      "source": "启用后，此模型路由的请求将依次尝试主渠道和备选渠道，而非使用当前渠道本身。所有渠道共享同一总 attempt 与等待预算；仅在零原始字节、零 model event 时才允许渠道切换；一旦开始输出则禁止回退。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 162,
+          "column": 21
         }
       ]
     },
@@ -2988,7 +3125,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1138,
+          "line": 1192,
           "column": 9
         }
       ]
@@ -3000,7 +3137,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 427,
+          "line": 513,
           "column": 15
         }
       ]
@@ -3024,8 +3161,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 413,
+          "line": 499,
           "column": 15
+        }
+      ]
+    },
+    "b807bba777f26521": {
+      "source": "渠道 Fallback",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 685,
+          "column": 21
         }
       ]
     },
@@ -3036,7 +3185,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 514,
+          "line": 600,
           "column": 21
         }
       ]
@@ -3096,7 +3245,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 447,
+          "line": 533,
           "column": 21
         }
       ]
@@ -3132,7 +3281,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 482,
+          "line": 500,
           "column": 14
         }
       ]
@@ -3257,7 +3406,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 461,
+          "line": 547,
           "column": 21
         }
       ]
@@ -3269,17 +3418,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1435,
+          "line": 1489,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 1437,
+          "line": 1491,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 1472,
+          "line": 1526,
           "column": 93
         }
       ]
@@ -3315,7 +3464,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1113,
+          "line": 1167,
           "column": 51
         }
       ]
@@ -3363,7 +3512,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 330,
+          "line": 347,
           "column": 12
         }
       ]
@@ -3411,7 +3560,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 473,
+          "line": 491,
           "column": 14
         }
       ]
@@ -3435,7 +3584,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1383,
+          "line": 1437,
           "column": 14
         },
         {
@@ -3481,12 +3630,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 575,
+          "line": 661,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 344,
+          "line": 361,
           "column": 49
         }
       ]
@@ -3522,12 +3671,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 551,
+          "line": 637,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 365,
+          "line": 382,
           "column": 36
         }
       ]
@@ -3539,7 +3688,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 453,
+          "line": 539,
           "column": 15
         }
       ]
@@ -3585,6 +3734,18 @@
         }
       ]
     },
+    "da70002351399642": {
+      "source": "{0} 的 Fallback 候选渠道数量必须为 1–2 个",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 564,
+          "column": 14
+        }
+      ]
+    },
     "daede9881787abe7": {
       "source": "备注",
       "kind": "text",
@@ -3592,7 +3753,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 598,
+          "line": 739,
           "column": 19
         },
         {
@@ -3609,7 +3770,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 467,
+          "line": 485,
           "column": 14
         }
       ]
@@ -3621,7 +3782,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1144,
+          "line": 1198,
           "column": 5
         }
       ]
@@ -3674,7 +3835,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1291,
+          "line": 1345,
           "column": 21
         }
       ]
@@ -3688,6 +3849,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 177,
           "column": 5
+        }
+      ]
+    },
+    "e3abec290e517d0d": {
+      "source": "{0} 的 Fallback 主渠道 ID 不能与当前渠道相同",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 561,
+          "column": 14
         }
       ]
     },
@@ -3751,7 +3924,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1139,
+          "line": 1193,
           "column": 34
         }
       ]
@@ -3883,7 +4056,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1167,
+          "line": 1221,
           "column": 16
         }
       ]
@@ -3960,7 +4133,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 162,
+          "line": 163,
           "column": 16
         }
       ]
@@ -3996,7 +4169,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 351,
+          "line": 368,
           "column": 14
         }
       ]
@@ -4008,7 +4181,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1115,
+          "line": 1169,
           "column": 38
         }
       ]
@@ -4025,17 +4198,22 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 535,
+          "line": 621,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 559,
+          "line": 645,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 583,
+          "line": 669,
+          "column": 21
+        },
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 693,
           "column": 21
         }
       ]
@@ -4089,6 +4267,30 @@
         }
       ]
     },
+    "f5f7a9178b115d01": {
+      "source": "启用后，此模型路由的请求将按顺序使用主渠道和备选渠道，不再使用当前渠道本身。所有渠道共享总 attempt 预算；仅在零输出时允许切换。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 698,
+          "column": 1
+        }
+      ]
+    },
+    "f5fa9caa9bfd9c4d": {
+      "source": "备选渠道 2（第 3 优先，可选）",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 727,
+          "column": 72
+        }
+      ]
+    },
     "f61e03f047b786d5": {
       "source": "{0} 的最大输出 Token 必须为正整数",
       "kind": "template",
@@ -4096,12 +4298,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 485,
+          "line": 503,
           "column": 14
         },
         {
           "file": "src/state/appState.js",
-          "line": 491,
+          "line": 509,
           "column": 14
         }
       ]
@@ -4157,7 +4359,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1190,
+          "line": 1244,
           "column": 12
         }
       ]
@@ -4169,7 +4371,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1113,
+          "line": 1167,
           "column": 40
         }
       ]

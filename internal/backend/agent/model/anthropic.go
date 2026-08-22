@@ -290,15 +290,17 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	if err := ApplyAnthropicExtraParams(body, req.AnthropicExtraParamsEnabled, req.AnthropicExtraParamsJSON); err != nil {
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
-		return err
+		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
 	recordLLMRequestArtifact(req, "anthropic", modelID, "POST", requestURL, body)
 
 	payload, err := json.Marshal(body)
 	if err != nil {
+		// json 序列化失败属于本地请求构建错误，不可通过切换渠道解决，包装为 RequestBuildError。
+		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
-		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
-		return err
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
+		return buildErr
 	}
 
 	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
@@ -307,27 +309,41 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, requestURL, bytes.NewReader(payload))
 		if err != nil {
-			return nil, err
+			// http.NewRequest 失败是本地构建错误，禁止 fallback。
+			return nil, &RequestBuildError{Err: err}
 		}
 		ApplyAnthropicCompatibleAuthHeaders(httpReq, apiKey)
 		httpReq.Header.Set("anthropic-version", "2023-06-01")
 		httpReq.Header.Set("content-type", "application/json")
 		httpReq.Header.Set("User-Agent", AnthropicClaudeCodeUserAgent)
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
-			return nil, err
+			// 自定义 header 构建失败是本地逻辑错误，禁止 fallback。
+			return nil, &RequestBuildError{Err: err}
 		}
 		return httpReq, nil
 	}
 
 	sawStreamEvent := false
-	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, adapter.retry)
+	// effectiveRetry 复用 adapter.retry 配置，并在 FallbackMaxAttempts>0 时收紧
+	// maxAttempts，确保所有候选渠道共享同一总 attempt 预算。
+	// FallbackRemainingWait>0 时同步收紧 maxTotalWait，确保 sleep 预算全链共享。
+	effectiveRetry := normalizeProviderRetry(adapter.retry)
+	if req.FallbackMaxAttempts > 0 && req.FallbackMaxAttempts < effectiveRetry.maxAttempts {
+		effectiveRetry.maxAttempts = req.FallbackMaxAttempts
+	}
+	if req.FallbackRemainingWait > 0 && req.FallbackRemainingWait < effectiveRetry.maxTotalWait {
+		effectiveRetry.maxTotalWait = req.FallbackRemainingWait
+	}
+	effectiveRetry.fallbackSafety = req.FallbackSafety
+	effectiveRetry.fallbackBudget = req.FallbackBudget
+	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, effectiveRetry)
 	if err != nil {
 		if idleErr := streamIdle.Err(); idleErr != nil {
 			err = idleErr
 		}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
-		return err
+		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
 	// 使用闭包变量确保 defer 关闭最终的 body（可能是原始或重试后的 wrapper）
 	bodyToClose := resp.Body
@@ -341,9 +357,9 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		err = buildHTTPStatusError("anthropic adapter", resp)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
-		return err
+		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
-	bodyToClose = newRetryingStreamBody(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, resp.Body, responseRetryState(resp), nil, adapter.retry, func() bool { return !sawStreamEvent })
+	bodyToClose = newRetryingStreamBody(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, resp.Body, responseRetryState(resp), nil, effectiveRetry, func() bool { return !sawStreamEvent })
 	resp.Body = bodyToClose
 	streamIdle.AttachBody(resp.Body)
 
@@ -402,9 +418,16 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	firstEventAt := time.Time{}
 	sawCompletionMarker := false
 	fail := func(streamErr error) error {
+		// 将 retryingStreamBody 的 raw-bytes 状态传播到 StreamTruncatedError，
+		// 以便 FallbackAwareRouter 精确判断"有字节但无 model event"场景并阻断 fallback。
+		if trunc, ok := streamErr.(*StreamTruncatedError); ok && !trunc.RawBytesObserved {
+			if reporter, ok2 := bodyToClose.(RawBytesReporter); ok2 && reporter.HasRawBytes() {
+				trunc.RawBytesObserved = true
+			}
+		}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
-		return streamErr
+		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
 	}
 	flushThinkingCompleted := func() error {
 		if thinkingStarted.IsZero() {

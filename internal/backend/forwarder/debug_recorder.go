@@ -91,11 +91,7 @@ func (recorder *debugRecorder) LogBidiRaw(ctx context.Context, requestID string,
 	event["append_seqno"] = appendSeqno
 	event["status"] = strings.TrimSpace(status)
 	event["data_len"] = len(dataHex)
-	if mode == "full" {
-		event["data_hex"] = dataHex
-	} else {
-		event["payload_omitted"] = "basic_mode"
-	}
+	event["payload_omitted"] = "raw_sensitive_content"
 	for key, value := range extra {
 		event[key] = value
 	}
@@ -113,9 +109,11 @@ func (recorder *debugRecorder) LogBidiDecoded(ctx context.Context, requestID str
 	event["append_seqno"] = appendSeqno
 	event["client_kind"] = strings.TrimSpace(clientKind)
 	event["message_case"] = agentClientMessageCase(message)
-	if mode == "full" {
+	if mode == "full" && !containsSubagentSensitiveDebugContent(intent) {
 		event["message"] = deferredProtoJSONDebugPayload(message)
 		event["intent"] = deferredInboundIntentDebugPayload(intent)
+	} else if mode == "full" {
+		event["payload_omitted"] = "subagent_sensitive_content"
 	} else {
 		event["intent_kind"] = strings.TrimSpace(intent.Kind)
 		event["payload_omitted"] = "basic_mode"
@@ -173,6 +171,7 @@ func (recorder *debugRecorder) LogProviderArtifact(ctx context.Context, requestI
 	if mode == "off" {
 		return
 	}
+	payload = omitProviderRawArtifactContent(payload)
 	fields := map[string]any{
 		"model_call_id": strings.TrimSpace(modelCallID),
 	}
@@ -185,11 +184,51 @@ func (recorder *debugRecorder) LogProviderArtifact(ctx context.Context, requestI
 	recorder.LogProvider(ctx, requestID, conversationID, eventName, fields)
 }
 
+func omitProviderRawArtifactContent(payload map[string]any) map[string]any {
+	if len(payload) == 0 {
+		return payload
+	}
+	result := make(map[string]any, len(payload)+2)
+	for key, value := range payload {
+		switch strings.TrimSpace(key) {
+		case "body":
+			result["body_omitted"] = true
+		case "raw_chunk":
+			if chunk, ok := value.(string); ok {
+				result["raw_chunk_byte_len"] = len([]byte(chunk))
+			}
+		default:
+			result[key] = value
+		}
+	}
+	return result
+}
+
 func (recorder *debugRecorder) ServerMessagePayload(ctx context.Context, message *agentv1.AgentServerMessage) any {
-	if !recorder.full(ctx) || message == nil {
+	if !recorder.full(ctx) || message == nil || containsSubagentServerSensitiveContent(message) {
 		return nil
 	}
 	return deferredProtoJSONDebugPayload(message)
+}
+
+func containsSubagentSensitiveDebugContent(intent InboundIntent) bool {
+	if strings.TrimSpace(intent.SubagentTypeName) != "" {
+		return true
+	}
+	if intent.ExecClientControlMessage != nil {
+		// 控制消息不携带足够的父 exec 类型，保守省略，避免 subagent throw 正文落盘。
+		return true
+	}
+	message := intent.ExecClientMessage
+	return message != nil && (message.GetSubagentResult() != nil || message.GetSubagentAwaitResult() != nil || message.GetForceBackgroundSubagentResult() != nil)
+}
+
+func containsSubagentServerSensitiveContent(message *agentv1.AgentServerMessage) bool {
+	if message == nil {
+		return false
+	}
+	execMessage := message.GetExecServerMessage()
+	return execMessage != nil && (execMessage.GetSubagentArgs() != nil || execMessage.GetSubagentAwaitArgs() != nil || execMessage.GetForceBackgroundSubagentArgs() != nil)
 }
 
 func (recorder *debugRecorder) Close() {
@@ -256,9 +295,28 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	)
 	correlation.ModelCallID = firstNonEmpty(correlation.ModelCallID, debugString(rawEvent, "model_call_id"), stored.ModelCallID)
 	correlation.ToolCallID = firstNonEmpty(correlation.ToolCallID, debugString(rawEvent, "tool_call_id"), stored.ToolCallID)
+	correlation.RootConversationID = firstNonEmpty(correlation.RootConversationID, debugString(rawEvent, "root_conversation_id"), stored.RootConversationID)
+	correlation.ParentConversationID = firstNonEmpty(correlation.ParentConversationID, debugString(rawEvent, "parent_conversation_id"), stored.ParentConversationID)
+	correlation.ParentModelCallID = firstNonEmpty(correlation.ParentModelCallID, debugString(rawEvent, "parent_model_call_id"), stored.ParentModelCallID)
+	correlation.ParentToolCallID = firstNonEmpty(correlation.ParentToolCallID, debugString(rawEvent, "parent_tool_call_id"), stored.ParentToolCallID)
+	correlation.SubagentRunID = firstNonEmpty(correlation.SubagentRunID, debugString(rawEvent, "subagent_run_id"), stored.SubagentRunID)
+	correlation.ChildConversationID = firstNonEmpty(correlation.ChildConversationID, debugString(rawEvent, "child_conversation_id"), stored.ChildConversationID)
+	correlation.AgentID = firstNonEmpty(correlation.AgentID, debugString(rawEvent, "agent_id"), stored.AgentID)
 	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
 	if correlation.TurnSequence == 0 {
 		correlation.TurnSequence = stored.TurnSequence
+	}
+	if correlation.ProviderPass == 0 {
+		correlation.ProviderPass = int(readInt64Value(rawEvent["provider_pass"]))
+	}
+	if correlation.ProviderPass == 0 {
+		correlation.ProviderPass = stored.ProviderPass
+	}
+	if correlation.HTTPAttempt == 0 {
+		correlation.HTTPAttempt = int(readInt64Value(rawEvent["http_attempt"]))
+	}
+	if correlation.HTTPAttempt == 0 {
+		correlation.HTTPAttempt = stored.HTTPAttempt
 	}
 	turnSequence := readInt64Value(rawEvent["turn_seq"])
 	if turnSequence <= 0 {
@@ -594,11 +652,25 @@ func (recorder *debugRecorder) contextWithRequestCorrelation(ctx context.Context
 		stored.ConversationID,
 	)
 	correlation.ModelCallID = firstNonEmpty(strings.TrimSpace(modelCallID), correlation.ModelCallID, stored.ModelCallID)
+	correlation.RootConversationID = firstNonEmpty(correlation.RootConversationID, stored.RootConversationID)
+	correlation.ParentConversationID = firstNonEmpty(correlation.ParentConversationID, stored.ParentConversationID)
+	correlation.ParentModelCallID = firstNonEmpty(correlation.ParentModelCallID, stored.ParentModelCallID)
+	correlation.ParentToolCallID = firstNonEmpty(correlation.ParentToolCallID, stored.ParentToolCallID)
+	correlation.ToolCallID = firstNonEmpty(correlation.ToolCallID, stored.ToolCallID)
+	correlation.SubagentRunID = firstNonEmpty(correlation.SubagentRunID, stored.SubagentRunID)
+	correlation.ChildConversationID = firstNonEmpty(correlation.ChildConversationID, stored.ChildConversationID)
+	correlation.AgentID = firstNonEmpty(correlation.AgentID, stored.AgentID)
 	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
 	if correlation.TurnSequence == 0 {
 		correlation.TurnSequence = stored.TurnSequence
 	}
-	if correlation.TraceID == "" && correlation.CursorRequestID == "" && correlation.ModelCallID == "" && correlation.TurnID == "" {
+	if correlation.ProviderPass == 0 {
+		correlation.ProviderPass = stored.ProviderPass
+	}
+	if correlation.HTTPAttempt == 0 {
+		correlation.HTTPAttempt = stored.HTTPAttempt
+	}
+	if correlation.TraceID == "" && correlation.CursorRequestID == "" && correlation.ConversationID == "" && correlation.ModelCallID == "" && correlation.ToolCallID == "" && correlation.RootConversationID == "" && correlation.ParentConversationID == "" && correlation.SubagentRunID == "" && correlation.TurnID == "" {
 		return ctx
 	}
 	return observability.WithCorrelation(ctx, correlation)

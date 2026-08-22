@@ -34,55 +34,73 @@ type SessionMetadata struct {
 }
 
 type Correlation struct {
-	ProjectID       string `json:"project_id,omitempty"`
-	TraceID         string `json:"trace_id,omitempty"`
-	SpanID          string `json:"span_id,omitempty"`
-	ParentSpanID    string `json:"parent_span_id,omitempty"`
-	HTTPRequestID   string `json:"http_request_id,omitempty"`
-	CursorRequestID string `json:"cursor_request_id,omitempty"`
-	ConversationID  string `json:"conversation_id,omitempty"`
-	TurnID          string `json:"turn_id,omitempty"`
-	TurnSequence    uint64 `json:"turn_sequence,omitempty"`
-	ModelCallID     string `json:"model_call_id,omitempty"`
-	ToolCallID      string `json:"tool_call_id,omitempty"`
+	ProjectID            string `json:"project_id,omitempty"`
+	TraceID              string `json:"trace_id,omitempty"`
+	SpanID               string `json:"span_id,omitempty"`
+	ParentSpanID         string `json:"parent_span_id,omitempty"`
+	HTTPRequestID        string `json:"http_request_id,omitempty"`
+	CursorRequestID      string `json:"cursor_request_id,omitempty"`
+	ConversationID       string `json:"conversation_id,omitempty"`
+	RootConversationID   string `json:"root_conversation_id,omitempty"`
+	ParentConversationID string `json:"parent_conversation_id,omitempty"`
+	ParentToolCallID     string `json:"parent_tool_call_id,omitempty"`
+	SubagentRunID        string `json:"subagent_run_id,omitempty"`
+	ChildConversationID  string `json:"child_conversation_id,omitempty"`
+	AgentID              string `json:"agent_id,omitempty"`
+	ParentModelCallID    string `json:"parent_model_call_id,omitempty"`
+	TurnID               string `json:"turn_id,omitempty"`
+	TurnSequence         uint64 `json:"turn_sequence,omitempty"`
+	ModelCallID          string `json:"model_call_id,omitempty"`
+	ToolCallID           string `json:"tool_call_id,omitempty"`
+	ProviderPass         int    `json:"provider_pass,omitempty"`
+	HTTPAttempt          int    `json:"http_attempt,omitempty"`
 }
 
 type Event struct {
-	SchemaVersion       int            `json:"schema_version"`
-	Timestamp           time.Time      `json:"timestamp"`
-	Sequence            uint64         `json:"sequence"`
-	AppSessionID        string         `json:"app_session_id"`
-	ProjectID           string         `json:"project_id,omitempty"`
-	TraceID             string         `json:"trace_id,omitempty"`
-	SpanID              string         `json:"span_id,omitempty"`
-	ParentSpanID        string         `json:"parent_span_id,omitempty"`
-	HTTPRequestID       string         `json:"http_request_id,omitempty"`
-	CursorRequestID     string         `json:"cursor_request_id,omitempty"`
-	ConversationID      string         `json:"conversation_id,omitempty"`
-	TurnID              string         `json:"turn_id,omitempty"`
-	TurnSequence        uint64         `json:"turn_sequence,omitempty"`
-	ModelCallID         string         `json:"model_call_id,omitempty"`
-	ToolCallID          string         `json:"tool_call_id,omitempty"`
-	Layer               string         `json:"layer"`
-	Event               string         `json:"event"`
-	Capability          string         `json:"capability,omitempty"`
-	Operation           string         `json:"operation,omitempty"`
-	Direction           string         `json:"direction,omitempty"`
-	Route               string         `json:"route,omitempty"`
-	ExecutionTarget     string         `json:"execution_target,omitempty"`
-	Protocol            string         `json:"protocol,omitempty"`
-	Status              string         `json:"status,omitempty"`
-	SemanticOutcome     string         `json:"semantic_outcome,omitempty"`
-	ImplementationState string         `json:"implementation_state,omitempty"`
-	Severity            string         `json:"severity,omitempty"`
-	ErrorCategory       string         `json:"error_category,omitempty"`
-	DurationMS          int64          `json:"duration_ms,omitempty"`
-	RequestBytes        int64          `json:"request_bytes,omitempty"`
-	ResponseBytes       int64          `json:"response_bytes,omitempty"`
-	DecodeError         bool           `json:"decode_error,omitempty"`
-	DroppedEvents       uint64         `json:"dropped_events,omitempty"`
-	Fields              map[string]any `json:"fields,omitempty"`
-	PayloadRef          string         `json:"payload_ref,omitempty"`
+	SchemaVersion        int            `json:"schema_version"`
+	Timestamp            time.Time      `json:"timestamp"`
+	Sequence             uint64         `json:"sequence"`
+	AppSessionID         string         `json:"app_session_id"`
+	ProjectID            string         `json:"project_id,omitempty"`
+	TraceID              string         `json:"trace_id,omitempty"`
+	SpanID               string         `json:"span_id,omitempty"`
+	ParentSpanID         string         `json:"parent_span_id,omitempty"`
+	HTTPRequestID        string         `json:"http_request_id,omitempty"`
+	CursorRequestID      string         `json:"cursor_request_id,omitempty"`
+	ConversationID       string         `json:"conversation_id,omitempty"`
+	RootConversationID   string         `json:"root_conversation_id,omitempty"`
+	ParentConversationID string         `json:"parent_conversation_id,omitempty"`
+	ParentToolCallID     string         `json:"parent_tool_call_id,omitempty"`
+	SubagentRunID        string         `json:"subagent_run_id,omitempty"`
+	ChildConversationID  string         `json:"child_conversation_id,omitempty"`
+	AgentID              string         `json:"agent_id,omitempty"`
+	ParentModelCallID    string         `json:"parent_model_call_id,omitempty"`
+	TurnID               string         `json:"turn_id,omitempty"`
+	TurnSequence         uint64         `json:"turn_sequence,omitempty"`
+	ModelCallID          string         `json:"model_call_id,omitempty"`
+	ToolCallID           string         `json:"tool_call_id,omitempty"`
+	ProviderPass         int            `json:"provider_pass,omitempty"`
+	HTTPAttempt          int            `json:"http_attempt,omitempty"`
+	Layer                string         `json:"layer"`
+	Event                string         `json:"event"`
+	Capability           string         `json:"capability,omitempty"`
+	Operation            string         `json:"operation,omitempty"`
+	Direction            string         `json:"direction,omitempty"`
+	Route                string         `json:"route,omitempty"`
+	ExecutionTarget      string         `json:"execution_target,omitempty"`
+	Protocol             string         `json:"protocol,omitempty"`
+	Status               string         `json:"status,omitempty"`
+	SemanticOutcome      string         `json:"semantic_outcome,omitempty"`
+	ImplementationState  string         `json:"implementation_state,omitempty"`
+	Severity             string         `json:"severity,omitempty"`
+	ErrorCategory        string         `json:"error_category,omitempty"`
+	DurationMS           int64          `json:"duration_ms,omitempty"`
+	RequestBytes         int64          `json:"request_bytes,omitempty"`
+	ResponseBytes        int64          `json:"response_bytes,omitempty"`
+	DecodeError          bool           `json:"decode_error,omitempty"`
+	DroppedEvents        uint64         `json:"dropped_events,omitempty"`
+	Fields               map[string]any `json:"fields,omitempty"`
+	PayloadRef           string         `json:"payload_ref,omitempty"`
 }
 
 type Payload struct {
@@ -130,7 +148,8 @@ func WithCorrelation(ctx context.Context, correlation Correlation) context.Conte
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, correlationContextKey{}, normalizeCorrelation(correlation))
+	merged := mergeCorrelation(CorrelationFromContext(ctx), correlation)
+	return context.WithValue(ctx, correlationContextKey{}, merged)
 }
 
 func CorrelationFromContext(ctx context.Context) Correlation {
@@ -151,17 +170,26 @@ func NewTrace() Correlation {
 func ChildSpan(parent Correlation) Correlation {
 	parent = normalizeCorrelation(parent)
 	return Correlation{
-		ProjectID:       parent.ProjectID,
-		TraceID:         firstNonEmpty(parent.TraceID, randomID(16)),
-		SpanID:          randomID(8),
-		ParentSpanID:    parent.SpanID,
-		HTTPRequestID:   parent.HTTPRequestID,
-		CursorRequestID: parent.CursorRequestID,
-		ConversationID:  parent.ConversationID,
-		TurnID:          parent.TurnID,
-		TurnSequence:    parent.TurnSequence,
-		ModelCallID:     parent.ModelCallID,
-		ToolCallID:      parent.ToolCallID,
+		ProjectID:            parent.ProjectID,
+		TraceID:              firstNonEmpty(parent.TraceID, randomID(16)),
+		SpanID:               randomID(8),
+		ParentSpanID:         parent.SpanID,
+		HTTPRequestID:        parent.HTTPRequestID,
+		CursorRequestID:      parent.CursorRequestID,
+		ConversationID:       parent.ConversationID,
+		RootConversationID:   parent.RootConversationID,
+		ParentConversationID: parent.ParentConversationID,
+		ParentToolCallID:     parent.ParentToolCallID,
+		SubagentRunID:        parent.SubagentRunID,
+		ChildConversationID:  parent.ChildConversationID,
+		AgentID:              parent.AgentID,
+		ParentModelCallID:    parent.ParentModelCallID,
+		TurnID:               parent.TurnID,
+		TurnSequence:         parent.TurnSequence,
+		ModelCallID:          parent.ModelCallID,
+		ToolCallID:           parent.ToolCallID,
+		ProviderPass:         parent.ProviderPass,
+		HTTPAttempt:          parent.HTTPAttempt,
 	}
 }
 
@@ -177,12 +205,62 @@ func applyCorrelation(event *Event, correlation Correlation) {
 	event.HTTPRequestID = firstNonEmpty(event.HTTPRequestID, correlation.HTTPRequestID)
 	event.CursorRequestID = firstNonEmpty(event.CursorRequestID, correlation.CursorRequestID)
 	event.ConversationID = firstNonEmpty(event.ConversationID, correlation.ConversationID)
+	event.RootConversationID = firstNonEmpty(event.RootConversationID, correlation.RootConversationID)
+	event.ParentConversationID = firstNonEmpty(event.ParentConversationID, correlation.ParentConversationID)
+	event.ParentToolCallID = firstNonEmpty(event.ParentToolCallID, correlation.ParentToolCallID)
+	event.SubagentRunID = firstNonEmpty(event.SubagentRunID, correlation.SubagentRunID)
+	event.ChildConversationID = firstNonEmpty(event.ChildConversationID, correlation.ChildConversationID)
+	event.AgentID = firstNonEmpty(event.AgentID, correlation.AgentID)
+	event.ParentModelCallID = firstNonEmpty(event.ParentModelCallID, correlation.ParentModelCallID)
 	event.TurnID = firstNonEmpty(event.TurnID, correlation.TurnID)
 	if event.TurnSequence == 0 {
 		event.TurnSequence = correlation.TurnSequence
 	}
 	event.ModelCallID = firstNonEmpty(event.ModelCallID, correlation.ModelCallID)
 	event.ToolCallID = firstNonEmpty(event.ToolCallID, correlation.ToolCallID)
+	if event.ProviderPass == 0 {
+		event.ProviderPass = correlation.ProviderPass
+	}
+	if event.HTTPAttempt == 0 {
+		event.HTTPAttempt = correlation.HTTPAttempt
+	}
+}
+
+func mergeCorrelation(base Correlation, overlay Correlation) Correlation {
+	base = normalizeCorrelation(base)
+	overlay = normalizeCorrelation(overlay)
+	mergeString := func(target *string, value string) {
+		if value != "" {
+			*target = value
+		}
+	}
+	mergeString(&base.ProjectID, overlay.ProjectID)
+	mergeString(&base.TraceID, overlay.TraceID)
+	mergeString(&base.SpanID, overlay.SpanID)
+	mergeString(&base.ParentSpanID, overlay.ParentSpanID)
+	mergeString(&base.HTTPRequestID, overlay.HTTPRequestID)
+	mergeString(&base.CursorRequestID, overlay.CursorRequestID)
+	mergeString(&base.ConversationID, overlay.ConversationID)
+	mergeString(&base.RootConversationID, overlay.RootConversationID)
+	mergeString(&base.ParentConversationID, overlay.ParentConversationID)
+	mergeString(&base.ParentToolCallID, overlay.ParentToolCallID)
+	mergeString(&base.SubagentRunID, overlay.SubagentRunID)
+	mergeString(&base.ChildConversationID, overlay.ChildConversationID)
+	mergeString(&base.AgentID, overlay.AgentID)
+	mergeString(&base.ParentModelCallID, overlay.ParentModelCallID)
+	mergeString(&base.TurnID, overlay.TurnID)
+	mergeString(&base.ModelCallID, overlay.ModelCallID)
+	mergeString(&base.ToolCallID, overlay.ToolCallID)
+	if overlay.TurnSequence != 0 {
+		base.TurnSequence = overlay.TurnSequence
+	}
+	if overlay.ProviderPass != 0 {
+		base.ProviderPass = overlay.ProviderPass
+	}
+	if overlay.HTTPAttempt != 0 {
+		base.HTTPAttempt = overlay.HTTPAttempt
+	}
+	return base
 }
 
 func normalizeCorrelation(value Correlation) Correlation {
@@ -193,6 +271,13 @@ func normalizeCorrelation(value Correlation) Correlation {
 	value.HTTPRequestID = strings.TrimSpace(value.HTTPRequestID)
 	value.CursorRequestID = strings.TrimSpace(value.CursorRequestID)
 	value.ConversationID = strings.TrimSpace(value.ConversationID)
+	value.RootConversationID = strings.TrimSpace(value.RootConversationID)
+	value.ParentConversationID = strings.TrimSpace(value.ParentConversationID)
+	value.ParentToolCallID = strings.TrimSpace(value.ParentToolCallID)
+	value.SubagentRunID = strings.TrimSpace(value.SubagentRunID)
+	value.ChildConversationID = strings.TrimSpace(value.ChildConversationID)
+	value.AgentID = strings.TrimSpace(value.AgentID)
+	value.ParentModelCallID = strings.TrimSpace(value.ParentModelCallID)
 	value.TurnID = strings.TrimSpace(value.TurnID)
 	value.ModelCallID = strings.TrimSpace(value.ModelCallID)
 	value.ToolCallID = strings.TrimSpace(value.ToolCallID)

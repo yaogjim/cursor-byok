@@ -744,7 +744,12 @@ func newCompactionFailedEntry(plan *PendingCompaction, cause error) HistoryEntry
 		Kind: "compaction_failed",
 	}
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
-		payload["error"] = strings.TrimSpace(cause.Error())
+		var providerErr providerTerminalError
+		if errors.As(cause, &providerErr) {
+			payload["error"] = safeProviderTerminalMessage(providerErr)
+		} else {
+			payload["error"] = strings.TrimSpace(cause.Error())
+		}
 	}
 	if plan != nil {
 		payload["trigger"] = strings.TrimSpace(plan.Trigger)
@@ -1674,7 +1679,7 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 			requestID := stream.RequestID
 			turnSeq := stream.TurnSeq
 			stream.mu.Unlock()
-			if usageErr := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "provider_error", usage, err.Error(), false); usageErr != nil {
+			if usageErr := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "provider_error", usage, safeProviderTerminalMessage(err), false); usageErr != nil {
 				return "", fmt.Errorf("record compaction provider error usage: %w", usageErr)
 			}
 		}

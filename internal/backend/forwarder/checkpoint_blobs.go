@@ -37,6 +37,38 @@ func failedCheckpointTerminalAction(errorCode string, errorMessage string) check
 	}
 }
 
+func checkpointActionWithSubagentAcknowledgement(runID string) checkpointTerminalAction {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return checkpointTerminalAction{}
+	}
+	return checkpointTerminalAction{AcknowledgeSubagentRunIDs: []string{runID}}
+}
+
+func mergeCheckpointTerminalAction(existing checkpointTerminalAction, incoming checkpointTerminalAction) checkpointTerminalAction {
+	merged := existing
+	if incoming.Kind != checkpointTerminalActionNone {
+		merged.Kind = incoming.Kind
+		merged.Completion = incoming.Completion
+		merged.ErrorCode = incoming.ErrorCode
+		merged.ErrorMessage = incoming.ErrorMessage
+	}
+	seen := make(map[string]struct{}, len(existing.AcknowledgeSubagentRunIDs)+len(incoming.AcknowledgeSubagentRunIDs))
+	merged.AcknowledgeSubagentRunIDs = nil
+	for _, runID := range append(append([]string(nil), existing.AcknowledgeSubagentRunIDs...), incoming.AcknowledgeSubagentRunIDs...) {
+		runID = strings.TrimSpace(runID)
+		if runID == "" {
+			continue
+		}
+		if _, ok := seen[runID]; ok {
+			continue
+		}
+		seen[runID] = struct{}{}
+		merged.AcknowledgeSubagentRunIDs = append(merged.AcknowledgeSubagentRunIDs, runID)
+	}
+	return merged
+}
+
 func (service *Service) queueCheckpointProjection(stream *ActiveStream, projection *CheckpointProjection, completion *pendingTurnCompletion) error {
 	return service.queueCheckpointProjectionWithTerminal(stream, projection, successfulCheckpointTerminalAction(completion))
 }
@@ -57,8 +89,8 @@ func (service *Service) queueCheckpointProjectionWithTerminal(stream *ActiveStre
 	if stream.ConfirmedCheckpointBlobs == nil {
 		stream.ConfirmedCheckpointBlobs = make(map[string]struct{})
 	}
-	if terminal.Kind == checkpointTerminalActionNone && stream.PendingCheckpoint != nil {
-		terminal = stream.PendingCheckpoint.Terminal
+	if stream.PendingCheckpoint != nil {
+		terminal = mergeCheckpointTerminalAction(stream.PendingCheckpoint.Terminal, terminal)
 	}
 	required := make(map[string]struct{}, len(projection.Blobs))
 	pendingKeys := make(map[string]struct{}, len(stream.PendingCheckpointBlobWrites))
@@ -202,7 +234,23 @@ func (service *Service) publishReadyCheckpoint(stream *ActiveStream) error {
 		}
 		return err
 	}
+	service.acknowledgeSubagentRunsAfterCheckpoint(terminal.AcknowledgeSubagentRunIDs)
 	return service.finishCheckpointTerminalAction(stream, terminal)
+}
+
+func (service *Service) acknowledgeSubagentRunsAfterCheckpoint(runIDs []string) {
+	if service == nil || service.subagentRuns == nil {
+		return
+	}
+	for _, runID := range runIDs {
+		runID = strings.TrimSpace(runID)
+		if runID == "" {
+			continue
+		}
+		if _, err := service.subagentRuns.MarkAcknowledged(runID); err != nil {
+			log.Printf("subagent_service mark_acknowledged_failed run_id=%s err=%v", runID, err)
+		}
+	}
 }
 
 func (service *Service) handleCheckpointBlobTimeout(stream *ActiveStream) error {

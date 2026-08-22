@@ -254,6 +254,9 @@ type PendingExec struct {
 	StderrBuffer string
 	// ArtifactPath 保存该 exec 对应的原始桥接工件路径。
 	ArtifactPath string
+	// SubagentRunID 是 Task 派发前生成的稳定运行标识符，贯通整个 subagent 生命周期。
+	// 非 subagent exec 保持空值；缺失时保持 unknown，不按时间推断。
+	SubagentRunID string
 }
 
 // PendingInteraction 表示一条尚未收口的交互桥记录。

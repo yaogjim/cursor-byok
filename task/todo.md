@@ -4,12 +4,73 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: p1-subagent-handoff-provider-fallback-20260821
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved (durable-handoff + ordered-allowlist)
+DELIVERY_STATUS: core implementation and verification completed; real Cursor protocol fixture remains pending evidence
+
+### CONTEXT
+
+- 用户已确认继续实施除 MITM、证书安装、系统代理接管和透明代理扩展外的 P1。
+- Subagent 恢复承诺为 `durable-handoff`：持久化已生成终态并在重启后幂等交接给 parent；不承诺 child 执行点自动续跑。
+- Provider fallback 为默认关闭的 `ordered-allowlist`：只尝试显式有序渠道；任意原始流字节、model event 或副作用后禁止切换；retry/fallback 共享 attempts 与等待预算。
+- 不修改 proto；child prompt/result 正文和 Provider 原始敏感响应不得进入观测日志，凭证和 Provider 原始敏感响应不得落盘。
+- 设计锚点：`docs/prd_cursor_byok_工作决策基线.md#10-p1-subagent-恢复与-provider-fallback-决策基线`、`docs/prd_cursor_byok_系统架构与核心业务数据流.md#147-design-p1-subagent-fallbacksubagent-恢复与-provider-fallback`。
+
+### GOAL
+
+- 建立版本化 `SubagentRunStore`，按 `terminal_prepared → parent_committed → acknowledged` 顺序完成本地 parent history/tool-result 的幂等唯一交接。
+- Backend 启动扫描持久化 run；已生成终态可重放，未终结 child 转为 `awaiting_client_resume`，不得自动重派。
+- 贯通 root/parent/tool/subagent/child/agent/model-call/attempt 的可选关联字段；缺失值保持空值，不按时间伪造。
+- 实现默认关闭、显式有序且安全窗口严格受限的 Provider fallback，并提供后端校验、前端编辑和受控观测。
+
+### NON_GOALS
+
+- 不承诺 Backend 崩溃后 child 从原执行点自动续跑，不自行重派 Task 或重放工具副作用。
+- 不实现已有输出后的 Provider 切换、续传、答案拼接或整轮重放。
+- 不修改公共 proto、MITM whitelist、CONNECT/直通、CA/证书、系统代理或透明代理行为。
+- 不提交、不推送、不发布，不停止或替换当前运行中的唯一代理实例。
+
+### ACTIVE SLICES
+
+- [completed] `p1-parent-correlation`：扩展并接线 parent/root/tool/subagent/child/agent/model-call/attempt correlation；缺失值保持 unknown/空值。
+- [completed] `p1-terminal-contract`：实现 typed terminal 分类、首个持久化终态胜出和冲突保护。
+- [completed] `p1-durable-handoff`：实现版本化 run/result、原子替换、checksum、启动恢复、parent 幂等提交及 crash-window/重复 replay/并发 CAS 测试。
+- [completed] `p1-provider-fallback`：实现默认关闭的显式有序配置、resolver/router、raw-byte/model-event/兼容性门禁、共享预算、工件隔离和前端入口。
+- [completed] `p1-integration-verification`：全仓 Go、race、vet、前端配置投影/生产构建、差异与敏感信息审查均通过；禁止范围零变更。
+- [pending-evidence] `p1-protocol-fixture`：未采集新的真实 Cursor 协议 fixture；本轮仅使用并测试已有生成字段，不修改 proto。该缺口不得被表述为 child 自动续跑已验证。
+
+### LATEST REVIEW
+
+- 修复缺失 parent 持久会话时恢复逻辑静默创建孤立 conversation 的问题：online/recovery handoff 现在只追加到已存在 parent；缺失或已删除时保持 durable result 并进入 `awaiting_parent_resume`。
+- 修复合法 checksum 但未知 run status 被启动扫描静默忽略的问题：未知状态现在隔离到 `_corrupt/`，不会被误判为无需处理。
+- 修复 fallback 链末尾候选均不兼容时，最后实际尝试渠道仍使用临时候缀且 `fallback_to` 指向被跳过渠道的问题：现在按下一实际兼容候选计算工件终点和切换观测。
+- 已补 online/recovery missing-parent、unknown-status isolation、跳过不兼容候选与实际最终渠道工件标识回归测试。
+
+### ACCEPTANCE
+
+- `gofmt`、`git diff --check`、`go test ./... -count=1` 通过。
+- 相关 Go 包 `go vet` 与 `go test -race` 通过；前端配置投影测试和生产构建通过。
+- 故障注入覆盖 result/run 原子写窗口、prepare/parent commit/run CAS 窗口、重复 replay、并发 CAS、非法 JSON/raw-byte、输出后禁止 fallback、预算和兼容门禁。
+- `git diff` 不包含 `proto/`、`internal/mitm/`、证书、透明代理或系统代理范围变更。
+- 记录单写者约束：同一 `historyRoot` 同时只能由一个活跃 Backend 写入；进程内 CAS 不宣传为跨进程 CAS。
+
+### STOP CONDITIONS
+
+- 需要扩大 MITM/证书/透明代理范围、修改公共 proto，或要求 child 崩溃后自动续跑。
+- 发现无法在零原始字节、零 model event、零副作用窗口内证明 fallback 安全。
+- 全仓回归需要扩大到未批准业务范围。
+
+## Previous Work Package (P0)
+
 WORK_PACKAGE_ID: provider-disconnect-recovery-20260821
-STATUS: in_progress
+STATUS: completed
 RISK_LEVEL: high
 OWNER: orchestrator
 DESIGN_READINESS: approved (P0)
-DELIVERY_STATUS: implemented (P0)
+DELIVERY_STATUS: completed (P0); P1 deferred to roadmap
 
 ### CONTEXT
 
@@ -18,6 +79,7 @@ DELIVERY_STATUS: implemented (P0)
 - 已确认根因之一：basic artifact 使用 `payload_summary`，归一化只读取 `payload`，导致失败摘要被默认投影为成功。
 - 当前 HTTP retry 包围 `client.Do` 与 status；OpenAI/Anthropic 已校验 completion marker，但 2xx 后首个 model event 前的截断未进入请求重试。
 - 设计锚点：`docs/prd_cursor_byok_工作决策基线.md#62-agent工具链与-provider-断连`、`docs/prd_cursor_byok_系统架构与核心业务数据流.md#145-design-provider-disconnect-001provider-断连终态与安全恢复`。
+- 2026-08-21 P1 复核结论：当前 P0 已满足 provider 断连正确性门禁，父子关联、独立 checkpoint、结构化失败和原子结果提交只在承诺 subagent 崩溃恢复 / exactly-once 结果交付时成为必做；provider fallback 与 MITM 行为变更均非必做，全部暂缓到 `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`。
 
 ### GOAL
 
@@ -34,8 +96,8 @@ DELIVERY_STATUS: implemented (P0)
 
 ### BASELINE
 
-- branch/head：`noad` / `eed4ca6898a3a6a5222ab188c72b209f1534175c`。
-- 开工时工作区干净；本工作包首先产生的修改仅为已确认的 PRD/Design/Todo 同步。
+- branch/head：`noad` / `08509589d75cee408552f8cb80a3a9470a94be51`。
+- P0 已作为单个原子提交纳入仓库；本次仅做 P1 必要性复核和路线图收口。
 - 运行中唯一代理实例受保护；测试不得停止或替换 `127.0.0.1:18080` / `127.0.0.1:18090` 的服务。
 - `task/todo.md` 仅由主控修改；subagent 不得修改活动任务真值源。
 
@@ -87,21 +149,25 @@ DELIVERY_STATUS: implemented (P0)
 #### provider-parent-correlation
 
 - priority: P1
-- status: pending
-- owner: orchestrator
+- status: deferred-to-roadmap
+- owner: roadmap
 - size: M
 - depends_on: provider-p0-integration-verification
 - scope: root/parent conversation、parent tool、subagent task/run、model call、attempt 的可选关联字段与入口接线；不含原子结果提交。
 - acceptance: 父子调用可从入口关联到 terminal，缺失字段明确为 unknown。
+- reentry_condition: 需要跨父子审计、定位 child 失败归属，或开始设计 subagent 崩溃恢复。
+- roadmap: `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`
 
 #### subagent-atomic-result
 
 - priority: P1
-- status: blocked
-- owner: orchestrator
+- status: deferred-to-roadmap
+- owner: roadmap
 - size: L，必须继续拆分
 - depends_on: provider-parent-correlation
-- block_reason: 需要独立实施级 Design 固化 child checkpoint/result、parent tool-result、事务/CAS、恢复和兼容合同。
+- block_reason: 需要独立实施级 Design 固化 child checkpoint/result、parent tool-result、结构化失败、事务/CAS、恢复和兼容合同。
+- reentry_condition: 产品明确承诺 subagent 进程重启恢复或 child result 到 parent tool-result 的 exactly-once 交付，或真实故障证明存在完成结果丢失/重复提交。
+- roadmap: `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`
 
 ### ALLOWED_ROOTS
 

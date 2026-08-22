@@ -182,11 +182,12 @@ func commitMessageConnectError(recorder *commitMessageLogRecorder, code connect.
 	if err == nil {
 		err = fmt.Errorf("commit message generation failed")
 	}
+	safeError := safeProviderTerminalMessage(err)
 	if _, logErr := recorder.appendEvent("error", map[string]any{
 		"code":  code.String(),
-		"error": err.Error(),
+		"error": safeError,
 	}); logErr != nil {
-		log.Printf("forwarder failed to write commit message error log error=%v original_error=%v", logErr, err)
+		log.Printf("forwarder failed to write commit message error log error=%v original_error=%s", logErr, safeError)
 	}
 	return connect.NewError(code, err)
 }

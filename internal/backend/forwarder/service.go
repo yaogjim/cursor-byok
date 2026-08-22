@@ -27,6 +27,7 @@ import (
 	modeladapter "cursor/internal/backend/agent/model"
 	promptengine "cursor/internal/backend/agent/prompt"
 	protocol "cursor/internal/backend/agent/protocol"
+	"cursor/internal/observability"
 )
 
 const (
@@ -264,6 +265,7 @@ type Service struct {
 	execBridge         execbridge.ExecBridge
 	interactionBridge  interactionbridge.InteractionBridge
 	appendSeq          *appendSequenceTracker
+	subagentRuns       *SubagentRunStore
 }
 
 type agentModelMemory interface {
@@ -305,8 +307,10 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captu
 		execBridge:         execbridge.NewBridge(),
 		interactionBridge:  interactionbridge.NewBridge(),
 		appendSeq:          newAppendSequenceTracker(),
+		subagentRuns:       NewSubagentRunStore(historyRoot),
 	}
 	service.startHistoryMaintenance()
+	service.startSubagentRecovery()
 	return service
 }
 
@@ -340,6 +344,7 @@ func newServiceWithDependencies(store *ConversationFileStore, projector *History
 		execBridge:         execbridge.NewBridge(),
 		interactionBridge:  interactionbridge.NewBridge(),
 		appendSeq:          newAppendSequenceTracker(),
+		subagentRuns:       NewSubagentRunStore(historyRoot),
 	}
 }
 
@@ -1037,29 +1042,47 @@ func (service *Service) handleExecResult(intent InboundIntent) error {
 	if err := service.persistExecContentBlobs(result.ContentBlobs); err != nil {
 		return err
 	}
-	markExecCompleted(stream, pending)
-	backgroundShellToolCallID := ""
-	if strings.TrimSpace(pending.ExecKind) == "shell" && shellToolCallIsBackgrounded(result.ToolCall) {
-		backgroundShellToolCallID = firstNonEmpty(strings.TrimSpace(result.ToolCallID), strings.TrimSpace(pending.ToolCallID))
-	}
-	if strings.TrimSpace(pending.ExecKind) == "execute_hook_pre_compact" {
-		return service.handlePreCompactTerminal(stream, pending.ProviderPass, strings.TrimSpace(result.ToolResultPayload))
-	}
-	if result.ToolCall != nil {
-		if err := service.appendToolResult(stream, result.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall); err != nil {
+	// subagent exec：先 durable handoff 再 markExecCompleted（crash-safe 顺序）；普通 exec 保持原有顺序。
+	if strings.TrimSpace(pending.SubagentRunID) != "" && service.subagentRuns != nil {
+		toolCallID := firstNonEmpty(strings.TrimSpace(result.ToolCallID), strings.TrimSpace(pending.ToolCallID))
+		if _, bindErr := service.subagentRuns.BindChildIdentity(pending.SubagentRunID, "", extractSubagentAgentID(intent.ExecClientMessage)); bindErr != nil {
+			return fmt.Errorf("subagent bind child identity: %w", bindErr)
+		}
+		var toolCallEncoded []byte
+		if result.ToolCall != nil {
+			toolCallEncoded, _ = protojson.Marshal(result.ToolCall)
+		}
+		category := categorizeSubagentResultMsg(intent.ExecClientMessage)
+		summary := extractSubagentErrorSummary(intent.ExecClientMessage)
+		if err := service.appendSubagentToolResultIdempotent(stream, pending, toolCallID, result.ToolResultPayload, toolCallEncoded, category, summary); err != nil {
 			return err
 		}
-	} else if strings.TrimSpace(result.ToolResultPayload) != "" {
-		if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
-			return err
+		markExecCompleted(stream, pending)
+	} else {
+		markExecCompleted(stream, pending)
+		backgroundShellToolCallID := ""
+		if strings.TrimSpace(pending.ExecKind) == "shell" && shellToolCallIsBackgrounded(result.ToolCall) {
+			backgroundShellToolCallID = firstNonEmpty(strings.TrimSpace(result.ToolCallID), strings.TrimSpace(pending.ToolCallID))
 		}
-	}
-	if backgroundShellToolCallID != "" {
-		if recordedToolCallID, recorded := recordBackgroundShellActionMemory(stream, backgroundShellToolCallID, time.Now().UTC()); recorded {
-			if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-				newBackgroundShellActionMetadataEntry(stream.TurnSeq, stream.RequestID, recordedToolCallID, backgroundShellActionSourceLocalBackgrounded),
-			}); err != nil {
+		if strings.TrimSpace(pending.ExecKind) == "execute_hook_pre_compact" {
+			return service.handlePreCompactTerminal(stream, pending.ProviderPass, strings.TrimSpace(result.ToolResultPayload))
+		}
+		if result.ToolCall != nil {
+			if err := service.appendToolResult(stream, result.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall); err != nil {
 				return err
+			}
+		} else if strings.TrimSpace(result.ToolResultPayload) != "" {
+			if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+				return err
+			}
+		}
+		if backgroundShellToolCallID != "" {
+			if recordedToolCallID, recorded := recordBackgroundShellActionMemory(stream, backgroundShellToolCallID, time.Now().UTC()); recorded {
+				if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
+					newBackgroundShellActionMetadataEntry(stream.TurnSeq, stream.RequestID, recordedToolCallID, backgroundShellActionSourceLocalBackgrounded),
+				}); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1069,7 +1092,11 @@ func (service *Service) handleExecResult(intent InboundIntent) error {
 	if err := service.syncSummaryCarryForward(stream.ConversationID, intent.RequestID, pending.ModelCallID); err != nil {
 		return err
 	}
-	if err := service.publishCheckpoint(intent.RequestID, stream.ConversationID); err != nil {
+	checkpointAction := checkpointTerminalAction{}
+	if strings.TrimSpace(pending.SubagentRunID) != "" && service.subagentRuns != nil {
+		checkpointAction = checkpointActionWithSubagentAcknowledgement(pending.SubagentRunID)
+	}
+	if err := service.publishCheckpointWithTerminalAction(intent.RequestID, checkpointAction); err != nil {
 		return err
 	}
 	return service.reconcileStream(stream)
@@ -1131,22 +1158,32 @@ func (service *Service) handleExecControl(intent InboundIntent) error {
 		}
 		return nil
 	}
-	markExecCompleted(stream, pending)
-	if strings.TrimSpace(pending.ExecKind) == "execute_hook_pre_compact" {
-		return service.handlePreCompactTerminal(stream, pending.ProviderPass, "")
-	}
-	if strings.TrimSpace(result.ToolResultPayload) != "" {
-		if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+	// subagent throw 路径：durable handoff 必须在 markExecCompleted 之前完成（crash-safe 顺序）。
+	// 无论 ToolResultPayload 是否为空都走此路径，确保 run 状态到达 terminal_prepared。
+	if strings.TrimSpace(pending.SubagentRunID) != "" && service.subagentRuns != nil {
+		if err := service.appendSubagentToolResultIdempotent(stream, pending, strings.TrimSpace(pending.ToolCallID), result.ToolResultPayload, nil, SubagentTerminalToolError); err != nil {
 			return err
 		}
-		_, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			newMetadataEntry(stream.TurnSeq, stream.RequestID, "tool_control", map[string]any{
-				"tool_call_id": result.ToolCallID,
-				"payload":      result.ToolResultPayload,
-			}),
-		})
-		if err != nil {
-			return err
+		markExecCompleted(stream, pending)
+	} else {
+		// 普通 exec 路径：保持原有 markExecCompleted 优先顺序。
+		markExecCompleted(stream, pending)
+		if strings.TrimSpace(pending.ExecKind) == "execute_hook_pre_compact" {
+			return service.handlePreCompactTerminal(stream, pending.ProviderPass, "")
+		}
+		if strings.TrimSpace(result.ToolResultPayload) != "" {
+			if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+				return err
+			}
+			_, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
+				newMetadataEntry(stream.TurnSeq, stream.RequestID, "tool_control", map[string]any{
+					"tool_call_id": result.ToolCallID,
+					"payload":      result.ToolResultPayload,
+				}),
+			})
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if err := service.syncSummaryCarryForward(stream.ConversationID, intent.RequestID, pending.ModelCallID); err != nil {
@@ -1155,7 +1192,11 @@ func (service *Service) handleExecControl(intent InboundIntent) error {
 	if err := service.publishToolCallCompleted(intent.RequestID, result.ToolCallID, pending.ModelCallID, nil); err != nil {
 		return err
 	}
-	if err := service.publishCheckpoint(intent.RequestID, stream.ConversationID); err != nil {
+	checkpointAction := checkpointTerminalAction{}
+	if strings.TrimSpace(pending.SubagentRunID) != "" && service.subagentRuns != nil {
+		checkpointAction = checkpointActionWithSubagentAcknowledgement(pending.SubagentRunID)
+	}
+	if err := service.publishCheckpointWithTerminalAction(intent.RequestID, checkpointAction); err != nil {
 		return err
 	}
 	return service.reconcileStream(stream)
@@ -1565,6 +1606,21 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 		"turn_seq":               turnSeq,
 	})
 	ctx = service.debug.contextWithRequestCorrelation(ctx, requestID, conversationID, modelCallID)
+	providerCorrelation := observability.Correlation{
+		ConversationID: conversationID,
+		ModelCallID:    modelCallID,
+		TurnSequence:   uint64(turnSeq),
+		ProviderPass:   currentPass,
+	}
+	if conversation != nil {
+		providerCorrelation.RootConversationID = strings.TrimSpace(conversation.RootConversationID)
+		if strings.TrimSpace(conversation.ParentConversationID) != "" {
+			providerCorrelation.ParentConversationID = strings.TrimSpace(conversation.ParentConversationID)
+			providerCorrelation.ParentToolCallID = strings.TrimSpace(conversation.ParentToolCallID)
+			providerCorrelation.ChildConversationID = conversationID
+		}
+	}
+	ctx = observability.WithCorrelation(ctx, providerCorrelation)
 	go service.runProviderStream(stream, currentToken, ctx, providerRequest)
 	return nil
 }
@@ -1877,8 +1933,15 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 		return nil
 	}
 	if isExecInvocation {
+		rootConvID := stream.ConversationID
+		stream.mu.Lock()
+		if stream.CheckpointConversation != nil && strings.TrimSpace(stream.CheckpointConversation.RootConversationID) != "" {
+			rootConvID = strings.TrimSpace(stream.CheckpointConversation.RootConversationID)
+		}
+		stream.mu.Unlock()
 		serverMessage, pendingExec, err := service.execBridge.OpenExec(execbridge.OpenExecContext{
 			ConversationID:         stream.ConversationID,
+			RootConversationID:     rootConvID,
 			ModelID:                stream.ModelID,
 			SubagentModelOverrides: subagentOverrides,
 		}, invocation)
@@ -1890,6 +1953,27 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 		pendingExec.ReasoningSignature = invocation.ReasoningSignature
 		pendingExec.ReasoningSignatureSource = invocation.ReasoningSignatureSource
 		pendingExec = initializePendingExecForTracking(pendingExec)
+		// Task dispatch 前生成稳定 SubagentRunID 并持久化；失败必须明确失败，不允许静默派发。
+		if strings.TrimSpace(pendingExec.ExecKind) == "subagent" && service.subagentRuns != nil {
+			runID := GenerateSubagentRunID()
+			// rootConvID 已在打开 exec bridge 前从父会话 checkpoint 解析，并同时写入现有
+			// SubagentArgs.root_parent_conversation_id 与本地 durable identity。
+			identity := SubagentIdentity{
+				SubagentRunID:        runID,
+				ParentConversationID: stream.ConversationID,
+				RootConversationID:   rootConvID,
+				ParentToolCallID:     strings.TrimSpace(pendingExec.ToolCallID),
+				ParentRequestID:      strings.TrimSpace(stream.RequestID),
+				ParentModelCallID:    strings.TrimSpace(pendingExec.ModelCallID),
+				ParentTurnSeq:        stream.TurnSeq,
+				SubagentType:         parseArgsJSONSubagentType(pendingExec.ArgsJSON),
+				ModelID:              strings.TrimSpace(stream.ModelID),
+			}
+			if _, createErr := service.subagentRuns.CreateRun(identity); createErr != nil {
+				return service.completePreDispatchToolError(stream, invocation, startedToolCall, startedToolCall != nil, startedEmitted, fmt.Errorf("subagent persist failed before dispatch: %w", createErr))
+			}
+			pendingExec.SubagentRunID = runID
+		}
 		stream.mu.Lock()
 		pendingExec.ProviderPass = stream.ProviderPassCount
 		stream.PendingExecs[pendingExec.ExecID] = pendingExec
@@ -1984,22 +2068,53 @@ func (service *Service) recordExecDispatchMetadata(stream *ActiveStream, pending
 		return
 	}
 	toolName := strings.TrimSpace(deriveToolNameFromPendingExec(pending))
+	rootConversationID := ""
+	stream.mu.Lock()
+	if stream.CheckpointConversation != nil {
+		rootConversationID = strings.TrimSpace(stream.CheckpointConversation.RootConversationID)
+	}
+	stream.mu.Unlock()
+	metadata := map[string]any{
+		"tool_call_id":    pending.ToolCallID,
+		"message_id":      pending.MessageID,
+		"exec_id":         pending.ExecID,
+		"exec_kind":       pending.ExecKind,
+		"provider_pass":   pending.ProviderPass,
+		"tool_name":       toolName,
+		"model_call_id":   pending.ModelCallID,
+		"buffered":        buffered,
+		"started_emitted": startedEmitted,
+		"dispatch_order":  strings.TrimSpace(dispatchOrder),
+		"opened_at":       pending.OpenedAt,
+	}
+	if strings.TrimSpace(pending.SubagentRunID) != "" {
+		metadata["subagent_run_id"] = strings.TrimSpace(pending.SubagentRunID)
+		metadata["root_conversation_id"] = rootConversationID
+		metadata["parent_conversation_id"] = strings.TrimSpace(stream.ConversationID)
+		metadata["parent_tool_call_id"] = strings.TrimSpace(pending.ToolCallID)
+		metadata["parent_model_call_id"] = strings.TrimSpace(pending.ModelCallID)
+	}
 	if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-		newMetadataEntry(stream.TurnSeq, stream.RequestID, "exec_dispatch", map[string]any{
-			"tool_call_id":    pending.ToolCallID,
-			"message_id":      pending.MessageID,
-			"exec_id":         pending.ExecID,
-			"exec_kind":       pending.ExecKind,
-			"provider_pass":   pending.ProviderPass,
-			"tool_name":       toolName,
-			"model_call_id":   pending.ModelCallID,
-			"buffered":        buffered,
-			"started_emitted": startedEmitted,
-			"dispatch_order":  strings.TrimSpace(dispatchOrder),
-			"opened_at":       pending.OpenedAt,
-		}),
+		newMetadataEntry(stream.TurnSeq, stream.RequestID, "exec_dispatch", metadata),
 	}); err != nil {
 		log.Printf("forwarder exec dispatch metadata failed request_id=%s tool_call_id=%s message_id=%d err=%v", strings.TrimSpace(stream.RequestID), strings.TrimSpace(pending.ToolCallID), pending.MessageID, err)
+	}
+	if strings.TrimSpace(pending.SubagentRunID) != "" {
+		correlation := observability.Correlation{
+			CursorRequestID:      strings.TrimSpace(stream.RequestID),
+			ConversationID:       strings.TrimSpace(stream.ConversationID),
+			RootConversationID:   rootConversationID,
+			ParentConversationID: strings.TrimSpace(stream.ConversationID),
+			ParentModelCallID:    strings.TrimSpace(pending.ModelCallID),
+			ModelCallID:          strings.TrimSpace(pending.ModelCallID),
+			ParentToolCallID:     strings.TrimSpace(pending.ToolCallID),
+			ToolCallID:           strings.TrimSpace(pending.ToolCallID),
+			SubagentRunID:        strings.TrimSpace(pending.SubagentRunID),
+			TurnSequence:         uint64(stream.TurnSeq),
+			ProviderPass:         pending.ProviderPass,
+		}
+		ctx := observability.WithCorrelation(context.Background(), correlation)
+		service.debug.LogRuntime(ctx, stream.RequestID, stream.ConversationID, "subagent_dispatched", metadata)
 	}
 }
 

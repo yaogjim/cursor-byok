@@ -231,3 +231,148 @@ updates:
 - 凭据在任何模式下落盘，或真实正文、源码、Prompt 在未明确启用的本机 `full` session 之外写入日志或 artifact。
 - 无法判断 success 是否承担兼容 gate。
 - 无法提供独立回滚路径。
+
+## 10. P1 Subagent 恢复与 Provider Fallback 决策基线
+
+本节记录计划 `p1_subagent_恢复与_provider_fallback_实施计划_5c8db987` 阶段 0 Design Gate 冻结的工程决策。决策来源：已批准的 P1 计划、已读源码与 proto fixture；真实 Cursor 运行 fixture 仍属未知（见系统架构 PRD §14.7.2）。
+
+### 10.1 ID 合同
+
+后续实现必须遵守以下 ID 来源规则，不得自行推断或以传输标识代替业务 ID：
+
+| 字段 | 来源 / 生成规则 | 稳定性 | 当前状态 |
+|------|-----------------|--------|---------|
+| `root_conversation_id` | 父 `ConversationFile.RootConversationID`；若为空则取父 `ConversationID` 本身 | 跨 resume 稳定 | 已持久化 |
+| `parent_conversation_id` | `openTask` 填入 `SubagentArgs`（field 9），来源为 `openContext.ConversationID` | 稳定 | 已填入 |
+| `parent_tool_call_id` | `ToolInvocation.CallID`，由 Cursor 分配，传入 `openTask` | 稳定 | `ConversationFile` 已持久化 |
+| `subagent_run_id` | Task dispatch 前本地生成 UUID v4，立即持久化到 run store | 稳定，本地生成 | **P1 新增，当前不存在** |
+| `child_conversation_id` | `SubagentSuccess.agent_id` 或 Cursor checkpoint；仅在 child 绑定后可知 | 绑定后稳定，跨 resume 稳定性未知 | 到达 `SubagentResult` 时才可获取 |
+| `agent_id` | `SubagentSuccess.agent_id`（proto 必填 string）；`SubagentError.agent_id`（optional） | 真实运行行为未知 | 仅存在于 result 中 |
+| `exec_id` | `openTask` 内部生成 `exec-subagent-<UnixNano>` | 传输标识，每次重建均不同 | 不能作为业务 ID |
+| `request_id` | Forwarder 请求级别 ID，已存在于 `ConversationRequestPrefix` | 请求级别 | 已持久化 |
+| `model_call_id` | 每次 provider pass 生成，P0 已实现幂等 final | provider pass 级别 | 已实现（P0） |
+
+**unknown 规则**：任何字段值未知或尚未到达时，记录为字符串 `unknown`，不按时间窗口推断，不以 `exec_id`、`ExecServerMessage.Id` 或任何传输 ID 代替。
+
+### 10.2 Subagent Terminal 枚举与兼容投影
+
+**本地 terminal category（机器可判定，仅存在于本地 run record / history metadata / observability）：**
+
+| category | 触发条件 |
+|----------|---------|
+| `succeeded` | `SubagentResult.Success`，`background_reason = UNSPECIFIED` |
+| `backgrounded` | `SubagentResult.Success`，`background_reason != UNSPECIFIED`；或 `ForceBackgroundSubagentResult.ACCEPTED` |
+| `canceled` | `CancelSubagentAction`；`SubagentRunStatus.ABORTED` |
+| `timeout` | transport close / 等待超时，无 `SubagentResult` 到达 |
+| `provider_error` | `SubagentError`，typed 判断含 provider/model 失败语义（不解析自由文本分类） |
+| `tool_error` | `SubagentError`，typed 判断含工具执行失败语义 |
+| `parent_unavailable` | parent stream 消失且无 `SubagentResult` |
+| `truncated` | `ExecClientControlMessage.throw` / `ExecClientStreamClose`，无 `SubagentResult` |
+| `protocol_error` | 其他不可分类的协议层错误 |
+
+**向公共 proto 的兼容投影规则：**
+
+- success → `SubagentSuccess`（携带 `agent_id`、`final_message`、`tool_call_count`、`background_reason`、`transcript_path`）；`TaskResult.Success`。
+- 非 success → `SubagentError`（`error` = 脱敏 safe summary text，不含凭据，不含完整 provider error）；`TaskResult.Error`（`text` = safe category + summary）。
+- 机器可判定 category 不写入公共 proto，只存于本地 run record、history metadata 和 observability events。
+- 同一 `subagent_run_id` 只接受一次 terminal CAS；重复 terminal 记录 `subagent_terminal_conflict` 事件，不覆盖首个已提交终态。
+
+### 10.3 Durable Handoff 状态机与 Exactly-Once 范围
+
+```
+dispatched → running → terminal_prepared → parent_committed → acknowledged
+running → backgrounded → terminal_prepared
+terminal_prepared（parent identity 缺失或 parent 持久会话不存在）→ awaiting_parent_resume → parent_committed
+dispatched / running / backgrounded（backend 重启，child 未终结）→ awaiting_client_resume
+```
+
+**Exactly-once 范围限定**：本地 parent history 和 tool-result 最多出现一次结果。
+
+不变量：
+
+1. child terminal 必须先写入 durable `result.json`（`terminal_prepared`），再写 parent history；禁止先删除 `PendingExec` 再尝试持久化。
+2. parent `tool_result` 以 `subagent_run_id + result_digest` 作为幂等键；重启恢复可重复执行 commit 步骤，parent history 最多一次结果。
+3. 网络 checkpoint 和 RunSSE update 允许重发，但内容和幂等标识必须一致。
+4. parent identity 缺失，或对应 parent 持久会话不存在/已删除、无法安全追加时，标记 `awaiting_parent_resume`；恢复逻辑不得新建仅含 `tool_result` 的孤立 parent 会话。parent stream 不活跃本身不阻止本地文件级提交。在线 checkpoint 发布失败时保持 `parent_committed`，不回滚已提交结果。
+5. 同一 `historyRoot` 采用单活 Backend 写入约束；进程内 CAS 不宣传为跨进程 CAS，本轮不引入 OS 文件锁。
+
+### 10.4 Child Checkpoint 恢复边界
+
+已确认的恢复承诺：
+
+- Backend 重启后扫描 run store，恢复本地状态并等待 Cursor 重连/resume；**禁止 backend 自行重建或重启 Cursor 子代理进程**。
+- `terminal_prepared / awaiting_parent_resume`：从 durable result 重试 parent 文件级幂等提交；`awaiting_parent_resume` 表示 parent identity 不足，或对应 parent 持久会话不存在/已删除。恢复逻辑不得为此静默新建孤立 parent 会话。
+- `parent_committed / acknowledged`：不重新调用 child；本地 parent result 已唯一落盘。在线 checkpoint 发布失败时保持 `parent_committed`。
+- `dispatched / running / backgrounded`：转为 `awaiting_client_resume`；本轮不自动重派，也不宣传为从 child 执行点自动续跑。
+- 损坏、checksum 错误或版本不兼容：隔离文件，不删除 parent history，不自动重派 Task。
+- 本轮未新增复制 child 历史的独立 checkpoint 文件；恢复保证限定为 durable handoff。真实 Cursor resume fixture 仍是待补证项。
+
+明确禁止的恢复操作：
+
+- 在没有 Cursor resume 的情况下自行重派 Task 或重放工具副作用。
+- 以新请求伪装为原 child conversation 续传。
+
+### 10.5 Provider Fallback 合同
+
+**默认：关闭（`enabled: false`）**。关闭时行为与当前版本字节级一致。
+
+待实现的配置结构（示意）：
+
+```yaml
+providerFallback:
+  enabled: false               # 默认关闭
+  primaryChannelID: ""         # 主渠道 ID
+  candidateChannelIDs: []      # 有序候选列表，显式配置
+  maxChannels: 3               # 主渠道 + 最多 2 个候选
+  maxHttpAttempts: 5           # 共享 HTTP 尝试预算
+  maxWaitSeconds: 8            # 共享等待时间预算（仅 fallback 启用时生效）
+```
+
+**允许切换的错误类别**（首 model event 前安全窗口，且无副作用）：
+
+- transport 错误（DNS/TCP/TLS）
+- HTTP 429
+- 部分 5xx（502/503/504）
+- 2xx 后首 model event 前的 transport EOF / stream 截断
+- 零原始字节的 stream EOF / decode error
+
+**禁止切换：**
+
+- `context.Cancel` / deadline exceeded
+- HTTP 400/401/403/404
+- 请求构建错误 / 模型参数错误
+- 任意原始响应字节已到达
+- 任意 model event 已到达
+- `partial_tool_seen / completed_tool_seen / tool_dispatched = true`
+- `checkpoint_committed = true`
+- `downstream_published = true`
+- `RequestBodyOverride` 跨 Provider
+
+**跨 Provider 兼容门禁**（fallback 到不同 Provider 时执行）：
+
+- canonical messages 可投影到目标 Provider
+- tool schema 可用
+- 图片 / 附件需求可满足
+- 目标 context window 足够
+- provider-specific opaque state 可安全处理
+- 不满足时跳过并记录 `fallback_incompatible`，不静默降级能力
+
+**费用、隐私与兼容提示：**
+
+- 配置 UI 必须明确提示：跨 Provider fallback 可能改变费用、隐私边界、模型语义和工具兼容性。
+- 配置导入导出必须保留候选链；渠道 ID 变化时提示并阻止保存悬空引用。
+- fallback 保持同一 `model_call_id`；每个渠道尝试使用独立 `channel_attempt`；整条链只有一个业务终态。
+
+**与 P0 不冲突确认：**
+
+- P0 安全重试在同一渠道同一 `model_call_id` 内进行，重试窗口规则不变。
+- fallback 满足与 P0 相同的"无任何原始响应字节、无 model event"前提后才触发；共享 HTTP attempts 预算。
+- 默认关闭时 P0 路径无任何变化。
+
+### 10.6 MITM / CA / 透明代理不变量
+
+以下内容在 P1 全程保持不变：
+
+- `internal/mitm/`、`internal/certs/`、CONNECT 处理、白名单规则、系统代理配置、透明代理行为。
+- 不新增外部目标、不修改拦截策略、不改变证书安装流程。
+- P1 实现不得以任何方式影响现有 MITM 路由路径。

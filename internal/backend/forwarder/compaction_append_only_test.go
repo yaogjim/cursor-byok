@@ -8,7 +8,23 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
+	modeladapter "cursor/internal/backend/agent/model"
 )
+
+func TestCompactionFailureDoesNotPersistProviderResponseBody(t *testing.T) {
+	secret := "provider response contains sk-secret and user prompt"
+	entry := newCompactionFailedEntry(nil, providerTerminalError{cause: &modeladapter.HTTPStatusError{
+		StatusCode: 500,
+		Body:       secret,
+	}})
+	payload := string(entry.Payload)
+	if strings.Contains(payload, secret) || strings.Contains(payload, "sk-secret") || strings.Contains(payload, "user prompt") {
+		t.Fatalf("compaction failure leaked provider response: %s", payload)
+	}
+	if !strings.Contains(payload, "server_5xx status=500") {
+		t.Fatalf("compaction failure missing controlled provider category: %s", payload)
+	}
+}
 
 func TestApplyCompactionToConversationPreservesCanonicalHistory(t *testing.T) {
 	conversation := compactionAppendOnlyConversation(t)

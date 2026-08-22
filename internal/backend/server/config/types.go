@@ -54,6 +54,8 @@ type ModelAdapterConfig struct {
 	AnthropicMaxTokens          int    `json:"anthropicMaxTokens" yaml:"anthropicMaxTokens"`
 	AnthropicThinkingEffort     string `json:"anthropicThinkingEffort,omitempty" yaml:"anthropicThinkingEffort,omitempty"`
 	ThinkingBudgetTokens        int    `json:"thinkingBudgetTokens" yaml:"thinkingBudgetTokens"`
+	// ProviderFallback 表示该渠道的 provider fallback 配置；默认关闭。
+	ProviderFallback ProviderFallbackConfig `json:"providerFallback,omitempty" yaml:"providerFallback,omitempty"`
 }
 
 type RoutingConfig struct {
@@ -74,6 +76,18 @@ type AdvertisingConfig struct {
 
 type UpdatesConfig struct {
 	CheckOnStartup bool `json:"checkOnStartup" yaml:"checkOnStartup"`
+}
+
+// ProviderFallbackConfig 表示显式有序的 provider fallback 链配置。
+// 默认关闭（Enabled=false）；启用后 chain 由 PrimaryChannelID 与有序
+// CandidateChannelIDs 显式定义，最多支持主渠道 + 2 个候选。
+type ProviderFallbackConfig struct {
+	// Enabled 表示是否启用 fallback；默认 false。
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// PrimaryChannelID 表示首先尝试的渠道 ID；仅 Enabled=true 时有意义。
+	PrimaryChannelID string `json:"primaryChannelID" yaml:"primaryChannelID"`
+	// CandidateChannelIDs 表示有序候选渠道 ID 列表，最多 2 个；仅 Enabled=true 时有意义。
+	CandidateChannelIDs []string `json:"candidateChannelIDs" yaml:"candidateChannelIDs"`
 }
 
 type ObservabilityConfig struct {
@@ -230,9 +244,14 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
 		seenChannelIDs[next.ID] = struct{}{}
+		// 原样复制 ProviderFallback；第二遍在 validateProviderFallbacks 中校验与归一化。
+		next.ProviderFallback = item.ProviderFallback
 		normalized = append(normalized, next)
 	}
 	normalizeModelAdapterSorts(normalized)
+	if err := validateProviderFallbacks(normalized, seenChannelIDs); err != nil {
+		return nil, err
+	}
 	return normalized, nil
 }
 
@@ -407,6 +426,58 @@ func normalizeModelAdapterType(value string) string {
 		return ""
 	}
 }
+
+// validateProviderFallbacks 在所有渠道 ID 已计算完毕后，对每个启用 fallback 的适配器
+// 执行引用完整性、自引用、重复检测，并原地归一化（trim）候选列表。
+func validateProviderFallbacks(normalized []ModelAdapterConfig, knownIDs map[string]struct{}) error {
+	for i := range normalized {
+		fb := normalized[i].ProviderFallback
+		if !fb.Enabled {
+			continue
+		}
+		primary := strings.TrimSpace(fb.PrimaryChannelID)
+		if primary == "" {
+			return errors.New("模型适配器 providerFallback.primaryChannelID 不能为空")
+		}
+		if _, ok := knownIDs[primary]; !ok {
+			return fmt.Errorf("模型适配器 providerFallback.primaryChannelID 引用了不存在的渠道 %q", primary)
+		}
+		if primary == normalized[i].ID {
+			return errors.New("模型适配器 providerFallback.primaryChannelID 不能与当前渠道相同")
+		}
+		if len(fb.CandidateChannelIDs) == 0 || len(fb.CandidateChannelIDs) > 2 {
+			return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 数量必须为 1–2 个，当前为 %d 个", len(fb.CandidateChannelIDs))
+		}
+		// seenInChain 防重复；预置 primary 与当前渠道自身 ID
+		seenInChain := map[string]struct{}{
+			primary:          {},
+			normalized[i].ID: {},
+		}
+		trimmed := make([]string, 0, len(fb.CandidateChannelIDs))
+		for _, rawCID := range fb.CandidateChannelIDs {
+			cid := strings.TrimSpace(rawCID)
+			if cid == "" {
+				return errors.New("模型适配器 providerFallback.candidateChannelIDs 包含空渠道 ID")
+			}
+			if _, ok := knownIDs[cid]; !ok {
+				return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 引用了不存在的渠道 %q", cid)
+			}
+			if _, dup := seenInChain[cid]; dup {
+				return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 包含重复或自引用渠道 %q", cid)
+			}
+			seenInChain[cid] = struct{}{}
+			trimmed = append(trimmed, cid)
+		}
+		// 写回归一化后的 fallback 配置
+		normalized[i].ProviderFallback = ProviderFallbackConfig{
+			Enabled:             true,
+			PrimaryChannelID:    primary,
+			CandidateChannelIDs: trimmed,
+		}
+	}
+	return nil
+}
+
 func normalizeTheme(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "light":

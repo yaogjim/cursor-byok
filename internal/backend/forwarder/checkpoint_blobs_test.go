@@ -2,11 +2,60 @@ package forwarder
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
 )
+
+func TestCheckpointAcknowledgesSubagentOnlyAfterCheckpointPublished(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	runStore := NewSubagentRunStore(t.TempDir())
+	service.subagentRuns = runStore
+	runID := "run-checkpoint-ack"
+	record, err := runStore.CreateRun(SubagentIdentity{
+		SubagentRunID:        runID,
+		ParentConversationID: stream.ConversationID,
+		ParentToolCallID:     "tool-call-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	envelope := &SubagentResultEnvelope{
+		SubagentRunID:    runID,
+		TerminalCategory: SubagentTerminalSucceeded,
+		TerminalAt:       time.Now().UTC(),
+		ParentCommitKey:  "commit-key-1",
+	}
+	if _, err := runStore.PrepareTerminal(runID, record.Version, envelope); err != nil {
+		t.Fatalf("PrepareTerminal() error = %v", err)
+	}
+	if _, err := runStore.MarkParentCommitted(runID); err != nil {
+		t.Fatalf("MarkParentCommitted() error = %v", err)
+	}
+
+	action := checkpointActionWithSubagentAcknowledgement(runID)
+	if err := service.queueCheckpointProjectionWithTerminal(stream, projection, action); err != nil {
+		t.Fatalf("queueCheckpointProjectionWithTerminal() error = %v", err)
+	}
+	before, err := runStore.LoadRun(runID)
+	if err != nil {
+		t.Fatalf("LoadRun() before ACK error = %v", err)
+	}
+	if before.Status != SubagentRunParentCommitted {
+		t.Fatalf("status before checkpoint publish = %q, want parent_committed", before.Status)
+	}
+
+	acknowledgeCheckpointBlobs(t, service, stream)
+	after, err := runStore.LoadRun(runID)
+	if err != nil {
+		t.Fatalf("LoadRun() after ACK error = %v", err)
+	}
+	if after.Status != SubagentRunAcknowledged {
+		t.Fatalf("status after checkpoint publish = %q, want acknowledged", after.Status)
+	}
+}
 
 func TestCheckpointBlobSyncWaitsForAcknowledgementsBeforePublishingNonTerminalCheckpoint(t *testing.T) {
 	service, stream, projection := testCheckpointBlobProjection(t)

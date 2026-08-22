@@ -306,6 +306,23 @@ export function createEmptyModelAdapter() {
     anthropicMaxTokens: 0,
     anthropicThinkingEffort: ANTHROPIC_THINKING_EFFORT_DEFAULT,
     thinkingBudgetTokens: 0,
+    providerFallback: {
+      enabled: false,
+      primaryChannelID: "",
+      candidateChannelIDs: [],
+    },
+  };
+}
+
+// normalizeProviderFallback 归一化 providerFallback 配置；默认关闭。
+function normalizeProviderFallback(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  return {
+    enabled: asBoolean(raw.enabled),
+    primaryChannelID: asString(raw.primaryChannelID ?? raw.primary_channel_id ?? ""),
+    candidateChannelIDs: Array.isArray(raw.candidateChannelIDs)
+      ? raw.candidateChannelIDs.map((id) => asString(id)).filter(Boolean)
+      : [],
   };
 }
 
@@ -426,6 +443,7 @@ export function normalizeModelAdapter(source) {
     thinkingBudgetTokens: asPositiveInteger(
       raw.thinkingBudgetTokens ?? raw.thinking_budget_tokens,
     ),
+    providerFallback: normalizeProviderFallback(raw.providerFallback ?? raw.provider_fallback),
   };
 }
 
@@ -455,7 +473,7 @@ export function normalizeModelAdapters(source) {
     }));
 }
 
-export function validateModelAdapters(source) {
+export function validateModelAdapters(source, { allAdapters } = {}) {
   const adapters = normalizeModelAdapters(source);
   const seenIdentityKeys = new Set();
   for (const [index, adapter] of adapters.entries()) {
@@ -522,6 +540,42 @@ export function validateModelAdapters(source) {
       return `模型渠道重复，请检查 url、modelID、apiKey、displayName、endpoint 组合`;
     }
     seenIdentityKeys.add(dedupeKey);
+  }
+  // ── providerFallback 悬空引用检查（需要所有 ID 已收集完毕后才能校验）──
+  // allAdapters 可由调用方传入完整列表（如单条编辑时），用于跨渠道引用完整性检查。
+  const refAdapters = allAdapters ? normalizeModelAdapters(allAdapters) : adapters;
+  const adapterIDSet = new Set(refAdapters.map((a) => a.id).filter(Boolean));
+  for (const [index, adapter] of adapters.entries()) {
+    const prefix = `模型 ${index + 1}`;
+    const fb = adapter.providerFallback;
+    if (!fb || !fb.enabled) {
+      continue;
+    }
+    if (!fb.primaryChannelID) {
+      return `${prefix} 的 Fallback 主渠道 ID 不能为空`;
+    }
+    if (!adapterIDSet.has(fb.primaryChannelID)) {
+      return `${prefix} 的 Fallback 主渠道 ID "${fb.primaryChannelID}" 引用了不存在的渠道`;
+    }
+    if (fb.primaryChannelID === adapter.id) {
+      return `${prefix} 的 Fallback 主渠道 ID 不能与当前渠道相同`;
+    }
+    if (!fb.candidateChannelIDs || fb.candidateChannelIDs.length === 0 || fb.candidateChannelIDs.length > 2) {
+      return `${prefix} 的 Fallback 候选渠道数量必须为 1–2 个`;
+    }
+    const seenInChain = new Set([fb.primaryChannelID, adapter.id]);
+    for (const cid of fb.candidateChannelIDs) {
+      if (!cid) {
+        return `${prefix} 的 Fallback 候选渠道 ID 不能为空`;
+      }
+      if (!adapterIDSet.has(cid)) {
+        return `${prefix} 的 Fallback 候选渠道 ID "${cid}" 引用了不存在的渠道`;
+      }
+      if (seenInChain.has(cid)) {
+        return `${prefix} 的 Fallback 候选渠道包含重复或自引用 ID "${cid}"`;
+      }
+      seenInChain.add(cid);
+    }
   }
   return "";
 }

@@ -34,6 +34,7 @@ var (
 	conversationLockProcessStartedAt = time.Now()
 	conversationProcessLocksMu       sync.Mutex
 	conversationProcessLocks         = make(map[string]*conversationProcessLock)
+	errConversationNotFound          = errors.New("conversation not found")
 )
 
 type conversationProcessLock struct {
@@ -126,19 +127,42 @@ func (store *ConversationFileStore) AppendEntries(conversationID string, entries
 
 // AppendEntriesWithUpdate 原子追加 context entries，并在同一把会话锁内更新 state metadata。
 func (store *ConversationFileStore) AppendEntriesWithUpdate(conversationID string, entries []HistoryEntry, update func(*ConversationFile) error) (*ConversationFile, []HistoryEntry, error) {
+	return store.appendEntriesWithUpdate(conversationID, entries, update, true)
+}
+
+// AppendEntriesToExistingWithUpdate 只向已存在的会话追加 entries。
+// 该方法用于 durable handoff，防止恢复过程中把已删除或从未存在的 parent
+// conversation 静默重建为仅含 tool_result 的孤立会话。
+func (store *ConversationFileStore) AppendEntriesToExistingWithUpdate(conversationID string, entries []HistoryEntry, update func(*ConversationFile) error) (*ConversationFile, []HistoryEntry, error) {
+	return store.appendEntriesWithUpdate(conversationID, entries, update, false)
+}
+
+func (store *ConversationFileStore) appendEntriesWithUpdate(conversationID string, entries []HistoryEntry, update func(*ConversationFile) error, createIfMissing bool) (*ConversationFile, []HistoryEntry, error) {
 	if store == nil {
 		return nil, nil, fmt.Errorf("conversation file store is nil")
 	}
 	if len(entries) == 0 && update == nil {
 		conversation, err := store.LoadConversation(conversationID)
+		if err == nil && conversation == nil && !createIfMissing {
+			err = fmt.Errorf("%w: %s", errConversationNotFound, strings.TrimSpace(conversationID))
+		}
 		return conversation, nil, err
 	}
 	normalizedConversationID, err := validateConversationID(conversationID)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := os.MkdirAll(store.conversationDir(normalizedConversationID), 0o755); err != nil {
-		return nil, nil, fmt.Errorf("create conversation directory: %w", err)
+	if createIfMissing {
+		if err := os.MkdirAll(store.conversationDir(normalizedConversationID), 0o755); err != nil {
+			return nil, nil, fmt.Errorf("create conversation directory: %w", err)
+		}
+	} else {
+		if _, statErr := os.Stat(store.conversationDir(normalizedConversationID)); statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				return nil, nil, fmt.Errorf("%w: %s", errConversationNotFound, normalizedConversationID)
+			}
+			return nil, nil, fmt.Errorf("stat conversation directory: %w", statErr)
+		}
 	}
 	release, err := acquireConversationLock(store.lockPath(normalizedConversationID))
 	if err != nil {
@@ -151,6 +175,9 @@ func (store *ConversationFileStore) AppendEntriesWithUpdate(conversationID strin
 		return nil, nil, err
 	}
 	if conversation == nil {
+		if !createIfMissing {
+			return nil, nil, fmt.Errorf("%w: %s", errConversationNotFound, normalizedConversationID)
+		}
 		conversation = &ConversationFile{
 			SchemaVersion:      conversationSchemaVersion,
 			ConversationID:     normalizedConversationID,

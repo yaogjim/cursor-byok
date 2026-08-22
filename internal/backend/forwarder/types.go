@@ -237,10 +237,11 @@ const (
 )
 
 type checkpointTerminalAction struct {
-	Kind         checkpointTerminalActionKind
-	Completion   pendingTurnCompletion
-	ErrorCode    string
-	ErrorMessage string
+	Kind                      checkpointTerminalActionKind
+	Completion                pendingTurnCompletion
+	ErrorCode                 string
+	ErrorMessage              string
+	AcknowledgeSubagentRunIDs []string
 }
 
 type pendingCheckpointPublish struct {

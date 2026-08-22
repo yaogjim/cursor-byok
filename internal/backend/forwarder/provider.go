@@ -14,10 +14,16 @@ type DefaultProviderGateway struct {
 }
 
 // NewProviderGateway 创建默认 provider 网关。
+// 若 resolver 同时实现了 ChannelPlanResolver（如 config.Manager），则使用
+// FallbackAwareRouter；否则退回到普通 Router，行为与之前完全一致。
 func NewProviderGateway(resolver modeladapter.ChannelResolver) *DefaultProviderGateway {
-	return &DefaultProviderGateway{
-		router: modeladapter.NewRouter(resolver),
+	var router modeladapter.ModelAdapterRouter
+	if planResolver, ok := resolver.(modeladapter.ChannelPlanResolver); ok {
+		router = modeladapter.NewFallbackAwareRouter(modeladapter.NewRouter(resolver), planResolver)
+	} else {
+		router = modeladapter.NewRouter(resolver)
 	}
+	return &DefaultProviderGateway{router: router}
 }
 
 // StartStream 把 forwarder 的 provider 请求翻译成 modeladapter.StreamRequest 并发起流式调用。

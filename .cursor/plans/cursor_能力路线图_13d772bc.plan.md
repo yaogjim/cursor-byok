@@ -23,6 +23,18 @@ todos:
   - id: architecture-convergence
     content: 拆分 forwarder、工具桥、provider 公共层与前端 stores，并建立端到端可观测性
     status: pending
+  - id: subagent-parent-correlation
+    content: 已贯通 root/parent conversation、parent tool call、subagent run、child/agent、model call 与 attempt；缺失字段保持空值
+    status: completed
+  - id: subagent-recovery-transaction
+    content: 已实现 durable run/result 与 parent tool-result 幂等交接；未终结 child 只转 awaiting_client_resume，不承诺执行点自动续跑
+    status: completed
+  - id: provider-fallback-decision
+    content: 已按用户决策实现默认关闭的显式 ordered allowlist，仅允许零原始字节、零 model event、零副作用窗口切换
+    status: completed
+  - id: mitm-routing-decision
+    content: 保持当前 MITM/直通行为；仅在真实日志证明不必要拦截、CA 信任或路由错误造成用户故障时进入证据门禁后的决策
+    status: pending
 isProject: false
 ---
 
@@ -192,6 +204,27 @@ sequenceDiagram
 - 将 exec bridge 按 filesystem、search、shell、MCP、subagent 拆分；将 compaction、projection、persistence 变成稳定接口。
 - 将 `[frontend/src/state/appState.js](frontend/src/state/appState.js)` 拆为 proxy、config、models、metrics、diagnostics stores。
 - 抽取 provider 公共的 SSE、HTTP error、usage、tool-call aggregation 与 artifact redaction，保留 OpenAI/Anthropic 各自协议语义。
+
+### Provider 断连 P1 实施状态
+
+用户已触发并批准 P1 Active Work Package。当前状态：
+
+| 切片 | 状态 | 已实现边界 | 残余风险 |
+| --- | --- | --- | --- |
+| 父子关联 | 核心完成 | root/parent conversation、parent tool/model call、subagent run、child/agent、model call、provider/http attempt 可选关联；缺失值保持空值 | 真实 Cursor child conversation 绑定来源仍待 fixture，不由 agent ID 推断 |
+| durable handoff | 核心完成 | `run.json` + `result.json`、checksum、原子替换、首终态胜出、parent history 幂等提交、启动恢复 | 单 `historyRoot` 依赖单活 Backend；不提供跨进程 CAS，不承诺 child 执行点自动续跑 |
+| typed terminal | 核心完成 | 只按已有 protobuf oneof/exec control 分类；无法可靠区分时保守为 `protocol_error` | timeout/provider/parent unavailable 等类别只有出现可靠 typed 来源后才能细分 |
+| Provider fallback | 核心完成、默认关闭 | 显式 primary + ordered candidates；零原始字节/零 model event/零副作用门禁；共享预算与兼容检查 | 显式候选允许模型语义变化，UI 必须持续提示费用、隐私和兼容风险 |
+| MITM 路由决策 | 保持暂缓 | 本轮无 MITM、CA、证书、CONNECT、系统代理或透明代理扩展 | 只在独立证据与决策门禁后重新评估 |
+
+实施顺序已完成为：**父子关联 → durable run/result + typed terminal → parent 幂等交接 → 默认关闭 fallback**。真实 Cursor success/error/background/resume fixture 和最终全仓验证仍由 `task/todo.md` 跟踪。
+
+必须保持以下边界：
+
+- `durable-handoff` 只保证已生成终态在本地 parent history/tool-result 中幂等唯一交接；网络 checkpoint/update 可重发，未终结 child 不自动重派。
+- Provider fallback 只尝试显式 allowlist，任意原始字节、model event 或副作用后立即停止切换。
+- MITM whitelist、CONNECT、CA/证书、系统代理和透明代理行为保持现状。
+- 同一 `historyRoot` 同时只能由一个活跃 Backend 写入。
 
 ## 7. 验收基线
 

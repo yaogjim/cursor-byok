@@ -12,6 +12,62 @@ import (
 	"time"
 )
 
+func TestWithCorrelationMergesAndNormalizesStableIdentifiers(t *testing.T) {
+	parent := Correlation{
+		TraceID:              " trace-1 ",
+		SpanID:               " span-parent ",
+		RootConversationID:   " root-1 ",
+		ParentConversationID: " parent-1 ",
+		ParentModelCallID:    " parent-model-1 ",
+		ParentToolCallID:     " parent-tool-1 ",
+		SubagentRunID:        " run-1 ",
+		ChildConversationID:  " child-1 ",
+		AgentID:              " agent-1 ",
+		ProviderPass:         2,
+	}
+	ctx := WithCorrelation(context.Background(), parent)
+	ctx = WithCorrelation(ctx, Correlation{
+		SpanID:         " span-child ",
+		ConversationID: " conversation-1 ",
+		ModelCallID:    " model-1 ",
+		HTTPAttempt:    3,
+	})
+	got := CorrelationFromContext(ctx)
+	if got.TraceID != "trace-1" || got.SpanID != "span-child" {
+		t.Fatalf("trace correlation = %+v", got)
+	}
+	if got.RootConversationID != "root-1" || got.ParentConversationID != "parent-1" || got.ParentModelCallID != "parent-model-1" || got.ParentToolCallID != "parent-tool-1" {
+		t.Fatalf("parent correlation was not preserved: %+v", got)
+	}
+	if got.SubagentRunID != "run-1" || got.ChildConversationID != "child-1" || got.AgentID != "agent-1" {
+		t.Fatalf("subagent correlation was not preserved: %+v", got)
+	}
+	if got.ConversationID != "conversation-1" || got.ModelCallID != "model-1" || got.ProviderPass != 2 || got.HTTPAttempt != 3 {
+		t.Fatalf("downstream correlation was not merged: %+v", got)
+	}
+}
+
+func TestApplyCorrelationIncludesSubagentAndAttemptFields(t *testing.T) {
+	event := Event{}
+	applyCorrelation(&event, Correlation{
+		RootConversationID:   "root-1",
+		ParentConversationID: "parent-1",
+		ParentModelCallID:    "parent-model-1",
+		ParentToolCallID:     "parent-tool-1",
+		SubagentRunID:        "run-1",
+		ChildConversationID:  "child-1",
+		AgentID:              "agent-1",
+		ProviderPass:         2,
+		HTTPAttempt:          4,
+	})
+	if event.RootConversationID != "root-1" || event.ParentConversationID != "parent-1" || event.ParentModelCallID != "parent-model-1" || event.ParentToolCallID != "parent-tool-1" {
+		t.Fatalf("event parent correlation = %+v", event)
+	}
+	if event.SubagentRunID != "run-1" || event.ChildConversationID != "child-1" || event.AgentID != "agent-1" || event.ProviderPass != 2 || event.HTTPAttempt != 4 {
+		t.Fatalf("event subagent correlation = %+v", event)
+	}
+}
+
 func TestSanitizeRemovesCredentialsRecursively(t *testing.T) {
 	input := map[string]any{
 		"Authorization": "Bearer top-secret",
