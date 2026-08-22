@@ -136,12 +136,10 @@ func projectCursorTranscriptEntry(entry HistoryEntry) (cursorTranscriptLine, boo
 			return cursorTranscriptLine{}, false, fmt.Errorf("decode transcript assistant_text: %w", err)
 		}
 		text := cleanCursorTranscriptAssistantText(payload.Text)
-		thinking := strings.TrimSpace(payload.ReasoningContent)
-		content := joinTranscriptText(text, thinking)
-		if content == "" {
+		if text == "" {
 			return cursorTranscriptLine{}, false, nil
 		}
-		return cursorTranscriptTextLine("assistant", content), true, nil
+		return cursorTranscriptTextLine("assistant", text), true, nil
 	case "tool_call":
 		var payload toolCallEntryPayload
 		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -155,7 +153,7 @@ func projectCursorTranscriptEntry(entry HistoryEntry) (cursorTranscriptLine, boo
 		if !ok {
 			return cursorTranscriptLine{}, false, nil
 		}
-		return cursorTranscriptToolCallLine(descriptor.Function.Name, descriptor.Function.Arguments, payload.ReasoningContent), true, nil
+		return cursorTranscriptToolCallLine(descriptor.Function.Name, descriptor.Function.Arguments), true, nil
 	case "model_message":
 		var payload modelMessageEntryPayload
 		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -173,7 +171,7 @@ func projectCursorTranscriptModelMessage(message modeladapter.Message) (cursorTr
 		return cursorTranscriptLine{}, false, nil
 	}
 	content := make([]cursorTranscriptContent, 0, len(message.ToolCalls)+1)
-	texts := make([]string, 0, len(message.ContentParts)+2)
+	texts := make([]string, 0, len(message.ContentParts)+1)
 	if text := strings.TrimSpace(message.Content); text != "" {
 		texts = append(texts, text)
 	}
@@ -186,9 +184,6 @@ func projectCursorTranscriptModelMessage(message modeladapter.Message) (cursorTr
 		case "image":
 			texts = append(texts, "[Image]")
 		}
-	}
-	if thinking := strings.TrimSpace(message.ReasoningContent); thinking != "" {
-		texts = append(texts, thinking)
 	}
 	if len(texts) > 0 {
 		text := strings.Join(texts, "\n\n")
@@ -231,16 +226,12 @@ func cursorTranscriptTextLine(role string, text string) cursorTranscriptLine {
 	}
 }
 
-func cursorTranscriptToolCallLine(name string, arguments string, reasoning string) cursorTranscriptLine {
-	content := make([]cursorTranscriptContent, 0, 2)
-	if thinking := strings.TrimSpace(reasoning); thinking != "" {
-		content = append(content, cursorTranscriptContent{Type: "text", Text: thinking})
-	}
-	content = append(content, cursorTranscriptContent{
+func cursorTranscriptToolCallLine(name string, arguments string) cursorTranscriptLine {
+	content := []cursorTranscriptContent{{
 		Type:  "tool_use",
 		Name:  strings.TrimSpace(name),
 		Input: decodeTranscriptToolInput(arguments),
-	})
+	}}
 	return cursorTranscriptLine{Role: "assistant", Message: &cursorTranscriptMessage{Content: content}}
 }
 
@@ -314,17 +305,6 @@ func compileTranscriptContextTagPatterns(tags []string) []*regexp.Regexp {
 
 func collapseTranscriptBlankLines(text string) string {
 	return strings.TrimSpace(transcriptBlankLinesPattern.ReplaceAllString(text, "\n\n"))
-}
-
-func joinTranscriptText(text string, thinking string) string {
-	parts := make([]string, 0, 2)
-	if strings.TrimSpace(text) != "" {
-		parts = append(parts, strings.TrimSpace(text))
-	}
-	if strings.TrimSpace(thinking) != "" {
-		parts = append(parts, strings.TrimSpace(thinking))
-	}
-	return strings.Join(parts, "\n\n")
 }
 
 func normalizeAgentTranscriptsFolder(path string) string {

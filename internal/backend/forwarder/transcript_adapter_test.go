@@ -12,14 +12,16 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
+	modeladapter "cursor/internal/backend/agent/model"
 )
 
 func TestProjectCursorTranscriptJSONLMatchesCursorContract(t *testing.T) {
+	const reasoningCanary = "PRIVATE_REASONING_CANARY"
 	toolCall := transcriptTestEditToolCall(t, "file.txt")
 	conversation := transcriptTestConversation([]HistoryEntry{
 		transcriptTestUserMessageEntry(t, 1, "request-1", "<user_info>hidden</user_info>\n\nchange the file"),
-		newAssistantTextEntry(1, "request-1", "<thinking>hidden</thinking>\nDone", "checked carefully", ""),
-		newToolCallEntry(1, "request-1", "call-1", "Edit", "", "", toolCall),
+		newAssistantTextEntry(1, "request-1", "<thinking>hidden</thinking>\nDone", reasoningCanary, ""),
+		newToolCallEntry(1, "request-1", "call-1", "Edit", reasoningCanary, "", toolCall),
 		newToolResultEntry(1, "request-1", "call-1", "Edit", `{"path":"file.txt"}`, "edited", "", toolCall),
 		newMetadataEntry(1, "request-1", "turn_completed", nil),
 		transcriptTestUserMessageEntry(t, 2, "request-2", "next question"),
@@ -30,6 +32,9 @@ func TestProjectCursorTranscriptJSONLMatchesCursorContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("projectCursorTranscriptJSONL() error = %v", err)
 	}
+	if strings.Contains(string(data), reasoningCanary) {
+		t.Fatalf("public transcript leaked reasoning canary:\n%s", data)
+	}
 	lines := decodeCursorTranscriptLines(t, data)
 	if len(lines) != 5 {
 		t.Fatalf("transcript lines = %d, want 5\n%s", len(lines), data)
@@ -38,7 +43,7 @@ func TestProjectCursorTranscriptJSONLMatchesCursorContract(t *testing.T) {
 	if lines[0].Role != "user" || transcriptLineText(lines[0]) != "change the file" {
 		t.Fatalf("user line = %#v", lines[0])
 	}
-	if lines[1].Role != "assistant" || transcriptLineText(lines[1]) != "Done\n\nchecked carefully" {
+	if lines[1].Role != "assistant" || transcriptLineText(lines[1]) != "Done" {
 		t.Fatalf("assistant line = %#v", lines[1])
 	}
 	if lines[2].Role != "assistant" || lines[2].Message == nil || len(lines[2].Message.Content) != 1 {
@@ -57,6 +62,60 @@ func TestProjectCursorTranscriptJSONLMatchesCursorContract(t *testing.T) {
 	}
 	if lines[4].Role != "user" || transcriptLineText(lines[4]) != "next question" {
 		t.Fatalf("current user line = %#v", lines[4])
+	}
+}
+
+func TestProjectCursorTranscriptMultipleToolCallsOmitSharedReasoning(t *testing.T) {
+	const reasoningCanary = "PRIVATE_SHARED_REASONING_CANARY"
+	conversation := transcriptTestConversation([]HistoryEntry{
+		newAssistantTextEntry(1, "request-1", "", reasoningCanary, ""),
+		newToolCallEntry(1, "request-1", "call-1", "Edit", reasoningCanary, "", transcriptTestEditToolCall(t, "one.txt")),
+		newToolCallEntry(1, "request-1", "call-2", "Edit", reasoningCanary, "", transcriptTestEditToolCall(t, "two.txt")),
+		newToolCallEntry(1, "request-1", "call-3", "Edit", reasoningCanary, "", transcriptTestEditToolCall(t, "three.txt")),
+	})
+
+	data, err := projectCursorTranscriptJSONL(conversation)
+	if err != nil {
+		t.Fatalf("projectCursorTranscriptJSONL() error = %v", err)
+	}
+	if strings.Contains(string(data), reasoningCanary) {
+		t.Fatalf("public transcript leaked shared reasoning canary:\n%s", data)
+	}
+	lines := decodeCursorTranscriptLines(t, data)
+	if len(lines) != 3 {
+		t.Fatalf("transcript lines = %d, want 3 tool calls\n%s", len(lines), data)
+	}
+	for index, line := range lines {
+		if line.Message == nil || len(line.Message.Content) != 1 || line.Message.Content[0].Type != "tool_use" {
+			t.Fatalf("tool line %d = %#v", index, line)
+		}
+	}
+}
+
+func TestProjectCursorTranscriptModelMessageOmitsReasoning(t *testing.T) {
+	const reasoningCanary = "PRIVATE_IMPORTED_REASONING_CANARY"
+	entry, ok, err := newModelMessageEntry(1, "request-1", modeladapter.Message{
+		Role:             "assistant",
+		Content:          "visible imported text",
+		ReasoningContent: reasoningCanary,
+	})
+	if err != nil {
+		t.Fatalf("newModelMessageEntry() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("newModelMessageEntry() omitted visible assistant message")
+	}
+
+	data, err := projectCursorTranscriptJSONL(transcriptTestConversation([]HistoryEntry{entry}))
+	if err != nil {
+		t.Fatalf("projectCursorTranscriptJSONL() error = %v", err)
+	}
+	if strings.Contains(string(data), reasoningCanary) {
+		t.Fatalf("public transcript leaked imported reasoning canary:\n%s", data)
+	}
+	lines := decodeCursorTranscriptLines(t, data)
+	if len(lines) != 1 || transcriptLineText(lines[0]) != "visible imported text" {
+		t.Fatalf("imported assistant transcript = %s", data)
 	}
 }
 

@@ -1056,6 +1056,7 @@ P1 核心实现完成与最终交付声明必须区分。当前最终收口要�
 9. `basic` 不得落盘正文；`full` 必须显式启用、写盘前清除凭据并受保留期和磁盘配额约束；专用隐私审计继续默认关闭。
 10. 客户端只采集，不读取历史日志、不分析、不生成报告；只允许通过受限启动器打开独立 `tools/log-analyzer`。分析器不进入客户端二进制或更新归档。
 11. 运行中唯一代理实例不能在无维护窗口时被替换。
+12. `agent-transcripts` 公共投影只包含可见文本与结构化工具调用，不得把 `ReasoningContent` 降格为普通 `text`；内部 history/context 仍保留 provider replay 所需 reasoning signature 与 item/call ID。
 
 ## 16. 当前架构风险
 
