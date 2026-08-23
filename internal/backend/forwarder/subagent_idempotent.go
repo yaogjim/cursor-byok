@@ -55,7 +55,7 @@ func (service *Service) appendSubagentToolResultIdempotent(
 	if service.subagentRuns == nil || strings.TrimSpace(pending.SubagentRunID) == "" {
 		return service.appendToolResult(
 			stream, toolCallID, deriveToolNameFromPendingExec(pending),
-			pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil,
+			pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil, pending.ModelCallID,
 		)
 	}
 	runID := strings.TrimSpace(pending.SubagentRunID)
@@ -166,11 +166,11 @@ commitStep:
 	// ── Step 2: Idempotent AppendEntriesWithUpdate ───────────────────────────
 	// tool_result entry 带 IdempotencyKey = parentCommitKey。
 	// 所有字段（category/toolName/payload/toolCall）来自胜出信封。
-	trEntry := newToolResultEntry(
+	trEntry := withHistoryModelCallID(newToolResultEntry(
 		stream.TurnSeq, stream.RequestID, toolCallID, commitToolName,
 		string(commitArgsJSON), storedPayload, pending.ReasoningContent,
 		json.RawMessage(commitToolCallEncoded),
-	)
+	), pending.ModelCallID)
 	trEntry.IdempotencyKey = parentCommitKey
 
 	// metadata entry 记录 subagent handoff 信息（供观测，不含 prompt/result 正文）。
@@ -190,6 +190,13 @@ commitStep:
 		metaFields["agent_id"] = record.Identity.AgentID
 	}
 	metaEntry := newMetadataEntry(stream.TurnSeq, stream.RequestID, "subagent_handoff", metaFields)
+	entries := []HistoryEntry{trEntry, metaEntry}
+	if evidenceEntry, ok := newSubagentExecutionEvidenceEntry(
+		stream.TurnSeq, stream.RequestID, pending.ModelCallID, toolCallID, commitToolName,
+		commitArgsJSON, commitToolCallEncoded, commitCategory, 0,
+	); ok {
+		entries = append(entries, withHistoryModelCallID(evidenceEntry, pending.ModelCallID))
+	}
 
 	conversationID := stream.ConversationID
 	committed := false
@@ -201,7 +208,6 @@ commitStep:
 	}
 
 	if service.store != nil {
-		entries := []HistoryEntry{trEntry, metaEntry}
 		persisted, _, appendErr := service.store.AppendEntriesToExistingWithUpdate(
 			conversationID,
 			resetEntrySequences(entries),
@@ -235,13 +241,15 @@ commitStep:
 			if persisted != nil {
 				stream.CheckpointConversation = persisted
 			}
+			rebuildStreamExecutionEvidenceLocked(stream)
 			stream.UpdatedAt = time.Now().UTC()
 			stream.mu.Unlock()
 			committed = true
 		}
 	} else {
 		// 纯内存路径（测试）。
-		appendEntriesInPlace(stream.CheckpointConversation, []HistoryEntry{trEntry, metaEntry})
+		appendEntriesInPlace(stream.CheckpointConversation, entries)
+		rebuildStreamExecutionEvidenceLocked(stream)
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
 		committed = true

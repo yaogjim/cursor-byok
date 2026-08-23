@@ -76,10 +76,11 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 		return nil, nil
 	}
 	entries := replayablePromptProjectionEntries(conversation.Entries)
-	messages := make([]modeladapter.Message, 0, len(entries)*2)
+	messages := make([]projectedReplayMessage, 0, len(entries)*2)
 	seenToolCalls := make(map[string]struct{})
 	openToolCalls := make(map[string]struct{})
 	toolCallMessageIndexes := make(map[string]int)
+	reasoningEmissions := newReplayReasoningEmissionTracker()
 	for _, entry := range entries {
 		switch strings.TrimSpace(entry.Kind) {
 		case "model_message":
@@ -89,15 +90,15 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			}
 			message := cloneReplayModelMessage(payload.Message)
 			if strings.TrimSpace(message.Role) != "" {
-				messages = append(messages, message)
+				messages = append(messages, newProjectedReplayMessage(message, entry))
 			}
 		case "compaction_summary", "compacted_summary":
 			summary, ok := decodeCompactionSummaryEntry(entry)
 			if ok {
-				messages = append(messages, modeladapter.Message{
+				messages = append(messages, newProjectedReplayMessage(modeladapter.Message{
 					Role:    "user",
 					Content: "<conversation_summary>\n" + summary + "\n</conversation_summary>",
-				})
+				}, entry))
 			}
 		case "user_message":
 			userMessage := &agentv1.UserMessage{}
@@ -106,7 +107,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			}
 			message, ok := promptengine.BuildUserMessageReplayMessage(userMessage)
 			if ok {
-				messages = append(messages, toModelMessage(message))
+				messages = append(messages, newProjectedReplayMessage(toModelMessage(message), entry))
 			}
 		case "request_context":
 			requestContext := &agentv1.RequestContext{}
@@ -114,7 +115,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 				return nil, fmt.Errorf("decode request_context entry: %w", err)
 			}
 			for _, replay := range promptengine.BuildRequestContextReplayMessages(requestContext) {
-				messages = append(messages, toModelMessage(replay))
+				messages = append(messages, newProjectedReplayMessage(toModelMessage(replay), entry))
 			}
 		case "prompt_context":
 			var payload promptContextEntryPayload
@@ -131,7 +132,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 				Persist: true,
 			})
 			if isReplayablePromptContext(context) {
-				messages = append(messages, context.Message)
+				messages = append(messages, newProjectedReplayMessage(context.Message, entry))
 			}
 		case "assistant_text":
 			var payload assistantTextPayload
@@ -144,7 +145,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			if strings.TrimSpace(payload.Text) == "" && !hasReplayableReasoningPayload(payload.ReasoningContent, payload.ReasoningSignature, payload.ReasoningSignatureSource) {
 				continue
 			}
-			messages = append(messages, modeladapter.Message{
+			replayMessage := modeladapter.Message{
 				Role:                            "assistant",
 				Content:                         strings.TrimSpace(payload.Text),
 				ReasoningContent:                payload.ReasoningContent,
@@ -153,7 +154,9 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 				OpenAIResponsesReasoningID:      payload.ReasoningItemID,
 				OpenAIResponsesReasoningStatus:  payload.ReasoningStatus,
 				OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), payload.ReasoningSummary...),
-			})
+			}
+			messages = append(messages, newProjectedReplayMessage(replayMessage, entry))
+			applyProjectedReplayReasoning(reasoningEmissions, entry, messages)
 		case "tool_call":
 			var payload toolCallEntryPayload
 			if err := json.Unmarshal(entry.Payload, &payload); err != nil {
@@ -174,7 +177,9 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			replayMessage.OpenAIResponsesReasoningStatus = payload.ReasoningStatus
 			replayMessage.OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), payload.ReasoningSummary...)
 			applyPromptProviderMetadataToFirstToolCall(&replayMessage, payload.ProviderItemID, payload.ProviderCallID, payload.ProviderStatus)
-			messages = append(messages, toModelMessage(replayMessage))
+			modelMessage := toModelMessage(replayMessage)
+			messages = append(messages, newProjectedReplayMessage(modelMessage, entry))
+			applyProjectedReplayReasoning(reasoningEmissions, entry, messages)
 			if toolCallID := strings.TrimSpace(payload.ToolCallID); toolCallID != "" {
 				toolCallMessageIndexes[toolCallID] = len(messages) - 1
 				seenToolCalls[toolCallID] = struct{}{}
@@ -190,7 +195,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			if _, ok := seenToolCalls[toolCallID]; ok {
 				delete(openToolCalls, toolCallID)
 				if index, found := toolCallMessageIndexes[toolCallID]; found && index >= 0 && index < len(messages) {
-					overrideModelToolReplayFromEntry(&messages[index], payload.ToolName, payload.Arguments)
+					overrideModelToolReplayFromEntry(&messages[index].Message, payload.ToolName, payload.Arguments)
 					delete(toolCallMessageIndexes, toolCallID)
 				}
 				var toolCall *agentv1.ToolCall
@@ -215,16 +220,16 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 					if ok {
 						replayMessage.Name = toolName
 						replayMessage.Content = limitProjectedToolResultReplay(toolName, replayMessage.Content, payload.ResultText, true, historicalToolResult)
-						messages = append(messages, toModelMessage(replayMessage))
+						messages = append(messages, newProjectedReplayMessage(toModelMessage(replayMessage), entry))
 						continue
 					}
 				}
-				messages = append(messages, modeladapter.Message{
+				messages = append(messages, newProjectedReplayMessage(modeladapter.Message{
 					Role:       "tool",
 					Name:       toolName,
 					ToolCallID: toolCallID,
 					Content:    limitProjectedToolResultReplay(toolName, payload.ResultText, "", false, historicalToolResult),
-				})
+				}, entry))
 				continue
 			}
 			if len(payload.ToolCall) > 0 {
@@ -233,30 +238,31 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 					return nil, fmt.Errorf("decode tool_result tool_call entry: %w", err)
 				}
 				replayMessages, ok := promptengine.BuildToolCallReplayMessages(payload.ToolCallID, toolCall)
-				if !ok {
+				if ok {
+					overrideToolReplayFromEntry(replayMessages, payload.ToolName, payload.Arguments)
+					for index := range replayMessages {
+						if strings.TrimSpace(replayMessages[index].Role) != "assistant" || len(replayMessages[index].ToolCalls) == 0 {
+							continue
+						}
+						replayMessages[index].ReasoningContent = payload.ReasoningContent
+						replayMessages[index].ReasoningSignature = payload.ReasoningSignature
+						replayMessages[index].ReasoningSignatureSource = payload.ReasoningSignatureSource
+						replayMessages[index].OpenAIResponsesReasoningID = payload.ReasoningItemID
+						replayMessages[index].OpenAIResponsesReasoningStatus = payload.ReasoningStatus
+						replayMessages[index].OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), payload.ReasoningSummary...)
+						applyPromptProviderMetadataToFirstToolCall(&replayMessages[index], payload.ProviderItemID, payload.ProviderCallID, payload.ProviderStatus)
+					}
+					for _, replay := range replayMessages {
+						if strings.TrimSpace(replay.Role) == "tool" {
+							toolName := firstNonEmpty(strings.TrimSpace(replay.Name), strings.TrimSpace(payload.ToolName))
+							replay.Content = limitProjectedToolResultReplay(toolName, replay.Content, payload.ResultText, true, historicalToolResult)
+						}
+						modelMessage := toModelMessage(replay)
+						messages = append(messages, newProjectedReplayMessage(modelMessage, entry))
+						applyProjectedReplayReasoning(reasoningEmissions, entry, messages)
+					}
 					continue
 				}
-				overrideToolReplayFromEntry(replayMessages, payload.ToolName, payload.Arguments)
-				for index := range replayMessages {
-					if strings.TrimSpace(replayMessages[index].Role) != "assistant" || len(replayMessages[index].ToolCalls) == 0 {
-						continue
-					}
-					replayMessages[index].ReasoningContent = payload.ReasoningContent
-					replayMessages[index].ReasoningSignature = payload.ReasoningSignature
-					replayMessages[index].ReasoningSignatureSource = payload.ReasoningSignatureSource
-					replayMessages[index].OpenAIResponsesReasoningID = payload.ReasoningItemID
-					replayMessages[index].OpenAIResponsesReasoningStatus = payload.ReasoningStatus
-					replayMessages[index].OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), payload.ReasoningSummary...)
-					applyPromptProviderMetadataToFirstToolCall(&replayMessages[index], payload.ProviderItemID, payload.ProviderCallID, payload.ProviderStatus)
-				}
-				for _, replay := range replayMessages {
-					if strings.TrimSpace(replay.Role) == "tool" {
-						toolName := firstNonEmpty(strings.TrimSpace(replay.Name), strings.TrimSpace(payload.ToolName))
-						replay.Content = limitProjectedToolResultReplay(toolName, replay.Content, payload.ResultText, true, historicalToolResult)
-					}
-					messages = append(messages, toModelMessage(replay))
-				}
-				continue
 			}
 			if strings.TrimSpace(payload.ToolCallID) == "" || strings.TrimSpace(payload.ToolName) == "" {
 				continue
@@ -272,37 +278,37 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			if isLegacyPatchEditToolName(payload.ToolName) {
 				effectiveArguments = "{}"
 			}
-			messages = append(messages,
-				modeladapter.Message{
-					Role:                            "assistant",
-					ReasoningContent:                payload.ReasoningContent,
-					ReasoningSignature:              payload.ReasoningSignature,
-					ReasoningSignatureSource:        payload.ReasoningSignatureSource,
-					OpenAIResponsesReasoningID:      payload.ReasoningItemID,
-					OpenAIResponsesReasoningStatus:  payload.ReasoningStatus,
-					OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), payload.ReasoningSummary...),
-					ToolCalls: []modeladapter.ToolCallDescriptor{{
-						ID:                    strings.TrimSpace(payload.ToolCallID),
-						Type:                  "function",
-						OpenAIResponsesID:     strings.TrimSpace(payload.ProviderItemID),
-						OpenAIResponsesCallID: strings.TrimSpace(payload.ProviderCallID),
-						OpenAIResponsesStatus: strings.TrimSpace(payload.ProviderStatus),
-						Function: modeladapter.ToolCallFunctionShape{
-							Name:      effectiveToolName,
-							Arguments: effectiveArguments,
-						},
-					}},
-				},
-				modeladapter.Message{
-					Role:       "tool",
-					Name:       effectiveToolName,
-					ToolCallID: strings.TrimSpace(payload.ToolCallID),
-					Content:    limitProjectedToolResultReplay(payload.ToolName, payload.ResultText, "", false, historicalToolResult),
-				},
-			)
+			fallbackAssistant := modeladapter.Message{
+				Role:                            "assistant",
+				ReasoningContent:                payload.ReasoningContent,
+				ReasoningSignature:              payload.ReasoningSignature,
+				ReasoningSignatureSource:        payload.ReasoningSignatureSource,
+				OpenAIResponsesReasoningID:      payload.ReasoningItemID,
+				OpenAIResponsesReasoningStatus:  payload.ReasoningStatus,
+				OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), payload.ReasoningSummary...),
+				ToolCalls: []modeladapter.ToolCallDescriptor{{
+					ID:                    strings.TrimSpace(payload.ToolCallID),
+					Type:                  "function",
+					OpenAIResponsesID:     strings.TrimSpace(payload.ProviderItemID),
+					OpenAIResponsesCallID: strings.TrimSpace(payload.ProviderCallID),
+					OpenAIResponsesStatus: strings.TrimSpace(payload.ProviderStatus),
+					Function: modeladapter.ToolCallFunctionShape{
+						Name:      effectiveToolName,
+						Arguments: effectiveArguments,
+					},
+				}},
+			}
+			messages = append(messages, newProjectedReplayMessage(fallbackAssistant, entry))
+			applyProjectedReplayReasoning(reasoningEmissions, entry, messages)
+			messages = append(messages, newProjectedReplayMessage(modeladapter.Message{
+				Role:       "tool",
+				Name:       effectiveToolName,
+				ToolCallID: strings.TrimSpace(payload.ToolCallID),
+				Content:    limitProjectedToolResultReplay(payload.ToolName, payload.ResultText, "", false, historicalToolResult),
+			}, entry))
 		}
 	}
-	return normalizeReplayMessageSequence(messages), nil
+	return projectedReplayMessagesToModel(normalizeProjectedReplayMessages(messages)), nil
 }
 
 func compactedPromptProjectionEntries(entries []HistoryEntry) []HistoryEntry {
@@ -894,30 +900,34 @@ func applyPromptProviderMetadataToFirstToolCall(message *promptengine.Message, p
 }
 
 func normalizeReplayMessageSequence(messages []modeladapter.Message) []modeladapter.Message {
+	return projectedReplayMessagesToModel(normalizeProjectedReplayMessages(wrapProjectedReplayMessages(messages)))
+}
+
+func normalizeProjectedReplayMessages(messages []projectedReplayMessage) []projectedReplayMessage {
 	if len(messages) == 0 {
 		return nil
 	}
-	normalized := make([]modeladapter.Message, 0, len(messages))
+	normalized := make([]projectedReplayMessage, 0, len(messages))
 	for _, item := range messages {
-		message := cloneReplayModelMessage(item)
-		if mergeReplayAssistantToolCalls(&normalized, message) {
+		message := cloneProjectedReplayMessage(item)
+		if mergeProjectedReplayAssistantToolCalls(&normalized, message) {
 			continue
 		}
 		normalized = append(normalized, message)
 	}
-	normalized = filterProviderSuppressedToolReplayMessages(normalized)
-	normalized = coalesceInterleavedReplayToolBatches(normalized)
-	return trimReplayDanglingAssistantToolCalls(normalized)
+	normalized = filterProjectedProviderSuppressedToolReplayMessages(normalized)
+	normalized = coalesceProjectedInterleavedReplayToolBatches(normalized)
+	return rehomeOrphanedReplayReasoning(trimProjectedReplayDanglingAssistantToolCalls(normalized))
 }
 
-func filterProviderSuppressedToolReplayMessages(messages []modeladapter.Message) []modeladapter.Message {
+func filterProjectedProviderSuppressedToolReplayMessages(messages []projectedReplayMessage) []projectedReplayMessage {
 	if len(messages) == 0 {
 		return nil
 	}
-	filtered := make([]modeladapter.Message, 0, len(messages))
+	filtered := make([]projectedReplayMessage, 0, len(messages))
 	skippedToolCallIDs := make(map[string]struct{})
 	for _, item := range messages {
-		message := cloneReplayModelMessage(item)
+		message := cloneProjectedReplayMessage(item)
 		if strings.TrimSpace(message.Role) == "assistant" && len(message.ToolCalls) > 0 {
 			nextToolCalls := make([]modeladapter.ToolCallDescriptor, 0, len(message.ToolCalls))
 			for _, toolCall := range message.ToolCalls {
@@ -973,12 +983,12 @@ func cloneReplayModelMessage(message modeladapter.Message) modeladapter.Message 
 	return cloned
 }
 
-func mergeReplayAssistantToolCalls(messages *[]modeladapter.Message, message modeladapter.Message) bool {
+func mergeProjectedReplayAssistantToolCalls(messages *[]projectedReplayMessage, message projectedReplayMessage) bool {
 	if len(*messages) == 0 {
 		return false
 	}
 	last := &(*messages)[len(*messages)-1]
-	if !canMergeReplayAssistantToolCalls(*last, message) {
+	if !canMergeProjectedReplayAssistantToolCalls(*last, message) {
 		return false
 	}
 	startIndex := len(last.ToolCalls)
@@ -988,8 +998,18 @@ func mergeReplayAssistantToolCalls(messages *[]modeladapter.Message, message mod
 		last.ToolCalls = append(last.ToolCalls, item)
 	}
 	last.ReasoningContent = mergeReplayReasoning(last.ReasoningContent, message.ReasoningContent)
-	mergeReplayReasoningMetadata(last, message)
+	mergeReplayReasoningMetadata(&last.Message, message.Message)
+	if strings.TrimSpace(last.replayAggregationKey) == "" {
+		last.replayAggregationKey = message.replayAggregationKey
+	}
 	return true
+}
+
+func canMergeProjectedReplayAssistantToolCalls(last projectedReplayMessage, current projectedReplayMessage) bool {
+	if !canMergeReplayAssistantToolCalls(last.Message, current.Message) {
+		return false
+	}
+	return strings.TrimSpace(last.replayAggregationKey) == strings.TrimSpace(current.replayAggregationKey)
 }
 
 func canMergeReplayAssistantToolCalls(last modeladapter.Message, current modeladapter.Message) bool {
@@ -1011,26 +1031,26 @@ func canMergeReplayAssistantToolCalls(last modeladapter.Message, current modelad
 	return true
 }
 
-func coalesceInterleavedReplayToolBatches(messages []modeladapter.Message) []modeladapter.Message {
+func coalesceProjectedInterleavedReplayToolBatches(messages []projectedReplayMessage) []projectedReplayMessage {
 	if len(messages) == 0 {
 		return nil
 	}
-	normalized := make([]modeladapter.Message, 0, len(messages))
+	normalized := make([]projectedReplayMessage, 0, len(messages))
 	for index := 0; index < len(messages); index++ {
-		message := cloneReplayModelMessage(messages[index])
-		groupID := replayAssistantToolGroupID(message)
+		message := cloneProjectedReplayMessage(messages[index])
+		groupID := replayAssistantToolGroupID(message.Message)
 		if groupID == "" {
 			normalized = append(normalized, message)
 			continue
 		}
 
 		batch := message
-		toolResults := make(map[string]modeladapter.Message)
+		toolResults := make(map[string]projectedReplayMessage)
 		toolResultOrder := make([]string, 0)
 		changed := false
 		nextIndex := index + 1
 		for nextIndex < len(messages) {
-			next := cloneReplayModelMessage(messages[nextIndex])
+			next := cloneProjectedReplayMessage(messages[nextIndex])
 			if strings.TrimSpace(next.Role) == "tool" && replayToolCallGroupID(next.ToolCallID) == groupID {
 				toolCallID := strings.TrimSpace(next.ToolCallID)
 				if _, ok := toolResults[toolCallID]; !ok {
@@ -1041,7 +1061,7 @@ func coalesceInterleavedReplayToolBatches(messages []modeladapter.Message) []mod
 				nextIndex++
 				continue
 			}
-			if replayAssistantToolGroupID(next) == groupID && canMergeReplayAssistantToolCalls(batch, next) {
+			if replayAssistantToolGroupID(next.Message) == groupID && canMergeProjectedReplayAssistantToolCalls(batch, next) {
 				startIndex := len(batch.ToolCalls)
 				for toolIndex, toolCall := range next.ToolCalls {
 					item := toolCall
@@ -1049,7 +1069,10 @@ func coalesceInterleavedReplayToolBatches(messages []modeladapter.Message) []mod
 					batch.ToolCalls = append(batch.ToolCalls, item)
 				}
 				batch.ReasoningContent = mergeReplayReasoning(batch.ReasoningContent, next.ReasoningContent)
-				mergeReplayReasoningMetadata(&batch, next)
+				mergeReplayReasoningMetadata(&batch.Message, next.Message)
+				if strings.TrimSpace(batch.replayAggregationKey) == "" {
+					batch.replayAggregationKey = next.replayAggregationKey
+				}
 				changed = true
 				nextIndex++
 				continue
@@ -1119,6 +1142,417 @@ func replayToolCallGroupID(toolCallID string) string {
 		}
 	}
 	return ""
+}
+
+type projectedReplayMessage struct {
+	modeladapter.Message
+	replayAggregationKey string
+}
+
+func newProjectedReplayMessage(message modeladapter.Message, entry HistoryEntry) projectedReplayMessage {
+	return projectedReplayMessage{
+		Message:              cloneReplayModelMessage(message),
+		replayAggregationKey: replayModelCallAggregationKey(entry),
+	}
+}
+
+func cloneProjectedReplayMessage(item projectedReplayMessage) projectedReplayMessage {
+	return projectedReplayMessage{
+		Message:              cloneReplayModelMessage(item.Message),
+		replayAggregationKey: item.replayAggregationKey,
+	}
+}
+
+func wrapProjectedReplayMessages(messages []modeladapter.Message) []projectedReplayMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	items := make([]projectedReplayMessage, 0, len(messages))
+	for _, message := range messages {
+		items = append(items, projectedReplayMessage{Message: cloneReplayModelMessage(message)})
+	}
+	return items
+}
+
+func projectedReplayMessagesToModel(items []projectedReplayMessage) []modeladapter.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	messages := make([]modeladapter.Message, 0, len(items))
+	for _, item := range items {
+		messages = append(messages, cloneReplayModelMessage(item.Message))
+	}
+	return messages
+}
+
+type replayReasoningEmissionTracker struct {
+	emittedCalls  map[string]int
+	emittedLegacy map[string]int
+}
+
+func newReplayReasoningEmissionTracker() *replayReasoningEmissionTracker {
+	return &replayReasoningEmissionTracker{
+		emittedCalls:  make(map[string]int),
+		emittedLegacy: make(map[string]int),
+	}
+}
+
+func replayModelCallAggregationKey(entry HistoryEntry) string {
+	requestID := strings.TrimSpace(entry.RequestID)
+	modelCallID := strings.TrimSpace(entry.ModelCallID)
+	if requestID == "" || modelCallID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d\x1f%s\x1f%s", entry.TurnSeq, requestID, modelCallID)
+}
+
+func replayLegacyReasoningIdentityKey(entry HistoryEntry, message modeladapter.Message) string {
+	requestID := strings.TrimSpace(entry.RequestID)
+	itemID := strings.TrimSpace(message.OpenAIResponsesReasoningID)
+	signature := strings.TrimSpace(message.ReasoningSignature)
+	if requestID == "" || itemID == "" || signature == "" {
+		return ""
+	}
+	return fmt.Sprintf("%d\x1f%s\x1f%s\x1f%s", entry.TurnSeq, requestID, itemID, signature)
+}
+
+func messageHasReplayReasoningTuple(message modeladapter.Message) bool {
+	if hasReplayableReasoningPayload(message.ReasoningContent, message.ReasoningSignature, message.ReasoningSignatureSource) {
+		return true
+	}
+	return strings.TrimSpace(message.OpenAIResponsesReasoningID) != "" ||
+		strings.TrimSpace(message.OpenAIResponsesReasoningStatus) != "" ||
+		len(message.OpenAIResponsesReasoningSummary) > 0
+}
+
+func clearReplayReasoning(message *modeladapter.Message) {
+	if message == nil {
+		return
+	}
+	message.ReasoningContent = ""
+	message.ReasoningSignature = ""
+	message.ReasoningSignatureSource = ""
+	message.OpenAIResponsesReasoningID = ""
+	message.OpenAIResponsesReasoningStatus = ""
+	message.OpenAIResponsesReasoningSummary = nil
+}
+
+func copyReplayReasoning(dst *modeladapter.Message, src modeladapter.Message) {
+	mergeReplayReasoningTuple(dst, src)
+}
+
+type replayReasoningTuple struct {
+	content   string
+	signature string
+	source    string
+	itemID    string
+	status    string
+	summary   json.RawMessage
+}
+
+func captureReplayReasoningTuple(message modeladapter.Message) replayReasoningTuple {
+	tuple := replayReasoningTuple{
+		content:   message.ReasoningContent,
+		signature: message.ReasoningSignature,
+		source:    message.ReasoningSignatureSource,
+		itemID:    message.OpenAIResponsesReasoningID,
+		status:    message.OpenAIResponsesReasoningStatus,
+	}
+	if len(message.OpenAIResponsesReasoningSummary) > 0 {
+		tuple.summary = append(json.RawMessage(nil), message.OpenAIResponsesReasoningSummary...)
+	}
+	return tuple
+}
+
+func cloneReplayReasoningTuple(tuple replayReasoningTuple) replayReasoningTuple {
+	cloned := tuple
+	if len(tuple.summary) > 0 {
+		cloned.summary = append(json.RawMessage(nil), tuple.summary...)
+	} else {
+		cloned.summary = nil
+	}
+	return cloned
+}
+
+func applyReplayReasoningTuple(dst *modeladapter.Message, tuple replayReasoningTuple) {
+	if dst == nil {
+		return
+	}
+	dst.ReasoningContent = tuple.content
+	dst.ReasoningSignature = tuple.signature
+	dst.ReasoningSignatureSource = tuple.source
+	dst.OpenAIResponsesReasoningID = tuple.itemID
+	dst.OpenAIResponsesReasoningStatus = tuple.status
+	if len(tuple.summary) == 0 {
+		dst.OpenAIResponsesReasoningSummary = nil
+		return
+	}
+	dst.OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), tuple.summary...)
+}
+
+func mergeReplayReasoningTuple(dst *modeladapter.Message, src modeladapter.Message) {
+	if dst == nil {
+		return
+	}
+	applyReplayReasoningTuple(dst, selectReplayReasoningTuple(captureReplayReasoningTuple(*dst), captureReplayReasoningTuple(src)))
+}
+
+func selectReplayReasoningTuple(current replayReasoningTuple, candidate replayReasoningTuple) replayReasoningTuple {
+	currentContent := strings.TrimSpace(current.content)
+	candidateContent := strings.TrimSpace(candidate.content)
+	currentSig := strings.TrimSpace(current.signature)
+	candidateSig := strings.TrimSpace(candidate.signature)
+	exactContent := currentContent == candidateContent
+	incompatible := replayReasoningContentsIncompatible(current.content, candidate.content)
+
+	if currentSig != "" && candidateSig != "" && currentSig != candidateSig {
+		if replayReasoningTupleMoreComplete(candidate, current) {
+			return cloneReplayReasoningTuple(candidate)
+		}
+		return cloneReplayReasoningTuple(current)
+	}
+
+	if currentSig != "" && currentSig == candidateSig {
+		if incompatible {
+			if replayReasoningTupleMoreComplete(candidate, current) {
+				return cloneReplayReasoningTuple(candidate)
+			}
+			return cloneReplayReasoningTuple(current)
+		}
+		if exactContent || candidateContent == "" {
+			return fillReplayReasoningMatchingMetadata(cloneReplayReasoningTuple(current), candidate)
+		}
+		if currentContent == "" {
+			return fillReplayReasoningMatchingMetadata(cloneReplayReasoningTuple(candidate), current)
+		}
+		return mergeReplayReasoningTerminalStatus(cloneReplayReasoningTuple(current), candidate)
+	}
+
+	if currentSig != "" && candidateSig == "" {
+		if incompatible {
+			return cloneReplayReasoningTuple(current)
+		}
+		if exactContent || candidateContent == "" {
+			return fillReplayReasoningMatchingMetadata(cloneReplayReasoningTuple(current), candidate)
+		}
+		return mergeReplayReasoningTerminalStatus(cloneReplayReasoningTuple(current), candidate)
+	}
+
+	if currentSig == "" && candidateSig != "" {
+		if exactContent {
+			return fillReplayReasoningMatchingMetadata(cloneReplayReasoningTuple(current), candidate)
+		}
+		return cloneReplayReasoningTuple(candidate)
+	}
+
+	if incompatible {
+		return cloneReplayReasoningTuple(current)
+	}
+	chosen := cloneReplayReasoningTuple(current)
+	if replayReasoningContentMoreComplete(currentContent, candidateContent) || (currentContent == "" && candidateContent != "") {
+		chosen.content = candidate.content
+	}
+	return fillReplayReasoningMatchingMetadata(chosen, candidate)
+}
+
+func fillReplayReasoningMatchingMetadata(dst replayReasoningTuple, src replayReasoningTuple) replayReasoningTuple {
+	dstSig := strings.TrimSpace(dst.signature)
+	srcSig := strings.TrimSpace(src.signature)
+	srcSource := strings.TrimSpace(src.source)
+	if srcSig != "" {
+		switch {
+		case dstSig == "":
+			dst.signature = src.signature
+			if srcSource != "" {
+				dst.source = src.source
+			}
+		case dstSig == srcSig:
+			if strings.TrimSpace(dst.source) == "" && srcSource != "" {
+				dst.source = src.source
+			}
+		}
+	}
+	if itemID := strings.TrimSpace(src.itemID); itemID != "" && strings.TrimSpace(dst.itemID) == "" {
+		dst.itemID = src.itemID
+	}
+	dst = mergeReplayReasoningTerminalStatus(dst, src)
+	if strings.TrimSpace(string(src.summary)) != "" && strings.TrimSpace(string(dst.summary)) == "" {
+		dst.summary = append(json.RawMessage(nil), src.summary...)
+	}
+	return dst
+}
+
+func mergeReplayReasoningTerminalStatus(dst replayReasoningTuple, src replayReasoningTuple) replayReasoningTuple {
+	if status := strings.TrimSpace(src.status); status != "" {
+		if strings.TrimSpace(dst.status) == "" || replayReasoningStatusMoreComplete(dst.status, status) {
+			dst.status = src.status
+		}
+	}
+	return dst
+}
+
+func replayReasoningTupleMoreComplete(candidate replayReasoningTuple, current replayReasoningTuple) bool {
+	candidateReplayable := hasReplayableReasoningPayload(candidate.content, candidate.signature, candidate.source)
+	currentReplayable := hasReplayableReasoningPayload(current.content, current.signature, current.source)
+	if candidateReplayable != currentReplayable {
+		return candidateReplayable
+	}
+	candidateLen := len(strings.TrimSpace(candidate.content))
+	currentLen := len(strings.TrimSpace(current.content))
+	if candidateLen != currentLen {
+		return candidateLen > currentLen
+	}
+	if (strings.TrimSpace(candidate.signature) != "") != (strings.TrimSpace(current.signature) != "") {
+		return strings.TrimSpace(candidate.signature) != ""
+	}
+	if (strings.TrimSpace(candidate.source) != "") != (strings.TrimSpace(current.source) != "") {
+		return strings.TrimSpace(candidate.source) != ""
+	}
+	candidateSummary := strings.TrimSpace(string(candidate.summary)) != ""
+	currentSummary := strings.TrimSpace(string(current.summary)) != ""
+	if candidateSummary != currentSummary {
+		return candidateSummary
+	}
+	if (strings.TrimSpace(candidate.itemID) != "") != (strings.TrimSpace(current.itemID) != "") {
+		return strings.TrimSpace(candidate.itemID) != ""
+	}
+	candidateTerminal := replayReasoningStatusTerminal(candidate.status)
+	currentTerminal := replayReasoningStatusTerminal(current.status)
+	if candidateTerminal != currentTerminal {
+		return candidateTerminal
+	}
+	return false
+}
+
+func replayReasoningContentsCompatible(left string, right string) bool {
+	return !replayReasoningContentsIncompatible(left, right)
+}
+
+func replayReasoningContentsIncompatible(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" || left == right {
+		return false
+	}
+	return !strings.HasPrefix(right, left) && !strings.HasPrefix(left, right)
+}
+
+func replayReasoningContentMoreComplete(current string, candidate string) bool {
+	current = strings.TrimSpace(current)
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || candidate == current {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	return strings.HasPrefix(candidate, current) && len(candidate) > len(current)
+}
+
+func replayReasoningStatusMoreComplete(current string, candidate string) bool {
+	current = strings.TrimSpace(current)
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || candidate == current {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	return replayReasoningStatusTerminal(candidate) && !replayReasoningStatusTerminal(current)
+}
+
+func replayReasoningStatusTerminal(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "completed", "incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyProjectedReplayReasoning(tracker *replayReasoningEmissionTracker, entry HistoryEntry, messages []projectedReplayMessage) {
+	if tracker == nil || len(messages) == 0 {
+		return
+	}
+	message := &messages[len(messages)-1].Message
+	if strings.TrimSpace(message.Role) != "assistant" {
+		return
+	}
+	if !messageHasReplayReasoningTuple(*message) {
+		return
+	}
+	if callKey := replayModelCallAggregationKey(entry); callKey != "" {
+		applyReplayReasoningEmission(tracker.emittedCalls, callKey, messages)
+		return
+	}
+	if legacyKey := replayLegacyReasoningIdentityKey(entry, *message); legacyKey != "" {
+		applyReplayReasoningEmission(tracker.emittedLegacy, legacyKey, messages)
+	}
+}
+
+func applyReplayReasoningEmission(emitted map[string]int, key string, messages []projectedReplayMessage) {
+	if emitted == nil || key == "" || len(messages) == 0 {
+		return
+	}
+	currentIndex := len(messages) - 1
+	occupiedIndex, occupied := emitted[key]
+	if !occupied {
+		emitted[key] = currentIndex
+		return
+	}
+	if occupiedIndex >= 0 && occupiedIndex < len(messages) {
+		mergeReplayReasoningTuple(&messages[occupiedIndex].Message, messages[currentIndex].Message)
+	}
+	clearReplayReasoning(&messages[currentIndex].Message)
+}
+
+func isOrphanedReplayReasoningCarrier(message modeladapter.Message) bool {
+	if strings.TrimSpace(message.Role) != "assistant" {
+		return false
+	}
+	if strings.TrimSpace(message.Content) != "" || len(message.ContentParts) > 0 || len(message.ToolCalls) > 0 {
+		return false
+	}
+	return messageHasReplayReasoningTuple(message)
+}
+
+func nextReplayAssistantIndexBeforeUser(messages []projectedReplayMessage, from int) int {
+	for index := from + 1; index < len(messages); index++ {
+		switch strings.TrimSpace(messages[index].Role) {
+		case "user":
+			return -1
+		case "assistant":
+			return index
+		}
+	}
+	return -1
+}
+
+func sameProjectedReplayAggregationKey(left projectedReplayMessage, right projectedReplayMessage) bool {
+	leftKey := strings.TrimSpace(left.replayAggregationKey)
+	rightKey := strings.TrimSpace(right.replayAggregationKey)
+	return leftKey != "" && leftKey == rightKey
+}
+
+func rehomeOrphanedReplayReasoning(messages []projectedReplayMessage) []projectedReplayMessage {
+	if len(messages) == 0 {
+		return nil
+	}
+	rehomed := make([]projectedReplayMessage, 0, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := cloneProjectedReplayMessage(messages[index])
+		if !isOrphanedReplayReasoningCarrier(message.Message) {
+			rehomed = append(rehomed, message)
+			continue
+		}
+		target := nextReplayAssistantIndexBeforeUser(messages, index)
+		if target < 0 || messageHasReplayReasoningTuple(messages[target].Message) || !sameProjectedReplayAggregationKey(message, messages[target]) {
+			rehomed = append(rehomed, message)
+			continue
+		}
+		mergeReplayReasoningTuple(&messages[target].Message, message.Message)
+	}
+	return rehomed
 }
 
 func mergeReplayReasoning(left string, right string) string {
@@ -1201,7 +1635,7 @@ func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapt
 // 部分模型（如 gpt-5.3-codex-spark）会在同一条响应里先输出 function_call 再输出说明文本，
 // 落盘顺序为 tool_call → assistant_text → tool_result，若只收集紧邻的 tool 消息，
 // 会把有结果回放的调用误判为悬空。
-func replayToolResponseWindowEnd(messages []modeladapter.Message, index int) int {
+func replayToolResponseWindowEnd(messages []projectedReplayMessage, index int) int {
 	end := index + 1
 	for end < len(messages) {
 		candidate := messages[end]
@@ -1218,6 +1652,10 @@ func replayToolResponseWindowEnd(messages []modeladapter.Message, index int) int
 }
 
 func trimReplayDanglingAssistantToolCalls(messages []modeladapter.Message) []modeladapter.Message {
+	return projectedReplayMessagesToModel(trimProjectedReplayDanglingAssistantToolCalls(wrapProjectedReplayMessages(messages)))
+}
+
+func trimProjectedReplayDanglingAssistantToolCalls(messages []projectedReplayMessage) []projectedReplayMessage {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1243,9 +1681,9 @@ func trimReplayDanglingAssistantToolCalls(messages []modeladapter.Message) []mod
 			}
 		}
 	}
-	trimmed := make([]modeladapter.Message, 0, len(messages))
+	trimmed := make([]projectedReplayMessage, 0, len(messages))
 	for _, item := range messages {
-		message := cloneReplayModelMessage(item)
+		message := cloneProjectedReplayMessage(item)
 		if strings.TrimSpace(message.Role) == "assistant" && len(message.ToolCalls) > 0 {
 			nextToolCalls := make([]modeladapter.ToolCallDescriptor, 0, len(message.ToolCalls))
 			for _, toolCall := range message.ToolCalls {

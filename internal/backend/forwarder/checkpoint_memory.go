@@ -17,6 +17,7 @@ func (service *Service) replaceCheckpointConversation(stream *ActiveStream, conv
 	}
 	stream.mu.Lock()
 	stream.CheckpointConversation = cloneConversationFile(conversation)
+	rebuildStreamExecutionEvidenceLocked(stream)
 	stream.mu.Unlock()
 	return nil
 }

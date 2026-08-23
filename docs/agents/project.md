@@ -13,7 +13,8 @@ onboarded: 2026-03-14
 
 ## 声明开关
 
-- **任务真值源**：`task/todo.md`（单文件）
+- **任务真值源**：`task/todo.md`（详细实施目标、阶段、步骤、范围、验收与执行结果）
+- **进展归档**：`docs/process.md`（当前进展、版本完成情况与时间线；阶段收尾时与 `task/todo.md` 同步）
 - **Context7 MCP**：未接入；本项目明确禁用
 - **浏览器验证工具**：无固定工具；任务需要 UI 验证时按当前环境能力选择并记录降级边界
 - **仓库 README**：`noad` 与 `main` 均使用中文版，唯一入口为根目录 `README.md`；不保留英文版，不使用 `README-CN.md` 双语分流
@@ -25,7 +26,9 @@ onboarded: 2026-03-14
 | 产品与工作决策基线 | `docs/prd_cursor_byok_工作决策基线.md` |
 | 当前功能与上游差异 | `docs/prd_cursor_byok_当前功能与上游差异.md` |
 | 系统 Design | `docs/prd_cursor_byok_系统架构与核心业务数据流.md` |
-| 实施计划 | `.cursor/plans/*.plan.md` |
+| 活动实施计划与执行状态 | `task/todo.md` |
+| 总体进展、版本归档与时间线 | `docs/process.md` |
+| 已批准的专项实施计划 | `.cursor/plans/*.plan.md` |
 | 上游同步规则 | `docs/cursor_byok_upstream_merge_requirements.md` |
 | 上游同步→发版 Runbook | `docs/cursor_byok_upstream_sync_release_runbook.md` |
 
@@ -37,6 +40,7 @@ onboarded: 2026-03-14
 |------|--------------------|----------------|
 | 项目定位与业务规则 | `README.md`；`docs/prd_cursor_byok_工作决策基线.md` | 产品定位、长期边界与已确认工作决策；仓库入口 README 仅中文 |
 | PRD / 验收标准 | `docs/prd_cursor_byok_工作决策基线.md`；`docs/prd_cursor_byok_当前功能与上游差异.md` | 产品约束、当前功能事实、上游差异及验收口径 |
+| 活动执行与进展 | `task/todo.md`；`docs/process.md` | 前者是详细实施与执行状态真值源，后者是进展、版本和时间线归档；阶段完成时必须同步更新 |
 | Design / ADR | `docs/prd_cursor_byok_系统架构与核心业务数据流.md`；ADR 未登记 | 系统架构、模块职责和核心数据流；重大新决策需补稳定 Design/ADR 锚点 |
 | 代码 / 配置入口 | `main.go`；`internal/`；`frontend/`；`Taskfile.yml`；`build/config.yml` | 客户端主流程、后端模块、前端、构建与运行配置 |
 | schema / API / 契约 | `proto/`；`internal/backend/server/config/types.go`；`internal/observability/contract.go`；`tools/log-analyzer/internal/contract/contract.go` | RPC、配置、观测事件和离线分析器数据契约 |

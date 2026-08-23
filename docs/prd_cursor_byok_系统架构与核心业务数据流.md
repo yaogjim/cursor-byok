@@ -1041,6 +1041,117 @@ P1 核心实现完成与最终交付声明必须区分。当前最终收口要�
 - **残余风险**：`SubagentSuccess.agent_id` 跨 resume 稳定性和 `subagent_runs_by_parent_tool_call_id` 实际填充行为未核实；同一 `historyRoot` 依赖单活 Backend 写入；网络 checkpoint/update 不在本地 exactly-once 范围内。
 - **当前 verdict**：`Design Readiness=approved`；核心实现已完成，最终集成验证进行中；不得宣称 child 执行点自动续跑。
 
+## 14.8 DESIGN-AGENT-EVIDENCE-001：模型调用 replay、执行证据与完成门禁
+
+- **Design Readiness**：`approved`；实现、接线、独立终审与分层验证已完成，`delivery_status=accepted`（未提交、未发布）。
+- **决策时间**：2026-08-22。
+- **适用范围**：内部 canonical history/replay、turn 内执行证据、完成前门禁、agent/subagent prompt 和 metadata-only 诊断。
+- **关联计划**：`.cursor/plans/agent_治理补全主控执行计划_6bb10903.plan.md`。
+- **不包含**：公共 proto、MITM/CA/证书/路由、发布、subagent protocol recorder/fixture exporter。
+
+### 14.8.1 已核实事实与问题边界
+
+1. 实施前 `HistoryEntry`、`toolCallEntryPayload` 和 `assistantTextPayload` 没有持久化 `model_call_id`；`ToolInvocation`、`PendingExec` 和 `PendingInteraction` 已有该身份，构成兼容追加字段的来源。
+2. 实施前 `ProjectPromptReplay` 会把每条 `tool_call` payload 内的 reasoning 附到对应 assistant tool-call replay，因此同一模型调用产生多个工具时可能重复恢复同一 reasoning。
+3. 公共 `agent-transcripts` 已在 `v0.0.49.2` 改为只投影可见文本与结构化工具事件；本设计和当前实现都禁止把内部 reasoning、signature、门禁 reminder 或账本 metadata 投影到公共 JSONL。
+4. 实施前最终 assistant 文本、工具调用和工具结果没有统一的结构化执行证据账本；当前实现以 metadata-only `execution_evidence` 补齐该缺口，自然语言完成声明仍不能证明编辑或验证真实发生。
+5. 成功收口统一经过 `completeSuccessfulTurn`；当前门禁已接在线路的最终 `flushAssistantText` 之后、写入 `turn_completed` 与发布最终 checkpoint 之前。
+
+### 14.8.2 兼容 history 与 reasoning 聚合合同
+
+- `HistoryEntry` 追加 `model_call_id,omitempty`；新 `assistant_text`、`tool_call`、`tool_result` 从当前 provider call 或 pending bridge 贯通该值。旧 JSON 不迁移、不重写，缺失字段可直接读取。
+- 新记录的聚合键为 `(turn_seq, request_id, model_call_id)`。同一键的 reasoning tuple 只附着到第一条可承载的 assistant replay message；后续 tool-call message 保留工具参数和 provider item/call/status，但清除重复 reasoning 投影。
+- reasoning tuple 包含 content、signature、signature source、provider reasoning item/status/summary；canonical history 中这些值不得删除或降格。
+- 不跨 turn/request/model call 聚合。不同 model call 即使 reasoning 文本相同也各保留一份。
+- 旧记录缺少 `model_call_id` 时，只有非空 provider reasoning identity 与 signature 能严格证明相同时才去重；身份不足时保持旧行为，宁可重复也不跨调用误合并。
+- checkpoint、fork、compaction、失败/中断输出和 tool-result fallback replay 都适用同一双读合同；工具顺序、参数、signature、provider metadata 和 result 关联不得改变。
+
+### 14.8.3 执行证据账本合同
+
+canonical history 新增内部 metadata 类型 `execution_evidence`，schema version 从 1 开始。持久字段白名单仅允许：
+
+- `schema_version`、稳定 `evidence_id`；
+- turn/request/model-call/tool-call 的稳定 ID；
+- `sequence`；
+- `tool_category=mutation|verification|neutral|unknown`；
+- 受控工具/验证种类枚举；
+- `terminal_status` 与 `successful`。
+
+禁止持久化工具参数、完整命令、stdout/stderr、result 正文、文件正文/路径、reasoning、header、token、cookie、API key 或它们的正文 hash。账本证据必须来自结构化 ToolCall 和已进入终态的 tool result：
+
+- pending/started/transport-closed 不是终态证据；
+- failed/canceled 可作为受控诊断记录，但 `successful=false`，不能成为完成证据；
+- assistant 文本、thinking、代码块或内联完整文件永远不能产生执行证据；
+- 未知 MCP 分类为 `unknown`，不自动升级为 mutation 或 verification；
+- 重复 result、恢复 replay 和 subagent durable handoff 通过稳定 idempotency key 去重。
+
+内存索引只缓存计数、最后成功 mutation/verification sequence、状态和稳定 ID；restart 时从 metadata 重建。旧 history 没有账本时为 `absent/unknown`，不得反推或伪造。
+
+### 14.8.4 mutation、verification 与 stale 合同
+
+- mutation 仅包括现有注册表中会修改文件/系统状态的受控工具成功终态；未知工具保持 `unknown`。
+- verification 仅包括成功终态且被受控分类为 test/build/lint/vet/check 的执行命令；分类时可在内存读取参数，但持久层只保存枚举。
+- 每个成功 mutation 都使此前 verification 过期。有效 verification 的 sequence 必须严格晚于最后一个成功 mutation。
+- `mutation_tool_count` 和 `verification_command_count` 只计成功终态；失败和 pending 另行反映在受控状态中。
+- `verification_evidence` 只能是 `present|absent|stale|unknown` 等受控枚举加稳定 evidence ID，不含命令或输出正文。
+
+### 14.8.5 完成门禁状态机
+
+门禁只在 agent/subagent 的编辑执行语义中评估；Ask/Plan 纯问答不受影响。适用性由结构化 mutation 尝试或当前用户请求的窄范围显式编辑意图决定，assistant 自述既不触发执行成功，也不产生证据。
+
+状态如下：
+
+1. `not_applicable`：纯问答，无显式编辑请求且无 mutation 尝试，正常完成。
+2. `satisfied`：有成功 mutation，且有 sequence 晚于最后 mutation 的成功 verification，正常完成。
+3. `insufficient_first`：显式编辑任务缺成功 mutation，或 mutation 后缺有效 verification，或仍有 pending/失败结果；持久化一次 metadata-only 诊断与 prompt context，并继续同一 turn 的下一 provider pass。
+4. `insufficient_after_retry`：持久记录表明已提醒一次但证据仍不足；不再重试，写受控诊断后保守完成。最终文本仍只是文本，不能转化为执行证据。
+
+`retry_count=1` 必须以 turn/request 级 idempotent metadata 持久化，restart/checkpoint 后不得再次提醒。provider 失败、取消或用户中断不自动触发第二次调用；pending bridge 继续由既有状态机等待终态，门禁不得抢先结束或重复 dispatch。
+
+提醒只允许表达受控缺口：缺成功 mutation、缺晚于 mutation 的 verification、存在 pending/失败结果或未知工具不构成证据。提醒不得含 reasoning、stdout、文件正文、路径、完整命令或工具参数。
+
+### 14.8.6 Prompt 与诊断合同
+
+agent/subagent prompt 和 agent mode reminder 必须一致声明：编辑只能由真实工具成功终态证明；自然语言、thinking、计划、代码块或内联文件不能替代编辑；mutation 后必须运行更晚的验证；失败/pending/unknown 必须如实报告。Ask/Plan 不增加编辑门禁，不修改 tool allowlist，不要求暴露 reasoning。
+
+受控诊断字段为：`reasoning_hash`、`transcript_reasoning_emit_count`、`mutation_tool_count`、`verification_command_count`、`verification_stale`、`verification_evidence`、`completion_gate_status`、`completion_gate_retry_count` 与受控缺口枚举。`reasoning_hash` 使用稳定 SHA-256 且不保存正文；`transcript_reasoning_emit_count` 在公共 transcript 正常必须为 0。debug recorder 只复制显式白名单字段，禁止任意 map 透传。
+
+### 14.8.7 兼容、失败与回退
+
+- 回退代码可恢复旧 replay/收口行为；新增可选字段和 metadata 不要求 destructive migration。
+- 旧 history、未知 MCP 或缺失 ledger 必须可读且不崩溃；证据不足最多提醒一次，不允许无限循环。
+- 任何实现若需要公共 proto、破坏性 schema 迁移、重复工具副作用或复制敏感正文，必须停止并重新设计。
+- 完成门禁可通过移除接线恢复旧完成路径；history 中已写的可选字段/metadata 仍应被旧 reader 忽略。
+
+### 14.8.8 验证合同
+
+- replay：同一 model call 多工具只恢复一份 reasoning；不同调用不误合并；旧 history 双读；工具顺序/参数/signature/provider metadata/result 关联不变。
+- ledger：成功/失败/pending/canceled、重复 replay、restart、unknown MCP、subagent handoff 和隐私 canary。
+- gate：无 mutation、mutation 失败/pending、verification stale、补证成功、第二次仍不足、纯问答和 checkpoint/restart 最多一次提醒。
+- 隐私：history、debug artifact、普通日志和公共 transcript 均扫描 reasoning/stdout/文件正文/凭据/参数 canary。
+- 完成前必须运行精确测试、forwarder 全包/race/vet、`internal/...`、根全仓、根构建和两个独立 Go module 的适用回归；无运行证据不得标 `accepted`。
+
+### 14.8.9 实际实现、终审结论与兼容边界
+
+当前实现状态：
+
+- `HistoryEntry.ModelCallID` 已作为可选字段接通新 assistant/tool history 写入，旧 JSON 无迁移双读；replay 以 model-call 聚合身份跟踪 reasoning，保留首个载体位置并允许后到的更完整且正文/签名相容 tuple 原地升级。
+- orphan reasoning rehome 不得跨 `model_call_id`；provider signature 只与 exact reasoning content 绑定。没有与新正文匹配的 signature 时，不生成“新正文 + 旧签名”。
+- `execution_evidence` 已在 tool result 同一追加批次中以真实持久 sequence 写入；分类、terminal、success、idempotency、restart/subagent recovery 和 stale 派生集中在独立模块中。
+- 完成门禁从最新持久 canonical history 重建 turn/request 范围证据，首次不足只写一条结构化 reminder 并续跑一次，第二次不足保守收口；重复 complete、restart、pending bridge 和已提醒恢复不产生第三次循环。
+- agent/subagent prompt、动态 reminder、`turn_completed` 与 debug recorder 已接通 metadata-only 白名单诊断；公共 transcript 继续只输出用户可见文本和结构化工具事件。
+
+独立终审结论：replay 方向发现的跨调用 rehome 和正文/签名错配两个 P1 已按测试驱动修复，最终复核无新 P0/P1；账本/门禁以及 prompt/诊断/隐私方向无可复现 P0/P1/P2。集成回归已证明 canonical history 中存在 completion gate reminder、`execution_evidence` 和 `completion_gate` metadata 时，公共 transcript 仍不投影这些内部内容，同时保留用户可见 assistant 文本和合法结构化 `tool_use.path`。原始问题复盘要求的多工具共享 15K reasoning 已落实为 15 KiB start/end canary，证明大 reasoning 载荷不会因长度或多工具复制进入公共 transcript。
+
+保守兼容边界：
+
+1. 裸 `modeladapter.Message` 二次 normalize 已失去 model-call 身份时，不执行 orphan reasoning rehome；这是防止跨调用误合并的保守选择。
+2. 旧 history 的连续工具批次若双方 `model_call_id` 都为空，继续保留旧合并行为；该行为仅用于旧数据兼容，不作为新 history 的身份隔离能力。
+3. 后台 shell 命令正文不持久化，重启后无法分类的命令保持 `unknown`；完成门禁不以可能滞后的 live 索引替代持久 history。
+4. 当前 synthetic/单元/集成证据不替代真实 Cursor success/error/background/resume 六场景 fixture，不证明 child 从中断执行点自动续跑。
+
+最终验证覆盖公共 transcript 专项、forwarder 全包/race/vet、根模块串行全量 test/vet、根客户端构建、prompt/前端和两个独立 Go module 的适用回归；详细命令和环境 `ENOSPC`/`frontend/dist` setup 记录见 `task/todo.md` 与 `docs/process.md`。实现仍停留在隔离 worktree 未提交 diff，未执行 commit、push、tag 或 release。
+
 ## 15. 核心不变量
 
 后续任何实现、合并或重构都必须保护以下不变量：

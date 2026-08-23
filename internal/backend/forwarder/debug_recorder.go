@@ -142,6 +142,16 @@ func (recorder *debugRecorder) LogRuntime(ctx context.Context, requestID string,
 	recorder.appendJSONL(ctx, requestID, conversationID, "runtime.jsonl", event)
 }
 
+func (recorder *debugRecorder) LogTurnDiagnostics(ctx context.Context, requestID string, conversationID string, diag turnDiagnosticRecord) {
+	if recorder == nil || !recorder.enabled(ctx) {
+		return
+	}
+	event := recorder.baseEvent("runtime", requestID, conversationID)
+	event["event"] = "turn_diagnostics"
+	copyTurnDiagnosticFields(event, diag)
+	recorder.appendJSONL(ctx, requestID, conversationID, "runtime.jsonl", event)
+}
+
 func (recorder *debugRecorder) LogRunSSE(ctx context.Context, requestID string, conversationID string, eventName string, fields map[string]any) {
 	if !recorder.enabled(ctx) {
 		return
@@ -389,7 +399,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		}
 	}
 	fields := make(map[string]any)
-	for _, key := range []string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome"} {
+	for _, key := range append([]string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome"}, turnDiagnosticFieldKeys()...) {
 		if value, ok := rawEvent[key]; ok {
 			fields[key] = value
 		} else if value, ok := payloadFields[key]; ok {

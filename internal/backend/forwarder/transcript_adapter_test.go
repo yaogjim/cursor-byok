@@ -65,8 +65,12 @@ func TestProjectCursorTranscriptJSONLMatchesCursorContract(t *testing.T) {
 	}
 }
 
-func TestProjectCursorTranscriptMultipleToolCallsOmitSharedReasoning(t *testing.T) {
-	const reasoningCanary = "PRIVATE_SHARED_REASONING_CANARY"
+func TestProjectCursorTranscriptMultipleToolCallsOmitShared15KReasoning(t *testing.T) {
+	const (
+		reasoningCanaryStart = "PRIVATE_SHARED_15K_REASONING_CANARY_START"
+		reasoningCanaryEnd   = "PRIVATE_SHARED_15K_REASONING_CANARY_END"
+	)
+	reasoningCanary := reasoningCanaryStart + strings.Repeat("x", 15*1024) + reasoningCanaryEnd
 	conversation := transcriptTestConversation([]HistoryEntry{
 		newAssistantTextEntry(1, "request-1", "", reasoningCanary, ""),
 		newToolCallEntry(1, "request-1", "call-1", "Edit", reasoningCanary, "", transcriptTestEditToolCall(t, "one.txt")),
@@ -78,8 +82,10 @@ func TestProjectCursorTranscriptMultipleToolCallsOmitSharedReasoning(t *testing.
 	if err != nil {
 		t.Fatalf("projectCursorTranscriptJSONL() error = %v", err)
 	}
-	if strings.Contains(string(data), reasoningCanary) {
-		t.Fatalf("public transcript leaked shared reasoning canary:\n%s", data)
+	for _, canary := range []string{reasoningCanaryStart, reasoningCanaryEnd} {
+		if strings.Contains(string(data), canary) {
+			t.Fatalf("public transcript leaked shared 15K reasoning canary %q:\n%s", canary, data)
+		}
 	}
 	lines := decodeCursorTranscriptLines(t, data)
 	if len(lines) != 3 {

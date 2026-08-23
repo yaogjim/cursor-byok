@@ -73,11 +73,11 @@ func (service *Service) handleInteractionResult(intent InboundIntent) error {
 	toolName := strings.TrimSpace(deriveToolNameFromPendingInteraction(pending))
 	if result.ToolCall != nil {
 		applySwitchModeMetadata(stream, result.ToolCall)
-		if err := service.appendToolResult(stream, result.ToolCallID, toolName, pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall); err != nil {
+		if err := service.appendToolResult(stream, result.ToolCallID, toolName, pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall, pending.ModelCallID); err != nil {
 			return err
 		}
 	} else if strings.TrimSpace(result.ToolResultPayload) != "" {
-		if err := service.appendToolResult(stream, pending.ToolCallID, toolName, pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+		if err := service.appendToolResult(stream, pending.ToolCallID, toolName, pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil, pending.ModelCallID); err != nil {
 			return err
 		}
 	}
@@ -517,7 +517,7 @@ func (service *Service) handleReadTodosToolInvocation(stream *ActiveStream, invo
 }
 
 func (service *Service) completeImmediateToolResult(stream *ActiveStream, invocation runtimecore.ToolInvocation, resultText string, toolCall *agentv1.ToolCall) error {
-	if err := service.appendToolResult(stream, invocation.CallID, strings.TrimSpace(invocation.ToolName), invocation.ArgsJSON, resultText, invocation.ReasoningContent, toolCall); err != nil {
+	if err := service.appendToolResult(stream, invocation.CallID, strings.TrimSpace(invocation.ToolName), invocation.ArgsJSON, resultText, invocation.ReasoningContent, toolCall, invocation.ModelCallID); err != nil {
 		return err
 	}
 	if err := service.publishToolCallCompleted(stream.RequestID, invocation.CallID, invocation.ModelCallID, toolCall); err != nil {

@@ -80,6 +80,7 @@ type HistoryEntry struct {
 	Seq              int64           `json:"seq"`
 	TurnSeq          int64           `json:"turn_seq"`
 	RequestID        string          `json:"request_id,omitempty"`
+	ModelCallID      string          `json:"model_call_id,omitempty"`
 	IdempotencyKey   string          `json:"idempotency_key,omitempty"`
 	Role             string          `json:"role"`
 	Kind             string          `json:"kind"`
@@ -87,6 +88,26 @@ type HistoryEntry struct {
 	ParentToolCallID string          `json:"parent_tool_call_id,omitempty"`
 	Payload          json.RawMessage `json:"payload"`
 	CreatedAt        time.Time       `json:"created_at"`
+}
+
+func (entry *HistoryEntry) UnmarshalJSON(raw []byte) error {
+	type historyEntryAlias HistoryEntry
+	var decoded historyEntryAlias
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*entry = HistoryEntry(decoded)
+	if strings.TrimSpace(entry.ModelCallID) != "" {
+		return nil
+	}
+	var extra struct {
+		ModelCallIDCamel string `json:"modelCallID"`
+	}
+	if err := json.Unmarshal(raw, &extra); err != nil {
+		return err
+	}
+	entry.ModelCallID = strings.TrimSpace(extra.ModelCallIDCamel)
+	return nil
 }
 
 type ConversationSummary struct {
@@ -176,6 +197,7 @@ type ActiveStream struct {
 	Backlog                     []StreamEvent
 	Subscribers                 map[string]*StreamSubscriber
 	CheckpointConversation      *ConversationFile
+	ExecutionEvidence           executionEvidenceIndex
 	PendingExecs                map[string]runtimecore.PendingExec
 	PendingInteractions         map[string]runtimecore.PendingInteraction
 	PartialToolCallIDs          map[string]struct{}

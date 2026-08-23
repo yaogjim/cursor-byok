@@ -70,7 +70,7 @@ func (service *Service) completePreDispatchToolError(
 			return err
 		}
 		if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload),
+			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
 		}); err != nil {
 			return err
 		}
@@ -83,7 +83,7 @@ func (service *Service) completePreDispatchToolError(
 		}
 	}
 	resultText := formatPreDispatchToolError(invocation, cause)
-	if err := service.appendToolResult(stream, invocation.CallID, strings.TrimSpace(invocation.ToolName), invocation.ArgsJSON, resultText, invocation.ReasoningContent, nil); err != nil {
+	if err := service.appendToolResultWithEvidence(stream, invocation.CallID, strings.TrimSpace(invocation.ToolName), invocation.ArgsJSON, resultText, invocation.ReasoningContent, nil, invocation.ModelCallID, executionEvidenceHintFailed, ""); err != nil {
 		return err
 	}
 	if err := service.publishToolCallCompleted(stream.RequestID, invocation.CallID, invocation.ModelCallID, nil); err != nil {

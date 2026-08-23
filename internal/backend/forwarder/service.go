@@ -950,6 +950,7 @@ func (service *Service) persistInterruptedProviderOutput(stream *ActiveStream) (
 		{
 			TurnSeq:        turnSeq,
 			RequestID:      requestID,
+			ModelCallID:    modelCallID,
 			IdempotencyKey: key,
 			Role:           "assistant",
 			Kind:           "assistant_text",
@@ -1068,11 +1069,11 @@ func (service *Service) handleExecResult(intent InboundIntent) error {
 			return service.handlePreCompactTerminal(stream, pending.ProviderPass, strings.TrimSpace(result.ToolResultPayload))
 		}
 		if result.ToolCall != nil {
-			if err := service.appendToolResult(stream, result.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall); err != nil {
+			if err := service.appendToolResult(stream, result.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, result.ToolCall, pending.ModelCallID); err != nil {
 				return err
 			}
 		} else if strings.TrimSpace(result.ToolResultPayload) != "" {
-			if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+			if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil, pending.ModelCallID); err != nil {
 				return err
 			}
 		}
@@ -1172,7 +1173,7 @@ func (service *Service) handleExecControl(intent InboundIntent) error {
 			return service.handlePreCompactTerminal(stream, pending.ProviderPass, "")
 		}
 		if strings.TrimSpace(result.ToolResultPayload) != "" {
-			if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil); err != nil {
+			if err := service.appendToolResultWithEvidence(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, result.ToolResultPayload, pending.ReasoningContent, nil, pending.ModelCallID, executionEvidenceHintFailed, ""); err != nil {
 				return err
 			}
 			_, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
@@ -1289,7 +1290,7 @@ func (service *Service) recoverNonStreamingExecAfterStreamClose(stream *ActiveSt
 	resultPayload := fmt.Sprintf("%s transport closed before terminal result arrived", firstNonEmpty(toolName, pending.ExecKind, "tool"))
 	log.Printf("forwarder synthetic exec recovery request_id=%s tool_call_id=%s message_id=%d exec_id=%s exec_kind=%s", strings.TrimSpace(stream.RequestID), strings.TrimSpace(pending.ToolCallID), pending.MessageID, strings.TrimSpace(pending.ExecID), strings.TrimSpace(pending.ExecKind))
 	if toolName != "" {
-		if err := service.appendToolResult(stream, pending.ToolCallID, toolName, pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil); err != nil {
+		if err := service.appendToolResultWithEvidence(stream, pending.ToolCallID, toolName, pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil, pending.ModelCallID, executionEvidenceHintTransportClosed, ""); err != nil {
 			return err
 		}
 	}
@@ -1900,7 +1901,7 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 			return err
 		}
 		_, err = service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload),
+			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
 		})
 		if err != nil {
 			return err
@@ -2134,7 +2135,11 @@ func shouldBufferExecDispatch(toolName string) bool {
 // reasoning 在已提交 history 中应挂在 assistant_text / tool_call 上。
 // tool_result 保存一份 reasoning_content 兜底，replay 只会在缺失 tool_call entry
 // 且 reasoning 可回放时用它重建 assistant tool_use，不会把 thinking 复制到工具消息上。
-func (service *Service) appendToolResult(stream *ActiveStream, toolCallID string, toolName string, argsJSON []byte, resultText string, reasoningContent string, toolCall *agentv1.ToolCall) error {
+func (service *Service) appendToolResult(stream *ActiveStream, toolCallID string, toolName string, argsJSON []byte, resultText string, reasoningContent string, toolCall *agentv1.ToolCall, modelCallID string) error {
+	return service.appendToolResultWithEvidence(stream, toolCallID, toolName, argsJSON, resultText, reasoningContent, toolCall, modelCallID, "", "")
+}
+
+func (service *Service) appendToolResultWithEvidence(stream *ActiveStream, toolCallID string, toolName string, argsJSON []byte, resultText string, reasoningContent string, toolCall *agentv1.ToolCall, modelCallID string, terminalHint string, commandOverride string) error {
 	if stream == nil {
 		return nil
 	}
@@ -2146,10 +2151,27 @@ func (service *Service) appendToolResult(stream *ActiveStream, toolCallID string
 		}
 		payload = encoded
 	}
-	_, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-		newToolResultEntry(stream.TurnSeq, stream.RequestID, toolCallID, toolName, string(argsJSON), resultText, reasoningContent, payload),
-	})
-	return err
+	entries := []HistoryEntry{
+		withHistoryModelCallID(newToolResultEntry(stream.TurnSeq, stream.RequestID, toolCallID, toolName, string(argsJSON), resultText, reasoningContent, payload), modelCallID),
+	}
+	if evidence, ok := maybeExecutionEvidenceEntry(executionEvidenceInput{
+		TurnSeq:         stream.TurnSeq,
+		RequestID:       stream.RequestID,
+		ModelCallID:     modelCallID,
+		ToolCallID:      toolCallID,
+		ToolName:        toolName,
+		ArgsJSON:        argsJSON,
+		ToolCall:        toolCall,
+		TerminalHint:    terminalHint,
+		CommandOverride: firstNonEmpty(strings.TrimSpace(commandOverride), backgroundShellCommandForEvidence(stream, argsJSON)),
+	}); ok {
+		entries = append(entries, withHistoryModelCallID(evidence, modelCallID))
+	}
+	if _, err := service.appendConversationEntries(stream, stream.ConversationID, entries); err != nil {
+		return err
+	}
+	rebuildStreamExecutionEvidence(stream)
+	return nil
 }
 
 func (service *Service) publishToolCallCompleted(requestID string, toolCallID string, modelCallID string, toolCall *agentv1.ToolCall) error {
@@ -2357,6 +2379,13 @@ func (service *Service) completeSuccessfulTurn(stream *ActiveStream, completion 
 	if stream == nil {
 		return nil
 	}
+	handled, err := service.applyCompletionEvidenceGate(stream, completion)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
+	}
 	requestID := firstNonEmpty(strings.TrimSpace(completion.RequestID), strings.TrimSpace(stream.RequestID))
 	conversationID := firstNonEmpty(strings.TrimSpace(completion.ConversationID), strings.TrimSpace(stream.ConversationID))
 	modelCallID := firstNonEmpty(strings.TrimSpace(completion.ModelCallID), strings.TrimSpace(stream.CurrentModelCallID))
@@ -2368,12 +2397,23 @@ func (service *Service) completeSuccessfulTurn(stream *ActiveStream, completion 
 	if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "completed", usage, "", false); err != nil {
 		return fmt.Errorf("record completed turn usage: %w", err)
 	}
-	if _, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{
-		newMetadataEntry(turnSeq, requestID, "turn_completed", map[string]any{
-			"model_call_id": modelCallID,
-		}),
-	}); err != nil {
+	diag, err := service.buildTurnDiagnosticsForCompletion(stream, pendingTurnCompletion{
+		ConversationID: conversationID,
+		RequestID:      requestID,
+		TurnSeq:        turnSeq,
+		ModelCallID:    modelCallID,
+		Usage:          usage,
+	})
+	if err != nil {
 		return err
+	}
+	completed := newMetadataEntry(turnSeq, requestID, "turn_completed", turnCompletedValueMap(modelCallID, diag))
+	completed.IdempotencyKey = turnCompletedIdempotencyKey(turnSeq, requestID)
+	if _, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{completed}); err != nil {
+		return err
+	}
+	if service.debug != nil {
+		service.debug.LogTurnDiagnostics(context.Background(), requestID, conversationID, diag)
 	}
 	if err := service.recordTurnFinalizedSnapshot(stream, conversationID, turnSeq, requestID, "completed", ""); err != nil {
 		return fmt.Errorf("record completed turn finalized: %w", err)
@@ -2534,8 +2574,12 @@ func (service *Service) flushAssistantText(stream *ActiveStream, conversationID 
 	if strings.TrimSpace(text) == "" && (!allowReasoningOnly || !hasReplayableReasoningPayload(reasoningContent, reasoningSignature, reasoningSignatureSource)) {
 		return nil
 	}
+	modelCallID := ""
+	if stream != nil {
+		modelCallID = strings.TrimSpace(stream.CurrentModelCallID)
+	}
 	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{
-		newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary),
+		withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID),
 	})
 	return err
 }
@@ -2545,7 +2589,7 @@ func (service *Service) flushFailedProviderOutput(stream *ActiveStream, conversa
 	if strings.TrimSpace(text) == "" && (!allowReasoningOnly || !hasReplayableReasoningPayload(reasoningContent, reasoningSignature, reasoningSignatureSource)) {
 		return nil
 	}
-	entry := newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary)
+	entry := withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID)
 	entry.IdempotencyKey = interruptedProviderOutputIdempotencyKey(turnSeq, requestID, modelCallID, providerPass)
 	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{entry})
 	return err
@@ -2724,6 +2768,11 @@ func newModeChangePromptContextEntry(turnSeq int64, requestID string, mode agent
 		},
 		true,
 	))
+}
+
+func withHistoryModelCallID(entry HistoryEntry, modelCallID string) HistoryEntry {
+	entry.ModelCallID = strings.TrimSpace(modelCallID)
+	return entry
 }
 
 // newAssistantTextEntry 构造 assistant 文本 entry。

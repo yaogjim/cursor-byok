@@ -105,11 +105,11 @@ func (service *Service) recoverSubagentTerminalPrepared(record *SubagentRunRecor
 	// 恢复时使用 envelope.ToolName；旧记录空值默认 "Task"（向后兼容）。
 	toolNameForReplay := firstNonEmpty(strings.TrimSpace(envelope.ToolName), "Task")
 
-	trEntry := newToolResultEntry(
+	trEntry := withHistoryModelCallID(newToolResultEntry(
 		turnSeq, requestID, toolCallID, toolNameForReplay,
 		string(envelope.ArgsJSON), envelope.ToolResultPayload, "",
 		toolCallPayload,
-	)
+	), record.Identity.ParentModelCallID)
 	trEntry.IdempotencyKey = parentCommitKey
 
 	metaEntry := newMetadataEntry(turnSeq, requestID, "subagent_handoff_recovery", map[string]any{
@@ -127,6 +127,16 @@ func (service *Service) recoverSubagentTerminalPrepared(record *SubagentRunRecor
 	})
 
 	entries := []HistoryEntry{trEntry, metaEntry}
+	evidenceCategory := envelope.TerminalCategory
+	if evidenceCategory == "" {
+		evidenceCategory = record.TerminalCategory
+	}
+	if evidenceEntry, ok := newSubagentExecutionEvidenceEntry(
+		turnSeq, requestID, record.Identity.ParentModelCallID, toolCallID, toolNameForReplay,
+		envelope.ArgsJSON, envelope.ToolCallEncoded, evidenceCategory, 0,
+	); ok {
+		entries = append(entries, withHistoryModelCallID(evidenceEntry, record.Identity.ParentModelCallID))
+	}
 
 	// 在 parent conversation lock 内幂等追加（与在线路径相同的 CAS 检查）。
 	_, _, appendErr := service.store.AppendEntriesToExistingWithUpdate(

@@ -4,6 +4,76 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: agent-governance-completion-20260822
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved (compatible replay aggregation + single-retry evidence gate)
+DELIVERY_STATUS: accepted (implemented, wired, independently reviewed, fully regression-tested, documented; not committed or released)
+
+### CONTEXT
+
+- 用户已批准 `.cursor/plans/agent_治理补全主控执行计划_6bb10903.plan.md`，要求主控串行管理 subagent 完成 replay 聚合、执行证据账本、最终完成门禁、提示约束与 metadata-only 诊断。
+- 基线固定为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；隔离分支/worktree 为 `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`。
+- `v0.0.49.1` 必须保持 `716b436ca0d79e34e52ea02a8ecc07f6579b5cfe`，不得移动、覆盖或复用。
+- 当前主工作树的无关 WIP 不纳入本包；stash `bd8bf912...`（protocol recorder）与 `ab88a93a...`（fixture exporter）禁止 apply/drop。
+- 用户已确认兼容式 history 双读和证据不足时最多一次提醒续跑；不修改公共 proto，不自动提交、推送或发布。
+
+### GOAL
+
+- 同一 `model_call_id` 的 reasoning 在内部 replay 只恢复一次，同时保持 canonical history、signature、provider metadata、工具顺序/参数/result 关联。
+- 只以结构化 ToolCall 与成功终态 tool result 建立 metadata-only mutation/verification 证据；pending、失败、取消、未知 MCP 和 assistant 自述不得成为成功证据。
+- mutation 后旧 verification 自动 stale；最终完成前最多提醒并续跑一次，第二次仍不足时保守结束并记录诊断。
+- 公共 `agent-transcripts` 继续零 reasoning 泄漏，普通日志和账本不复制 reasoning、stdout、文件正文、凭据、路径或工具参数正文。
+
+### ACTIVE SLICES
+
+- [completed] `gov-stage-0`：已核对发布/标签/stash 指针，保护当前 WIP，并从 `4878561` 创建干净隔离 worktree；`git diff --check` 与保护路径检查通过。
+- [completed] `gov-stage-1`：系统 Design §14.8 已冻结兼容 history/replay/ledger/gate、恢复与隐私合同；replay RED 测试按 TDD 落地。
+- [completed] `gov-stage-2`：已贯通 `HistoryEntry.ModelCallID` 并按模型调用聚合 reasoning；只读复审发现的“弱 tuple 先占槽导致完整 tuple 丢失”P1 已修复。主控复验 `go test ./internal/backend/forwarder -count=1 -timeout 600s`、同包 race、vet、`git diff --check` 全部通过。
+- [completed] `gov-stage-3`：已实现 metadata-only `execution_evidence`、typed terminal、mutation/verification 分类、最终 entry sequence、同一追加批次写入、跨 turn 幂等、restart/subagent rebuild 和 stale 判定。复审发现 AwaitShell 无 exit 误落失败及脚本前缀假阳性，均已修复；主控专项/全包/race/vet/diff 通过。保守边界：重启后不持久化后台命令正文，无法分类时保持 unknown；异步 subagent recovery 的 live 索引可能滞后，门禁必须从最新持久 history 重建。
+- [completed] `gov-stage-4`：已接入单次提醒续跑、restart/重复 complete 幂等和第二次不足保守收口。独立复审发现编辑+解释请求被错误绕过（P1）及中文建议问句误触发（P2），均已按 TDD 修复并复核关闭；主控专项、forwarder 全包、race、vet、gofmt、`git diff --check` 全部通过。服务切换后的首次 520 按 20 秒退避恢复成功。
+- [completed] `gov-stage-5`：已为 agent/subagent 静态 prompt 与动态 reminder 加入真实工具成功终态、mutation 后晚验证和失败缺口合同；Ask/Plan 不强制编辑且工具 allowlist 不变。`turn_completed` 与 debug recorder 已接入逐字段 metadata-only 诊断：reasoning SHA-256/absent、公共 transcript reasoning emit count、mutation/verification/stale/evidence 和 gate 状态。复审发现公共 transcript 合法 tool path 被隐私测试误报及投影错误 fail-open，均已修复；主控 prompt/专项/全包/race/vet/diff 通过。
+- [completed] `gov-stage-6`：治理故障矩阵、forwarder 全包/race/vet、`go test ./internal/...`、`go vet ./internal/...`、根模块 `go test .`/`go test ./...`/`go vet .`、prompt、前端配置投影与生产构建、根客户端二进制、`cursor-tab-server` test/race/vet、`tools/log-analyzer` test/race/vet 均通过。初次根全量并发链接因磁盘 `ENOSPC` 失败，系统回收后以 `-p 1` 相同覆盖范围重跑通过；生成 symlink/dist/临时二进制已删除，禁止路径与 `git diff --check` 无差异。
+- [completed] `gov-stage-7`：三路独立终审和主控反向审计已闭合。replay 终审发现并修复两个 P1：禁止 orphan reasoning 跨 `model_call_id` rehome，以及把 provider signature 与 exact reasoning content 绑定，避免“新正文 + 旧签名”；最终复核无新 P0/P1。账本/门禁及 prompt/诊断/隐私两路终审无可复现 P0/P1/P2。新增集成回归证明 completion gate 的内部 prompt reminder 与 metadata 保留在 canonical history、不会进入公共 transcript，同时用户可见回答和合法结构化 `tool_use.path` 均保留。
+- [completed] `gov-stage-8`：在 replay 终审修复后重新运行公共 transcript 专项、forwarder 全包/race/vet、根模块串行全量 test/vet、gofmt 与 `git diff --check`，全部通过；更新 `task/todo.md`、`docs/process.md` 与系统 Design。根测试首次因缺少真实 `frontend/dist` 而在 `go:embed` setup 阶段停止；只读复用主工作树依赖生成隔离临时 dist 后重跑通过，临时 dist、依赖 symlink、bindings symlink、`gen` symlink 均已删除。公开 proto、MITM/证书、发布资产、主工作树 WIP 与两个专用 stash 无漂移。
+- [completed] `post-governance-interrupted-work`：已只读分析指定 transcript 的全部用户请求、回合终态和结构化工具时间线；分析快照为 820 条 JSONL、SHA-256 `2f638d5571a0d3dc313033408d0700417d2dda6d2c76440575596f3b7aa3cf99`（该 transcript 会随当前会话继续增长，仅用于复算本次结论）。原会话中被停止的 Stage 4 在用户切换 LLM 服务后已恢复并闭合；Stage 6 的四条 `Superseded by newer request` 终态只是同一根测试命令被后续请求替代，之后已用 `-p 1` 串行重跑闭合，不是四个独立遗留任务。治理计划五项能力均已实现并验收。分析发现原建议中唯一可直接补齐的规格遗漏是“15K reasoning canary”；现已把三工具共享 reasoning 回归提升为显式 15 KiB start/end canary，并通过专项、forwarder 全包/race/vet 和 diff 检查。
+
+### FINAL VERIFICATION EVIDENCE
+
+- `go test ./internal/backend/forwarder -run 'TestCompleteSuccessfulTurnFirstInsufficientDoesNotProjectGateIntoPublicTranscript|TestPublicTranscriptReasoningEmitCountMustBeZero|TestCursorTranscript' -count=1 -timeout 600s`：通过。
+- `go test ./internal/backend/forwarder -run 'TestProjectCursorTranscriptMultipleToolCallsOmitShared15KReasoning|TestCompleteSuccessfulTurnFirstInsufficientDoesNotProjectGateIntoPublicTranscript|TestPublicTranscriptReasoningEmitCountMustBeZero' -count=1 -timeout 600s`：transcript 分析后新增的 15 KiB canary 专项通过。
+- `go test ./internal/backend/forwarder -count=1 -timeout 600s`：通过。
+- `go test -race ./internal/backend/forwarder -count=1 -timeout 600s`：通过，无 race。
+- `go vet ./internal/backend/forwarder`：通过。
+- `go test -p 1 ./... -count=1 -timeout 900s`：通过；覆盖根模块全部 package。
+- `go vet -p 1 ./...`：通过。
+- 改动 Go 文件 `gofmt -d` 无输出；`git diff --check` 通过。
+- Stage 6 已通过且本轮未受 replay 修复影响的既有证据继续有效：`go test ./internal/...` / `go vet ./internal/...`、根客户端构建、prompt 测试、前端配置投影与生产构建，以及 `cursor-tab-server`、`tools/log-analyzer` 两个独立模块的 test/race/vet。
+
+### CONSERVATIVE COMPATIBILITY BOUNDARIES
+
+- 裸 `modeladapter.Message` 二次 normalize 已丢失 model-call 身份时，不执行 orphan reasoning rehome；该保守行为避免跨调用误合并。
+- 旧 history 的连续工具批次若双方 `model_call_id` 都为空，继续保留旧合并行为；这只是旧数据兼容，不作为新 history 身份隔离能力宣传。
+- 真实 Cursor success/error/background/resume 六场景 fixture 仍是独立证据缺口；当前治理验收不证明 child 从中断执行点自动续跑。
+- 原始建议中的“逐项比对 assistant 声称文件与 Git diff”和“reasoning 超阈值时中途打断”没有作为本治理包运行语义实现：前者与 metadata-only、禁止持久路径/完整参数的隐私合同冲突，后者会改变流式模型行为。当前已批准实现是在完成点检查结构化 mutation 与晚于 mutation 的 verification，并最多提醒一次；若要增加更强门禁，必须另做 Design 与产品决策。
+- recorder/exporter 两个专用 stash 仍是独立工作包，未被读取、应用或混入治理；继续实现和真实 fixture 采集需要新的明确授权。
+
+### STOP CONDITIONS
+
+- 需要修改公共 proto、MITM/CA/证书/路由、发布元数据，或移动 `v0.0.49.1`。
+- 发现需要破坏性 history 迁移、无法避免重复工具副作用、或完成门禁会误伤纯问答且不能在既定语义内修复。
+- subagent 服务连续 5 次无法恢复；按 20/40/80/160/320 秒退避后保存 agent ID、错误、diff 和测试证据并停止等待用户。
+- 需要应用/删除 recorder 或 exporter 专用 stash，或把当前主工作树其他 WIP 整体复制进本分支。
+
+### ACCEPTANCE
+
+- 计划 §12 全部总体验收条件闭合；实现、接线、精确/全量/race/vet/build、隐私扫描、旧 history 双读、故障注入和独立复审均有实际成功证据。
+- `proto/`、`internal/mitm/`、证书、发布资产和两个专用 stash 无变化；不 commit/push/tag/release。
+- 完成后同步本文件、`docs/process.md` 和系统 Design；必要验证未运行时只能标 `verified-partial`，不得标 `accepted`。
+
+## Previous Work Package: P1 subagent handoff 与 Provider fallback
+
 WORK_PACKAGE_ID: p1-subagent-handoff-provider-fallback-20260821
 STATUS: completed
 RISK_LEVEL: high

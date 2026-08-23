@@ -66,7 +66,7 @@ func (service *Service) handleWriteToolInvocation(stream *ActiveStream, invocati
 			return err
 		}
 		_, err = service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload),
+			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
 		})
 		if err != nil {
 			return err
@@ -304,7 +304,7 @@ func (service *Service) finishWriteOperation(stream *ActiveStream, toolCallID st
 	}
 	toolCall := buildCompletedWriteToolCall(writeArgs.Path, writeArgs.Contents, result)
 	historyToolCall := buildCompletedWriteHistoryToolCall(writeArgs.Path, result)
-	if err := service.appendToolResult(stream, strings.TrimSpace(toolCallID), "Write", historyArgsJSON, summarizeWriteHistoryResult(writeArgs.Path, result), reasoningContent, historyToolCall); err != nil {
+	if err := service.appendToolResult(stream, strings.TrimSpace(toolCallID), "Write", historyArgsJSON, summarizeWriteHistoryResult(writeArgs.Path, result), reasoningContent, historyToolCall, modelCallID); err != nil {
 		return err
 	}
 	if err := service.publishToolCallCompleted(stream.RequestID, strings.TrimSpace(toolCallID), strings.TrimSpace(modelCallID), toolCall); err != nil {

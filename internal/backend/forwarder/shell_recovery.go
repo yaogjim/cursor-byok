@@ -159,7 +159,11 @@ func (service *Service) recoverShellWithoutTerminal(stream *ActiveStream, pendin
 		strings.TrimSpace(reason),
 		strings.TrimSpace(pending.StreamState),
 	)
-	if err := service.appendToolResult(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil); err != nil {
+	hint := executionEvidenceHintPending
+	if strings.TrimSpace(reason) == shellRecoveryReasonTransportClosed {
+		hint = executionEvidenceHintTransportClosed
+	}
+	if err := service.appendToolResultWithEvidence(stream, pending.ToolCallID, deriveToolNameFromPendingExec(pending), pending.ArgsJSON, resultPayload, pending.ReasoningContent, nil, pending.ModelCallID, hint, ""); err != nil {
 		return err
 	}
 	if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{

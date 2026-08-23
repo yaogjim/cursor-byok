@@ -103,7 +103,7 @@ func (service *Service) handlePatchEditToolInvocation(stream *ActiveStream, invo
 			return err
 		}
 		_, err = service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, patchEditToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload),
+			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, patchEditToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
 		})
 		if err != nil {
 			return err
@@ -398,7 +398,7 @@ func (service *Service) finishPatchEditOperation(stream *ActiveStream, toolCallI
 	}
 	toolCall := buildCompletedEditToolCall(path, result)
 	historyToolCall := buildCompletedEditToolCall(path, compactPatchEditHistoryEditResult(path, result))
-	if err := service.appendToolResult(stream, strings.TrimSpace(toolCallID), patchEditToolName, argsJSON, summarizePatchEditResult(path, result), reasoningContent, historyToolCall); err != nil {
+	if err := service.appendToolResult(stream, strings.TrimSpace(toolCallID), patchEditToolName, argsJSON, summarizePatchEditResult(path, result), reasoningContent, historyToolCall, modelCallID); err != nil {
 		return err
 	}
 	if err := service.publishToolCallCompleted(stream.RequestID, strings.TrimSpace(toolCallID), strings.TrimSpace(modelCallID), toolCall); err != nil {

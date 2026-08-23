@@ -24,7 +24,10 @@ const (
 	promptContextSourceSubagentContract          = "subagent_contract"
 	promptContextSourceSubagentEmptyStopRecovery = "subagent_empty_stop_recovery"
 	promptContextSourceDebugModeReminder         = "debug_mode_reminder"
+	promptContextSourceExecutionEvidenceContract = "execution_evidence_contract"
 )
+
+const executionEvidenceContractText = "Only a real tool call with a successful terminal result can prove that an edit happened.\nAssistant self-reports, thinking, plans, code blocks, and inline full files cannot prove a file was modified.\nAfter a mutation, you must run a later verification; earlier verification is stale.\nWhen reporting completion, cite only this turn's structured tool results. Do not invent commands, tests, or file changes.\nIf a tool is failed, pending, or unknown, acknowledge the gap. Do not rewrite it as success."
 
 // NewReminderInjector 创建默认 reminder 注入器。
 func NewReminderInjector() *DefaultReminderInjector {
@@ -45,6 +48,7 @@ func (injector *DefaultReminderInjector) Inject(mode agentv1.AgentMode, conversa
 			PromptContexts: []PromptContextMessage{
 				newPromptContextReminder(promptContextSourceSubagentContract, subagentContractText()),
 				newPromptContextReminder(promptContextSourceActiveModeContract, currentModeContractText(normalizedMode, true)),
+				newPromptContextReminder(promptContextSourceExecutionEvidenceContract, executionEvidenceContractText),
 			},
 		}, latestUserText)
 	}
@@ -79,6 +83,9 @@ func (injector *DefaultReminderInjector) Inject(mode agentv1.AgentMode, conversa
 		PromptContexts: []PromptContextMessage{
 			newPromptContextReminder(promptContextSourceActiveModeContract, currentModeContractText(normalizedMode, false)),
 		},
+	}
+	if normalizedMode == agentv1.AgentMode_AGENT_MODE_AGENT {
+		result.PromptContexts = append(result.PromptContexts, newPromptContextReminder(promptContextSourceExecutionEvidenceContract, executionEvidenceContractText))
 	}
 	if normalizedMode == agentv1.AgentMode_AGENT_MODE_PLAN {
 		if reminder := strings.TrimSpace(promptassets.MustReadPlanSystemReminder()); reminder != "" {

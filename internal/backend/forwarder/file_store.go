@@ -719,6 +719,7 @@ func appendEntriesInPlace(conversation *ConversationFile, entries []HistoryEntry
 		} else if next.Seq >= conversation.NextEntrySeq {
 			conversation.NextEntrySeq = next.Seq + 1
 		}
+		next = stampExecutionEvidenceSequence(next)
 		if next.TurnSeq > maxTurnSeq {
 			maxTurnSeq = next.TurnSeq
 		}
