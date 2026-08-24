@@ -49,6 +49,16 @@
 - 如必须交接，采用“回复发送后延迟交接、等待旧请求稳定、启动候选实例、健康检查、失败自动回退”的顺序。
 - 任何实验必须能恢复原代理、Cursor 设置、模型配置和账号状态。
 
+### 3.3 远程 CLI 使用本机 backend
+
+用户已确认：远端 Linux Docker 中的 Cursor CLI 要使用本机 BYOK backend 时，走方案 A。
+
+- 由本机发起 SSH 反向隧道 `-R 127.0.0.1:18090:127.0.0.1:18090`，把本机 loopback 的 18090 接到远端 loopback。不从远端 SSH 登录本机，不使用本机用户名密码，不把 `18080`/`18090` 改绑到非 loopback。
+- 远端容器使用 Docker `--network host`，并设置 `CURSOR_API_ENDPOINT=http://127.0.0.1:18090`；本地 BYOK 不设 CLI API key。
+- 本机 `127.0.0.1:18080` / `127.0.0.1:18090` 的运行中实例保护仍然有效。未确认前不附带转发 18080。
+- 完整操作记录（非官方会话复用、Linux Docker 安装、代理、方案 A 隧道与验收）见 [`docs/ops_198_cursor_cli_session_reuse.md`](ops_198_cursor_cli_session_reuse.md)。该手册不含真实 token、SSH 密码或 `auth.json` 正文。
+- 浏览器打开远端终端时：用 WeTTY（xterm.js），不用 ttyd。WeTTY 以 root 只监听远端 `127.0.0.1:7681`，交互 PTY 降权为非 root 用户 `bun` 的 `/bin/sh`；由 198 宿主机已有 nginx 提供 HTTPS + HTTP Basic，反代到该 loopback。不把 7681 发布到 `0.0.0.0`，不另起一套 nginx 抢占已有 `:80`。构建文件在仓库 `cursor-cli-docker/`。
+
 ## 4. 路由与信任决策
 
 ### 4.1 默认允许的目标

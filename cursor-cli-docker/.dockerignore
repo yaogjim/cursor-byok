@@ -1,0 +1,6 @@
+**/.DS_Store
+**/*.md
+.git
+.gitignore
+nginx-wetty.conf.example
+run.example.sh

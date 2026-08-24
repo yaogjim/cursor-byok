@@ -3,9 +3,17 @@
 > 本文档记录项目当前状态、待完成事项、版本完成情况和时间线，是面向维护者的进展摘要。
 > 详细实施阶段、逐步要求、路径范围和验收标准以 `[task/todo.md](../task/todo.md)` 为准。
 > 每个阶段通过验收后，必须在同一次收尾中更新 `task/todo.md` 的执行结果和本文档的进展归档；没有验证证据的事项不得标为完成。
-> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 会话运行记录。
+> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 会话运行记录。
 
 ## 一、待完成的内容
+
+### 0.1 198 远程 CLI 使用本机 18090（方案 A）
+
+已完成（2026-08-24）。用户确认远端 `cursor-cli` 容器用 Docker `--network host` 消费本机 `127.0.0.1:18090`。本机用公钥登录 `jandar@172.16.23.198`，LaunchAgent `com.yaogj.cursor198-18090-tunnel` 维持 `ssh -N -R 127.0.0.1:18090:127.0.0.1:18090`；未开本机远程登录，未改绑 18080/18090。验证：远端与容器内 `/healthz` 均为 `ok`；`agent models` 与本机 `CURSOR_API_ENDPOINT=http://127.0.0.1:18090` 的 21 个模型 ID 完全一致；本机 `127.0.0.1:18080`/`18090` 仍由原 Cursor 进程监听。未转发 18080。Mac 休眠后隧道会断，唤醒后 LaunchAgent KeepAlive 会重连。逐步操作、非官方 `auth.json` 会话复用、安装与代理细节见 [`docs/ops_198_cursor_cli_session_reuse.md`](ops_198_cursor_cli_session_reuse.md)。
+
+### 0.2 198 浏览器终端（WeTTY + 宿主机 nginx HTTPS/Basic）
+
+已完成（2026-08-24）。ttyd 交互差，已换成 [WeTTY](https://github.com/butlerx/wetty)（xterm.js）。构建上下文在仓库 `cursor-cli-docker/`，运行镜像 `cursor-cli-runtime:wetty`。容器 `--network host`，WeTTY 以 root 听 `127.0.0.1:7681`，PTY 经 `cursor-cli-shell` 降权为 `bun` 的 `/bin/sh`。宿主机 nginx 443：自签 TLS + HTTP Basic，反代 loopback 7681；隐藏 WeTTY 误发的 `ws://` CSP 并允许 `wss:`（否则 WebSocket 被拦，终端约 10 秒断开）；`X-Frame-Options` 为 `SAMEORIGIN` 且 CSP 带 `frame-ancestors 'self'`（`DENY` 会拦 WeTTY 同源 iframe `/assets/xterm_config/index.html`，刷新后抛 `SecurityError`）。验证：无凭据/错凭据 401，正确凭据 200；配置 iframe 200 且头为 `SAMEORIGIN`；经 nginx 的 socket.io 可维持 ≥20s 且出现 `$ ` 提示；`:80` 仍 200；本机 18080/18090 未改。口令与 `auth.json` 正文不入库。操作细节见同一 ops 手册 §13。
 
 ### 0. Agent 执行证据与完成门禁治理
 
@@ -190,6 +198,7 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 ### 2. 按时间索引
 
+- **2026-08-24**：198 远程 CLI 方案 A 隧道落地；浏览器终端由 ttyd 换成 WeTTY。随后修复 HTTPS 反代下 WeTTY helmet 只放行 `ws://`、浏览器 `wss://` 被 CSP 拦导致终端约 10 秒断开的问题；再将 `X-Frame-Options` 从 `DENY` 改为 `SAMEORIGIN`（并加 `frame-ancestors 'self'`），避免 WeTTY 同源 xterm 配置 iframe 被拦。`https://172.16.23.198/` 仍为 HTTPS + HTTP Basic，7681 仅 loopback。
 - **2026-08-22（`v0.0.49.2`）**：完成 Agent transcript reasoning/thinking 公开投影修复、全套验证、三平台资产构建与 GitHub Release。发布提交和标签均指向 `487856170b29380671477e843d7fec15250323ae`；远端资产与本地 SHA-256 一致；`v0.0.49.1` 保持不可变；未完成 exporter 与 subagent recorder 未纳入补丁版。
 
 - **2026-08-22**：`v0.0.49.1` 发布收尾完成；最终交付范围为 macOS arm64 与 macOS amd64，不含 Windows/Linux。Stage 3 MITM/TLS 基线完成：报告 `docs/mitm-tls-baseline-report.md`，9 个 closed `v0.0.49.1` session，分析器合计 `events=128456 traces=14338 findings=11468`，结论保持当前路由/CA/白名单。Stage 2 仍 `in_progress`：本地合同与 synthetic 回归已完成（`closes_stage_2=false`）；partial real observation 已落盘（14 个 acknowledged/succeeded run，`protocol_envelope_presence_available=false`，`closes_stage_2=false`）；系统 Design §14.7.11/12 已终审但实现尚未开始。本轮主控已实际运行 test/race/vet/gofmt/隐私扫描/`git diff --check`/保护路径检查并通过，**不是** `source=real` 六场景通过。`source=real` 六场景仍阻塞；当前阶段仍为 Stage 2 真实 Cursor 子代理协议补证。
