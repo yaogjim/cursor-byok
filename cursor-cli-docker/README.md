@@ -2,7 +2,7 @@
 
 198 上 Cursor CLI 容器的构建上下文。基础镜像 `oven/bun:1.3.14-slim`，内置 Node.js `24.13.1`；浏览器终端用 [WeTTY](https://github.com/butlerx/wetty)（xterm.js），不用 ttyd；并预装 [agent-browser](https://github.com/vercel-labs/agent-browser) `0.34.0` 与 Chrome for Testing。
 
-完整操作与验收见 [`docs/ops_198_cursor_cli_session_reuse.md`](../docs/ops_198_cursor_cli_session_reuse.md)。不要把 token、`auth.json`、htpasswd、SSH 密码写进本目录。
+完整操作与验收见 [`docs/ops_198_cursor_cli_session_reuse.md`](../docs/ops_198_cursor_cli_session_reuse.md)。主 Agent 与 custom subagent 的独立模型路由配置见 [`subagent-pool.md`](subagent-pool.md)。不要把 token、`auth.json`、htpasswd、SSH 密码写进本目录。
 
 ## 构建
 
