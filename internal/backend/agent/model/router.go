@@ -55,20 +55,17 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 	}
 
 	resolved := applyChannelToRequest(req, channel, router.resolver.ProviderStreamIdleTimeout(ctx))
-
-	switch resolved.Provider {
-	case "anthropic":
-		return router.anthropic.Stream(ctx, resolved, sink)
-	case "openai":
-		return router.openai.Stream(ctx, resolved, sink)
-	default:
-		return fmt.Errorf("unsupported provider %q", resolved.Provider)
-	}
+	return router.streamPreResolved(ctx, resolved, sink)
 }
 
 // streamPreResolved 使用已完整填充的 StreamRequest（Provider 字段已设置）直接选择适配器。
 // 供 FallbackAwareRouter 使用，跳过 SelectChannelForModel 解析步骤。
 func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	release, err := acquireUpstreamCapacity(ctx, req)
+	if err != nil {
+		return err
+	}
+	defer release()
 	switch strings.TrimSpace(req.Provider) {
 	case "anthropic":
 		return router.anthropic.Stream(ctx, req, sink)
@@ -94,6 +91,11 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.Provider = strings.TrimSpace(channel.Provider)
 	resolved.BaseURL = strings.TrimSpace(channel.BaseURL)
 	resolved.APIKey = strings.TrimSpace(channel.APIKey)
+	resolved.MaxConcurrentRequests = channel.MaxConcurrentRequests
+	resolved.UpstreamCapacityGroupKey = strings.TrimSpace(channel.UpstreamCapacityGroupKey)
+	if resolved.UpstreamCapacityGroupKey == "" {
+		resolved.UpstreamCapacityGroupKey = upstreamCapacityGroupKey(resolved.Provider, resolved.BaseURL, resolved.APIKey)
+	}
 	resolved.ProviderModelID = strings.TrimSpace(channel.Model)
 	resolved.ResolvedChannelID = strings.TrimSpace(channel.ID)
 	resolved.ResolvedChannelName = strings.TrimSpace(channel.Name)

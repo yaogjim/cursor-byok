@@ -4,7 +4,7 @@
 - **状态**：已按 2026-08-24 实跑落地；非官方路径，官方不支持
 - **CLI 版本**：`2026.08.11-e8db854`
 - **基础镜像**：`oven/bun:1.3.14-slim`
-- **运行镜像**：`cursor-cli-runtime:wetty`（同 tag `cursor-cli-runtime:1.3.14-slim`；由 `oven/bun:1.3.14-slim` 构建，含 WeTTY / wget / git 等）
+- **运行镜像**：`cursor-cli-runtime:wetty`（同 tag `cursor-cli-runtime:1.3.14-slim`；候选/同镜像 tag `cursor-cli-runtime:agent-browser-smoke`；由 `oven/bun:1.3.14-slim` 构建，含 WeTTY、Node.js `24.13.1`、`agent-browser 0.34.0`、Chrome for Testing、wget/git 等）
 - **远端**：`jandar@172.16.23.198`
 - **决策锚点**：[`prd_cursor_byok_工作决策基线.md`](prd_cursor_byok_工作决策基线.md) §3.2、§3.3
 
@@ -12,7 +12,7 @@
 
 1. 把本机 macOS Cursor CLI 的 **access token + refresh token** 写成 Linux `auth.json`（对话里称为「方案 2：非官方会话复用」）。
 2. 在 198 的 Docker（`oven/bun:1.3.14-slim`）里安装 Cursor CLI，用这份会话工作；再配出网 HTTP 代理，以及后续把本机 `127.0.0.1:18090` 接到容器（方案 A）。
-3. 用 [WeTTY](https://github.com/butlerx/wetty)（xterm.js）提供浏览器终端：交互 `/bin/sh` 跑在非 root 用户 `bun` 下；WeTTY **只**听 `127.0.0.1:7681`，交给宿主机已有 nginx 的 HTTPS + HTTP Basic。构建文件在仓库 [`cursor-cli-docker/`](../cursor-cli-docker/)。已弃用 ttyd。
+3. 用 [WeTTY](https://github.com/butlerx/wetty)（xterm.js）提供浏览器终端：交互 `/bin/sh` 跑在非 root 用户 `bun` 下；WeTTY **只**听 `127.0.0.1:7681`，交给宿主机已有 nginx 的 HTTPS + HTTP Basic。镜像还预装 [agent-browser](https://github.com/vercel-labs/agent-browser) 与 Chrome for Testing，供容器内 headless 浏览器自动化使用。构建文件在仓库 [`cursor-cli-docker/`](../cursor-cli-docker/)。已弃用 ttyd。
 
 不要把真实 token、refresh token、SSH 密码、`auth.json` 正文、htpasswd、Basic Auth 口令贴进聊天、提交进 git，或写进本文件。
 
@@ -569,13 +569,15 @@ Docker 引擎 data-root 仍是 `/home/docker`。镜像层和 overlay 在 `/home`
 
 ttyd 的浏览器交互差，已改用 [WeTTY](https://github.com/butlerx/wetty)（xterm.js + WebSocket）。仍只把 `127.0.0.1:7681` 交给宿主机 HTTPS + HTTP Basic；不把 7681 直接暴露。构建文件在 [`cursor-cli-docker/`](../cursor-cli-docker/)。
 
-### 13.1 当前事实（2026-08-24 WeTTY 验收）
+### 13.1 当前事实（2026-08-24 WeTTY、2026-08-25 agent-browser 验收）
 
 | 检查 | 结果 |
 |------|------|
-| 容器镜像 | `cursor-cli-runtime:wetty` / `cursor-cli-runtime:1.3.14-slim`（`866c7dec7c30`，约 900MB） |
+| 正式镜像标签 | `cursor-cli-runtime:wetty` / `cursor-cli-runtime:1.3.14-slim` → `eb8b925b9b8c`（约 1.86GB）；同镜像候选 tag `cursor-cli-runtime:agent-browser-smoke` |
+| 运行中旧实例 | `cursor-cli` 未重启，仍绑定旧镜像 `866c7dec7c30`；旧镜像另保留 `cursor-cli-runtime:wetty-pre-agent-browser` |
 | 容器用户 / 入口 | `User=root`，`Entrypoint=/usr/local/bin/docker-entrypoint.sh`，`--init` |
-| WeTTY | `wetty@2.5.0` + Node `v22.17.0`；`wetty --host 127.0.0.1 --port 7681 --base / --command /usr/local/bin/cursor-cli-shell` |
+| WeTTY | `wetty@2.5.0` + Node `v24.13.1`（新镜像）；`wetty --host 127.0.0.1 --port 7681 --base / --command /usr/local/bin/cursor-cli-shell` |
+| agent-browser | `agent-browser 0.34.0`；Chrome for Testing `152.0.7977.54`；`AGENT_BROWSER_EXECUTABLE_PATH=/usr/local/bin/chrome-for-testing`，并提供 `google-chrome` 标准发现名 |
 | 7681 监听 | 仅 `127.0.0.1:7681`；Docker `Ports={}`，没有 `-p 7681`；**无 ttyd 进程** |
 | 页面 | loopback 与 HTTPS 鉴权后 HTML 含 WeTTY / xterm，不含 ttyd |
 | 工具 | 容器内 `wget` `git` `curl` 等仍在 PATH |
@@ -611,10 +613,12 @@ cd /usr/local/cursor-cli/src/cursor-cli-docker   # 或仓库 cursor-cli-docker/
 sudo docker build \
   --build-arg HTTP_PROXY=http://172.16.137.80:8118 \
   --build-arg HTTPS_PROXY=http://172.16.137.80:8118 \
-  -t cursor-cli-runtime:wetty .
+  -t cursor-cli-runtime:agent-browser-smoke .
 ```
 
-不要 `apt-get install npm`：Debian 的 `npm` 会拉几百个 `node-*` 包，经 8118 容易 502。Dockerfile 改为官方 Node linux-x64 二进制 + `npm install -g wetty@2.5.0`。
+先用独立容器验证 `cursor-cli-runtime:agent-browser-smoke`，再把同一个镜像 ID 标记为 `cursor-cli-runtime:wetty` / `cursor-cli-runtime:1.3.14-slim`。改 Docker tag 不会重启已运行容器；提升前把旧镜像保留为 `cursor-cli-runtime:wetty-pre-agent-browser`。
+
+不要 `apt-get install npm`：Debian 的 `npm` 会拉几百个 `node-*` 包，经 8118 容易 502。Dockerfile 使用官方 Node `24.13.1` linux-x64 二进制；固定安装 `wetty@2.5.0` 与 `agent-browser@0.34.0`。`agent-browser install --with-deps` 会下载 Chrome for Testing 和 Linux 浏览器依赖；Dockerfile 对 npm、apt/Chrome 下载使用独立层和有限重试。Chrome 固化在 `/opt/agent-browser`，避免运行时 `/home/bun` bind mount 把它遮住。
 
 ### 13.4 bun 家目录里的 CLI 与会话
 
@@ -688,3 +692,30 @@ sudo docker run -d --name cursor-cli --restart unless-stopped --network host --i
 - WeTTY 在 HTTP 反代后默认 CSP 只允许 `ws://`。已在宿主机 nginx 隐藏该头并允许 `wss:`；镜像内 `patch-wetty.cjs` 同时给 WeTTY 打了双 scheme + `trust proxy`。已打开的旧标签页需强制刷新。
 - WeTTY 需要同源 iframe 加载 xterm 配置。nginx 已用 `X-Frame-Options SAMEORIGIN` + CSP `frame-ancestors 'self'`；不要改回 `DENY`，也不要清空该头。
 - 旧 ttyd 镜像保留为 `cursor-cli-runtime:ttyd-backup`，当前未使用。
+
+## 14. 可选：独立 Cursor CLI 物理模型池控制器
+
+仓库中的 `tools/cursor-cli-model-pool` 是独立 Go module，不属于 cursor-byok 客户端、Wails 发布包或 198 容器默认启动链。只有需要按优先级运行多个物理模型时才单独部署；停止使用或删除其配置不会影响 IDE、18090 隧道和现有 `agent` 命令。
+
+控制器读取 `~/.cursor-local-assistant-v2/cli-model-pool.yaml`，通过 `agent models` 和同目录现有 `config.yaml` 交叉核验模型身份。池成员必须是未启用 `providerFallback` 的物理 adapter；逻辑路由 alias 会被拒绝，避免“外层 Agent 进程切换 × 内层 Provider fallback”形成乘法重试。API Key 只在内存中参与既有渠道 ID 核验，不写入模型池配置或 journal。
+
+推荐先在目标机器构建并只运行无副作用预检：
+
+```bash
+cd tools/cursor-cli-model-pool
+go build -o ./bin/cursor-cli-model-pool ./cmd/cursor-cli-model-pool
+./bin/cursor-cli-model-pool validate
+./bin/cursor-cli-model-pool dry-run
+```
+
+`dry-run` 会执行配置、模型和 physical-only 预检并显示 argv，但不会启动任务 Agent。真实任务的 prompt 只从 stdin 输入：
+
+```bash
+printf '%s' '只回答 OK，不调用工具。' | ./bin/cursor-cli-model-pool run
+```
+
+自动换模型只允许发生在零 `thinking`/assistant/tool、零文件或外部副作用的 pre-output 窗口，并且错误必须属于结构化白名单：启动失败、transport、HTTP 429/502/503/504。认证、其他 4xx/5xx、取消、未知错误或 NDJSON 解析失败都会保守停止。write 模式还要求显式 `safety.allowWrite: true`，由 Cursor 使用 `--worktree` 创建 `~/.cursor/worktrees/<repo>/<name>`；控制器不执行 `git worktree add`，只监视该真实路径，检测到创建、写入或删除即禁止跨模型重放。
+
+journal 位于 `~/.cursor-local-assistant-v2/cli-model-pool-journal.jsonl`，权限为 `0600`，只包含编排、模型、phase、错误类别、输出/变更标记和可用关联 ID；不保存 prompt、NDJSON 正文、工具参数、API Key、Cursor token 或 header。完整 schema、退出码和安全边界见 `tools/cursor-cli-model-pool/README.md`。
+
+在 198 使用时继续保持本手册既有边界：endpoint 仍为 `http://127.0.0.1:18090`，不修改 SSH 隧道、Docker 默认命令、`auth.json` 或 18080/18090 监听。先执行 `validate`/`dry-run`；真实验证只使用 Ask 任务，不用 write prompt。

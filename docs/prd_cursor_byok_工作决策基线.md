@@ -326,17 +326,22 @@ dispatched / running / backgrounded（backend 重启，child 未终结）→ awa
 
 **默认：关闭（`enabled: false`）**。关闭时行为与当前版本字节级一致。
 
-待实现的配置结构（示意）：
+**配置合同：**
 
 ```yaml
 providerFallback:
   enabled: false               # 默认关闭
   primaryChannelID: ""         # 主渠道 ID
   candidateChannelIDs: []      # 有序候选列表，显式配置
-  maxChannels: 3               # 主渠道 + 最多 2 个候选
-  maxHttpAttempts: 5           # 共享 HTTP 尝试预算
-  maxWaitSeconds: 8            # 共享等待时间预算（仅 fallback 启用时生效）
+  maxHttpAttempts: 5           # 全链共享 HTTP 尝试预算；允许 2–9
+  maxWaitSeconds: 8            # 全链共享退避等待预算（秒）；允许 1–30
 ```
+
+- 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds`；合法非零值必须原样保存、导入导出和回显。
+- 保存入口对非零越界值严格报错；运行时解析再做 `2–9 / 1–30` 防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
+- 单渠道 HTTP attempt 上限固定为 3，不开放 UI 配置。渠道分配为 `min(chain_remaining_attempts, 3)`，因此默认链可以形成 `3+2`，多渠道也可以因前序实际用量形成 `1+3+1`。
+- 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道 4 秒默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
+- fallback 禁用时保留预算字段但不生效，运行路径继续使用单渠道 P0 合同。
 
 **允许切换的错误类别**（首 model event 前安全窗口，且无副作用）：
 
@@ -386,3 +391,35 @@ providerFallback:
 - `internal/mitm/`、`internal/certs/`、CONNECT 处理、白名单规则、系统代理配置、透明代理行为。
 - 不新增外部目标、不修改拦截策略、不改变证书安装流程。
 - P1 实现不得以任何方式影响现有 MITM 路由路径。
+
+### 10.7 逻辑子代理模型与独立 CLI 模型池
+
+三层能力必须同时保留且职责互斥：
+
+1. **IDE 逻辑子代理模型**：Cursor IDE 只在启动新 subagent 时应用 `SubagentModelOverrides`。启用 fallback 的 adapter 是“逻辑路由（建议仅子代理）”；当前 Cursor 模型选择器仍可能让父 Agent 选择它，因此“软专用”是产品引导，不是技术强制隔离。已经运行的 subagent 不支持热切换模型。
+2. **BYOK Provider fallback**：只重试同一 `model_call_id` 的 HTTP/channel 链，不重放完整 subagent，不续传或拼接已有输出。渠道切换必须满足零原始响应字节、零 model event、零工具或其他副作用。链内 primary/candidate 必须是 `providerFallback.enabled=false` 的物理渠道，逻辑 alias 不得嵌套成为另一逻辑链成员。
+3. **独立 Cursor CLI 模型池**：作为高层进程控制器按配置顺序启动物理模型；每个模型在一次编排中最多启动一次。它不是 IDE 能力的替代，也不把新进程描述为恢复同一个 subagent。
+
+CLI 模型池只允许引用 `providerFallback.enabled=false` 的物理 adapter。预检必须同时验证精确 16 位模型 ID 存在于 `agent models`，并在固定的本机 BYOK `config.yaml` 中唯一匹配；ID 复用现有渠道哈希合同，因此 API Key 仅可在内存中参与哈希，禁止输出、记录或持久化。零匹配、多匹配或逻辑路由 ID均拒绝。Provider 与 CLI 预算不跨进程共享，因此通过配置隔离防止“外层进程数 × 内层 fallback chain”的乘法重试。
+
+CLI 自动切换的安全条件是：进程仍处于启动或输出前阶段，且尚未观察到 assistant、thinking、tool call 或 worktree mutation。`system/init` 与回显用户输入只表明进程已初始化，仍属于 pre-output；任意模型生成事件保守关闭自动切换窗口。只有 spawn 失败或 CLI 暴露的结构化错误类别明确为 transport、429、502/503/504 时才允许切换；不得解析 stderr 或自然语言猜测。认证、非法模型、HTTP 500、其他 4xx、取消、配置错误、未知非零退出或缺少 typed 分类均直接停止；输出或 mutation 后的失败进入 `needs_review`，禁止跨模型自动重放。
+
+Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID、模型 ID/序号、阶段、可用的 session/request ID、退出码、受控错误类别、是否已观察输出/变更和 worktree 标识；不得保存 prompt、NDJSON 正文、tool 参数、API Key、Cursor token 或 provider 凭据。写任务必须显式启用并使用独立 worktree；Ask/Plan 为默认安全模式。
+
+### 10.8 验收与回滚决策
+
+- Provider fallback 可通过 `enabled: false` 回到单渠道 P0；删除或忽略新增预算字段回到默认 5/8。
+- CLI 控制器使用独立配置 `~/.cursor-local-assistant-v2/cli-model-pool.yaml` 和独立 Go module；停止使用或移除该配置不得影响 IDE、18090 或客户端二进制。
+- IDE、Provider 和 CLI 三条链必须分别提供同层运行证据。fake agent 不证明真实 CLI，单元测试不证明真实 IDE child 模型传播，CLI 成功也不证明 Provider 故障注入通过。
+- 缺少真实 IDE 或 CLI 证据时只能标记 `delivery_status=verified-partial`，不得标记 accepted。
+
+### 10.9 配置写事务与物理上游容量合同
+
+本节冻结配置整文件读改写竞态和同一物理上游进程内容量保护的最小合同：
+
+- 普通 UI 保存以调用方提交的用户字段为准，但必须在存储锁内读取最新配置并保留最新 `lastAgentModelHash`；运行时模型 hash 更新只 patch 该字段，相同值为 no-op，不写盘、不通知 listener、不触发 Host rebuild；完整导入是唯一允许全量替换配置和 hash 的入口。
+- Manager 写事务串行覆盖“Store 原子写入 → 内存 current → 文件 snapshot → listener”。写盘失败时磁盘和内存均不前移；listener 在 Store 锁和 Manager 写锁释放后调用，避免重入死锁。
+- 物理 adapter 可配置 `maxConcurrentRequests`：缺失或 `0` 表示不限流，非零只允许 `1–16`。启用 `providerFallback` 的逻辑 alias 必须为 `0`；按 provider type、规范化 Base URL 和 API Key 判定为同一物理上游的 adapter 必须配置相同值，禁止 `0` 旁路。
+- 上游组身份只在进程内以 SHA-256 表示；API Key、Base URL 和组 hash 均不得进入日志、错误、事件或持久配置。槽覆盖一次物理渠道的完整 Stream，包含同渠道 HTTP retry；切换候选前释放旧槽。
+- 有限容量下每个物理渠道最多等待固定 2 秒，不保证 FIFO。容量等待不消费真实 HTTP attempt，也不计入 Provider fallback 的 retry/backoff 等待预算。超时返回 typed `capacity_unavailable`；只有在零 HTTP、零原始响应字节、零 model event、零副作用窗口内才可切到不同上游组，同组候选直接跳过。父 context 取消立即返回原始取消错误并禁止 fallback。
+- 默认 `0` 保持历史无限并发行为。删除字段或设为 `0` 即回滚容量能力；当前真实 `grok-HA` 配置按用户决定不设置非零限制，因此本合同的实现与受控测试不能表述为当前在线环境已经启用容量保护。

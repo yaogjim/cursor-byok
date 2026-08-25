@@ -72,6 +72,48 @@ func TestForbiddenKeyCoversAliases(t *testing.T) {
 	}
 }
 
+func TestAllowlistedFieldsKeepsProviderFallbackBudgetFacts(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"chain_max_attempts":              5,
+		"chain_max_wait_ms":               8000,
+		"chain_attempts_used":             3,
+		"chain_attempts_remaining":        2,
+		"chain_wait_used_ms":              1000,
+		"chain_wait_remaining_ms":         7000,
+		"channel_allocation_max_attempts": 3,
+		"retry_delay_ms":                  0,
+		"channel_attempt":                 1,
+		"channel_id":                      "ch-a",
+		"fallback_from":                   "ch-a",
+		"fallback_to":                     "ch-b",
+		"fallback_reason":                 "rate_limited",
+		"fallback_suppressed_reason":      "wait_budget_exhausted",
+		"authorization":                   "Bearer sk-secret",
+		"headers":                         map[string]string{"Authorization": "Bearer sk-secret"},
+		"body":                            `{"prompt":"secret"}`,
+		"query":                           "api_key=sk-secret",
+		"key":                             "sk-secret",
+	})
+	if fields["authorization"] != nil || fields["headers"] != nil || fields["body"] != nil || fields["query"] != nil || fields["key"] != nil {
+		t.Fatalf("secret fields leaked: %#v", fields)
+	}
+	if fields["chain_max_attempts"] != 5 || fields["chain_max_wait_ms"] != 8000 {
+		t.Fatalf("budget caps dropped: %#v", fields)
+	}
+	if fields["chain_attempts_used"] != 3 || fields["chain_attempts_remaining"] != 2 {
+		t.Fatalf("attempt remaining dropped: %#v", fields)
+	}
+	if fields["chain_wait_used_ms"] != 1000 || fields["chain_wait_remaining_ms"] != 7000 {
+		t.Fatalf("wait remaining dropped: %#v", fields)
+	}
+	if fields["channel_allocation_max_attempts"] != 3 || fields["retry_delay_ms"] != 0 {
+		t.Fatalf("allocation/delay dropped: %#v", fields)
+	}
+	if fields["channel_id"] != "ch-a" || fields["fallback_to"] != "ch-b" {
+		t.Fatalf("channel ids dropped: %#v", fields)
+	}
+}
+
 func TestPathStripsQueryFragmentAndKeepsDeterministicShape(t *testing.T) {
 	cases := []struct {
 		in, want string

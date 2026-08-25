@@ -69,7 +69,7 @@ func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
 	if err != nil {
 		return serverconfig.Config{}, err
 	}
-	if err := s.saveUserConfig(cfg); err != nil {
+	if err := s.replaceUserConfig(cfg); err != nil {
 		return serverconfig.Config{}, fmt.Errorf("保存导入配置失败: %w", err)
 	}
 	persisted, err := s.loadUserConfig()

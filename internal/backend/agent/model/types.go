@@ -83,6 +83,13 @@ type StreamRequest struct {
 	BaseURL string
 	// APIKey 表示 provider 鉴权凭据。
 	APIKey string
+	// MaxConcurrentRequests 是物理上游组的可选并发上限。
+	// 0 表示不限流；非零合法范围 1–16。路由解析后以 ResolvedChannel 的值为准。
+	MaxConcurrentRequests int
+	// UpstreamCapacityGroupKey 是仅内存的上游组身份（SHA-256 hex）。
+	// 按 provider type + NormalizeBaseURL(baseURL) + API key 计算；
+	// 不得写入日志、YAML 或错误文本。空则在 acquire 时按当前渠道身份计算。
+	UpstreamCapacityGroupKey string
 	// ProviderModelID 表示 provider 侧真实模型标识。
 	ProviderModelID string
 	// ResolvedChannelID 表示本次请求实际命中的 adapter 渠道 ID。
@@ -140,8 +147,8 @@ type StreamRequest struct {
 	// 以确保所有渠道共用同一总 attempt 预算，防止 fallback 链无限放大重试次数。
 	FallbackMaxAttempts int
 	// FallbackRemainingWait 表示 FallbackAwareRouter 分配给当前渠道的共享 sleep/backoff 预算剩余量。
-	// 0 表示使用适配器默认值（defaultRetryMaxTotalWait）。非零值将覆盖 effectiveRetry.maxTotalWait，
-	// 以确保整条 fallback 链的 sleep 总量不超过 fallbackChainMaxWait。
+	// 哨兵是 FallbackBudget != nil，不是本字段 > 0。fallback 路径在 normalize 之后把
+	// maxTotalWait 直接覆盖为该值（包括 0）；0 表示禁止后续 sleep，不得回落到 4s。
 	// 注意：不得将此值用于 context.WithTimeout，仅作为 providerRetry 的 maxTotalWait 上限。
 	FallbackRemainingWait time.Duration
 	// FallbackArtifactSuffix 表示 FallbackAwareRouter 为非最后渠道注入的工件写入后缀。
@@ -166,6 +173,8 @@ type FallbackSafetyInfo struct {
 	requestBuildFailed bool
 	httpAttempts       int
 	waited             time.Duration
+	waitBudgetBlocked  bool
+	lastRetryDelay     time.Duration
 }
 
 type FallbackSafetySnapshot struct {
@@ -174,6 +183,8 @@ type FallbackSafetySnapshot struct {
 	RequestBuildFailed bool
 	HTTPAttempts       int
 	Waited             time.Duration
+	WaitBudgetBlocked  bool
+	LastRetryDelay     time.Duration
 }
 
 func (s *FallbackSafetyInfo) MarkRawBytesObserved() {
@@ -218,6 +229,16 @@ func (s *FallbackSafetyInfo) markWaited(delay time.Duration) {
 	}
 	s.mu.Lock()
 	s.waited += delay
+	s.lastRetryDelay = delay
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) markWaitBudgetBlocked() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.waitBudgetBlocked = true
 	s.mu.Unlock()
 }
 
@@ -233,6 +254,8 @@ func (s *FallbackSafetyInfo) Snapshot() FallbackSafetySnapshot {
 		RequestBuildFailed: s.requestBuildFailed,
 		HTTPAttempts:       s.httpAttempts,
 		Waited:             s.waited,
+		WaitBudgetBlocked:  s.waitBudgetBlocked,
+		LastRetryDelay:     s.lastRetryDelay,
 	}
 }
 
@@ -240,6 +263,8 @@ func (s *FallbackSafetyInfo) Snapshot() FallbackSafetySnapshot {
 // client.Do 前消费一个 attempt；每次 retry sleep 前预留等待预算。
 type FallbackRetryBudget struct {
 	mu                sync.Mutex
+	maxAttempts       int
+	maxWait           time.Duration
 	remainingAttempts int
 	remainingWait     time.Duration
 }
@@ -251,7 +276,12 @@ func NewFallbackRetryBudget(maxAttempts int, maxWait time.Duration) *FallbackRet
 	if maxWait < 0 {
 		maxWait = 0
 	}
-	return &FallbackRetryBudget{remainingAttempts: maxAttempts, remainingWait: maxWait}
+	return &FallbackRetryBudget{
+		maxAttempts:       maxAttempts,
+		maxWait:           maxWait,
+		remainingAttempts: maxAttempts,
+		remainingWait:     maxWait,
+	}
 }
 
 func (b *FallbackRetryBudget) TryConsumeAttempt() bool {
@@ -287,6 +317,23 @@ func (b *FallbackRetryBudget) Remaining() (int, time.Duration) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.remainingAttempts, b.remainingWait
+}
+
+func (b *FallbackRetryBudget) Snapshot() (maxAttempts, usedAttempts, remainingAttempts int, maxWait, usedWait, remainingWait time.Duration) {
+	if b == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	usedAttempts = b.maxAttempts - b.remainingAttempts
+	if usedAttempts < 0 {
+		usedAttempts = 0
+	}
+	usedWait = b.maxWait - b.remainingWait
+	if usedWait < 0 {
+		usedWait = 0
+	}
+	return b.maxAttempts, usedAttempts, b.remainingAttempts, b.maxWait, usedWait, b.remainingWait
 }
 
 // LLMArtifactPaths 表示一次模型调用相关工件路径。

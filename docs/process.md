@@ -3,7 +3,7 @@
 > 本文档记录项目当前状态、待完成事项、版本完成情况和时间线，是面向维护者的进展摘要。
 > 详细实施阶段、逐步要求、路径范围和验收标准以 `[task/todo.md](../task/todo.md)` 为准。
 > 每个阶段通过验收后，必须在同一次收尾中更新 `task/todo.md` 的执行结果和本文档的进展归档；没有验证证据的事项不得标为完成。
-> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 会话运行记录。
+> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 / 2026-08-25 会话运行记录。
 
 ## 一、待完成的内容
 
@@ -15,7 +15,34 @@
 
 已完成（2026-08-24）。ttyd 交互差，已换成 [WeTTY](https://github.com/butlerx/wetty)（xterm.js）。构建上下文在仓库 `cursor-cli-docker/`，运行镜像 `cursor-cli-runtime:wetty`。容器 `--network host`，WeTTY 以 root 听 `127.0.0.1:7681`，PTY 经 `cursor-cli-shell` 降权为 `bun` 的 `/bin/sh`。宿主机 nginx 443：自签 TLS + HTTP Basic，反代 loopback 7681；隐藏 WeTTY 误发的 `ws://` CSP 并允许 `wss:`（否则 WebSocket 被拦，终端约 10 秒断开）；`X-Frame-Options` 为 `SAMEORIGIN` 且 CSP 带 `frame-ancestors 'self'`（`DENY` 会拦 WeTTY 同源 iframe `/assets/xterm_config/index.html`，刷新后抛 `SecurityError`）。验证：无凭据/错凭据 401，正确凭据 200；配置 iframe 200 且头为 `SAMEORIGIN`；经 nginx 的 socket.io 可维持 ≥20s 且出现 `$ ` 提示；`:80` 仍 200；本机 18080/18090 未改。口令与 `auth.json` 正文不入库。操作细节见同一 ops 手册 §13。
 
+### 0.3 三层模型路由与 CLI 模型池（实现完成，证据部分闭合）
+
+2026-08-24 已完成三层实现、自动化门禁和两路独立终审，当前 `delivery_status=verified-partial`，未提交、未推送、未发布。第一层真实 IDE metadata-only probe 证明新建 Explore/generalPurpose child 可使用不同于父会话的模型，并且 child `requested_model.model_id` 与 runtime ModelID 一致；这只证明新 spawn 的模型传播，不证明运行中 child 热切换。
+
+第二层 Provider fallback 已支持全链 `maxHttpAttempts` 默认 5/可配 2–9、`maxWaitSeconds` 默认 8/可配 1–30，单渠道固定最多 3。共享预算覆盖 `3+2`、`1+3+1`、wait=0、超预算 `Retry-After`、HTTP 500 只同渠道重试、取消、raw bytes/model event 后零切换和兼容性跳过。配置保存改为用后端派生 ID 的完整 adapter 集合先校验、再剥 ID 序列化；逻辑 adapter 不得嵌套成为另一条 fallback 链的物理成员。UI 增加预算、逻辑路由、费用/隐私/模型语义/工具兼容提示，逻辑 alias 不再直接发送 endpoint 测试请求。
+
+第三层新增独立 `tools/cursor-cli-model-pool` Go module，按有序物理模型各启动一次。它用 `agent models` 与 BYOK 配置精确交叉核验并拒绝 fallback-enabled alias；prompt 只走 stdin；未知错误 fail closed；任意 thinking/assistant/tool/未知事件或 Cursor worktree mutation 后禁止跨模型重放。write 模式不执行 `git worktree add`，只监视 Cursor 的真实 `~/.cursor/worktrees/<repo>/<name>` 路径；fsnotify 事件与前后 snapshot 共同形成 sticky mutation 门禁。metadata-only journal 权限为 `0600`，不保存 prompt、NDJSON 正文、工具参数或凭据。使用说明见 `tools/cursor-cli-model-pool/README.md`，198 可选部署边界见运维手册 §14。
+
+验证已通过：根 module `go test ./...`、全量 race、vet；Provider 定向 test/race/vet；前端配置投影与生产构建；CLI module test/race/vet/build；日志分析器 test/race/vet；临时 HOME 的 CLI `validate`/`dry-run`；发布隔离、禁止路径与 `git diff --check`。独立终审首轮发现并修复三类承重问题：前端重复实现渠道 SHA-256；CLI 监视错误 worktree 路径；终审阶段逻辑 alias 可嵌套入 Provider 链、短暂 worktree mutation 可漏检以及成功 HTTP 200 被错误分类。返工后两路复审均无剩余 P0/P1。
+
+2026-08-25 用户本机真实观测（未提交、未改 18080/18090 PID）：逻辑路由 `grok-HA`/`543fe17c50d81660` 启用 fallback，primary 为故障物理渠道 `Grokeeror`/`d5ab6805830e5baa`（`127.0.0.1`，`modelID=dd`），candidates 为 `grok-hongai`/`3d2b0ff4a6be3e42` 与 `grok`/`378723ba5535e672`，全链 5 attempts / 8s。`provider_fallback_attempt` 共 54 条、28 个 `model_call_id`：13 次 Grokeeror `transport` 后 hongai 成功（used 4/5）；13 次 hongai 随后 `server_5xx` 且 `attempt_budget_exhausted`（used 5 remain 0），第三候选未启动，符合 primary 吃满 3 后只剩 3+2。预算字段 used+remaining 恒等于 5，wait 未耗尽。CLI 池在临时 HOME（复制 `config.yaml`，Library 软链以通过 `agent login`）对用户指定的 `3d2b0ff4a6be3e42`/`45719971585b2646`/`506d30d8e14b7b5e` `validate`/`dry-run` 通过；引用 `grok-HA` 返回「禁止引用 providerFallback.enabled=true 的逻辑适配器」。仓库 cwd 的 Ask `run` 首模型成功（`system/init → user → thinking* → assistant → result/success`），因此未切到第二/第三物理模型；从 `/tmp` 启动时 Cursor Workspace Trust 产生非结构化错误，控制器记 `unknown` 并 fail-closed、不换模型。journal `0600`、无 prompt/凭据。副作用：运行中 18090 把 `lastAgentModelHash` 从 `grok-HA` 写成 `grok-hongai`；23 个 adapter 与 fallback 链字段未变，未创建真实 `cli-model-pool.yaml`。
+
+证据缺口：本机没有 `wails3`，独立 Vite 页面因 `/wails/runtime` 404 无法挂载，因此浏览器视觉验收未通过；真实 CLI 两模型 pre-output 故障切换仍未发生（首物理模型已成功）。故本工作包标 `verified-partial`，不得宣传为 CLI 故障切换和 Wails 浏览器验收均完成。
+
+### 0.4 配置写竞态与物理上游容量（能力验收完成，在线未启用）
+
+已完成（2026-08-25；随本次汇总提交交付，未推送、未发布）。普通 UI 保存现在会在 Store 锁内读取最新 YAML，以 UI payload 更新用户字段并保留最新 `lastAgentModelHash`；运行时 hash 更新只 patch 该字段，相同值不写盘、不通知 listener、不触发 Host rebuild；完整导入继续通过显式 replace 全量替换并允许替换 hash。Manager 写事务锁串行提交磁盘、current 和 snapshot，写盘失败不推进内存。确定性交错、并发 race、失败回滚、hash no-op 和 import replace 均有自动化覆盖。
+
+物理 adapter 新增可选 `maxConcurrentRequests`：缺失/0 保持无限并发，非零允许 1–16；逻辑 fallback alias 必须为 0，同 provider、规范化 Base URL 和 API Key 的物理渠道必须配置一致。resolver 将限制和只在内存存在的 SHA-256 上游组身份投影到真实请求；进程级 limiter 固定最多等待 2 秒，槽覆盖完整 Stream 及同渠道 retry。容量超时为 typed `capacity_unavailable`，不消耗 HTTP attempt 或 fallback retry/backoff wait，只在零 HTTP、零原始字节、零 model event、零副作用窗口切到不同上游组；同组候选跳过，父 context 取消不 fallback，release 不泄漏。API Key、Base URL 和组 hash 不进入日志、事件或错误。
+
+主控集成复查发现并修复了一个跨切片 P1：resolver 虽已产生容量值，`applyChannelToRequest` 原先没有用 `ResolvedChannel` 覆盖 `StreamRequest`，导致真实配置无法生效而仅测试手工请求字段有效。修复后补了请求投影、真实 HTTP 峰值、Manager legacy snapshot 和上游组规范化回归；独立复审确认无剩余 P0/P1。
+
+验证通过：容量与配置定向 test；根 module `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`；前端投影测试和生产 build；CLI 独立 module test/race/vet/build；日志分析器 test/race/vet；`git diff --check` 与 proto/MITM/certs 保护路径检查。Apple Silicon / macOS 14.6.1 使用隔离临时工具链运行 `task build`，生成约 23 MiB 的 `bin/macos-arm64.dmg`（SHA-256 `15a719c97ca4229cf618e75c4e890e6b14381ff6f34ffaac12763e160f89bf7f`）；`hdiutil verify`、只读挂载、Mach-O arm64 与 adhoc codesign 校验通过。DMG 受 `bin/` ignore 规则保护，不纳入 Git，且未做 Developer ID 签名或 notarization。详细合同见工作决策基线 §10.9、系统 Design §14.10，详细任务证据见 `task/todo.md` 的 `config-race-upstream-capacity-20260825`。
+
+用户明确选择不修改当前真实 `grok-HA` 配置，本次也未读取后改写该文件、未占用或重启 18080/18090。因此可声明“容量能力已实现并经非零 fixture 验证”，当前在线 `grok-HA` 仍为无限并发，不能声明在线容量风险已启用关闭。
+
 ### 0. Agent 执行证据与完成门禁治理
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 

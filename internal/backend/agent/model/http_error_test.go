@@ -199,6 +199,12 @@ func TestClassifyHTTPStatusAndProviderError(t *testing.T) {
 	if got := ClassifyProviderError(fmt.Errorf("wrap: %w", newStreamTruncatedError("anthropic", io.ErrUnexpectedEOF))); got != ProviderErrorStreamDecode {
 		t.Fatalf("wrapped truncated category = %q", got)
 	}
+	if got := ClassifyProviderError(&CapacityUnavailableError{}); got != ProviderErrorCapacityUnavailable {
+		t.Fatalf("capacity category = %q", got)
+	}
+	if got := ClassifyProviderError(fmt.Errorf("wrap: %w", &CapacityUnavailableError{})); got != ProviderErrorCapacityUnavailable {
+		t.Fatalf("wrapped capacity category = %q", got)
+	}
 	if ProviderErrorStreamDecode != "stream_decode" {
 		t.Fatalf("reserved stream_decode category changed: %q", ProviderErrorStreamDecode)
 	}

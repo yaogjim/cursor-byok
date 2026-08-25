@@ -1033,3 +1033,131 @@ func TestModelArtifactErrorOmitsProviderResponseBody(t *testing.T) {
 		t.Fatalf("error summary = %q", summary)
 	}
 }
+
+func TestApplyStreamRequestRetryOverridesWaitIncludingZero(t *testing.T) {
+	base := providerRetry{}
+	zeroWait := applyStreamRequestRetry(base, StreamRequest{
+		FallbackBudget:        NewFallbackRetryBudget(5, 0),
+		FallbackRemainingWait: 0,
+		FallbackMaxAttempts:   2,
+	})
+	if zeroWait.maxTotalWait != 0 {
+		t.Fatalf("wait=0 overlay fell back to %v, want 0", zeroWait.maxTotalWait)
+	}
+	if zeroWait.maxAttempts != 2 {
+		t.Fatalf("maxAttempts = %d, want 2", zeroWait.maxAttempts)
+	}
+
+	chainWait := applyStreamRequestRetry(base, StreamRequest{
+		FallbackBudget:        NewFallbackRetryBudget(7, 8*time.Second),
+		FallbackRemainingWait: 8 * time.Second,
+	})
+	if chainWait.maxTotalWait != 8*time.Second {
+		t.Fatalf("chain wait overlay = %v, want 8s (must exceed single-channel 4s)", chainWait.maxTotalWait)
+	}
+
+	disabled := applyStreamRequestRetry(base, StreamRequest{
+		FallbackRemainingWait: 0,
+		FallbackMaxAttempts:   2,
+	})
+	if disabled.maxTotalWait != defaultRetryMaxTotalWait {
+		t.Fatalf("nil FallbackBudget wait = %v, want default %v", disabled.maxTotalWait, defaultRetryMaxTotalWait)
+	}
+	if disabled.maxAttempts != 2 {
+		t.Fatalf("disabled path still honors explicit FallbackMaxAttempts: got %d", disabled.maxAttempts)
+	}
+}
+
+func TestProviderRetryRetryAfterExceedsWaitBudgetDoesNotRetry(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Retry-After", "30")
+		writer.WriteHeader(http.StatusTooManyRequests)
+		_, _ = writer.Write([]byte(`{"error":"later"}`))
+	}))
+	defer providerServer.Close()
+
+	var delays []time.Duration
+	retry := recordingRetry(&delays)
+	retry.maxDelay = 30 * time.Second
+	retry.maxTotalWait = 8 * time.Second
+	retry.fallbackBudget = NewFallbackRetryBudget(5, 8*time.Second)
+	retry.fallbackSafety = &FallbackSafetyInfo{}
+
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
+		},
+		audit.Default(),
+		retry,
+	)
+	if err != nil {
+		t.Fatalf("over-budget Retry-After should return the 429 response, not sleep/retry: %v", err)
+	}
+	if response == nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("response = %+v, want 429", response)
+	}
+	_ = response.Body.Close()
+	if hits != 1 {
+		t.Fatalf("hits = %d, want 1 (no zero-delay same-channel retry)", hits)
+	}
+	if len(delays) != 0 {
+		t.Fatalf("slept %v, want none", delays)
+	}
+	if !retry.fallbackSafety.Snapshot().WaitBudgetBlocked {
+		t.Fatal("expected WaitBudgetBlocked after Retry-After exceeded remaining wait")
+	}
+}
+
+func TestProviderRetryWaitZeroDoesNotFallBackToDefaultWait(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer providerServer.Close()
+
+	var delays []time.Duration
+	retry := applyStreamRequestRetry(recordingRetry(&delays), StreamRequest{
+		FallbackBudget:        NewFallbackRetryBudget(5, 0),
+		FallbackRemainingWait: 0,
+		FallbackMaxAttempts:   3,
+	})
+	retry.fallbackSafety = &FallbackSafetyInfo{}
+	retry.sleep = func(ctx context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return ctx.Err()
+	}
+
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
+		},
+		audit.Default(),
+		retry,
+	)
+	if err != nil {
+		t.Fatalf("wait=0 should return the 429 response without retry: %v", err)
+	}
+	if response == nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("response = %+v, want 429", response)
+	}
+	_ = response.Body.Close()
+	if hits != 1 {
+		t.Fatalf("hits = %d, want 1", hits)
+	}
+	if len(delays) != 0 {
+		t.Fatalf("slept %v, want none", delays)
+	}
+}

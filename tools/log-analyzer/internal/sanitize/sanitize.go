@@ -15,7 +15,13 @@ var (
 		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "append_seqno": {},
 		"host": {}, "connection_id": {}, "traffic_class": {}, "action": {},
 		"tls_role": {}, "path": {}, "host_hint": {}, "source": {}, "port": {},
-		"target_host": {},
+		"target_host":     {},
+		"channel_attempt": {}, "channel_id": {}, "fallback_from": {}, "fallback_to": {},
+		"fallback_reason": {}, "fallback_suppressed_reason": {},
+		"chain_max_attempts": {}, "chain_max_wait_ms": {},
+		"chain_attempts_used": {}, "chain_attempts_remaining": {},
+		"chain_wait_used_ms": {}, "chain_wait_remaining_ms": {},
+		"channel_allocation_max_attempts": {}, "retry_delay_ms": {},
 	}
 )
 

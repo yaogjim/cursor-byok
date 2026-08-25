@@ -324,18 +324,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	}
 
 	sawStreamEvent := false
-	// effectiveRetry 复用 adapter.retry 配置，并在 FallbackMaxAttempts>0 时收紧
-	// maxAttempts，确保所有候选渠道共享同一总 attempt 预算。
-	// FallbackRemainingWait>0 时同步收紧 maxTotalWait，确保 sleep 预算全链共享。
-	effectiveRetry := normalizeProviderRetry(adapter.retry)
-	if req.FallbackMaxAttempts > 0 && req.FallbackMaxAttempts < effectiveRetry.maxAttempts {
-		effectiveRetry.maxAttempts = req.FallbackMaxAttempts
-	}
-	if req.FallbackRemainingWait > 0 && req.FallbackRemainingWait < effectiveRetry.maxTotalWait {
-		effectiveRetry.maxTotalWait = req.FallbackRemainingWait
-	}
-	effectiveRetry.fallbackSafety = req.FallbackSafety
-	effectiveRetry.fallbackBudget = req.FallbackBudget
+	effectiveRetry := applyStreamRequestRetry(adapter.retry, req)
 	resp, err := doProviderStreamRequestWithRetry(streamCtx, adapter.client, "anthropic", req.RequestID, req.ModelCallID, buildHTTPRequest, effectiveRetry)
 	if err != nil {
 		if idleErr := streamIdle.Err(); idleErr != nil {

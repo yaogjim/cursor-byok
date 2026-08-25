@@ -19,6 +19,10 @@ import {
   startModelAdapterTest,
   toUserError,
 } from "@/state/appState";
+import {
+  LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
+  selectAdaptersForEndpointTest,
+} from "@/state/configProjection";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const BATCH_TEST_CONCURRENCY = 10;
@@ -295,8 +299,13 @@ function isAdapterTesting(adapter) {
 }
 
 async function handleTestModelAdapter(adapter) {
+  const plan = selectAdaptersForEndpointTest([adapter]);
+  if (plan.skippedLogical.length) {
+    message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
+    return;
+  }
   try {
-    await runModelAdapterTest(adapter);
+    await runModelAdapterTest(plan.toTest[0] ?? adapter);
   } catch (_error) {
     // 失败结果会通过事件同步到界面，这里不再额外弹窗打断用户。
   }
@@ -323,7 +332,11 @@ async function handleTestAllModelAdapters() {
     await stopBatchTesting();
     return;
   }
-  const adapters = filteredAdapters.value.slice();
+  const plan = selectAdaptersForEndpointTest(filteredAdapters.value);
+  if (plan.skippedLogical.length) {
+    message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
+  }
+  const adapters = plan.toTest.slice();
   if (adapters.length === 0) {
     return;
   }

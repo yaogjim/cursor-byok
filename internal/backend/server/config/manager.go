@@ -19,6 +19,7 @@ type Manager struct {
 	current     atomic.Pointer[Config]
 	listenersMu sync.RWMutex
 	listeners   []func(Config)
+	writeMu     sync.Mutex
 	reloadMu    sync.Mutex
 	snapshot    fileSnapshot
 	lastReload  time.Time
@@ -68,21 +69,23 @@ func (manager *Manager) Load(ctx context.Context) (Config, error) {
 }
 
 func (manager *Manager) Save(ctx context.Context, cfg Config) (Config, error) {
-	if manager == nil || manager.store == nil {
-		return Config{}, fmt.Errorf("config manager is not initialized")
-	}
-	normalized, err := manager.store.Save(ctx, cfg)
-	if err != nil {
-		return Config{}, err
-	}
-	manager.setCurrent(normalized)
-	manager.reloadMu.Lock()
-	manager.snapshot = manager.store.snapshot()
-	manager.lastReload = time.Now()
-	manager.reloadError = ""
-	manager.reloadMu.Unlock()
-	manager.notify(normalized)
-	return normalized, nil
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.Save(ctx, cfg)
+		if err != nil {
+			return Config{}, false, err
+		}
+		return saved, true, nil
+	})
+}
+
+func (manager *Manager) SaveUserConfig(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveUserConfig(ctx, cfg)
+		if err != nil {
+			return Config{}, false, err
+		}
+		return saved, true, nil
+	})
 }
 
 func (manager *Manager) LastAgentModelHash() string {
@@ -93,17 +96,33 @@ func (manager *Manager) LastAgentModelHash() string {
 }
 
 func (manager *Manager) SaveLastAgentModelHash(ctx context.Context, value string) error {
-	if manager == nil {
-		return fmt.Errorf("config manager is not initialized")
-	}
-	normalizedValue := strings.TrimSpace(value)
-	current := manager.Current()
-	if strings.TrimSpace(current.LastAgentModelHash) == normalizedValue {
-		return nil
-	}
-	current.LastAgentModelHash = normalizedValue
-	_, err := manager.Save(ctx, current)
+	_, err := manager.commitStoreWrite(false, func() (Config, bool, error) {
+		return manager.store.SaveLastAgentModelHash(ctx, value)
+	})
 	return err
+}
+
+func (manager *Manager) commitStoreWrite(notify bool, write func() (Config, bool, error)) (Config, error) {
+	if manager == nil || manager.store == nil {
+		return Config{}, fmt.Errorf("config manager is not initialized")
+	}
+	manager.writeMu.Lock()
+	cfg, changed, err := write()
+	if err != nil {
+		manager.writeMu.Unlock()
+		return Config{}, err
+	}
+	manager.setCurrent(cfg)
+	manager.reloadMu.Lock()
+	manager.snapshot = manager.store.snapshot()
+	manager.lastReload = time.Now()
+	manager.reloadError = ""
+	manager.reloadMu.Unlock()
+	manager.writeMu.Unlock()
+	if notify && changed {
+		manager.notify(cfg)
+	}
+	return cfg, nil
 }
 
 func (manager *Manager) ProviderStreamIdleTimeout(ctx context.Context) time.Duration {
@@ -175,6 +194,7 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 			AnthropicMaxTokens:          item.AnthropicMaxTokens,
 			AnthropicThinkingEffort:     item.AnthropicThinkingEffort,
 			ThinkingBudgetTokens:        item.ThinkingBudgetTokens,
+			MaxConcurrentRequests:       item.MaxConcurrentRequests,
 		})
 	}
 	return legacyruntime.RuntimeConfigSnapshot{
@@ -210,17 +230,28 @@ func (manager *Manager) reloadIfChanged(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if !manager.writeMu.TryLock() {
+		return
+	}
+	cfg, changed := manager.reloadIfChangedLocked(ctx)
+	manager.writeMu.Unlock()
+	if changed {
+		manager.notify(cfg)
+	}
+}
+
+func (manager *Manager) reloadIfChangedLocked(ctx context.Context) (Config, bool) {
 	now := time.Now()
 	manager.reloadMu.Lock()
 	if !manager.lastReload.IsZero() && now.Sub(manager.lastReload) < configHotReloadMinInterval {
 		manager.reloadMu.Unlock()
-		return
+		return Config{}, false
 	}
 	manager.lastReload = now
 	nextSnapshot := manager.store.snapshot()
 	if nextSnapshot == manager.snapshot {
 		manager.reloadMu.Unlock()
-		return
+		return Config{}, false
 	}
 	cfg, err := manager.store.Load(ctx)
 	if err != nil {
@@ -230,13 +261,13 @@ func (manager *Manager) reloadIfChanged(ctx context.Context) {
 			manager.reloadError = errText
 		}
 		manager.reloadMu.Unlock()
-		return
+		return Config{}, false
 	}
 	manager.snapshot = nextSnapshot
 	manager.reloadError = ""
 	manager.setCurrent(cfg)
 	manager.reloadMu.Unlock()
-	manager.notify(cfg)
+	return cfg, true
 }
 
 func (manager *Manager) notify(cfg Config) {

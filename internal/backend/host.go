@@ -123,6 +123,22 @@ func (host *Host) SaveConfig(ctx context.Context, cfg serverconfig.Config) (serv
 	if host == nil || host.configs == nil {
 		return serverconfig.Config{}, fmt.Errorf("backend config manager is not initialized")
 	}
+	normalized, err := host.configs.SaveUserConfig(ctx, cfg)
+	if err != nil {
+		return serverconfig.Config{}, err
+	}
+	if host.httpServer == nil {
+		if rebuildErr := host.rebuild(normalized); rebuildErr != nil {
+			return serverconfig.Config{}, rebuildErr
+		}
+	}
+	return normalized, nil
+}
+
+func (host *Host) ReplaceConfig(ctx context.Context, cfg serverconfig.Config) (serverconfig.Config, error) {
+	if host == nil || host.configs == nil {
+		return serverconfig.Config{}, fmt.Errorf("backend config manager is not initialized")
+	}
 	normalized, err := host.configs.Save(ctx, cfg)
 	if err != nil {
 		return serverconfig.Config{}, err

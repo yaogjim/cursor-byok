@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -188,6 +189,40 @@ func TestImportUserConfigRejectsUnknownFieldsWithoutOverwriting(t *testing.T) {
 	}
 	if persisted.Observability.Mode != serverconfig.ObservabilityModeFull {
 		t.Fatal("invalid import overwrote the existing config")
+	}
+}
+
+func TestImportUserConfigReplacesLastAgentModelHash(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	current := serverconfig.DefaultConfig()
+	current.LastAgentModelHash = "live-hash"
+	current.Appearance.Theme = "light"
+	if _, err := service.store.Save(context.Background(), current); err != nil {
+		t.Fatalf("seed Save() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "imported.yaml")
+	content := "lastAgentModelHash: imported-hash\nappearance:\n  theme: dark\nmodelAdapters: []\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := service.ImportUserConfig(path)
+	if err != nil {
+		t.Fatalf("ImportUserConfig() error = %v", err)
+	}
+	if got.LastAgentModelHash != "imported-hash" {
+		t.Fatalf("imported hash = %q, want imported-hash", got.LastAgentModelHash)
+	}
+	if got.Appearance.Theme != "dark" {
+		t.Fatalf("imported theme = %q, want dark", got.Appearance.Theme)
+	}
+
+	persisted, err := service.LoadUserConfig()
+	if err != nil {
+		t.Fatalf("LoadUserConfig() error = %v", err)
+	}
+	if persisted.LastAgentModelHash != "imported-hash" {
+		t.Fatalf("persisted hash = %q, want imported-hash", persisted.LastAgentModelHash)
 	}
 }
 
