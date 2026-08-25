@@ -37,9 +37,13 @@
 
 主控集成复查发现并修复了一个跨切片 P1：resolver 虽已产生容量值，`applyChannelToRequest` 原先没有用 `ResolvedChannel` 覆盖 `StreamRequest`，导致真实配置无法生效而仅测试手工请求字段有效。修复后补了请求投影、真实 HTTP 峰值、Manager legacy snapshot 和上游组规范化回归；独立复审确认无剩余 P0/P1。
 
-验证通过：容量与配置定向 test；根 module `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`；前端投影测试和生产 build；CLI 独立 module test/race/vet/build；日志分析器 test/race/vet；`git diff --check` 与 proto/MITM/certs 保护路径检查。Apple Silicon / macOS 14.6.1 使用隔离临时工具链运行 `task build`，生成约 23 MiB 的 `bin/macos-arm64.dmg`（SHA-256 `15a719c97ca4229cf618e75c4e890e6b14381ff6f34ffaac12763e160f89bf7f`）；`hdiutil verify`、只读挂载、Mach-O arm64 与 adhoc codesign 校验通过。DMG 受 `bin/` ignore 规则保护，不纳入 Git，且未做 Developer ID 签名或 notarization。详细合同见工作决策基线 §10.9、系统 Design §14.10，详细任务证据见 `task/todo.md` 的 `config-race-upstream-capacity-20260825`。
+验证通过：容量与配置定向 test；根 module `go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`；前端投影测试和生产 build；CLI 独立 module test/race/vet/build；日志分析器 test/race/vet；`git diff --check` 与 proto/MITM/certs 保护路径检查。Apple Silicon / macOS 14.6.1 使用隔离临时工具链运行 `task build`，生成版本 `0.0.49.5`、约 23 MiB 的 `bin/macos-arm64.dmg`（SHA-256 `8ad056b49386841ba2cd1a8a3cff7ae3489948f38e9be47373da693090d93841`）；`hdiutil verify`、只读挂载、Info.plist/buildinfo 版本、Mach-O arm64 与 adhoc codesign 校验通过。DMG 受 `bin/` ignore 规则保护，不纳入 Git，且未做 Developer ID 签名或 notarization。详细合同见工作决策基线 §10.9、系统 Design §14.10，详细任务证据见 `task/todo.md` 的 `config-race-upstream-capacity-20260825`。
 
 用户明确选择不修改当前真实 `grok-HA` 配置，本次也未读取后改写该文件、未占用或重启 18080/18090。因此可声明“容量能力已实现并经非零 fixture 验证”，当前在线 `grok-HA` 仍为无限并发，不能声明在线容量风险已启用关闭。
+
+### 0.5 `v0.0.49.5` 发布候选
+
+用户于 2026-08-25 确认本轮更新采用版本号 `0.0.49.5`。版本事实源 `build/config.yml`、Wails macOS/Windows/Linux 构建元数据、`release-notes.md` 与归档 `releaselog/0.0.49.5.md` 已按该版本对齐；发布说明覆盖多层模型路由、配置写事务、可选物理上游容量和独立 CLI 模型池，并保留真实 `grok-HA` 未启用容量限制、CLI 两模型故障切换与 Wails 视觉验收未闭合的边界。README 的“当前稳定发布”仍指向已实际发布的 `v0.0.49.3`，只有 GitHub Release 完成后才切换，不提前宣称 `v0.0.49.5` 已发布。
 
 ### 0. Agent 执行证据与完成门禁治理
 
