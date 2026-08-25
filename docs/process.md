@@ -41,9 +41,9 @@
 
 用户明确选择不修改当前真实 `grok-HA` 配置，本次也未读取后改写该文件、未占用或重启 18080/18090。因此可声明“容量能力已实现并经非零 fixture 验证”，当前在线 `grok-HA` 仍为无限并发，不能声明在线容量风险已启用关闭。
 
-### 0.5 `v0.0.49.6` 本地发布
+### 0.5 `v0.0.49.6` 发布
 
-本次本地发布版本使用 `0.0.49.6`。版本事实源 `build/config.yml`、Wails macOS/Windows/Linux 构建元数据、`release-notes.md` 与归档 `releaselog/0.0.49.6.md` 已按该版本对齐；发布说明包含 Provider fallback 覆盖优先预算分配、五物理渠道配置与测试交互修正，以及此前已验证的多层模型路由、配置写事务和可选物理上游容量能力。README 的“当前稳定发布”仍指向已公开的 `v0.0.49.3`；本次按用户要求只生成本地资产，不创建或更新 GitHub Release。
+本次发布版本使用 `0.0.49.6`。版本事实源 `build/config.yml`、Wails macOS/Windows/Linux 构建元数据、`release-notes.md` 与归档 `releaselog/0.0.49.6.md` 已按该版本对齐；发布说明包含 Provider fallback 覆盖优先预算分配、五物理渠道配置与测试交互修正，以及此前已验证的多层模型路由、配置写事务和可选物理上游容量能力。2026-08-25 用户最新要求已取代此前“仅生成本地资产”的安排：`cli` 变更合入 `noad` 后，README 的“当前稳定发布”更新到 `v0.0.49.6`，发布资产上传到 `yaogjim/cursor-byok` GitHub Release，标签必须指向 `noad` 的发布提交。
 
 ### 0.6 Fallback 配置交互修正（自动化验收完成，视觉待补）
 

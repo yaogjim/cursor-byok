@@ -45,7 +45,7 @@ DELIVERY_STATUS: verified-partial（实现、定向/全量自动化和生产构�
 - 用户确认：“测试全部”静默跳过逻辑 alias；单独测试逻辑 alias 保留实际运行验证提示。
 - fallback 链上限调整为总共 5 个物理渠道，即 1 个 primary + 1–4 个 candidates；默认全链预算继续为 5 attempts / 8 seconds，范围继续为 2–9 / 1–30，渠道增多不扩大全链预算。
 - 修复通用 Select 长列表的视口高度和滚动容器错位，使鼠标与键盘都能访问全部可用物理 adapter。
-- 不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、真实 BYOK 配置、发布版本；本工作包此前已提交，当前发布版本为 0.0.49.6，构建产物不上传 GitHub。
+- 不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、真实 BYOK 配置、发布版本；本工作包此前已提交，当前发布版本为 0.0.49.6，并按 2026-08-25 用户最新要求随 `noad` 分支发布到 GitHub。
 
 ### ACTIVE SLICES
 
@@ -84,7 +84,7 @@ DELIVERY_STATUS: accepted（能力实现、受控非零 fixture、全量门禁�
 - 用户已批准 `.cursor/plans/配置竞态与上游容量风险精简计划_ff017475.plan.md`，目标是关闭普通 UI 保存与运行时 `lastAgentModelHash` 更新互相覆盖的进程内竞态，并提供默认关闭的物理上游共享容量限制。
 - 三种配置写语义固定为：普通保存保留最新 hash；hash-only 更新只 patch 该字段且相同值 no-op；完整导入显式全量替换并允许替换 hash。
 - `maxConcurrentRequests` 只挂物理 adapter：缺失/0 不限流，1–16 有效；逻辑 alias 必须为 0，同 provider + 规范化 Base URL + API Key 的物理 adapter 必须值一致。
-- 用户已确认本轮本地发布版本使用 `0.0.49.6`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.6.md` 必须保持一致。README 的“当前稳定发布”继续指向已公开版本；本次构建资产不上传 GitHub。
+- 用户已确认本轮发布版本使用 `0.0.49.6`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.6.md` 必须保持一致。2026-08-25 最新要求为：合并 `cli` 到 `noad`，更新 README 的“当前稳定发布”，推送 `noad`，并将构建资产发布到 GitHub；该要求取代此前仅生成本地资产的安排。
 - 不修改真实 `~/.cursor-local-assistant-v2/config.yaml`，不占用或重启 18080/18090；不修改公共 proto、MITM/CA/证书、系统代理或发布隔离。
 
 ### COMPLETED SLICES

@@ -1,6 +1,6 @@
 # Cursor BYOK noad
 
-> 让 Cursor 使用你自己的模型 API 的本地 BYOK 客户端。`noad` 分支默认浅色、默认关闭广告、默认不启动检查更新，更新按“检查 / 下载 / 安装”分阶段确认，发布与更新资源固定使用 `yaogjim/cursor-byok`。当前发布版本为 [v0.0.49.3](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.3)。
+> 让 Cursor 使用你自己的模型 API 的本地 BYOK 客户端。`noad` 分支默认浅色、默认关闭广告、默认不启动检查更新，更新按“检查 / 下载 / 安装”分阶段确认，发布与更新资源固定使用 `yaogjim/cursor-byok`。当前发布版本为 [v0.0.49.6](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6)。
 
 [下载最新版](https://github.com/yaogjim/cursor-byok/releases/latest) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues)
 
@@ -15,11 +15,18 @@
 - **Provider 备用渠道**：默认关闭；仅在当前渠道无输出、无副作用时，按你配置的顺序切换。
 - **完成更可核对**：编辑类任务必须同时有成功修改，以及晚于该修改的成功验证；口头声明不能替代实际改动和验证。
 - **可观测与统计**：展示 Token 消耗、缓存命中率、对话摘要、模型测试和日志采集状态。
-- **公开记录更克制**：公共 Agent transcript 只保留用户可见文本和结构化工具事件，不写入 reasoning、内部回放、凭据或门禁提醒。
+- **公开记录更克制**：公共 Agent transcript 只保留用户可见文本和结构化工具事件，不写入 reasoning、signature、内部回放、凭据或门禁提醒。
 
 ## 当前版本
 
-当前稳定发布为 **v0.0.49.3**（2026-08-23）。完整说明见 [GitHub Release](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.3) 与仓库 [`release-notes.md`](./release-notes.md)。
+当前稳定发布为 **v0.0.49.6**（2026-08-25）。完整说明见 [GitHub Release](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6) 与仓库 [`release-notes.md`](./release-notes.md)。
+
+### v0.0.49.6
+
+- Provider fallback 采用“保证渠道覆盖，再用剩余预算重试”，最多支持 1 个主渠道和 4 个有序物理候选渠道。
+- 普通配置保存会保留最新运行时模型选择；物理 adapter 支持可选的并发容量保护，逻辑 fallback alias 不参与容量限制。
+- “测试全部”静默跳过逻辑 alias，长下拉列表使用真实滚动容器并保留键盘访问。
+- 独立 CLI 模型池保持独立 module，不进入客户端发布包；真实 CLI 故障切换和 Wails 浏览器视觉验收仍是独立证据缺口。
 
 ### v0.0.49.3
 
