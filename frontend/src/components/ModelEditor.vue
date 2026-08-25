@@ -27,6 +27,17 @@ import {
   toUserError,
   validateModelAdapters,
 } from "@/state/appState";
+import {
+  DEFAULT_PROVIDER_FALLBACK,
+  formatFallbackBudgetInput,
+  isLogicalRoutingAdapter,
+  LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
+  MAX_PROVIDER_FALLBACK_CANDIDATES,
+  maxConcurrentRequestsFieldError,
+  parseFallbackBudgetInput,
+  providerFallbackBudgetFieldError,
+  shouldTestModelAdapterEndpoint,
+} from "@/state/configProjection";
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 
 const modelTypeTabs = [
@@ -159,7 +170,10 @@ const fieldTips = {
   anthropicExtraParams: "开启后会把 JSON 对象覆盖到 Anthropic 请求体。同名字段以这里为准。",
   anthropicMaxTokens: "Anthropic 模型单次回复允许生成的最大 Token 数。留空时使用默认值。",
   anthropicThinkingEffort: "Anthropic adaptive thinking 的思考强度。请求会固定使用新版 thinking.type=adaptive。",
-  providerFallback: "启用后，此模型路由的请求将依次尝试主渠道和备选渠道，而非使用当前渠道本身。所有渠道共享同一总 attempt 与等待预算；仅在零原始字节、零 model event 时才允许渠道切换；一旦开始输出则禁止回退。",
+  maxConcurrentRequests: "0 或不填表示不限制。同一接口地址与密钥的物理渠道共享该上限；无空闲槽时固定等待 2 秒。",
+  providerFallback: "启用后，此模型成为逻辑路由身份（建议仅子代理选择）。请求按主渠道和备选渠道顺序尝试，alias 自身不会向虚拟 endpoint 发请求。全链共享 HTTP 尝试与等待预算；单渠道最多 3 次，实际按 min(剩余预算, 3) 分配。仅在零原始字节、零 model event 时才允许渠道切换；一旦已有输出则禁止切换。跨 Provider 可能改变费用、隐私边界、模型语义和工具兼容性。",
+  maxHttpAttempts: "整条 fallback 链共享的最大 HTTP 尝试次数，默认 5，允许 2–9。越界会报错而不会静默截断。单渠道固定最多 3 次，实际按 min(剩余预算, 3) 分配。",
+  maxWaitSeconds: "整条 fallback 链共享的最大退避等待秒数，默认 8，允许 1–30。越界会报错而不会静默截断。",
   tooltipData: "模型列表 hover 时显示的备注说明。",
 };
 
@@ -237,6 +251,9 @@ async function handleSave() {
   if (!result.ok) {
     return;
   }
+  if (isLogicalRoutingAdapter(result.adapter)) {
+    message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
+  }
   emit("saved", result.adapter);
   emit("close");
 }
@@ -263,6 +280,11 @@ async function handleTest() {
   try {
     const saved = await persistDraft();
     if (!saved.ok || !saved.adapter) {
+      return;
+    }
+    if (!shouldTestModelAdapterEndpoint(saved.adapter)) {
+      message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
+      emit("saved", saved.adapter);
       return;
     }
     const result = await runModelAdapterTest(saved.adapter);
@@ -351,7 +373,9 @@ onBeforeUnmount(() => {
 
 // 其他已保存渠道（排除当前编辑中的适配器）
 const otherAdapters = computed(() =>
-  appState.modelAdapters.filter((a) => a.id && a.id !== draft.id),
+  appState.modelAdapters.filter(
+    (a) => a.id && a.id !== draft.id && !isLogicalRoutingAdapter(a),
+  ),
 );
 
 // 渠道下拉基础选项，含空"不选择"项
@@ -371,23 +395,55 @@ const fallbackPrimaryOptions = computed(() =>
   ),
 );
 
-// 候选渠道1选项：排除主渠道 + 候选2
-const fallbackCandidate1Options = computed(() =>
-  fallbackChannelBaseOptions.value.filter(
-    (o) => !o.value
-      || (o.value !== draft.providerFallback.primaryChannelID
-        && o.value !== (draft.providerFallback.candidateChannelIDs[1] || "")),
-  ),
+const fallbackNoChannels = computed(() =>
+  draft.providerFallback.enabled && otherAdapters.value.length === 0,
 );
 
-// 候选渠道2选项：排除主渠道 + 候选1
-const fallbackCandidate2Options = computed(() =>
-  fallbackChannelBaseOptions.value.filter(
-    (o) => !o.value
-      || (o.value !== draft.providerFallback.primaryChannelID
-        && o.value !== (draft.providerFallback.candidateChannelIDs[0] || "")),
-  ),
-);
+const fallbackCandidateSlotIndexes = computed(() => {
+  if (fallbackNoChannels.value || !draft.providerFallback.primaryChannelID) {
+    return [];
+  }
+  const ids = draft.providerFallback.candidateChannelIDs || [];
+  const slots = [];
+  for (let index = 0; index < MAX_PROVIDER_FALLBACK_CANDIDATES; index += 1) {
+    if (index > 0 && !ids[index - 1]) {
+      break;
+    }
+    slots.push(index);
+  }
+  return slots;
+});
+
+function candidateSlotValue(index) {
+  return draft.providerFallback.candidateChannelIDs[index] ?? "";
+}
+
+function candidateSlotOptions(index) {
+  const ids = draft.providerFallback.candidateChannelIDs || [];
+  const taken = new Set(
+    [draft.providerFallback.primaryChannelID, ...ids.filter((_, slotIndex) => slotIndex !== index)].filter(Boolean),
+  );
+  return fallbackChannelBaseOptions.value.filter((option) => !option.value || !taken.has(option.value));
+}
+
+function candidateSlotLabel(index) {
+  const required = index === 0 ? "必填" : "可选";
+  return `备选渠道 ${index + 1}（第 ${index + 2} 优先，${required}）`;
+}
+
+function setCandidateSlot(index, val) {
+  const value = String(val || "").trim();
+  const current = Array.isArray(draft.providerFallback.candidateChannelIDs)
+    ? draft.providerFallback.candidateChannelIDs.slice()
+    : [];
+  if (!value) {
+    draft.providerFallback.candidateChannelIDs = current.slice(0, index);
+    return;
+  }
+  const next = current.slice();
+  next[index] = value;
+  draft.providerFallback.candidateChannelIDs = next;
+}
 
 // 是否跨 Provider（OpenAI/Anthropic 混用）
 const isCrossProviderFallback = computed(() => {
@@ -403,34 +459,46 @@ const isCrossProviderFallback = computed(() => {
   return types.size > 1;
 });
 
-// 启用时无其他渠道可选
-const fallbackNoChannels = computed(() =>
-  draft.providerFallback.enabled && otherAdapters.value.length === 0,
+function createFallbackBudgetModel(key) {
+  return computed({
+    get() {
+      return formatFallbackBudgetInput(draft.providerFallback[key]);
+    },
+    set(value) {
+      draft.providerFallback[key] = parseFallbackBudgetInput(value);
+    },
+  });
+}
+
+const maxHttpAttemptsInput = createFallbackBudgetModel("maxHttpAttempts");
+const maxWaitSecondsInput = createFallbackBudgetModel("maxWaitSeconds");
+const maxHttpAttemptsError = computed(() =>
+  providerFallbackBudgetFieldError("maxHttpAttempts", draft.providerFallback.maxHttpAttempts),
+);
+const maxWaitSecondsError = computed(() =>
+  providerFallbackBudgetFieldError("maxWaitSeconds", draft.providerFallback.maxWaitSeconds),
+);
+const isLogicalRoutingDraft = computed(() => isLogicalRoutingAdapter(draft));
+const maxConcurrentRequestsInput = computed({
+  get() {
+    return formatFallbackBudgetInput(draft.maxConcurrentRequests);
+  },
+  set(value) {
+    draft.maxConcurrentRequests = parseFallbackBudgetInput(value);
+  },
+});
+const maxConcurrentRequestsError = computed(() =>
+  maxConcurrentRequestsFieldError(draft.maxConcurrentRequests),
 );
 
-// 候选渠道1（双向绑定槽位0，清空时同步清槽位1）
-const candidate1 = computed({
-  get() {
-    return draft.providerFallback.candidateChannelIDs[0] ?? "";
+watch(
+  () => draft.providerFallback.enabled,
+  (enabled) => {
+    if (enabled) {
+      draft.maxConcurrentRequests = 0;
+    }
   },
-  set(val) {
-    const v = String(val || "").trim();
-    const c2 = draft.providerFallback.candidateChannelIDs[1] ?? "";
-    draft.providerFallback.candidateChannelIDs = v ? (c2 ? [v, c2] : [v]) : [];
-  },
-});
-
-// 候选渠道2（双向绑定槽位1）
-const candidate2 = computed({
-  get() {
-    return draft.providerFallback.candidateChannelIDs[1] ?? "";
-  },
-  set(val) {
-    const v = String(val || "").trim();
-    const c1 = draft.providerFallback.candidateChannelIDs[0] ?? "";
-    draft.providerFallback.candidateChannelIDs = c1 ? (v ? [c1, v] : [c1]) : [];
-  },
-});
+);
 </script>
 
 <template>
@@ -678,11 +746,37 @@ const candidate2 = computed({
           />
         </div>
 
+        <label v-if="!isLogicalRoutingDraft" class="flex flex-col gap-1">
+          <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <Tooltip :content="fieldTips.maxConcurrentRequests" />
+            <span>上游并发上限</span>
+          </span>
+          <input
+            v-model="maxConcurrentRequestsInput"
+            type="text"
+            inputmode="numeric"
+            placeholder="例如：2（留空表示不限制）"
+            :aria-invalid="Boolean(maxConcurrentRequestsError)"
+            class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+            :class="maxConcurrentRequestsError
+              ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+              : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+          />
+          <span v-if="maxConcurrentRequestsError" class="text-[11px] text-[var(--color-error-text)]">{{ maxConcurrentRequestsError }}</span>
+          <span v-else class="text-[11px] text-[var(--color-text-muted)]">0 或不填表示不限制；同一接口与密钥共享，等待固定 2 秒。</span>
+        </label>
+
         <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
             <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
               <Tooltip :content="fieldTips.providerFallback" />
               <span>渠道 Fallback</span>
+              <span
+                v-if="isLogicalRoutingDraft"
+                class="rounded-[999px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-[7px] py-[2px] text-[11px] font-medium text-[var(--color-warning-text)]"
+              >
+                逻辑路由（建议仅子代理）
+              </span>
             </span>
             <label class="center-row gap-2 text-xs text-[var(--color-text)]">
               <input
@@ -695,8 +789,48 @@ const candidate2 = computed({
           </div>
           <div v-if="draft.providerFallback.enabled" class="mt-3 flex flex-col gap-3">
             <p class="text-xs text-[var(--color-text-secondary)]">
-              启用后，此模型路由的请求将按顺序使用主渠道和备选渠道，不再使用当前渠道本身。所有渠道共享总 attempt 预算；仅在零输出时允许切换。
+              启用后，此模型是逻辑路由 alias（建议仅子代理选择），自身不会向虚拟 endpoint 发请求。请求按主渠道和备选渠道顺序尝试；单渠道最多 3 次 HTTP，实际按 min(剩余预算, 3) 分配。仅在零原始字节、零 model event 时允许切换，已有输出后不切换。跨 Provider 可能改变费用、隐私边界、模型语义和工具兼容性。
             </p>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.maxHttpAttempts" />
+                  <span>全链最大 HTTP 尝试次数（默认 5）</span>
+                </span>
+                <input
+                  v-model="maxHttpAttemptsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts)"
+                  :aria-invalid="Boolean(maxHttpAttemptsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="maxHttpAttemptsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="maxHttpAttemptsError" class="text-[11px] text-[var(--color-error-text)]">{{ maxHttpAttemptsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 2–9；越界报错，不会静默截断。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.maxWaitSeconds" />
+                  <span>全链最大等待秒数（默认 8）</span>
+                </span>
+                <input
+                  v-model="maxWaitSecondsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds)"
+                  :aria-invalid="Boolean(maxWaitSecondsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="maxWaitSecondsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="maxWaitSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ maxWaitSecondsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 1–30；越界报错，不会静默截断。</span>
+              </label>
+            </div>
             <div
               v-if="fallbackNoChannels"
               class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
@@ -707,7 +841,7 @@ const candidate2 = computed({
               v-if="isCrossProviderFallback"
               class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
             >
-              检测到跨 Provider 配置（OpenAI / Anthropic 混用）。请确认工具 schema、模型语义与上下文格式兼容，不兼容时该渠道将被跳过而非降级。
+              检测到跨 Provider 配置（OpenAI / Anthropic 混用）。跨 Provider fallback 可能改变费用、隐私边界、模型语义和工具兼容性；不兼容时该渠道将被跳过而非降级。
             </div>
             <label v-if="!fallbackNoChannels" class="flex flex-col gap-1">
               <span class="text-xs text-[var(--color-text-secondary)]">主渠道（第 1 优先）</span>
@@ -716,18 +850,16 @@ const candidate2 = computed({
                 :options="fallbackPrimaryOptions"
               />
             </label>
-            <label v-if="!fallbackNoChannels && draft.providerFallback.primaryChannelID" class="flex flex-col gap-1">
-              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 1（第 2 优先，必填）</span>
+            <label
+              v-for="slotIndex in fallbackCandidateSlotIndexes"
+              :key="slotIndex"
+              class="flex flex-col gap-1"
+            >
+              <span class="text-xs text-[var(--color-text-secondary)]">{{ candidateSlotLabel(slotIndex) }}</span>
               <Select
-                v-model="candidate1"
-                :options="fallbackCandidate1Options"
-              />
-            </label>
-            <label v-if="!fallbackNoChannels && candidate1" class="flex flex-col gap-1">
-              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 2（第 3 优先，可选）</span>
-              <Select
-                v-model="candidate2"
-                :options="fallbackCandidate2Options"
+                :model-value="candidateSlotValue(slotIndex)"
+                :options="candidateSlotOptions(slotIndex)"
+                @update:model-value="setCandidateSlot(slotIndex, $event)"
               />
             </label>
           </div>

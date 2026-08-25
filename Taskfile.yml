@@ -348,7 +348,7 @@ tasks:
       - task: release:verify:analyzer-isolation
 
   release:verify:analyzer-isolation:
-    summary: 验证客户端发布包不包含独立日志分析器
+    summary: 验证客户端发布包不包含独立日志分析器或 CLI 模型池
     preconditions:
       - sh: python3 --version > /dev/null 2>&1
         msg: "未检测到 python3，无法执行发布隔离检查。"
@@ -362,8 +362,8 @@ tasks:
 
         release_dir = pathlib.Path("{{.RELEASE_DIR}}")
         archives = sorted(release_dir.glob("*.tar.gz")) + sorted(release_dir.glob("*.zip"))
-        forbidden_paths = ("tools/log-analyzer", "log-analyzer", "cursor-log-analyzer")
-        forbidden_markers = (b"cursor-log-analyzer", b"tools/log-analyzer")
+        forbidden_paths = ("tools/log-analyzer", "log-analyzer", "cursor-log-analyzer", "tools/cursor-cli-model-pool", "cursor-cli-model-pool")
+        forbidden_markers = (b"cursor-log-analyzer", b"tools/log-analyzer", b"cursor-cli-model-pool", b"tools/cursor-cli-model-pool")
         violations = []
 
         def inspect_member(archive_path, name, payload):
@@ -389,8 +389,16 @@ tasks:
         if violations:
             print("\n".join(violations), file=sys.stderr)
             raise SystemExit(1)
-        print(f"analyzer isolation verified: {len(archives)} archive(s)")
+        print(f"analyzer/cli-pool isolation verified: {len(archives)} archive(s)")
         PY
+
+  test:cursor-cli-model-pool:
+    summary: 运行独立 CLI 模型池 module 的 test/race/vet；不接入客户端 build 或发布包
+    dir: tools/cursor-cli-model-pool
+    cmds:
+      - go test ./... -count=1
+      - go test -race ./...
+      - go vet ./...
 
   release:verify:assets:
     summary: 验证当前版本发布资产是否齐全

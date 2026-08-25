@@ -2,10 +2,15 @@ package config
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestNormalizeConfigMigratesLegacyLogFlag(t *testing.T) {
@@ -182,6 +187,29 @@ func TestNormalizeModelAdapterConfigsRejectsUnknownReasoningEffort(t *testing.T)
 
 // ──── ProviderFallback 校验测试 ────────────────────────────────────────────────
 
+func testPhysicalAdapterSet(n int) []ModelAdapterConfig {
+	adapters := make([]ModelAdapterConfig, n)
+	for i := 0; i < n; i++ {
+		item := testModelAdapter("ch-"+strconv.Itoa(i), i+1)
+		item.BaseURL = "https://api" + strconv.Itoa(i) + ".example.com/v1"
+		adapters[i] = item
+	}
+	return adapters
+}
+
+func adapterIDs(t *testing.T, adapters []ModelAdapterConfig) []string {
+	t.Helper()
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize adapter set: %v", err)
+	}
+	ids := make([]string, len(normalized))
+	for i := range normalized {
+		ids[i] = normalized[i].ID
+	}
+	return ids
+}
+
 func testFallbackAdapters() []ModelAdapterConfig {
 	a := testModelAdapter("ch-a", 1)
 	b := testModelAdapter("ch-b", 2)
@@ -240,6 +268,40 @@ func TestProviderFallbackValidPrimaryAndCandidate(t *testing.T) {
 	}
 }
 
+func TestProviderFallbackRejectsLogicalChannelsInsideChain(t *testing.T) {
+	adapters := append(testFallbackAdapters(), testModelAdapter("ch-c", 3), testModelAdapter("ch-d", 4))
+	adapters[2].BaseURL = "https://api3.example.com/v1"
+	adapters[3].BaseURL = "https://api4.example.com/v1"
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idA, idB, idC := normalized[0].ID, normalized[1].ID, normalized[2].ID
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+
+	adapters[3].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idA,
+		CandidateChannelIDs: []string{idC},
+	}
+	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil || !strings.Contains(err.Error(), "物理渠道") {
+		t.Fatalf("logical primary must be rejected, err=%v", err)
+	}
+
+	adapters[3].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idA},
+	}
+	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil || !strings.Contains(err.Error(), "物理渠道") {
+		t.Fatalf("logical candidate must be rejected, err=%v", err)
+	}
+}
+
 func TestProviderFallbackRejectsDanglingRef(t *testing.T) {
 	adapters := testFallbackAdapters()
 	adapters[0].ProviderFallback = ProviderFallbackConfig{
@@ -270,19 +332,44 @@ func TestProviderFallbackRejectsDuplicateCandidates(t *testing.T) {
 	}
 }
 
-func TestProviderFallbackRejectsTooManyCandidates(t *testing.T) {
-	adapters := testFallbackAdapters()
-	normalizedAll, _ := NormalizeModelAdapterConfigs(adapters)
-	idB := normalizedAll[1].ID
-
-	// 3 个候选（超过最大 2 个）
+func TestProviderFallbackAcceptsFourCandidates(t *testing.T) {
+	adapters := testPhysicalAdapterSet(6)
+	ids := adapterIDs(t, adapters)
 	adapters[0].ProviderFallback = ProviderFallbackConfig{
 		Enabled:             true,
-		PrimaryChannelID:    idB,
-		CandidateChannelIDs: []string{idB, idB, idB},
+		PrimaryChannelID:    ids[1],
+		CandidateChannelIDs: []string{ids[2], ids[3], ids[4], ids[5]},
 	}
-	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
-		t.Fatal("more than 2 candidateChannelIDs should be rejected")
+	got, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("4 candidates should pass: %v", err)
+	}
+	gotIDs := got[0].ProviderFallback.CandidateChannelIDs
+	want := []string{ids[2], ids[3], ids[4], ids[5]}
+	if len(gotIDs) != 4 {
+		t.Fatalf("candidates = %#v, want %#v", gotIDs, want)
+	}
+	for i := range want {
+		if gotIDs[i] != want[i] {
+			t.Fatalf("candidates = %#v, want %#v", gotIDs, want)
+		}
+	}
+}
+
+func TestProviderFallbackRejectsTooManyCandidates(t *testing.T) {
+	adapters := testPhysicalAdapterSet(7)
+	ids := adapterIDs(t, adapters)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    ids[1],
+		CandidateChannelIDs: []string{ids[2], ids[3], ids[4], ids[5], ids[6]},
+	}
+	_, err := NormalizeModelAdapterConfigs(adapters)
+	if err == nil {
+		t.Fatal("more than 4 candidateChannelIDs should be rejected")
+	}
+	if !strings.Contains(err.Error(), "1–4") {
+		t.Fatalf("error should mention 1–4, got %v", err)
 	}
 }
 
@@ -298,5 +385,377 @@ func TestProviderFallbackRejectsEmptyCandidates(t *testing.T) {
 	}
 	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
 		t.Fatal("empty candidateChannelIDs should be rejected when fallback enabled")
+	}
+}
+
+func testFallbackChain(t *testing.T) (adapters []ModelAdapterConfig, idA, idB, idC string) {
+	t.Helper()
+	c := testModelAdapter("ch-c", 3)
+	c.BaseURL = "https://api3.example.com/v1"
+	adapters = append(testFallbackAdapters(), c)
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize fallback chain: %v", err)
+	}
+	return adapters, normalized[0].ID, normalized[1].ID, normalized[2].ID
+}
+
+func TestProviderFallbackBudgetDefaultsMissingAndZero(t *testing.T) {
+	adapters, _, idB, idC := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	got, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("missing budget should normalize: %v", err)
+	}
+	fb := got[0].ProviderFallback
+	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
+		t.Fatalf("missing budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
+	}
+
+	adapters[0].ProviderFallback.MaxHttpAttempts = 0
+	adapters[0].ProviderFallback.MaxWaitSeconds = 0
+	got, err = NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("zero budget should normalize: %v", err)
+	}
+	fb = got[0].ProviderFallback
+	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
+		t.Fatalf("zero budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
+	}
+}
+
+func TestProviderFallbackBudgetLegalBoundsPreserved(t *testing.T) {
+	cases := []struct {
+		attempts, wait int
+	}{
+		{2, 1},
+		{5, 8},
+		{7, 20},
+		{9, 30},
+	}
+	for _, test := range cases {
+		adapters, _, idB, idC := testFallbackChain(t)
+		adapters[0].ProviderFallback = ProviderFallbackConfig{
+			Enabled:             true,
+			PrimaryChannelID:    idB,
+			CandidateChannelIDs: []string{idC},
+			MaxHttpAttempts:     test.attempts,
+			MaxWaitSeconds:      test.wait,
+		}
+		got, err := NormalizeModelAdapterConfigs(adapters)
+		if err != nil {
+			t.Fatalf("legal budget %d/%d rejected: %v", test.attempts, test.wait, err)
+		}
+		fb := got[0].ProviderFallback
+		if fb.MaxHttpAttempts != test.attempts || fb.MaxWaitSeconds != test.wait {
+			t.Fatalf("budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, test.attempts, test.wait)
+		}
+	}
+}
+
+func TestProviderFallbackBudgetOutOfRangeFailsTyped(t *testing.T) {
+	cases := []struct {
+		name           string
+		attempts, wait int
+		field          string
+	}{
+		{"attempts_1", 1, 8, "maxHttpAttempts"},
+		{"attempts_10", 10, 8, "maxHttpAttempts"},
+		{"attempts_negative", -3, 8, "maxHttpAttempts"},
+		{"wait_31", 5, 31, "maxWaitSeconds"},
+		{"wait_negative", 5, -1, "maxWaitSeconds"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			adapters, _, idB, idC := testFallbackChain(t)
+			adapters[0].ProviderFallback = ProviderFallbackConfig{
+				Enabled:             true,
+				PrimaryChannelID:    idB,
+				CandidateChannelIDs: []string{idC},
+				MaxHttpAttempts:     test.attempts,
+				MaxWaitSeconds:      test.wait,
+			}
+			_, err := NormalizeModelAdapterConfigs(adapters)
+			if err == nil {
+				t.Fatal("expected typed budget validation error")
+			}
+			var typed *InvalidProviderFallbackBudgetError
+			if !errors.As(err, &typed) || typed.Field != test.field {
+				t.Fatalf("error = %v, want InvalidProviderFallbackBudgetError field %s", err, test.field)
+			}
+		})
+	}
+}
+
+func TestProviderFallbackBudgetRetainedWhenDisabled(t *testing.T) {
+	adapters := testFallbackAdapters()
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:         false,
+		MaxHttpAttempts: 7,
+		MaxWaitSeconds:  12,
+	}
+	got, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("disabled fallback with legal budget should pass: %v", err)
+	}
+	fb := got[0].ProviderFallback
+	if fb.Enabled {
+		t.Fatal("disabled fallback became enabled")
+	}
+	if fb.MaxHttpAttempts != 7 || fb.MaxWaitSeconds != 12 {
+		t.Fatalf("disabled budget = %d/%d, want 7/12", fb.MaxHttpAttempts, fb.MaxWaitSeconds)
+	}
+}
+
+func TestProviderFallbackBudgetYAMLJSONRoundtrip(t *testing.T) {
+	adapters, _, idB, idC := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+		MaxHttpAttempts:     7,
+		MaxWaitSeconds:      20,
+	}
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	payload, err := yaml.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("yaml marshal: %v", err)
+	}
+	if !strings.Contains(string(payload), "maxHttpAttempts: 7") || !strings.Contains(string(payload), "maxWaitSeconds: 20") {
+		t.Fatalf("yaml lost budget fields:\n%s", payload)
+	}
+	var decoded []ModelAdapterConfig
+	if err := yaml.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	roundtrip, err := NormalizeModelAdapterConfigs(decoded)
+	if err != nil {
+		t.Fatalf("normalize roundtrip: %v", err)
+	}
+	fb := roundtrip[0].ProviderFallback
+	if !fb.Enabled || fb.MaxHttpAttempts != 7 || fb.MaxWaitSeconds != 20 || fb.PrimaryChannelID != idB {
+		t.Fatalf("roundtrip fallback = %+v", fb)
+	}
+
+	jsonPayload, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	var jsonDecoded []ModelAdapterConfig
+	if err := json.Unmarshal(jsonPayload, &jsonDecoded); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	jsonRoundtrip, err := NormalizeModelAdapterConfigs(jsonDecoded)
+	if err != nil {
+		t.Fatalf("normalize json roundtrip: %v", err)
+	}
+	jsonFB := jsonRoundtrip[0].ProviderFallback
+	if !jsonFB.Enabled || jsonFB.MaxHttpAttempts != 7 || jsonFB.MaxWaitSeconds != 20 || jsonFB.PrimaryChannelID != idB {
+		t.Fatalf("json roundtrip fallback = %+v", jsonFB)
+	}
+}
+
+func TestMaxConcurrentRequestsDefaultsMissingAndZero(t *testing.T) {
+	adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+	got, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("missing maxConcurrentRequests should default: %v", err)
+	}
+	if got[0].MaxConcurrentRequests != 0 {
+		t.Fatalf("missing maxConcurrentRequests = %d, want 0", got[0].MaxConcurrentRequests)
+	}
+
+	adapters[0].MaxConcurrentRequests = 0
+	got, err = NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("zero maxConcurrentRequests should pass: %v", err)
+	}
+	if got[0].MaxConcurrentRequests != 0 {
+		t.Fatalf("zero maxConcurrentRequests = %d, want 0", got[0].MaxConcurrentRequests)
+	}
+}
+
+func TestMaxConcurrentRequestsLegalBoundsPreserved(t *testing.T) {
+	for _, limit := range []int{1, 8, 16} {
+		adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+		adapters[0].MaxConcurrentRequests = limit
+		got, err := NormalizeModelAdapterConfigs(adapters)
+		if err != nil {
+			t.Fatalf("legal maxConcurrentRequests %d rejected: %v", limit, err)
+		}
+		if got[0].MaxConcurrentRequests != limit {
+			t.Fatalf("maxConcurrentRequests = %d, want %d", got[0].MaxConcurrentRequests, limit)
+		}
+	}
+}
+
+func TestMaxConcurrentRequestsOutOfRangeFailsTyped(t *testing.T) {
+	cases := []int{-1, 17, 32}
+	for _, limit := range cases {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+			adapters[0].MaxConcurrentRequests = limit
+			_, err := NormalizeModelAdapterConfigs(adapters)
+			if err == nil {
+				t.Fatal("expected typed maxConcurrentRequests validation error")
+			}
+			var typed *InvalidMaxConcurrentRequestsError
+			if !errors.As(err, &typed) || typed.Value != limit {
+				t.Fatalf("error = %v, want InvalidMaxConcurrentRequestsError value %d", err, limit)
+			}
+			if strings.Contains(err.Error(), "test-key") {
+				t.Fatalf("error leaked API key: %v", err)
+			}
+		})
+	}
+}
+
+func TestMaxConcurrentRequestsRejectsLogicalAliasNonZero(t *testing.T) {
+	adapters, idA, idB, idC := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	adapters[0].MaxConcurrentRequests = 2
+	_, err := NormalizeModelAdapterConfigs(adapters)
+	if err == nil || !strings.Contains(err.Error(), "逻辑") {
+		t.Fatalf("logical alias non-zero maxConcurrentRequests must be rejected, err=%v", err)
+	}
+	if strings.Contains(err.Error(), "test-key") {
+		t.Fatalf("error leaked API key: %v", err)
+	}
+	_ = idA
+}
+
+func TestMaxConcurrentRequestsAllowsLogicalAliasZeroWithPhysicalLimit(t *testing.T) {
+	logical := testModelAdapter("logical", 1)
+	physicalSameGroup := testModelAdapter("physical-same", 2)
+	physicalOther := testModelAdapter("physical-other", 3)
+	physicalOther.BaseURL = "https://api3.example.com/v1"
+	normalized, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{logical, physicalSameGroup, physicalOther})
+	if err != nil {
+		t.Fatalf("normalize ids: %v", err)
+	}
+	idB, idC := normalized[1].ID, normalized[2].ID
+	logical.ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	logical.MaxConcurrentRequests = 0
+	physicalSameGroup.MaxConcurrentRequests = 4
+	physicalOther.MaxConcurrentRequests = 2
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{logical, physicalSameGroup, physicalOther})
+	if err != nil {
+		t.Fatalf("alias zero with physical limits should pass: %v", err)
+	}
+	if got[0].MaxConcurrentRequests != 0 || got[1].MaxConcurrentRequests != 4 || got[2].MaxConcurrentRequests != 2 {
+		t.Fatalf("limits = %d/%d/%d, want 0/4/2", got[0].MaxConcurrentRequests, got[1].MaxConcurrentRequests, got[2].MaxConcurrentRequests)
+	}
+}
+
+func TestMaxConcurrentRequestsSameUpstreamGroupMustMatch(t *testing.T) {
+	a := testModelAdapter("model-a", 1)
+	b := testModelAdapter("model-b", 2)
+	a.MaxConcurrentRequests = 2
+	b.MaxConcurrentRequests = 3
+	_, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{a, b})
+	if err == nil || !strings.Contains(err.Error(), "必须相同") {
+		t.Fatalf("same-group mismatch must be rejected, err=%v", err)
+	}
+	if strings.Contains(err.Error(), "test-key") || strings.Contains(strings.ToLower(err.Error()), "sha") {
+		t.Fatalf("error leaked API key or derived group key: %v", err)
+	}
+
+	b.MaxConcurrentRequests = 2
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{a, b})
+	if err != nil {
+		t.Fatalf("same-group matching limits should pass: %v", err)
+	}
+	if got[0].MaxConcurrentRequests != 2 || got[1].MaxConcurrentRequests != 2 {
+		t.Fatalf("matching group limits = %d/%d, want 2/2", got[0].MaxConcurrentRequests, got[1].MaxConcurrentRequests)
+	}
+
+	b.APIKey = "other-key"
+	b.MaxConcurrentRequests = 8
+	got, err = NormalizeModelAdapterConfigs([]ModelAdapterConfig{a, b})
+	if err != nil {
+		t.Fatalf("different groups may use different limits: %v", err)
+	}
+	if got[0].MaxConcurrentRequests != 2 || got[1].MaxConcurrentRequests != 8 {
+		t.Fatalf("different group limits = %d/%d, want 2/8", got[0].MaxConcurrentRequests, got[1].MaxConcurrentRequests)
+	}
+}
+
+func TestMaxConcurrentRequestsYAMLJSONRoundtrip(t *testing.T) {
+	adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+	adapters[0].MaxConcurrentRequests = 2
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+
+	payload, err := yaml.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("yaml marshal: %v", err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, "maxConcurrentRequests: 2") {
+		t.Fatalf("yaml lost maxConcurrentRequests:\n%s", text)
+	}
+	if strings.Contains(text, "upstreamCapacityGroupKey") || strings.Contains(text, "UpstreamCapacityGroupKey") {
+		t.Fatalf("yaml persisted derived group key:\n%s", text)
+	}
+
+	var decoded []ModelAdapterConfig
+	if err := yaml.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	roundtrip, err := NormalizeModelAdapterConfigs(decoded)
+	if err != nil {
+		t.Fatalf("normalize yaml roundtrip: %v", err)
+	}
+	if roundtrip[0].MaxConcurrentRequests != 2 {
+		t.Fatalf("yaml roundtrip maxConcurrentRequests = %d, want 2", roundtrip[0].MaxConcurrentRequests)
+	}
+
+	jsonPayload, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("json marshal: %v", err)
+	}
+	if strings.Contains(string(jsonPayload), "upstreamCapacityGroupKey") {
+		t.Fatalf("json persisted derived group key: %s", jsonPayload)
+	}
+	var jsonDecoded []ModelAdapterConfig
+	if err := json.Unmarshal(jsonPayload, &jsonDecoded); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	jsonRoundtrip, err := NormalizeModelAdapterConfigs(jsonDecoded)
+	if err != nil {
+		t.Fatalf("normalize json roundtrip: %v", err)
+	}
+	if jsonRoundtrip[0].MaxConcurrentRequests != 2 {
+		t.Fatalf("json roundtrip maxConcurrentRequests = %d, want 2", jsonRoundtrip[0].MaxConcurrentRequests)
+	}
+
+	zeroAdapters := []ModelAdapterConfig{testModelAdapter("ch-zero", 1)}
+	zeroNormalized, err := NormalizeModelAdapterConfigs(zeroAdapters)
+	if err != nil {
+		t.Fatalf("normalize zero: %v", err)
+	}
+	zeroPayload, err := yaml.Marshal(zeroNormalized)
+	if err != nil {
+		t.Fatalf("yaml marshal zero: %v", err)
+	}
+	if strings.Contains(string(zeroPayload), "maxConcurrentRequests") {
+		t.Fatalf("zero/missing maxConcurrentRequests should be omitted from yaml:\n%s", zeroPayload)
 	}
 }

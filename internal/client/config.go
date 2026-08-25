@@ -60,6 +60,30 @@ func (s *ProxyService) saveUserConfig(cfg UserConfig) error {
 	if s.backendHost != nil {
 		normalized, err = s.backendHost.SaveConfig(ctx, cfg)
 	} else if s.store != nil {
+		normalized, err = s.store.SaveUserConfig(ctx, cfg)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	return nil
+}
+
+func (s *ProxyService) replaceUserConfig(cfg UserConfig) error {
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ReplaceConfig(ctx, cfg)
+	} else if s.store != nil {
 		normalized, err = s.store.Save(ctx, cfg)
 	} else {
 		return nil

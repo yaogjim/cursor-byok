@@ -26,6 +26,9 @@ const (
 	ProviderErrorStreamIdleTimeout = "stream_idle_timeout"
 	// ProviderErrorRequestBuild 表示请求序列化/构建阶段失败，此类错误禁止跨渠道 fallback。
 	ProviderErrorRequestBuild = "request_build"
+	// ProviderErrorCapacityUnavailable 表示物理上游组在固定短超时内没有空闲槽。
+	// 零 HTTP / 零字节 / 零 model event 时可切到不同上游组；父 context 取消不得使用此分类。
+	ProviderErrorCapacityUnavailable = "capacity_unavailable"
 
 	bodySummaryEmpty         = "empty"
 	bodySummaryJSONError     = "json_error"
@@ -97,6 +100,23 @@ type StreamTruncatedError struct {
 	Provider         string
 	Err              error
 	RawBytesObserved bool
+}
+
+// CapacityUnavailableError 表示在固定 2 秒等待内无法获得上游组并发槽。
+// 错误文本不得包含 API key、组哈希或 URL。
+type CapacityUnavailableError struct{}
+
+func (err *CapacityUnavailableError) Error() string {
+	return "upstream capacity unavailable"
+}
+
+func (err *CapacityUnavailableError) Category() string {
+	return ProviderErrorCapacityUnavailable
+}
+
+func isCapacityUnavailable(err error) bool {
+	var capErr *CapacityUnavailableError
+	return errors.As(err, &capErr)
 }
 
 // RequestBuildError 表示在发送 HTTP 请求之前的序列化/构建阶段出错。
@@ -217,6 +237,9 @@ func ClassifyProviderError(err error) string {
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return ProviderErrorContextCanceled
+	}
+	if isCapacityUnavailable(err) {
+		return ProviderErrorCapacityUnavailable
 	}
 	if isProviderStreamIdleTimeout(err) {
 		return ProviderErrorStreamIdleTimeout

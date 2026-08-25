@@ -105,7 +105,10 @@ func normalizeProviderRetry(retry providerRetry) providerRetry {
 	if retry.maxDelay <= 0 {
 		retry.maxDelay = defaultRetryMaxDelay
 	}
-	if retry.maxTotalWait <= 0 {
+	if retry.maxTotalWait < 0 {
+		retry.maxTotalWait = 0
+	}
+	if retry.maxTotalWait == 0 && retry.fallbackBudget == nil {
 		retry.maxTotalWait = defaultRetryMaxTotalWait
 	}
 	if retry.sleep == nil {
@@ -117,6 +120,25 @@ func normalizeProviderRetry(retry providerRetry) providerRetry {
 	if retry.now == nil {
 		retry.now = time.Now
 	}
+	return retry
+}
+
+// applyStreamRequestRetry 先按普通单渠道规则 normalize，再在 fallback 路径
+// 用共享预算覆盖 maxAttempts / maxTotalWait。FallbackBudget != nil 时，
+// maxTotalWait 直接覆盖为剩余 wait（包括 0），不得回落到 4s。
+func applyStreamRequestRetry(retry providerRetry, req StreamRequest) providerRetry {
+	retry = normalizeProviderRetry(retry)
+	if req.FallbackMaxAttempts > 0 && req.FallbackMaxAttempts < retry.maxAttempts {
+		retry.maxAttempts = req.FallbackMaxAttempts
+	}
+	if req.FallbackBudget != nil {
+		retry.maxTotalWait = req.FallbackRemainingWait
+		if retry.maxTotalWait < 0 {
+			retry.maxTotalWait = 0
+		}
+	}
+	retry.fallbackSafety = req.FallbackSafety
+	retry.fallbackBudget = req.FallbackBudget
 	return retry
 }
 
@@ -138,6 +160,12 @@ func (retry providerRetry) reserveFallbackWait(delay time.Duration) bool {
 		retry.fallbackSafety.markWaited(delay)
 	}
 	return true
+}
+
+func (retry providerRetry) markWaitBudgetBlocked() {
+	if retry.fallbackSafety != nil {
+		retry.fallbackSafety.markWaitBudgetBlocked()
+	}
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {
@@ -276,6 +304,7 @@ func doProviderRequest(
 			if !canWait {
 				outcome.retryable = false
 				outcome.decision = retryDecisionNoRetryWaitBudget
+				retry.markWaitBudgetBlocked()
 			} else {
 				delay = waitDelay
 			}
@@ -318,6 +347,7 @@ func doProviderRequest(
 		}
 
 		if !retry.reserveFallbackWait(delay) {
+			retry.markWaitBudgetBlocked()
 			if err != nil {
 				closeResponseBody(resp)
 				return nil, err
@@ -506,6 +536,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 	delay, canWait := body.retry.retryWait(body.state.attempt, nil, body.state.waited)
 	if !canWait || !body.retry.reserveFallbackWait(delay) {
 		body.mu.Unlock()
+		body.retry.markWaitBudgetBlocked()
 		body.recordDecision(retryDecisionNoRetryWaitBudget, truncatedErr)
 		return truncatedErr
 	}
@@ -558,6 +589,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			if !canWait {
 				outcome.retryable = false
 				outcome.decision = retryDecisionNoRetryWaitBudget
+				body.retry.markWaitBudgetBlocked()
 			}
 		}
 		if resp != nil {
@@ -585,6 +617,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			return nil
 		}
 		if !body.retry.reserveFallbackWait(nextDelay) {
+			body.retry.markWaitBudgetBlocked()
 			body.recordDecision(retryDecisionNoRetryWaitBudget, truncatedErr)
 			if err != nil {
 				closeResponseBody(resp)

@@ -4,6 +4,177 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: fallback-coverage-first-budget-20260825
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（用户确认“保证渠道覆盖，再用剩余预算重试”；工作决策基线 §10.5 + 系统 Design §14.9.4）
+DELIVERY_STATUS: accepted（实现、定向测试、race、vet、前端投影检查和 diff 门禁通过；已纳入 0.0.49.6 提交）
+
+### CONTEXT
+
+- 运行证据 `f4c6e4d2-5bd4-4265-98ec-0aa9bfa99b2b` 证明旧分配把默认 5 attempts 贪婪分成 `3+2+0`：前两个 transport 渠道耗尽预算，第三个已配置且可用渠道从未发送 HTTP。
+- 用户已确认根因级修复：启用 fallback 时先为每个后续兼容渠道预留 1 次 attempt，再把剩余预算用于前序渠道重试；全链 attempt/wait、单渠道最多 3、输出/副作用/context/错误 allowlist 和兼容性门禁保持不变。
+- 最多 5 个物理渠道；默认 5 attempts 必须形成全覆盖，9 attempts 对 5 渠道形成 `3+3+1+1+1`。若显式预算小于渠道数，则按配置顺序各 1 次直到预算耗尽，不突破共享预算。
+- 不修改真实 BYOK 配置、公共 proto、MITM/CA/证书、系统代理、18080/18090、前端交互和发布版本；本工作包已按用户要求提交并推送，发布构建另行生成且不上传 GitHub。
+
+### ACTIVE SLICES
+
+- [completed] `coverage-contract`：工作决策基线与系统 Design 已替换旧 `min(remaining,3)`/`3+2+0` 合同，冻结覆盖优先算法、预算不足边界和验收矩阵。
+- [completed] `coverage-tdd`：真实 HTTP fixture 覆盖三渠道、五渠道、transport、503、预算 5/9/2 以及不兼容候选预留计算。
+- [completed] `coverage-runtime`：router 按后续兼容渠道数预留 attempt，当前渠道只使用剩余额度且继续受单渠道 3 次上限与共享预算约束。
+- [in_progress] `coverage-verification-closeout`：运行相关/全量测试、race/vet、diff/lint/review，随后同步证据和交付状态。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 前两个 transport 或 503 渠道失败时，第三个兼容健康渠道必须收到 HTTP 并可成功终止；五渠道默认预算必须到达第五渠道。
+- 任意配置下总 HTTP attempt 不超过共享预算，单渠道不超过 3；等待预算、安全门禁、兼容性与同上游组跳过语义不放宽。
+- 回滚仅需恢复旧分配器与对应测试/文档；配置 schema 和持久化数据无迁移。
+
+## Previous Work Package: Fallback 配置交互
+
+WORK_PACKAGE_ID: fallback-config-interaction-20260825
+STATUS: completed
+RISK_LEVEL: medium
+OWNER: orchestrator
+DESIGN_READINESS: approved（工作决策基线 §10.5 + 系统 Design §14.9.4/14.9.5）
+DELIVERY_STATUS: verified-partial（实现、定向/全量自动化和生产构建通过；本机缺少 Wails v3/task，未执行真实窗口视觉交互）
+
+### CONTEXT
+
+- 用户确认：“测试全部”静默跳过逻辑 alias；单独测试逻辑 alias 保留实际运行验证提示。
+- fallback 链上限调整为总共 5 个物理渠道，即 1 个 primary + 1–4 个 candidates；默认全链预算继续为 5 attempts / 8 seconds，范围继续为 2–9 / 1–30，渠道增多不扩大全链预算。
+- 修复通用 Select 长列表的视口高度和滚动容器错位，使鼠标与键盘都能访问全部可用物理 adapter。
+- 不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、真实 BYOK 配置、发布版本；本工作包此前已提交，当前发布版本为 0.0.49.6，构建产物不上传 GitHub。
+
+### ACTIVE SLICES
+
+- [completed] `fallback-contract-tests`：需求/设计合同已补充 5 通道、批量/单独测试语义和预算边界；前端投影、后端校验与 resolver 顺序回归已添加。
+- [completed] `fallback-ui-bugs`：批量测试移除逻辑 alias 保存提示；Select 将 Floating UI 可用高度施加到真实 `ul` 滚动容器，并保留键盘聚焦滚动。
+- [completed] `fallback-five-channels`：前端候选槽改为 4 槽数据驱动，后端权威上限改为 4 candidates；清空中间槽截断后续，候选排重和逻辑 alias 排除保持。
+- [completed] `fallback-verify-closeout`：前端投影、后端定向、`internal/...` 全量、生产构建、lint/diff 门禁通过；本机缺少 Wails v3/task，未扰动运行中 18080/18090，视觉交互记录为环境缺口。
+
+### FINAL VERIFICATION EVIDENCE
+
+- `node frontend/scripts/test-config-projection.mjs`：通过；覆盖 4 candidates 保存/顺序、第 5 candidate 拒绝、批量静默跳过、单独提示保留和 Select 真实滚动容器合同。
+- `go test ./internal/backend/server/config ./internal/client ./internal/backend/agent/model -count=1`：三包通过；仅有既有 macOS deployment target linker warning。
+- `go test ./internal/... -count=1`：全部 internal package 通过；同样仅有既有 linker warning。
+- `npm run build --prefix frontend`：Vite production build 通过（121 modules）；仅有既有 `--localstorage-file` 与 chunk-size warning。构建自动改写的 i18n 生成文件已恢复，未纳入本包。
+- `ReadLints`：受改源文件无诊断；`git diff --check` 与 gofmt 检查在收口时通过。
+- 浏览器边界：本机无 `wails3` 与 `task`，且没有可用浏览器 tab/开发 UI 端口；为避免占用运行中 Cursor 的 18080/18090，本轮不启动替代服务，视觉交互保持 `env/test gap`。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 1 primary + 4 candidates 可保存并按序投影，第 5 candidate 被前后端拒绝；默认预算与运行算法不变。
+- “测试全部”只调度物理 adapter 且不弹逻辑 alias 保存提示；单独逻辑 alias 测试仍提示运行验证。
+- 长下拉可滚动并选择末项；浏览器不可用时必须记录环境缺口，不用源码断言冒充视觉证据。
+- 回退到旧版前须先把新配置缩回最多 2 candidates；否则旧版严格校验会拒绝配置。
+
+## Previous Work Package: 配置写竞态与物理上游容量
+
+WORK_PACKAGE_ID: config-race-upstream-capacity-20260825
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（精简三写语义 + 物理上游共享槽）
+DELIVERY_STATUS: accepted（能力实现、受控非零 fixture、全量门禁和独立复审通过；当前真实 `grok-HA` 按用户决定保持不限流，在线容量保护未启用）
+
+### CONTEXT
+
+- 用户已批准 `.cursor/plans/配置竞态与上游容量风险精简计划_ff017475.plan.md`，目标是关闭普通 UI 保存与运行时 `lastAgentModelHash` 更新互相覆盖的进程内竞态，并提供默认关闭的物理上游共享容量限制。
+- 三种配置写语义固定为：普通保存保留最新 hash；hash-only 更新只 patch 该字段且相同值 no-op；完整导入显式全量替换并允许替换 hash。
+- `maxConcurrentRequests` 只挂物理 adapter：缺失/0 不限流，1–16 有效；逻辑 alias 必须为 0，同 provider + 规范化 Base URL + API Key 的物理 adapter 必须值一致。
+- 用户已确认本轮本地发布版本使用 `0.0.49.6`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.6.md` 必须保持一致。README 的“当前稳定发布”继续指向已公开版本；本次构建资产不上传 GitHub。
+- 不修改真实 `~/.cursor-local-assistant-v2/config.yaml`，不占用或重启 18080/18090；不修改公共 proto、MITM/CA/证书、系统代理或发布隔离。
+
+### COMPLETED SLICES
+
+- [completed] `config-write-transaction`：Store 锁内读取最新配置并分别实现 `SaveUserConfig`、`SaveLastAgentModelHash` 和完整 `Save`；Manager 写锁串行提交 disk/current/snapshot，hash-only 不通知 listener。Host/客户端普通保存与 import replace 已分流；确定性交错、并发 race、失败回滚、no-op 和完整替换测试已覆盖。
+- [completed] `capacity-schema-ui`：后端 schema、权威校验、resolver/runtime、前端状态/投影、ModelEditor 和四语种文案已接入 `maxConcurrentRequests`；逻辑 alias 非零、同组不一致和越界均拒绝，默认/边界/复制/roundtrip 已覆盖。
+- [completed] `provider-capacity-runtime`：进程级 limiter 按只在内存存在的 SHA-256 上游组共享槽，固定最多等待 2 秒，槽覆盖完整 Stream 和同渠道 retry；typed `capacity_unavailable` 只在零输出安全窗口切不同组，同组跳过，取消及时退出且 release 幂等。
+- [completed] `orchestrator-integration-review`：主控发现并修复 resolver 容量未覆盖到实际 `StreamRequest` 的跨切片 P1，同时补齐 Manager legacy snapshot 投影、runtime/前端上游组规范化和承重回归。独立复审确认无剩余 P0/P1。
+- [completed] `verification-closeout`：根 module、前端、CLI 独立 module、日志分析器、保护路径和 diff 门禁均通过；工作决策基线 §10.9 与系统 Design §14.10 已冻结合同。
+
+### FINAL VERIFICATION EVIDENCE
+
+- 定向后端：`go test ./internal/backend/agent/model ./internal/backend/server/config ./internal/runtime ./internal/client ./internal/backend -count=1 -timeout=120s` 通过；容量专项覆盖配置投影、limit=0、同组峰值、异组隔离、retry 持槽、2 秒 timeout fallback、同组跳过、取消无泄漏和 attempt/wait 预算零消耗。
+- 根 module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...` 全部通过。
+- 前端：`node scripts/test-config-projection.mjs` 和 `npm run build` 通过；仅有既有 chunk-size 与 Node localstorage 参数 warning。
+- CLI module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./...` 通过；日志分析器 module 的 test/race/vet 通过。
+- macOS 客户端：在 Apple Silicon / macOS 14.6.1 的既有历史验证曾生成版本 `0.0.49.5` 的 `bin/macos-arm64.dmg`（约 23 MiB，SHA-256 `8ad056b49386841ba2cd1a8a3cff7ae3489948f38e9be47373da693090d93841`）；`hdiutil verify`、DMG 只读挂载、Info.plist/buildinfo 版本、Mach-O arm64 检查及 app adhoc `codesign --verify --deep --strict` 均通过。产物受 `bin/` ignore 规则保护，不纳入 Git；未执行 Developer ID 签名或 notarization。
+- 最终检查：`git diff --check` 通过；`proto/`、`internal/mitm/`、`internal/certs/` 无 diff；本工作包未执行真实 BYOK 配置写入，也未占用或重启运行中端口。
+
+### ACCEPTANCE BOUNDARY AND ROLLBACK
+
+- 本工作包可声明“配置竞态修复和可选容量能力已实现并经非零受控 fixture 验证”。当前真实 `grok-HA` 未设置 `maxConcurrentRequests`，仍为无限并发，不得声明在线容量风险已经启用关闭。
+- 删除 `maxConcurrentRequests` 或设 0 可回滚 limiter；普通保存/hash patch/完整 replace 为持久化合同，回退时不得恢复整文件 hash RMW。
+- 三层模型路由工作包的 Wails 视觉验收与 CLI 两模型 pre-output 切换证据缺口保持独立，不由本包测试替代。
+
+## Previous Work Package: 三层模型路由与 CLI 模型池
+
+WORK_PACKAGE_ID: three-layer-subagent-provider-cli-pool-20260824
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（双入口 probe + 独立两轮实现模拟通过）
+DELIVERY_STATUS: verified-partial（实现、自动化门禁和独立终审通过；真实 grok-HA Provider fallback 与 CLI 三物理模型只读预检/Ask 已观测；CLI 两模型 pre-output 故障切换与 Wails 浏览器视觉验收仍是证据缺口）
+
+### CONTEXT
+
+- 用户已批准 `.cursor/plans/逻辑子代理、可配置_provider_fallback_与_cli_模型池计划_ff730446.plan.md`，要求在 `cli` 分支由主控协调 subagent 完整执行。
+- 三层职责固定为：IDE 新 spawn 的软专用逻辑子代理模型；BYOK Provider 层安全 fallback；独立 Cursor CLI 物理模型池控制器。CLI 池不得引用启用 `providerFallback` 的逻辑 adapter，避免外层进程切换与内层渠道链预算乘法放大。
+- Provider 全链 `maxHttpAttempts` 默认 5、可配置 2–9；`maxWaitSeconds` 默认 8、可配置 1–30；单渠道固定最多 3，链级预算跨渠道共享。
+- 自动切换只允许在零 assistant、零 tool call、零 mutation 的窗口；真实 CLI probe 额外观察到 `thinking` 事件，当前设计采用保守门禁：任意 model-generated event（包括 thinking）均关闭自动切换窗口。
+- 不修改公共 proto、MITM、CA、系统代理、18080/18090 监听；不把 CLI module 并入客户端配置、Wails 构建或发布归档；不提交、不推送、不发布。
+
+### GOAL
+
+- 让逻辑子代理模型通过可配置但安全的 Provider fallback 获得确定的全链 HTTP/等待预算、保存/回显 UI 和 metadata-only 链级观测。
+- 新增独立 `tools/cursor-cli-model-pool` Go module，按有序物理模型各启动一次，并在任何模型输出、工具或 worktree mutation 后停止自动重放、转人工复核。
+- 以真实 IDE metadata、真实 CLI NDJSON、httptest/fake-agent、前端浏览器与各 module 门禁分别证明三条链，不跨对象借证据。
+
+### ACTIVE SLICES
+
+- [completed] `three-layer-probe-ide`（owner: orchestrator + readonly explorer；size: S）：真实父会话模型 A 与新 Explore/generalPurpose child 模型 B 不同；父 `subagent_model_override_resolved.effective_model_id`、child `requested_model.model_id` 与 child `stream_state_updated.model_id` 一致。证据只保留匿名会话哈希和模型 ID metadata，未读取 prompt/header/凭据；18080/18090 PID 未变。
+- [completed] `three-layer-probe-cli`（owner: orchestrator + readonly explorer；size: S）：核验 Agent CLI `2026.08.11-e8db854`；本机 18090 `agent models` 返回 21 个配置模型且均为未启用 fallback 的物理 adapter；受控 Ask probe 依次产生 `system/init → user → thinking* → assistant → result/success`，stdin prompt 未进入 argv，探针后工作树干净、healthz 正常、监听 PID 未变。
+- [completed] `three-layer-design-gate`（owner: orchestrator + readonly reviewer；size: M；depends_on: two probes）：工作决策基线 §10.5/§10.7/§10.8 与系统 Design §14.9 已冻结配置、状态、错误、隐私、防叠加、回滚与验证合同。独立首轮模拟发现 wait=0 哨兵、模型 identity/secret、typed 错误、Retry-After、write argv/worktree、HTTP 500 和取消存在自由裁量；修订后第二轮确认无 P0/阻塞 P1，`Design Readiness=approved`。
+- [completed] `provider-config-observability-red-green`（owner: provider-coding-subagent；size: M；depends_on: design gate）：配置默认/边界/roundtrip、resolver、真实 `httptest` HTTP 3+2/1+3+1、等待/Retry-After、安全门禁、同一 model-call 关联和 metadata 观测已按 RED→GREEN 落地；逻辑 adapter 不能嵌套成为 fallback 链成员。
+- [completed] `provider-ui-save-red-green`（owner: frontend-coding-subagent；size: M；depends_on: design gate）：已修复“剥离派生 id 后再校验”的悬空引用根因，接入预算 UI、物理渠道筛选、逻辑路由标记、alias 禁止直接测试、风险提示和多语言文案。Node 投影测试与生产构建通过；Wails 浏览器视觉验收受本机缺少 Wails v3 CLI 阻塞。
+- [completed] `cli-pool-red-green`（owner: cli-coding-subagent；size: M；depends_on: design gate）：独立 module 以 fake agent 覆盖 preflight、stdin/argv、NDJSON 状态机、typed 错误分类、进程组取消、Cursor 真实 worktree 路径与 sticky mutation 监视、metadata-only journal、物理模型限制和发布隔离；首轮 P0 worktree 路径问题及终审 P1 mutation/status 问题均已修复。
+- [completed-partial] `three-layer-runtime-closeout`（owner: orchestrator；size: M；depends_on: all implementations）：根 module 全量 test/race/vet、Provider 定向门禁、前端投影/生产构建、CLI module test/race/vet/build、分析器 test/race/vet、发布隔离、敏感路径与 diff 检查均通过；两路独立终审无剩余 P0/P1。2026-08-25 用户本机补证：逻辑路由 `grok-HA`（`543fe17c50d81660`）primary=`Grokeeror`/`d5ab6805830e5baa`，candidates=`grok-hongai`/`3d2b0ff4a6be3e42` 然后 `grok`/`378723ba5535e672`，预算 5/8s；traces 共 54 条 `provider_fallback_attempt`、28 个 `model_call_id`，前期 13 次 transport→hongai 成功（3+1），后期 13 次 hongai `server_5xx` 在 remain=0 时 `attempt_budget_exhausted`，第三候选 `grok` 因 3+2 预算未启动。CLI 临时 HOME 对 `grok-hongai`/`grok-aigo`/`gpt-honga` 的 `validate`/`dry-run` 通过，引用 `grok-HA` 被拒绝；仓库 cwd 的 Ask `run` 首模型 `3d2b0ff4a6be3e42` 成功故未切后续模型；`/tmp` cwd 因 Workspace Trust 得到 `unknown` 并 fail-closed。18080/18090 仍为 Cursor PID 96155。副作用：运行中 18090 把 `lastAgentModelHash` 从 `543fe17c50d81660` 写成 `3d2b0ff4a6be3e42`，adapter/fallback 链未改。Wails 浏览器视觉验收和 CLI 两模型 pre-output 故障切换仍未闭合，交付保持 `verified-partial`。
+
+### ACCEPTANCE
+
+- Provider：配置 2–9 严格控制同一 `model_call_id` 的真实 HTTP 总 attempt；单渠道不超过 3；等待不超过配置；任意 raw byte/model event/副作用后候选调用为 0；整链唯一业务终态。
+- CLI：有序物理模型各最多启动一次；只在 `preflight/launching/pre_output` 且无 model-generated event/tool/mutation 时切换；write 强制独立 worktree；prompt、NDJSON、工具参数和凭据不入 journal。
+- IDE/UI：新 spawn child 使用逻辑模型覆盖；配置可保存、导入导出和回显；逻辑 alias 不直接发送测试请求；费用、隐私、模型语义和工具兼容风险可见。
+- 根 module、`tools/cursor-cli-model-pool`、`tools/log-analyzer` 分别通过适用 test/race/vet；前端投影测试和生产构建通过；浏览器视觉验收因缺少 Wails runtime 记录为证据缺口；`git diff --check` 和敏感信息/发布隔离/禁止路径检查通过。
+
+### FINAL VERIFICATION EVIDENCE
+
+- 根 module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...` 通过。
+- Provider 定向：`go test ./internal/backend/server/config ./internal/backend/agent/model ./internal/runtime -count=1`、同范围 race 与 vet 通过；覆盖 3+2、1+3+1、2/7/9 封顶、等待预算归零、超预算 `Retry-After`、HTTP 500 不切换、取消、raw bytes/model event 和跨 Provider 兼容门禁。
+- 前端：`node scripts/test-config-projection.mjs` 与 `npm run build` 通过；逻辑链成员拒绝、先校验后剥 ID、预算边界和 alias 跳过直接测试有自动化回归。独立 Vite 浏览器只能加载空壳：`/wails/runtime` 404，且本机 `wails3` 不可用，所以视觉验收未通过、不是代码失败证据。
+- CLI module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build` 通过；假 agent/fixture 的 `validate`/`dry-run` 以及 2026-08-25 真实三物理模型 `validate`/`dry-run` 通过。真实 Ask `run` 在仓库 cwd 由首模型成功结束；未写入真实 `cli-model-pool.yaml`/journal。adapter 身份未变，但 18090 将 `lastAgentModelHash` 更新为本次 Ask 使用的 `3d2b0ff4a6be3e42`。
+- 日志分析器：独立 module test/race/vet 通过；macOS 链接器仅报告既有 deployment target warning。
+- 发布与安全：根 `go list ./...` 不包含 CLI module；Taskfile 的 release prepare/verify 路径均调用 analyzer/CLI-pool 归档隔离检查；`proto/`、`internal/mitm/`、`internal/certs/`、`cursor-cli-docker/`、`bin/release/` 无本工作包 diff；`git diff --check` 通过。
+- 独立终审：Provider/frontend 与 CLI/security 两路复审在返工后均确认无剩余 P0/P1。残余 P2 包括 fallback 失败工件后缀/逻辑 alias 输出上限的既有语义、fsnotify 祖先目录事件可能导致额外 fail-closed、真实 `agent models` 输出 fixture 与 root identity golden 尚未固定；均不放宽安全窗口或重试预算。
+
+### ROLLBACK
+
+- Provider：关闭 `providerFallback.enabled` 恢复单渠道 P0；删除新预算字段回到默认 5 attempts/8 秒。配置现在拒绝逻辑 alias 嵌套在渠道链内。
+- CLI：停止使用或删除 `~/.cursor-local-assistant-v2/cli-model-pool.yaml` 即可；独立二进制/module 不进入客户端发布包，不修改 18090、IDE 配置或真实 BYOK `config.yaml`。
+- 前端：预算/UI/保存修复只投影现有配置 schema；回退相关前端文件不会迁移或重写已有配置。
+
+### STOP CONDITIONS
+
+- 需要修改公共 proto、MITM/CA/证书/系统代理、18080/18090 监听，或替换运行中唯一 Cursor 进程。
+- 无法可靠区分 CLI pre-output 与 model/tool/mutation，或无法终止整个子进程组。
+- 需要把 fallback-enabled 逻辑 adapter 放入 CLI 模型池，或发生完整 Agent runs × Provider fallback chain 的预算乘法。
+- subagent LLM 暂时失败时按 20/40/80/160/320 秒重试；连续五次仍失败则记录 agent ID、错误、diff/测试证据并停止等待用户。
+
+## Previous Work Package: Agent 治理补全
+
 WORK_PACKAGE_ID: agent-governance-completion-20260822
 STATUS: completed
 RISK_LEVEL: high

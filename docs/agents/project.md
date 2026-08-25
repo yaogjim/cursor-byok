@@ -31,6 +31,7 @@ onboarded: 2026-03-14
 | 已批准的专项实施计划 | `.cursor/plans/*.plan.md` |
 | 上游同步规则 | `docs/cursor_byok_upstream_merge_requirements.md` |
 | 上游同步→发版 Runbook | `docs/cursor_byok_upstream_sync_release_runbook.md` |
+| 198 远程 CLI 会话复用、本机 18090 接入与浏览器 WeTTY | `docs/ops_198_cursor_cli_session_reuse.md` |
 
 ## 项目上下文与权威事实源入口
 
@@ -45,7 +46,7 @@ onboarded: 2026-03-14
 | 代码 / 配置入口 | `main.go`；`internal/`；`frontend/`；`Taskfile.yml`；`build/config.yml` | 客户端主流程、后端模块、前端、构建与运行配置 |
 | schema / API / 契约 | `proto/`；`internal/backend/server/config/types.go`；`internal/observability/contract.go`；`tools/log-analyzer/internal/contract/contract.go` | RPC、配置、观测事件和离线分析器数据契约 |
 | 测试与验证命令 | `go test ./internal/...`；`go vet ./internal/...`；`node frontend/scripts/test-config-projection.mjs`；`npm run build --prefix frontend`；在 `cursor-tab-server`、`tools/log-analyzer` 分别运行 `go test ./...`、`go test -race ./...`、`go vet ./...`；`task release:verify:analyzer-isolation` | 按改动范围选择相关子集；完成声明须匹配实际运行证据 |
-| 运行 / 部署 / 可观测入口 | `task dev`；`task run`；`Taskfile.yml`；`build/`；`internal/observability/`；`cursor-tab-server/README.md`；`tools/log-analyzer/cmd/log-analyzer/` | 本地开发、客户端构建发布、运行时观测、Tab relay 与离线分析入口 |
+| 运行 / 部署 / 可观测入口 | `task dev`；`task run`；`Taskfile.yml`；`build/`；`internal/observability/`；`cursor-tab-server/README.md`；`tools/log-analyzer/cmd/log-analyzer/`；`docs/ops_198_cursor_cli_session_reuse.md` | 本地开发、客户端构建发布、运行时观测、Tab relay 与离线分析入口；198 Docker CLI 会话复用、方案 A 反向隧道、WeTTY 浏览器终端为环境专项操作手册，不含真实凭据 |
 | 外部依赖与参考方案 | `docs/cursor_byok_upstream_sync_release_runbook.md`；`docs/cursor_byok_upstream_merge_requirements.md`；根及独立 module 的 `go.mod`；`frontend/package.json` | 端到端同步发版、冲突边界、依赖版本与独立 module 隔离 |
 
 ## 项目覆盖规则

@@ -1008,7 +1008,7 @@ AND retry_budget_available
 - 保留 `SelectChannelForModel` 单渠道接口，并新增 `ChannelPlan`（primary + ordered candidates）解析；fallback 关闭时返回单渠道计划，现有路径不变。
 - `FallbackAwareRouter` 按计划逐个重建 provider request，不复用上一渠道 raw body；旧 response body 由 retry/adapter 关闭。
 - adapter/retry 通过 typed `FallbackSafetyInfo` 记录 `raw_bytes_observed`、`model_event_observed`、request-build、HTTP attempts 和等待预算；router 不根据错误文本推断输出安全状态。
-- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`，共享最多 5 次 HTTP attempt 与 8 秒退避预算。
+- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`。原始 P1 默认值为最多 5 次 HTTP attempt 与 8 秒退避预算；产品化后的配置范围、默认/兼容、单渠道 3 次上限和 wait 哨兵由 §14.9.4 覆盖。
 - `RequestBodyOverride`、provider opaque reasoning/tool state、图片、跨 Provider tools、不足的 context/output 容量会抑制候选；连续被跳过候选不能改变最后一个已实际尝试渠道的兼容性基准。
 - fallback 工件后缀按“最后一个实际兼容候选”计算；若剩余候选都会被门禁跳过，当前渠道保留原始 `model_call_id`，观测中的 `fallback_to` 也指向真正会尝试的下一渠道。
 - 显式 allowlist 代表用户授权候选模型语义变化；UI 明示费用、隐私、模型语义和工具兼容风险。
@@ -1151,6 +1151,176 @@ agent/subagent prompt 和 agent mode reminder 必须一致声明：编辑只能�
 4. 当前 synthetic/单元/集成证据不替代真实 Cursor success/error/background/resume 六场景 fixture，不证明 child 从中断执行点自动续跑。
 
 最终验证覆盖公共 transcript 专项、forwarder 全包/race/vet、根模块串行全量 test/vet、根客户端构建、prompt/前端和两个独立 Go module 的适用回归；详细命令和环境 `ENOSPC`/`frontend/dist` setup 记录见 `task/todo.md` 与 `docs/process.md`。实现仍停留在隔离 worktree 未提交 diff，未执行 commit、push、tag 或 release。
+
+## 14.9 DESIGN-THREE-LAYER-MODEL-ROUTING-001：逻辑子代理、可配置 Provider Fallback 与 CLI 模型池
+
+- **Design Readiness**：`approved`（双入口事实探针与独立两轮实现模拟通过）
+- **决策时间**：2026-08-24
+- **关联计划**：`.cursor/plans/逻辑子代理、可配置_provider_fallback_与_cli_模型池计划_ff730446.plan.md`
+- **继承锚点**：§14.5 `DESIGN-PROVIDER-DISCONNECT-001` 的安全重试与唯一终态；§14.7 `DESIGN-P1-SUBAGENT-FALLBACK-001` 的 ordered allowlist、兼容门禁和 durable handoff。
+- **覆盖关系**：本节只把 Provider 全链 5/8 预算产品化，并新增独立 CLI 进程控制器；与 §14.7 冲突时，以本节的可配置预算、防叠加和 CLI 状态机为准。
+
+### 14.9.1 问题机制、目标与非目标
+
+现有 Provider fallback 已共享固定 5 attempts/8s，但预算没有进入配置、resolver、UI 和完整观测；前端保存又在剥离派生 adapter ID 后校验引用，导致合法逻辑链可能被误报悬空。Cursor IDE 只能在新 spawn 时选择 child 模型，不能在已运行 child 内热切换。若在 Provider fallback 之外再无条件重跑完整 Agent，会重复输出、工具和文件副作用，并形成外层 runs × 内层渠道 attempts 的重试放大。
+
+所选机制把职责拆成三层：IDE 新 child 的逻辑模型选择；同一模型调用内的 Provider 安全 fallback；只面向物理模型的独立 CLI 进程控制器。可证伪结果是：配置值能严格改变同一 `model_call_id` 的真实 HTTP 上限，CLI 只在零模型输出/零工具/零 mutation 时切换，且逻辑 adapter 无法进入 CLI 池。任一结果无法由运行证据证明时，本功能不能标记 accepted。
+
+非目标：公共 proto、MITM/CA/证书/系统代理、18080/18090 监听、child 执行点恢复、已有输出续传/拼接、客户端 `config.yaml` 内置 CLI 池、Wails 发布包和 198 隧道/Docker 默认命令修改。
+
+### 14.9.2 已核实事实与剩余事实边界
+
+| 事实 | evidence_status | 当前证据与影响 |
+|------|-----------------|----------------|
+| 父模型 A 可将 Explore/generalPurpose override 解析到不同模型 B，child inbound `requested_model.model_id` 与 child runtime ModelID 均为 B | verified | 2026-08-24 真实 Task metadata-only probe；匿名会话哈希，未读取 prompt/header/凭据。允许进入 IDE 逻辑模型接线与测试。 |
+| Agent CLI `2026.08.11-e8db854` 支持 `--model`、`--endpoint`、stdin prompt、`--print --output-format stream-json`、`--mode ask|plan` 和 `--worktree` | verified | 本机 help/version 与受控 18090 Ask probe。 |
+| 真实 NDJSON 顺序包含 `system/init → user → thinking* → assistant → result/success` | verified | 受控 probe 只投影 type/subtype；正文未保存。`thinking` 因此必须纳入保守输出门禁。 |
+| `agent models` 可通过本机 18090 列出配置模型，当前 21 个 adapter 均未启用 fallback | verified | 只输出模型 ID 与 fallback 布尔值；配置中的 key/endpoint 未输出。 |
+| Provider 全链预算已由配置贯通到 `ChannelPlan` 和 `fallback_router.go` | verified | 缺失/0 默认 5 attempts/8s，保存范围 2–9/1–30；真实 `httptest` 覆盖共享分配、wait=0、`Retry-After` 和安全门禁。 |
+| 前端保存对包含后端派生 `id` 的 adapter 集合先校验，再剥离 `id` 序列化 | verified | `appState.js` 与 `configProjection.js` 已统一；合法 fallback 保存、roundtrip、悬空/自引用/重复及逻辑链成员拒绝测试通过。 |
+| SIGINT/SIGTERM、进程组清理、真实 pre-output 错误和 worktree mutation 的 CLI 行为 | partially-verified | `agent --help` 已核实 `--worktree <name>` 的实际目录为 `~/.cursor/worktrees/<repo-name>/<name>`；typed 错误、signal 和 mutation 仍须 fake agent + 受控真实验证，阻止 CLI accepted 声明。 |
+
+### 14.9.3 模块职责与事实源
+
+```text
+Cursor IDE AgentRunRequest
+  → SubagentModelOverrides / Task
+  → SubagentArgs.model_id
+  → 新 child run_request ModelID
+  → FallbackAwareRouter
+  → ChannelPlan(primary, candidates, chain budgets)
+  → provider adapter/retry
+
+cli-model-pool.yaml + stdin prompt
+  → config/preflight（agent models + BYOK adapter 物理性）
+  → runner（每模型一次进程）
+  → NDJSON parser + worktree observer
+  → safety state machine
+  → metadata-only journal / stdout passthrough
+```
+
+- 根 module 的 config/resolver/router/UI 负责 IDE 与 Provider 两层；继续复用现有 `FallbackAwareRouter` 和 `FallbackRetryBudget`，禁止新增第二套 HTTP retry 计数。
+- `tools/cursor-cli-model-pool` 是 Go 1.25 独立 module，不 import 根 module 的 `internal/`，不加入 `go.work`，不进入客户端 build/release。它只读固定路径 `~/.cursor-local-assistant-v2/config.yaml`，在内存中按版本化的 adapter identity 合同重算 `agent models` 使用的 16 位渠道 ID：先按根配置规则 normalize base URL/type/OpenAI endpoint；OpenAI 空 endpoint 规范化为 `/v1/chat/completions` 并使用五段 `baseURL/modelID/apiKey/displayName/openAIEndpoint`，非 OpenAI 使用四段 legacy 值；各段以换行连接后取 SHA-256 前 16 位。API Key 只允许作为该内存哈希输入，不得写入 journal、错误、测试 fixture 或任何输出；预检结束后不保留完整 adapter 配置。重复派生 ID、零匹配或多匹配均失败，不按显示名称或裸 `modelID` 猜测。
+- CLI 池自身事实源为 `~/.cursor-local-assistant-v2/cli-model-pool.yaml`；模型可用性事实来自每次运行前的 `agent models`，fallback 状态来自本机 BYOK `config.yaml`。池中的精确 16 位模型 ID 必须在两侧唯一匹配，且对应 adapter `providerFallback.enabled=false`；任一不匹配时预检失败。
+
+### 14.9.4 Provider 配置、算法与兼容合同
+
+`ProviderFallbackConfig` 新增：
+
+- `maxHttpAttempts: int`：缺失/0 默认 5；保存合法范围 2–9。
+- `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30，单位为秒。
+
+归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时字段保留但不参与运行。
+
+每次 fallback chain 创建一个 `FallbackRetryBudget(maxHttpAttempts, maxWaitSeconds)`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, 3)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `3+1+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `3+3+1+1+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
+
+wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认 4s。普通单渠道 `FallbackBudget == nil` 时继续使用 4s。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
+
+跨 Provider 继续执行 §14.7 的 messages、tools、图片/附件、context/output、opaque state 与 `RequestBodyOverride` 门禁。同渠道 P0 可以按既有合同重试 HTTP 500，但 **500 不允许切换渠道**；router 的切换 allowlist 只能包含 transport、429、502/503/504、零原始字节且首 model event 前的 EOF/decode/idle failure，不得复用宽泛 `status >= 500` 或统一 `ProviderErrorServer5xx` 判定。任意 raw byte、model event、工具/checkpoint/downstream 副作用或 context cancel 后立即终止链。
+
+### 14.9.5 前端保存、交互与观测合同
+
+保存必须对含派生 ID 的完整 adapter 集合完成引用、自引用、重复和预算校验，随后才在序列化 payload 时删除 `id`；Go 后端重新计算 ID。导入导出、禁用回显和旧配置 roundtrip 使用同一纯投影合同，不得让 `appState` 与 `configProjection` 对禁用字段采用不同语义。
+
+`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供“全链最大 HTTP 尝试次数（默认 5）”和“全链最大等待秒数（默认 8）”。帮助文本必须说明：单渠道最多 3、实际按剩余预算分配、alias 自身不发请求、已有输出后不切换，以及跨 Provider 的费用、隐私、模型语义和工具兼容风险。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
+
+逻辑 alias 的“保存并测试”及单卡片“测试”只保存或阻止直接 endpoint 请求，并提示使用运行验证；物理渠道仍可单独测试。“测试全部”只调度物理 adapter，静默跳过逻辑 alias，不显示保存提示，也不把跳过计入批量测试总数。
+
+`provider_fallback_attempt` 或同一 metadata 事件补充白名单字段：`chain_max_attempts`、`chain_max_wait_ms`、`chain_attempts_used/remaining`、`chain_wait_used_ms/remaining_ms`、`channel_allocation_max_attempts`、`retry_delay_ms`。字段只记录整数、受控枚举和渠道/调用关联 ID，不记录 body、headers、URL query 或凭据；`tools/log-analyzer` allowlist 与测试同步更新。整链保持同一 `model_call_id` 且只产生一个 `model_call_final`。
+
+### 14.9.6 CLI 配置、命令与安全状态机
+
+CLI 配置只允许以下闭集字段：`schemaVersion`（首版固定为 1）、`agentPath`、`endpoint`、有序 `models`、`mode=ask|plan|write`、`worktreeNamePrefix` 和 `safety.allowWrite`。`worktreeNamePrefix` 默认 `cursor-pool`，必须匹配 `[A-Za-z0-9][A-Za-z0-9._-]{0,31}`；最终名称为 prefix 加 16 位十六进制 orchestration ID。未知 schema version/字段、`force`、`yolo`、`printenv`、自动 MCP 批准及任意 credential 字段均拒绝。`safety.allowWrite` 默认 false；`mode=write` 时必须为 true，否则预检失败。BYOK 配置路径固定为 `~/.cursor-local-assistant-v2/config.yaml`，不可由池配置覆盖。endpoint 只接受精确值 `http://127.0.0.1:18090`，避免控制器成为新的数据出口。
+
+固定子进程 argv 为：
+
+```text
+agent --print --output-format stream-json --endpoint http://127.0.0.1:18090 --model <physical-id> [--mode ask|plan] [--worktree <generated-name>]
+```
+
+Prompt 写完 stdin 后立即 EOF，argv 和 journal 中不得出现。Ask/Plan 显式传 `--mode ask|plan`；write **省略 `--mode`**，因为当前 Agent CLI 只接受 ask/plan，而省略值才进入默认写模式，同时必须传生成的 `--worktree` 名称。worktree 名称为经字符白名单清洗的 `worktreeNamePrefix + orchestration_id`，不是绝对路径。默认不传 `--force`、`--yolo`、自动 MCP 批准或 `--printenv`。
+
+状态机为：
+
+```text
+preflight → launching → pre_output → observed → mutated → terminal
+                                     ↘ needs_review
+```
+
+- `system/init`、`user`、`retry` 和 `connection` 只更新 session/transport metadata，不单独关闭窗口。
+- 任意 `thinking`、`assistant`、`tool_call`（至少 `started`）进入 `observed`，永久关闭本次编排的自动模型切换窗口；这是比最低合同更保守的 fail-safe，避免隐藏模型生成内容被重复计费或改变后续行为。
+- write 模式不自行执行 `git worktree add`。controller 先以 `git rev-parse --show-toplevel` 获得仓库根和 repo basename，再按 Cursor CLI 已核实合同确定目标 `~/.cursor/worktrees/<repo-basename>/<generated-name>`；目标已存在时预检失败。启动 child 前，目标通常尚不存在，baseline 记为 absent；child 启动后持续观察同一路径，目录创建即进入 mutation 观察范围，并在进程终止后递归记录除 `.git/` 外全部相对路径和类型。普通文件记录大小与内容 SHA-256，目录记录路径存在，symlink 只哈希 link text、不跟随目录外目标。任意新增、删除、类型/内容变化进入 `mutated`；不支持类型或遍历、读取、比较失败也按 mutated，不能 fail-open。Ask/Plan 不创建 worktree，也不做 mutation 自动判定。
+- 只有 `preflight/launching/pre_output` 的进程 spawn 失败，或 CLI 提供的**结构化**错误类别明确为 transport、429、502/503/504 时可切下一个模型。分类器禁止解析 stderr/assistant/tool 自由文本；认证、非法模型、其他 4xx、HTTP 500、配置/NDJSON 解析错误、用户取消、signal、未知非零退出或缺少结构化错误类别均直接停止（fail-closed）。`result` 没有受控 typed category 时也属于未知，不能仅凭 exit code 猜测 429/5xx。
+- `observed/mutated` 后失败为 `needs_review`；不自动重启、不把下一模型描述为续跑。每个池成员每次 orchestration 最多启动一次；模型间只允许 `U(0,1s)` full jitter，不做同模型完整 Agent retry。
+- cancel 时先向独立进程组发送 SIGTERM 并停止后续模型调度；2 秒后仍未退出则向整个进程组发送 SIGKILL。父进程收到 SIGINT/SIGTERM 时采用同一流程，最终 exit 分类和是否观察输出/变更必须写入 metadata-only journal。Windows 构建不在首版 controller 验收范围；非 Unix 平台预检返回 unsupported，不静默退化为只杀直接 child。
+
+### 14.9.7 Journal、隐私、并发与恢复
+
+journal 每行只允许：`schema_version`、`orchestration_id`、模型 ID/序号、phase、可用的 session/request ID、exit code、error category、`output_observed`、`mutation_observed`、生成的 worktree **名称**和时间。未知关联写 `unknown`，不按时间推断。不得写解析后的 worktree 绝对路径、prompt、NDJSON 原行、assistant/thinking 正文、tool call 参数、stdout/stderr、环境变量、凭据或用户绝对项目路径；错误文本先归类再丢弃原文。
+
+一次 CLI controller 只运行一个 child；模型切换严格串行。journal 使用 `0600`、追加写和进程内单写者；崩溃恢复不自动续跑旧 orchestration，只保留终态不完整记录供人工检查。并发启动多个 controller 不共享预算；各自 worktree 名必须含随机 orchestration ID，冲突时预检失败。
+
+### 14.9.8 失败、回滚、发布隔离与运维
+
+Provider 保存失败不改变当前内存/磁盘配置；运行时预算异常按 clamp 后继续，观测记录规范化值。关闭 fallback 即回到单渠道 P0，旧 reader 忽略新增 YAML 字段。CLI 是旁路工具；删除其配置或停止命令不影响 IDE/backend。controller 不修改 198 隧道、Docker、`auth.json` 或 endpoint 监听。
+
+发布隔离检查在现有分析器禁入基础上增加 `tools/cursor-cli-model-pool` 与二进制 marker；根 module 测试/build 不编译独立 module。禁止路径反向审查包括 `proto/`、`internal/mitm/`、`internal/certs/`、系统代理和发布资产。
+
+### 14.9.9 验证合同与追踪
+
+- Provider config/resolver：旧配置默认 5/8、2–9/1–30 边界、非零越界失败、runtime clamp、禁用保留、YAML/JSON roundtrip；1 primary + 4 candidates 合法且保持顺序，第 5 个 candidate 拒绝。
+- Provider HTTP：真实 `httptest` 覆盖 3 渠道/5 attempts 的 `3+1+1` 且第三渠道成功、5 渠道/5 attempts 的全覆盖、5 渠道/9 attempts 的 `3+3+1+1+1`、transport 与 502/503/504 覆盖切换、预算小于渠道数时按序停止、第 N+1 次不发送、单渠道 ≤3、共享 wait、超预算 `Retry-After`、取消、raw byte/model event 后候选为 0、跨 Provider 不兼容跳过、同一 `model_call_id` 和唯一 final。
+- 前端：保存前校验/序列化后无 id、合法/悬空/自引用/重复、禁用/旧配置/import-export；浏览器覆盖预算边界、逻辑标记、风险提示、无候选和回显，控制台无错误。
+- CLI fake agent：模型顺序、每模型一次、stdin/argv、pre-output 切换、thinking/assistant/tool/mutation 后禁止、错误分类、取消/进程组、write/worktree、journal 脱敏、fallback alias 拒绝。
+- CLI runtime：先 dry-run/fake agent，再受控本机 18090 Ask；真实 pre-output 故障切换和 signal/worktree 行为若环境无法安全注入，明确登记 env/test gap，不借 mock 证据升级状态。
+- 全量门禁：根及受影响 package test/race/vet、前端投影与 build、独立 CLI module test/race/vet、log-analyzer test/race/vet、发布隔离、`git diff --check`、敏感信息与禁止路径扫描。
+
+追踪关系：工作决策基线 §10.5/§10.7/§10.8 → 本节 §14.9 → `task/todo.md` 工作包 `three-layer-subagent-provider-cli-pool-20260824` → Provider/前端/CLI tests 与运行证据。三条链各自维护 delivery status，整链状态取最低值。
+
+### 14.9.10 备选方案、自由裁量与 Design Gate 记录
+
+拒绝方案：只用 Provider fallback，无法提供 CLI 进程级确定性模型顺序；只用 CLI 池，会丢失 IDE 直接逻辑模型能力；CLI 引用逻辑 alias 会形成双层预算；固定 10/20/40/80/160 秒 Provider 退避最坏等待过长；已有输出后续跑/拼接无法证明无重复副作用。
+
+已闭合自由裁量：预算范围、per-channel 固定上限、500 错误 allowlist、thinking 门禁、stdin、worktree、journal 白名单、进程级一次性、loopback endpoint、fallback alias 拒绝和回滚均为确定合同。低层可自由选择 YAML/NDJSON 库、内部 package 划分和 full-jitter RNG 注入方式，但不得改变外部行为或隐私字段。
+
+- **正向模拟**：IDE override B → child B → ChannelPlan 读取预算 → primary/candidate 共享预算 → 唯一 final；CLI 配置 → models/BYOK 双预检 → stdin 启动物理模型 → NDJSON 成功 → metadata-only terminal。
+- **最高风险失败模拟**：5 个兼容渠道共享默认 5 attempts 时按 `1+1+1+1+1` 覆盖；任一 raw byte 后立即停止。CLI 在 thinking 后失败进入 `needs_review`，即使未出现 assistant/tool/mutation 也不切模型；write 文件变化同样停止。
+- **迁移/回滚模拟**：旧 YAML 缺字段得到 5/8；关闭 fallback 恢复单渠道；移除 CLI 配置不影响 backend；发布包扫描拒绝独立 module marker。
+- **独立首轮模拟**：只读 reviewer 于 2026-08-24 发现 wait=0 哨兵、CLI 模型 ID/API Key 哈希、typed 错误来源、超预算 `Retry-After`、write argv、worktree 指纹、500 切换和取消宽限期存在临场自由裁量；Design Gate 判定不通过。
+- **首轮修订**：已把上述事项闭合为 fallback-budget 存在即直接覆盖 wait（含 0）、API Key 仅内存哈希、typed 分类缺失 fail-closed、Retry-After 超预算结束本渠道、write 省略 mode 且强制生成 worktree、全文件内容指纹、500 只同渠道重试、SIGTERM 后 2 秒 SIGKILL，并固定配置路径和 YAML 字段闭集。
+- **独立复审 verdict**：同一只读 reviewer 重新读取修订后合同，逐项确认 wait=0、模型 identity、typed 错误、Retry-After、write argv、worktree、取消、配置闭集/路径和 HTTP 500 均已闭合；无新 P0 或阻塞编码的 P1，也无会改变业务、安全、兼容或回滚结果的临场决定。
+- **最终 verdict**：`Design Readiness=approved`，允许按 TDD 进入 Provider、前端和独立 CLI module 编码；真实 CLI 429/signal/worktree mutation 仍是 `delivery_status=accepted` 前的运行证据门禁，不是设计前提。
+
+## 14.10 DESIGN-CONFIG-RACE-UPSTREAM-CAPACITY-001：配置竞态与上游容量
+
+- **Design Readiness**：`approved`；实现与受控非零 fixture 验证进行中。
+- **决策时间**：2026-08-25。
+- **关联计划**：`.cursor/plans/配置竞态与上游容量风险精简计划_ff017475.plan.md`。
+- **范围边界**：只处理进程内配置写事务和 Provider 物理上游共享容量；不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、CLI `physical-only` 合同或发布隔离。
+
+### 14.10.1 配置写事务
+
+配置只公开三种写语义：
+
+1. `SaveUserConfig`：Store 锁内读取最新 YAML，以 UI payload 替换用户字段并 overlay 最新 `lastAgentModelHash`。
+2. `SaveLastAgentModelHash`：Store 锁内读取最新 YAML，只 patch hash；trim 后相同则不写盘。Manager 更新 current/snapshot，但不通知 listener，因此不触发 Host rebuild 或 Wails 全量配置事件。
+3. `Save` / `ReplaceConfig`：完整导入使用全量替换，允许替换 hash。
+
+Manager 的 `writeMu` 串行提交写入、current 和 snapshot；Store 的 `mu` 保护读取最新文件、规范化和临时文件 rename。写盘失败时 current/snapshot 不前移。热加载与显式写入共享 Manager 写串行边界；listener 只在写锁释放后调用。`Current()` 保持既有浅拷贝合同，不为此竞态引入热路径全量深拷贝。
+
+### 14.10.2 容量 schema、上游组与运行语义
+
+`ModelAdapterConfig.maxConcurrentRequests` 缺失/`0` 表示不限流，非零只允许 `1–16`。启用 fallback 的逻辑 alias 必须为 `0`。物理 adapter 按 `lower(provider type) + NormalizeBaseURL(baseURL) + trimmed API key` 归组；同组配置值必须一致。组身份取 SHA-256 并只存在内存，API Key、Base URL 和组 hash 不得写入 YAML、日志、事件或错误。
+
+resolver 把 limit 与瞬态组 key 投影到 `ResolvedChannel`，router 再覆盖到每次 `StreamRequest`。进程级 limiter 对一次物理渠道完整 Stream acquire 一次并 defer release，因此同渠道 429/5xx retry 始终持有同一槽，切候选前释放。容量等待固定最多 2 秒、非 FIFO、不维护显式有界队列；context 取消通过唤醒等待者及时返回，release 幂等且广播。
+
+容量超时返回 typed `capacity_unavailable`。该错误不消费 HTTP attempt，不消耗或重新激活 fallback retry/backoff wait budget；仅在零 HTTP、零原始字节、零 model event、零工具/checkpoint/downstream 副作用时允许切到不同上游组，同组候选直接跳过。未知零 HTTP 错误仍 fail closed；父 context 取消返回原始 `context.Canceled` / `DeadlineExceeded` 并禁止切换。
+
+### 14.10.3 兼容、热更新、回滚与验收边界
+
+默认 `0` 与旧配置保持无限并发。新请求立即使用当前解析到的限制；已运行请求不取消，旧等待者最多保留其原阈值 2 秒，本期不实现可调整 semaphore 或主动唤醒。设为 `0` 或删除字段即可回滚 limiter；普通 UI 保存和完整导入仍执行后端权威校验。
+
+验收必须包含配置两方向交错和 race、hash no-op/replace、同组峰值、异组隔离、retry 持槽、capacity fallback、同组跳过、取消无泄漏、前端默认/边界/roundtrip，以及根 module test/race/vet、前端 build 和差异检查。当前真实 `grok-HA` 按用户决定保持缺失/`0`；因此只允许声明容量能力经受控非零 fixture 验证，不得声明当前在线上游已经受容量保护。
 
 ## 15. 核心不变量
 

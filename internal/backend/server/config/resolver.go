@@ -41,49 +41,8 @@ func resolveModelAdapterChannel(adapters []ModelAdapterConfig, requestedModel st
 	if !ok {
 		return nil, legacyruntime.ErrChannelNotAvailable
 	}
-	matched := adapters[matchIndex]
-
-	resolved := &legacyruntime.ResolvedChannel{
-		ID:                          strings.TrimSpace(matched.ID),
-		Name:                        strings.TrimSpace(matched.DisplayName),
-		GroupName:                   "local",
-		Code:                        strings.TrimSpace(matched.ID),
-		Provider:                    strings.TrimSpace(matched.Type),
-		BaseURL:                     strings.TrimSpace(matched.BaseURL),
-		APIKey:                      strings.TrimSpace(matched.APIKey),
-		Model:                       strings.TrimSpace(matched.ModelID),
-		OpenAIEndpoint:              strings.TrimSpace(matched.OpenAIEndpoint),
-		OpenAIExtraParamsEnabled:    matched.OpenAIExtraParamsEnabled,
-		OpenAIExtraParamsJSON:       strings.TrimSpace(matched.OpenAIExtraParamsJSON),
-		CustomHeadersEnabled:        matched.CustomHeadersEnabled,
-		CustomHeadersJSON:           strings.TrimSpace(matched.CustomHeadersJSON),
-		AnthropicExtraParamsEnabled: matched.AnthropicExtraParamsEnabled,
-		AnthropicExtraParamsJSON:    strings.TrimSpace(matched.AnthropicExtraParamsJSON),
-		TimeoutMS:                   defaultChannelTimeoutMS,
-		ContextWindowTokens:         defaultChannelContextWindowTokens,
-		MaxTokens:                   defaultChannelMaxTokens,
-		ReasoningEffort:             strings.TrimSpace(matched.ReasoningEffort),
-		AnthropicMaxTokens:          defaultChannelMaxTokens,
-		AnthropicThinkingEffort:     defaultChannelAnthropicEffort,
-		ThinkingEnabled:             true,
-		ThinkingBudgetTokens:        defaultChannelThinkingBudget,
-	}
-	if matched.ContextWindowTokens > 0 {
-		resolved.ContextWindowTokens = matched.ContextWindowTokens
-	}
-	if matched.MaxCompletionTokens > 0 {
-		resolved.MaxTokens = matched.MaxCompletionTokens
-	}
-	if matched.AnthropicMaxTokens > 0 {
-		resolved.AnthropicMaxTokens = matched.AnthropicMaxTokens
-	}
-	if matched.ThinkingBudgetTokens > 0 {
-		resolved.ThinkingBudgetTokens = matched.ThinkingBudgetTokens
-	}
-	if strings.TrimSpace(matched.AnthropicThinkingEffort) != "" {
-		resolved.AnthropicThinkingEffort = strings.TrimSpace(matched.AnthropicThinkingEffort)
-	}
-	return resolved, nil
+	resolved := resolveAdapterToChannel(adapters[matchIndex])
+	return &resolved, nil
 }
 
 // SelectChannelPlanForModel 解析指定模型的渠道计划（含 fallback 链）。
@@ -116,11 +75,14 @@ func resolveModelAdapterChannelPlan(adapters []ModelAdapterConfig, requestedMode
 	}
 	matched := adapters[matchIndex]
 	fb := matched.ProviderFallback
+	attempts, waitSeconds := legacyruntime.ClampFallbackChainBudget(fb.MaxHttpAttempts, fb.MaxWaitSeconds)
 	if !fb.Enabled || len(fb.CandidateChannelIDs) == 0 {
 		ch := resolveAdapterToChannel(matched)
 		return &legacyruntime.ChannelPlan{
 			Channels:        []legacyruntime.ResolvedChannel{ch},
 			FallbackEnabled: false,
+			MaxHttpAttempts: attempts,
+			MaxWaitSeconds:  waitSeconds,
 		}, nil
 	}
 	// Fallback 已启用：构建链 [primary, candidates...]
@@ -140,6 +102,8 @@ func resolveModelAdapterChannelPlan(adapters []ModelAdapterConfig, requestedMode
 	return &legacyruntime.ChannelPlan{
 		Channels:        channels,
 		FallbackEnabled: true,
+		MaxHttpAttempts: attempts,
+		MaxWaitSeconds:  waitSeconds,
 	}, nil
 }
 
@@ -181,6 +145,8 @@ func resolveAdapterToChannel(matched ModelAdapterConfig) legacyruntime.ResolvedC
 		AnthropicThinkingEffort:     defaultChannelAnthropicEffort,
 		ThinkingEnabled:             true,
 		ThinkingBudgetTokens:        defaultChannelThinkingBudget,
+		MaxConcurrentRequests:       matched.MaxConcurrentRequests,
+		UpstreamCapacityGroupKey:    legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, matched.APIKey),
 	}
 	if matched.ContextWindowTokens > 0 {
 		resolved.ContextWindowTokens = matched.ContextWindowTokens

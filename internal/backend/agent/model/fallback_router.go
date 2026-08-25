@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -16,11 +17,10 @@ import (
 )
 
 const (
-	// fallbackChainTotalAttempts 是整条 fallback 链允许的最大 HTTP 尝试次数（共享预算）。
-	// 默认 3 次 × 最多 3 渠道 = 9 次，但共享预算上限为 5，防止无限放大。
-	fallbackChainTotalAttempts = 5
-	// fallbackChainMaxWait 是整条 fallback 链允许的最大等待时间（共享退避预算）。
-	fallbackChainMaxWait = 8 * time.Second
+	// fallbackChainTotalAttempts 是默认全链 HTTP 尝试次数；ChannelPlan 预算优先，缺失时回落到此值。
+	fallbackChainTotalAttempts = legacyruntime.DefaultFallbackMaxHttpAttempts
+	// fallbackChainMaxWait 是默认全链等待预算；ChannelPlan 预算优先。
+	fallbackChainMaxWait = time.Duration(legacyruntime.DefaultFallbackMaxWaitSeconds) * time.Second
 )
 
 // FallbackAwareRouter 在 ChannelPlan.FallbackEnabled=true 时按有序渠道列表依次尝试；
@@ -67,9 +67,61 @@ func (r *FallbackAwareRouter) Stream(ctx context.Context, req StreamRequest, sin
 	return r.streamWithFallback(ctx, req, sink, plan, idleTimeout)
 }
 
+func fallbackChainBudgetFromPlan(plan *legacyruntime.ChannelPlan) (int, time.Duration) {
+	attempts := fallbackChainTotalAttempts
+	waitSeconds := int(fallbackChainMaxWait / time.Second)
+	if plan != nil {
+		attempts = plan.MaxHttpAttempts
+		waitSeconds = plan.MaxWaitSeconds
+	}
+	attempts, waitSeconds = legacyruntime.ClampFallbackChainBudget(attempts, waitSeconds)
+	return attempts, time.Duration(waitSeconds) * time.Second
+}
+
+// countSubsequentReservableChannels 统计从 currentIdx 之后、按实际切换顺序
+// 会被尝试的兼容渠道数。不兼容候选不占预留；兼容性基准随“将被尝试”的渠道推进，
+// 与 streamWithFallback 在失败后查找下一候选的方式一致。
+func countSubsequentReservableChannels(req StreamRequest, channels []legacyruntime.ResolvedChannel, currentIdx int) int {
+	if currentIdx < 0 || currentIdx >= len(channels) {
+		return 0
+	}
+	from := channels[currentIdx]
+	count := 0
+	for idx := currentIdx + 1; idx < len(channels); idx++ {
+		if ok, _ := checkFallbackChannelCompatibility(req, from, channels[idx]); !ok {
+			continue
+		}
+		count++
+		from = channels[idx]
+	}
+	return count
+}
+
+// allocateFallbackChannelAttempts 按“保证渠道覆盖，再用剩余预算重试”分配当前渠道的 HTTP 次数。
+// 每个后续可尝试/兼容渠道预留 1 次；当前渠道使用 remaining-reserved，且不超过 providerRequestMaxAttempts。
+// 当剩余预算不足以覆盖当前+全部后续时，仍给当前 1 次（按顺序覆盖），不突破 remainingAttempts。
+func allocateFallbackChannelAttempts(remainingAttempts, subsequentReservable int) int {
+	if remainingAttempts <= 0 {
+		return 0
+	}
+	if subsequentReservable < 0 {
+		subsequentReservable = 0
+	}
+	reserved := subsequentReservable
+	if reserved > remainingAttempts-1 {
+		reserved = remainingAttempts - 1
+	}
+	usable := remainingAttempts - reserved
+	if usable > providerRequestMaxAttempts {
+		usable = providerRequestMaxAttempts
+	}
+	return usable
+}
+
 // streamWithFallback 执行多渠道 fallback 循环。
 // 共享预算规则：
-//   - HTTP attempt 总上限 fallbackChainTotalAttempts（5），每渠道单次分配不超过 providerRequestMaxAttempts（3）。
+//   - HTTP attempt 总上限由 ChannelPlan 决定（默认 fallbackChainTotalAttempts），每渠道单次分配不超过 providerRequestMaxAttempts（3）。
+//   - 覆盖优先：为每个后续实际可尝试/兼容渠道预留至少 1 次 HTTP；当前渠道最多使用 remaining-reserved。
 //   - sleep/backoff 预算 fallbackChainMaxWait（8s）通过 wall-clock 扣减方式传入各渠道；
 //     不使用 context.WithTimeout，避免连带截断正在进行的 HTTP 请求。
 //   - 安全门禁（原始字节、model event、context cancel、非可重试错误）任一触发即阻断 fallback。
@@ -80,7 +132,8 @@ func (r *FallbackAwareRouter) streamWithFallback(
 	plan *legacyruntime.ChannelPlan,
 	idleTimeout time.Duration,
 ) error {
-	budget := NewFallbackRetryBudget(fallbackChainTotalAttempts, fallbackChainMaxWait)
+	attempts, maxWait := fallbackChainBudgetFromPlan(plan)
+	budget := NewFallbackRetryBudget(attempts, maxWait)
 
 	var lastErr error
 	var prevChannel *legacyruntime.ResolvedChannel
@@ -113,10 +166,13 @@ func (r *FallbackAwareRouter) streamWithFallback(
 			}
 		}
 
-		// 计算本渠道的 attempt 分配（不超过单渠道默认上限）
-		perChannelAttempts := remainingAttempts
-		if perChannelAttempts > providerRequestMaxAttempts {
-			perChannelAttempts = providerRequestMaxAttempts
+		// 覆盖优先：后续实际可尝试/兼容渠道各预留 1 次，当前渠道使用剩余额度（不超过单渠道上限）。
+		perChannelAttempts := allocateFallbackChannelAttempts(
+			remainingAttempts,
+			countSubsequentReservableChannels(req, plan.Channels, channelIdx),
+		)
+		if perChannelAttempts <= 0 {
+			break
 		}
 
 		channelReq := applyChannelToRequest(req, &channel, idleTimeout)
@@ -125,6 +181,25 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		channelReq.FallbackBudget = budget
 		channelSafety := &FallbackSafetyInfo{}
 		channelReq.FallbackSafety = channelSafety
+		recordAttempt := func(reason, fallbackTo, suppressionReason string, success bool) {
+			if channelSafety.Snapshot().WaitBudgetBlocked && (suppressionReason == "" || suppressionReason == "chain_exhausted") {
+				suppressionReason = "wait_budget_exhausted"
+			}
+			recordFallbackAttempt(ctx, fallbackAttemptRecord{
+				requestID:         req.RequestID,
+				modelCallID:       req.ModelCallID,
+				channelAttempt:    channelIdx + 1,
+				channelID:         channel.ID,
+				previousChannelID: previousChannelID,
+				reason:            reason,
+				fallbackTo:        fallbackTo,
+				suppressionReason: suppressionReason,
+				success:           success,
+				budget:            budget,
+				allocation:        perChannelAttempts,
+				retryDelay:        channelSafety.Snapshot().LastRetryDelay,
+			})
+		}
 		// 只有后续仍存在兼容候选时，本次渠道才使用隔离后缀。
 		// 若剩余候选都会被跳过，本次就是实际终点，必须保留原始 ModelCallID。
 		if nextFallbackChannelIndex(req, plan.Channels, channelIdx) >= 0 {
@@ -141,9 +216,7 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		callErr = WrapFallbackSafetyError(callErr, channelSafety)
 
 		if callErr == nil {
-			// 成功
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, "", "", "", "success", true)
+			recordAttempt("", "", "", true)
 			return nil
 		}
 
@@ -155,36 +228,39 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		// 1. 已有任意原始字节或 model event（含工具进度/下游发布）→ 禁止切换。
 		safety := channelSafety.Snapshot()
 		if safety.RawBytesObserved || safety.ModelEventObserved {
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, reason, "", "output_observed", "failed", false)
+			recordAttempt(reason, "", "output_observed", false)
 			return callErr
 		}
 
 		// 2. 上下文取消 / deadline 超时 → 禁止切换
 		if ctx.Err() != nil {
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, reason, "", "context_done", "failed", false)
+			recordAttempt(reason, "", "context_done", false)
 			return ctx.Err()
 		}
 
-		// 3. 非可重试错误（4xx 非429、request_build、RawBytesObserved 等）→ 禁止切换
+		// 3. HTTP 500 可同渠道重试但禁止切换；仅 transport/429/502/503/504/零字节截断可切。
 		if !isFallbackEligibleError(callErr) {
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, reason, "", fallbackSuppressionReason(callErr), "failed", false)
+			recordAttempt(reason, "", fallbackSuppressionReason(callErr), false)
 			return callErr
 		}
 
 		remainingAfterAttempt, _ := budget.Remaining()
 		if remainingAfterAttempt <= 0 {
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, reason, "", "attempt_budget_exhausted", "failed", false)
+			recordAttempt(reason, "", "attempt_budget_exhausted", false)
 			return callErr
 		}
 
 		// 查找下一个真正兼容的候选，并为被跳过的候选记录受控原因。
+		// 容量超时后跳过相同上游组，避免对同一组再等 2 秒。
+		skipSameGroup := isCapacityUnavailable(callErr)
 		nextChannelIdx := -1
 		for candidateIdx := channelIdx + 1; candidateIdx < len(plan.Channels); candidateIdx++ {
 			candidate := plan.Channels[candidateIdx]
+			if skipSameGroup && sameUpstreamCapacityGroup(channel, candidate) {
+				recordFallbackIncompatible(ctx, req.RequestID, req.ModelCallID, candidateIdx+1,
+					candidate.ID, channel.ID, "same_upstream_group")
+				continue
+			}
 			if ok, incompatReason := checkFallbackChannelCompatibility(req, channel, candidate); !ok {
 				recordFallbackIncompatible(ctx, req.RequestID, req.ModelCallID, candidateIdx+1,
 					candidate.ID, channel.ID, incompatReason)
@@ -194,15 +270,13 @@ func (r *FallbackAwareRouter) streamWithFallback(
 			break
 		}
 		if nextChannelIdx < 0 {
-			recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-				channel.ID, previousChannelID, reason, "", "chain_exhausted", "failed", false)
+			recordAttempt(reason, "", "chain_exhausted", false)
 			return callErr
 		}
 
 		// 全部安全检查通过，切换到下一个实际兼容渠道。
 		nextChannelID := plan.Channels[nextChannelIdx].ID
-		recordFallbackAttempt(ctx, req.RequestID, req.ModelCallID, channelIdx+1,
-			channel.ID, previousChannelID, reason, nextChannelID, "", "failed", false)
+		recordAttempt(reason, nextChannelID, "", false)
 
 		attemptedChannel := channel
 		prevChannel = &attemptedChannel
@@ -217,13 +291,21 @@ func (r *FallbackAwareRouter) streamWithFallback(
 
 // isFallbackEligibleError 判断该错误是否允许切换到下一渠道。
 //
-// 允许切换：transport、rate_limited(429)、server_5xx、stream_idle_timeout、
-// stream_decode（且 RawBytesObserved=false）。
-// 禁止切换：context_canceled/deadline、4xx 非429、request_build、
-// RawBytesObserved=true（provider 已有字节但零 model event）及其他。
+// 允许切换：transport、429、502/503/504、零字节 pre-event 截断 / stream idle、
+// 以及零输出窗口内的 typed capacity_unavailable。
+// 禁止切换：HTTP 500（仅同渠道 P0 重试）、context cancel/deadline、4xx 非429、
+// request_build、未知零 HTTP、RawBytesObserved=true 及其他。
 func isFallbackEligibleError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if isCapacityUnavailable(err) {
+		if safety, ok := fallbackSafetyFromError(err); ok {
+			if safety.RawBytesObserved || safety.ModelEventObserved {
+				return false
+			}
+		}
+		return true
 	}
 	if safety, ok := fallbackSafetyFromError(err); ok {
 		if safety.RawBytesObserved || safety.ModelEventObserved || safety.RequestBuildFailed || safety.HTTPAttempts == 0 {
@@ -235,9 +317,22 @@ func isFallbackEligibleError(err error) bool {
 	if errors.As(err, &trunc) && trunc != nil && trunc.RawBytesObserved {
 		return false
 	}
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil {
+		return isFallbackEligibleHTTPStatus(httpErr.StatusCode)
+	}
 	switch ClassifyProviderError(err) {
-	case ProviderErrorTransport, ProviderErrorRateLimited, ProviderErrorServer5xx,
+	case ProviderErrorTransport, ProviderErrorRateLimited,
 		ProviderErrorStreamIdleTimeout, ProviderErrorStreamDecode:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFallbackEligibleHTTPStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return true
 	default:
 		return false
@@ -263,6 +358,10 @@ func fallbackSuppressionReason(err error) string {
 	default:
 		return "ineligible_error"
 	}
+}
+
+func sameUpstreamCapacityGroup(a, b legacyruntime.ResolvedChannel) bool {
+	return upstreamCapacityGroupKey(a.Provider, a.BaseURL, a.APIKey) == upstreamCapacityGroupKey(b.Provider, b.BaseURL, b.APIKey)
 }
 
 func nextFallbackChannelIndex(req StreamRequest, channels []legacyruntime.ResolvedChannel, currentIdx int) int {
@@ -361,18 +460,27 @@ func fallbackExtractAttemptsUsed(err error, allocated int) int {
 	return allocated
 }
 
+// fallbackAttemptRecord 是一条 fallback 渠道尝试的可观测输入。
+type fallbackAttemptRecord struct {
+	requestID         string
+	modelCallID       string
+	channelAttempt    int
+	channelID         string
+	previousChannelID string
+	reason            string
+	fallbackTo        string
+	suppressionReason string
+	success           bool
+	budget            *FallbackRetryBudget
+	allocation        int
+	retryDelay        time.Duration
+}
+
 // recordFallbackAttempt 记录 fallback 链每个渠道尝试的可观测事件。
 // 同一 model_call_id，channelAttempt 从 1 开始区分各渠道；不记录凭证、响应正文或完整 URL query。
-// fallbackTo 非空时表示本次失败后将切换到的下一渠道 ID（已通过全部安全门禁）；
-// 若 fallback 被阻断（安全门禁、预算耗尽、最后渠道等），fallbackTo 为空。
-func recordFallbackAttempt(
-	ctx context.Context,
-	requestID, modelCallID string,
-	channelAttempt int,
-	channelID, previousChannelID string,
-	reason, fallbackTo, suppressionReason, outcome string,
-	success bool,
-) {
+// fallbackTo 非空时表示本次失败后将切换到的下一渠道 ID（已通过全部安全门禁）。
+// WaitBudgetBlocked 时仍可切换，此时 fallback_to 与 fallback_suppressed_reason=wait_budget_exhausted 同时存在。
+func recordFallbackAttempt(ctx context.Context, rec fallbackAttemptRecord) {
 	sink := observability.ProcessSink()
 	if sink == nil {
 		return
@@ -382,38 +490,51 @@ func recordFallbackAttempt(
 	}
 	correlation := observability.CorrelationFromContext(ctx)
 	if correlation.CursorRequestID == "" {
-		correlation.CursorRequestID = strings.TrimSpace(requestID)
+		correlation.CursorRequestID = strings.TrimSpace(rec.requestID)
 	}
 	if correlation.ModelCallID == "" {
-		correlation.ModelCallID = strings.TrimSpace(modelCallID)
+		correlation.ModelCallID = strings.TrimSpace(rec.modelCallID)
 	}
 	ctx = observability.WithCorrelation(ctx, correlation)
 	status := "completed"
 	semanticOutcome := observability.OutcomeSucceeded
-	if !success {
+	if !rec.success {
 		status = "error"
 		semanticOutcome = observability.OutcomeFailed
 	}
-	fields := make(map[string]any, 8)
-	fields["channel_attempt"] = channelAttempt
-	if strings.TrimSpace(channelID) != "" {
-		fields["channel_id"] = audit.SanitizeMetadataText(channelID)
+	fields := make(map[string]any, 16)
+	fields["channel_attempt"] = rec.channelAttempt
+	if strings.TrimSpace(rec.channelID) != "" {
+		fields["channel_id"] = audit.SanitizeMetadataText(rec.channelID)
 	}
-	if strings.TrimSpace(previousChannelID) != "" {
-		fields["fallback_from"] = audit.SanitizeMetadataText(previousChannelID)
+	if strings.TrimSpace(rec.previousChannelID) != "" {
+		fields["fallback_from"] = audit.SanitizeMetadataText(rec.previousChannelID)
 	}
-	if strings.TrimSpace(fallbackTo) != "" {
-		fields["fallback_to"] = audit.SanitizeMetadataText(fallbackTo)
+	if strings.TrimSpace(rec.fallbackTo) != "" {
+		fields["fallback_to"] = audit.SanitizeMetadataText(rec.fallbackTo)
 	}
-	if strings.TrimSpace(reason) != "" {
-		fields["fallback_reason"] = reason
+	if strings.TrimSpace(rec.reason) != "" {
+		fields["fallback_reason"] = rec.reason
 	}
-	if strings.TrimSpace(suppressionReason) != "" {
-		fields["fallback_suppressed_reason"] = suppressionReason
+	if strings.TrimSpace(rec.suppressionReason) != "" {
+		fields["fallback_suppressed_reason"] = rec.suppressionReason
+	}
+	if rec.allocation > 0 {
+		fields["channel_allocation_max_attempts"] = rec.allocation
+	}
+	fields["retry_delay_ms"] = rec.retryDelay.Milliseconds()
+	if rec.budget != nil {
+		maxAttempts, usedAttempts, remainingAttempts, maxWait, usedWait, remainingWait := rec.budget.Snapshot()
+		fields["chain_max_attempts"] = maxAttempts
+		fields["chain_max_wait_ms"] = maxWait.Milliseconds()
+		fields["chain_attempts_used"] = usedAttempts
+		fields["chain_attempts_remaining"] = remainingAttempts
+		fields["chain_wait_used_ms"] = usedWait.Milliseconds()
+		fields["chain_wait_remaining_ms"] = remainingWait.Milliseconds()
 	}
 	event := observability.Event{
-		CursorRequestID:     strings.TrimSpace(requestID),
-		ModelCallID:         strings.TrimSpace(modelCallID),
+		CursorRequestID:     strings.TrimSpace(rec.requestID),
+		ModelCallID:         strings.TrimSpace(rec.modelCallID),
 		Layer:               "provider",
 		Event:               "provider_fallback_attempt",
 		Capability:          "provider_fallback",

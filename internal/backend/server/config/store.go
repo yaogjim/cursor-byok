@@ -101,18 +101,88 @@ func (store *Store) Save(_ context.Context, cfg Config) (Config, error) {
 		return Config{}, errors.New("配置存储未初始化")
 	}
 
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	_, _ = store.readLatestLocked()
 	normalized, err := NormalizeConfig(cfg)
 	if err != nil {
 		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveUserConfig(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
 	}
 
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := cfg
+	merged.LastAgentModelHash = disk.LastAgentModelHash
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
 	if err := store.saveLocked(normalized); err != nil {
 		return Config{}, err
 	}
 	return normalized, nil
+}
+
+func (store *Store) SaveLastAgentModelHash(_ context.Context, value string) (Config, bool, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, false, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, false, err
+	}
+	normalizedValue := strings.TrimSpace(value)
+	if strings.TrimSpace(disk.LastAgentModelHash) == normalizedValue {
+		return disk, false, nil
+	}
+	merged := disk
+	merged.LastAgentModelHash = normalizedValue
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, false, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, false, err
+	}
+	return normalized, true, nil
+}
+
+func (store *Store) readLatestLocked() (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return DefaultConfig(), nil
+	}
+	data, err := os.ReadFile(store.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return DefaultConfig(), nil
+		}
+		return Config{}, fmt.Errorf("读取用户配置失败: %w", err)
+	}
+	var current Config
+	if err := yaml.Unmarshal(data, &current); err != nil {
+		return Config{}, fmt.Errorf("解析用户配置失败: %w", err)
+	}
+	return NormalizeConfig(current)
 }
 
 func (store *Store) saveLocked(normalized Config) error {

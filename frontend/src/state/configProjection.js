@@ -18,6 +18,30 @@ export const DEFAULT_CLIENT_PREFERENCES = Object.freeze({
   updates: { checkOnStartup: false },
 });
 
+export const DEFAULT_PROVIDER_FALLBACK = Object.freeze({
+  enabled: false,
+  primaryChannelID: "",
+  candidateChannelIDs: Object.freeze([]),
+  maxHttpAttempts: 5,
+  maxWaitSeconds: 8,
+});
+
+export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
+
+export const PROVIDER_FALLBACK_LIMITS = Object.freeze({
+  maxHttpAttempts: Object.freeze({ min: 2, max: 9 }),
+  maxWaitSeconds: Object.freeze({ min: 1, max: 30 }),
+});
+
+export const DEFAULT_MAX_CONCURRENT_REQUESTS = 0;
+
+export const MAX_CONCURRENT_REQUESTS_LIMITS = Object.freeze({
+  min: 1,
+  max: 16,
+});
+
+export const LOGICAL_ROUTING_RUNTIME_VERIFY_HINT = "已保存。逻辑路由 alias 自身不会调用虚拟 endpoint，整条 fallback 链需通过实际运行验证。";
+
 function asString(value) {
   if (typeof value === "string") {
     return value.trim();
@@ -49,6 +73,25 @@ function boundedInteger(value, fallback, { min, max }) {
     return fallback;
   }
   return Math.min(max, Math.max(min, parsed));
+}
+
+function parseBudgetNumber(value) {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : Number.NaN;
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return 0;
+  }
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function defaultBudget(value, fallback) {
+  return value === 0 ? fallback : value;
 }
 
 export function normalizeObservabilityConfig(source, legacyLog = false) {
@@ -112,16 +155,300 @@ export function buildClientPreferencesFromState(source = {}) {
 }
 
 // normalizeProviderFallback 归一化单条 providerFallback 配置（纯函数，无副作用）。
-// 默认关闭；启用时必须有 primaryChannelID 和至少一个 candidateChannelID。
+// 缺失/0 预算归一化为 5/8；非零越界原样保留供校验报错，禁止静默 clamp。
+// 禁用时保留引用和预算字段，但不参与运行。
 export function normalizeProviderFallback(source) {
   const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
-  const enabled = asBoolean(raw.enabled);
-  if (!enabled) {
-    return { enabled: false, primaryChannelID: "", candidateChannelIDs: [] };
+  const candidateSource = Array.isArray(raw.candidateChannelIDs)
+    ? raw.candidateChannelIDs
+    : (Array.isArray(raw.candidate_channel_ids) ? raw.candidate_channel_ids : []);
+  return {
+    enabled: asBoolean(raw.enabled),
+    primaryChannelID: asString(raw.primaryChannelID ?? raw.primary_channel_id ?? ""),
+    candidateChannelIDs: candidateSource.map((id) => asString(id)).filter(Boolean),
+    maxHttpAttempts: defaultBudget(
+      parseBudgetNumber(raw.maxHttpAttempts ?? raw.max_http_attempts),
+      DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts,
+    ),
+    maxWaitSeconds: defaultBudget(
+      parseBudgetNumber(raw.maxWaitSeconds ?? raw.max_wait_seconds),
+      DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds,
+    ),
+  };
+}
+
+export function validateProviderFallbackBudget(source, prefix = "模型") {
+  const fb = source && typeof source === "object" ? source : {};
+  const attempts = fb.maxHttpAttempts;
+  const wait = fb.maxWaitSeconds;
+  if (
+    !Number.isInteger(attempts)
+    || attempts < PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.min
+    || attempts > PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.max
+  ) {
+    return `${prefix} 的全链最大 HTTP 尝试次数必须为 2–9 的整数`;
   }
-  const primaryChannelID = asString(raw.primaryChannelID ?? raw.primary_channel_id ?? "");
-  const candidateChannelIDs = Array.isArray(raw.candidateChannelIDs)
-    ? raw.candidateChannelIDs.map((id) => asString(id)).filter(Boolean)
-    : [];
-  return { enabled: true, primaryChannelID, candidateChannelIDs };
+  if (
+    !Number.isInteger(wait)
+    || wait < PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.min
+    || wait > PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.max
+  ) {
+    return `${prefix} 的全链最大等待秒数必须为 1–30 的整数`;
+  }
+  return "";
+}
+
+export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
+  const adapters = Array.isArray(source) ? source : [];
+  const refAdapters = Array.isArray(allAdapters) ? allAdapters : adapters;
+  const adapterByID = new Map(
+    refAdapters.map((item) => [asString(item?.id), item]).filter(([id]) => Boolean(id)),
+  );
+  const adapterIDSet = new Set(adapterByID.keys());
+
+  for (const [index, adapter] of adapters.entries()) {
+    const prefix = `模型 ${index + 1}`;
+    const fb = normalizeProviderFallback(adapter?.providerFallback);
+    const budgetError = validateProviderFallbackBudget(fb, prefix);
+    if (budgetError) {
+      return budgetError;
+    }
+    if (!fb.enabled) {
+      continue;
+    }
+    if (!fb.primaryChannelID) {
+      return `${prefix} 的 Fallback 主渠道 ID 不能为空`;
+    }
+    if (!adapterIDSet.has(fb.primaryChannelID)) {
+      return `${prefix} 的 Fallback 主渠道 ID "${fb.primaryChannelID}" 引用了不存在的渠道`;
+    }
+    if (fb.primaryChannelID === asString(adapter?.id)) {
+      return `${prefix} 的 Fallback 主渠道 ID 不能与当前渠道相同`;
+    }
+    if (isLogicalRoutingAdapter(adapterByID.get(fb.primaryChannelID))) {
+      return `${prefix} 的 Fallback 主渠道必须是未启用 Fallback 的物理渠道`;
+    }
+    if (!fb.candidateChannelIDs.length || fb.candidateChannelIDs.length > MAX_PROVIDER_FALLBACK_CANDIDATES) {
+      return `${prefix} 的 Fallback 候选渠道数量必须为 1–${MAX_PROVIDER_FALLBACK_CANDIDATES} 个`;
+    }
+    const seenInChain = new Set([fb.primaryChannelID, asString(adapter?.id)].filter(Boolean));
+    for (const cid of fb.candidateChannelIDs) {
+      if (!cid) {
+        return `${prefix} 的 Fallback 候选渠道 ID 不能为空`;
+      }
+      if (!adapterIDSet.has(cid)) {
+        return `${prefix} 的 Fallback 候选渠道 ID "${cid}" 引用了不存在的渠道`;
+      }
+      if (seenInChain.has(cid)) {
+        return `${prefix} 的 Fallback 候选渠道包含重复或自引用 ID "${cid}"`;
+      }
+      if (isLogicalRoutingAdapter(adapterByID.get(cid))) {
+        return `${prefix} 的 Fallback 候选渠道必须是未启用 Fallback 的物理渠道`;
+      }
+      seenInChain.add(cid);
+    }
+  }
+  return "";
+}
+
+export function stripDerivedModelAdapterIDs(source) {
+  return (Array.isArray(source) ? source : []).map((adapter) => {
+    const { id: _id, ...rest } = adapter && typeof adapter === "object" ? adapter : {};
+    return rest;
+  });
+}
+
+export function prepareModelAdaptersForPersist(source, validate = validateProviderFallbackAdapters) {
+  const adaptersWithIds = (Array.isArray(source) ? source : []).map((adapter) => (
+    adapter && typeof adapter === "object" ? { ...adapter } : {}
+  ));
+  const error = typeof validate === "function" ? (validate(adaptersWithIds) || "") : "";
+  if (error) {
+    return {
+      ok: false,
+      error,
+      adaptersWithIds,
+      payloadAdapters: null,
+    };
+  }
+  return {
+    ok: true,
+    error: "",
+    adaptersWithIds,
+    payloadAdapters: stripDerivedModelAdapterIDs(adaptersWithIds),
+  };
+}
+
+export function isLogicalRoutingAdapter(source) {
+  return Boolean(normalizeProviderFallback(source?.providerFallback).enabled);
+}
+
+export function shouldTestModelAdapterEndpoint(source) {
+  return !isLogicalRoutingAdapter(source);
+}
+
+export function selectAdaptersForEndpointTest(source) {
+  const adapters = Array.isArray(source) ? source : [];
+  const toTest = [];
+  const skippedLogical = [];
+  for (const adapter of adapters) {
+    if (shouldTestModelAdapterEndpoint(adapter)) {
+      toTest.push(adapter);
+    } else {
+      skippedLogical.push(adapter);
+    }
+  }
+  return { toTest, skippedLogical };
+}
+
+export function formatFallbackBudgetInput(value) {
+  if (value === 0 || value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    return "";
+  }
+  const text = String(value);
+  return text === "NaN" ? "" : text;
+}
+
+export function parseFallbackBudgetInput(value) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return 0;
+  }
+  if (!/^-?\d+$/.test(text)) {
+    return text;
+  }
+  return Number(text);
+}
+
+export function providerFallbackBudgetFieldError(field, value) {
+  if (value === null || value === undefined || value === "" || value === 0) {
+    return "";
+  }
+  const parsed = parseBudgetNumber(value);
+  if (field === "maxHttpAttempts") {
+    if (!Number.isInteger(parsed) || parsed < 2 || parsed > 9) {
+      return "全链最大 HTTP 尝试次数必须为 2–9 的整数";
+    }
+    return "";
+  }
+  if (field === "maxWaitSeconds") {
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 30) {
+      return "全链最大等待秒数必须为 1–30 的整数";
+    }
+    return "";
+  }
+  return "";
+}
+
+export function normalizeMaxConcurrentRequests(value) {
+  return parseBudgetNumber(value);
+}
+
+export function validateMaxConcurrentRequests(value, prefix = "模型") {
+  const parsed = parseBudgetNumber(value);
+  if (parsed === 0) {
+    return "";
+  }
+  if (
+    !Number.isInteger(parsed)
+    || parsed < MAX_CONCURRENT_REQUESTS_LIMITS.min
+    || parsed > MAX_CONCURRENT_REQUESTS_LIMITS.max
+  ) {
+    return `${prefix} 的上游并发上限必须为 0（不限制）或 1–16 的整数`;
+  }
+  return "";
+}
+
+export function maxConcurrentRequestsFieldError(value) {
+  if (value === null || value === undefined || value === "" || value === 0) {
+    return "";
+  }
+  const parsed = parseBudgetNumber(value);
+  if (
+    !Number.isInteger(parsed)
+    || parsed < MAX_CONCURRENT_REQUESTS_LIMITS.min
+    || parsed > MAX_CONCURRENT_REQUESTS_LIMITS.max
+  ) {
+    return "上游并发上限必须为 0（不限制）或 1–16 的整数";
+  }
+  return "";
+}
+
+function normalizeCapacityBaseURL(value) {
+  const raw = asString(value);
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol.toLowerCase()) || !parsed.host) {
+      return raw.replace(/\/+$/, "");
+    }
+    const schemeEnd = raw.indexOf("://");
+    const rest = raw.slice(schemeEnd + 3);
+    const authorityEnd = rest.search(/[/?#]/);
+    const authority = authorityEnd < 0 ? rest : rest.slice(0, authorityEnd);
+    const suffix = authorityEnd < 0 ? "" : rest.slice(authorityEnd);
+    const at = authority.lastIndexOf("@");
+    const userInfo = at < 0 ? "" : authority.slice(0, at + 1);
+    const host = (at < 0 ? authority : authority.slice(at + 1)).toLowerCase();
+    return `${raw.slice(0, schemeEnd).toLowerCase()}://${userInfo}${host}${suffix}`.replace(/\/+$/, "");
+  } catch {
+    return raw.replace(/\/+$/, "");
+  }
+}
+
+function upstreamCapacityGroupIdentity(adapter) {
+  return [
+    asString(adapter?.type).toLowerCase(),
+    normalizeCapacityBaseURL(adapter?.baseURL),
+    asString(adapter?.apiKey),
+  ].join("\n");
+}
+
+function mergeAdaptersForCapacityValidation(source, allAdapters) {
+  const adapters = Array.isArray(source) ? source : [];
+  const refs = Array.isArray(allAdapters) ? allAdapters : [];
+  if (!refs.length) {
+    return adapters;
+  }
+  const merged = new Map();
+  refs.forEach((item, index) => {
+    merged.set(asString(item?.id) || `#ref${index}`, item);
+  });
+  adapters.forEach((item, index) => {
+    const id = asString(item?.id);
+    merged.set(id || `#src${index}`, item);
+  });
+  return [...merged.values()];
+}
+
+export function validateUpstreamCapacityAdapters(source, { allAdapters } = {}) {
+  const adapters = Array.isArray(source) ? source : [];
+  for (const [index, adapter] of adapters.entries()) {
+    const prefix = `模型 ${index + 1}`;
+    const rangeError = validateMaxConcurrentRequests(adapter?.maxConcurrentRequests, prefix);
+    if (rangeError) {
+      return rangeError;
+    }
+    if (isLogicalRoutingAdapter(adapter) && parseBudgetNumber(adapter?.maxConcurrentRequests) !== 0) {
+      return `${prefix} 是逻辑路由 alias，上游并发上限必须为 0`;
+    }
+  }
+  const groups = new Map();
+  for (const adapter of mergeAdaptersForCapacityValidation(adapters, allAdapters)) {
+    if (isLogicalRoutingAdapter(adapter)) {
+      continue;
+    }
+    const key = upstreamCapacityGroupIdentity(adapter);
+    const limit = parseBudgetNumber(adapter?.maxConcurrentRequests);
+    if (!groups.has(key)) {
+      groups.set(key, limit);
+      continue;
+    }
+    if (groups.get(key) !== limit) {
+      return "同一接口地址和 API Key 的物理渠道必须使用相同的上游并发上限";
+    }
+  }
+  return "";
 }

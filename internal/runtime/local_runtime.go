@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,14 +43,52 @@ type ProviderFallbackConfig struct {
 	Enabled             bool     `json:"enabled"`
 	PrimaryChannelID    string   `json:"primaryChannelID"`
 	CandidateChannelIDs []string `json:"candidateChannelIDs"`
+	MaxHttpAttempts     int      `json:"maxHttpAttempts,omitempty"`
+	MaxWaitSeconds      int      `json:"maxWaitSeconds,omitempty"`
 }
+
+const (
+	DefaultFallbackMaxHttpAttempts = 5
+	MinFallbackMaxHttpAttempts     = 2
+	MaxFallbackMaxHttpAttempts     = 9
+	DefaultFallbackMaxWaitSeconds  = 8
+	MinFallbackMaxWaitSeconds      = 1
+	MaxFallbackMaxWaitSeconds      = 30
+	MinMaxConcurrentRequests       = 1
+	MaxMaxConcurrentRequests       = 16
+)
 
 // ChannelPlan 表示一次请求所有候选渠道（按优先顺序）。
 // Channels[0] 为首选，Channels[1:] 为依次尝试的候选。
 // FallbackEnabled=false 时始终只有一个渠道（现有路径不变）。
+// MaxHttpAttempts / MaxWaitSeconds 是归一化后的全链预算；router 再做防御性 clamp。
 type ChannelPlan struct {
 	Channels        []ResolvedChannel
 	FallbackEnabled bool
+	MaxHttpAttempts int
+	MaxWaitSeconds  int
+}
+
+// ClampFallbackChainBudget 把运行时预算钳到合法范围。只有 0 使用默认 5/8；
+// 负数属于非零越界，钳到最小 2/1，不得放宽到默认值。
+func ClampFallbackChainBudget(attempts, waitSeconds int) (int, int) {
+	switch {
+	case attempts == 0:
+		attempts = DefaultFallbackMaxHttpAttempts
+	case attempts < MinFallbackMaxHttpAttempts:
+		attempts = MinFallbackMaxHttpAttempts
+	case attempts > MaxFallbackMaxHttpAttempts:
+		attempts = MaxFallbackMaxHttpAttempts
+	}
+	switch {
+	case waitSeconds == 0:
+		waitSeconds = DefaultFallbackMaxWaitSeconds
+	case waitSeconds < MinFallbackMaxWaitSeconds:
+		waitSeconds = MinFallbackMaxWaitSeconds
+	case waitSeconds > MaxFallbackMaxWaitSeconds:
+		waitSeconds = MaxFallbackMaxWaitSeconds
+	}
+	return attempts, waitSeconds
 }
 
 // ModelAdapterConfig 定义了当前模块中的 ModelAdapterConfig 类型。
@@ -94,6 +134,8 @@ type ModelAdapterConfig struct {
 	AnthropicThinkingEffort string `json:"anthropicThinkingEffort,omitempty"`
 	// ThinkingBudgetTokens 表示当前声明中的 ThinkingBudgetTokens。
 	ThinkingBudgetTokens int `json:"thinkingBudgetTokens"`
+	// MaxConcurrentRequests 是物理上游组共享的可选并发上限。缺失/0 表示不限制，非零合法范围 1–16。
+	MaxConcurrentRequests int `json:"maxConcurrentRequests,omitempty"`
 }
 
 // RuntimeConfigSnapshot 定义了当前模块中的 RuntimeConfigSnapshot 类型。
@@ -123,19 +165,20 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			return nil, err
 		}
 		next := ModelAdapterConfig{
-			Sort:                 item.Sort,
-			DisplayName:          strings.TrimSpace(item.DisplayName),
-			Type:                 normalizeModelAdapterType(item.Type),
-			BaseURL:              baseURL,
-			APIKey:               strings.TrimSpace(item.APIKey),
-			TooltipData:          strings.TrimSpace(item.TooltipData),
-			ModelID:              strings.TrimSpace(item.ModelID),
-			ReasoningEffort:      normalizeReasoningEffort(item.ReasoningEffort),
-			OpenAIEndpoint:       modelchannel.NormalizeOpenAIEndpoint(item.Type, item.OpenAIEndpoint),
-			ContextWindowTokens:  normalizeMaxCompletionTokens(item.ContextWindowTokens),
-			MaxCompletionTokens:  normalizeMaxCompletionTokens(item.MaxCompletionTokens),
-			AnthropicMaxTokens:   normalizeMaxCompletionTokens(item.AnthropicMaxTokens),
-			ThinkingBudgetTokens: normalizeMaxCompletionTokens(item.ThinkingBudgetTokens),
+			Sort:                  item.Sort,
+			DisplayName:           strings.TrimSpace(item.DisplayName),
+			Type:                  normalizeModelAdapterType(item.Type),
+			BaseURL:               baseURL,
+			APIKey:                strings.TrimSpace(item.APIKey),
+			TooltipData:           strings.TrimSpace(item.TooltipData),
+			ModelID:               strings.TrimSpace(item.ModelID),
+			ReasoningEffort:       normalizeReasoningEffort(item.ReasoningEffort),
+			OpenAIEndpoint:        modelchannel.NormalizeOpenAIEndpoint(item.Type, item.OpenAIEndpoint),
+			ContextWindowTokens:   normalizeMaxCompletionTokens(item.ContextWindowTokens),
+			MaxCompletionTokens:   normalizeMaxCompletionTokens(item.MaxCompletionTokens),
+			AnthropicMaxTokens:    normalizeMaxCompletionTokens(item.AnthropicMaxTokens),
+			ThinkingBudgetTokens:  normalizeMaxCompletionTokens(item.ThinkingBudgetTokens),
+			MaxConcurrentRequests: item.MaxConcurrentRequests,
 		}
 		if next.Type == "openai" {
 			next.OpenAIExtraParamsEnabled = item.OpenAIExtraParamsEnabled
@@ -177,6 +220,11 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		case next.Type == "anthropic" && next.AnthropicThinkingEffort == "":
 			return nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
 		}
+		limit, err := normalizeMaxConcurrentRequests(next.MaxConcurrentRequests)
+		if err != nil {
+			return nil, err
+		}
+		next.MaxConcurrentRequests = limit
 		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
 			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
@@ -271,6 +319,32 @@ func normalizeMaxCompletionTokens(value int) int {
 	return value
 }
 
+func normalizeMaxConcurrentRequests(value int) (int, error) {
+	if value == 0 {
+		return 0, nil
+	}
+	if value < MinMaxConcurrentRequests || value > MaxMaxConcurrentRequests {
+		return 0, fmt.Errorf("模型适配器 maxConcurrentRequests=%d 超出合法范围：缺失或 0 表示不限制，非零必须为 %d–%d", value, MinMaxConcurrentRequests, MaxMaxConcurrentRequests)
+	}
+	return value, nil
+}
+
+// BuildUpstreamCapacityGroupKey 按 provider type + 归一化 BaseURL + API Key 计算仅内存使用的上游组身份。
+// 结果不得写入日志、YAML 或错误文本。
+func BuildUpstreamCapacityGroupKey(providerType, baseURL, apiKey string) string {
+	normalizedBaseURL, err := modelchannel.NormalizeBaseURL(baseURL)
+	if err != nil {
+		normalizedBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	}
+	payload := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(providerType)),
+		normalizedBaseURL,
+		strings.TrimSpace(apiKey),
+	}, "\n")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 // normalizeModelAdapterType 用于处理与 normalizeModelAdapterType 相关的逻辑。
 func normalizeModelAdapterType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -331,6 +405,10 @@ type ResolvedChannel struct {
 	ThinkingEnabled bool
 	// ThinkingBudgetTokens 表示当前声明中的 ThinkingBudgetTokens。
 	ThinkingBudgetTokens int
+	// MaxConcurrentRequests 是物理上游组共享的可选并发上限。0 表示不限制。
+	MaxConcurrentRequests int
+	// UpstreamCapacityGroupKey 是按 provider type + 归一化 BaseURL + API Key 计算的瞬态组身份，仅内存使用。
+	UpstreamCapacityGroupKey string
 }
 
 // ChannelUsageRecordCreatePayload 定义了一次渠道使用记录的最小载荷。
@@ -453,6 +531,8 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 			AnthropicThinkingEffort:     configurableChannelAnthropicThinkingEffort,
 			ThinkingEnabled:             true,
 			ThinkingBudgetTokens:        configurableChannelThinkingBudgetTokens,
+			MaxConcurrentRequests:       adapter.MaxConcurrentRequests,
+			UpstreamCapacityGroupKey:    BuildUpstreamCapacityGroupKey(adapter.Type, adapter.BaseURL, adapter.APIKey),
 		}
 		if adapter.ContextWindowTokens > 0 {
 			resolved.ContextWindowTokens = adapter.ContextWindowTokens
@@ -489,6 +569,8 @@ func (s *FixedChannelService) SelectChannelPlanForModel(ctx context.Context, mod
 	return &ChannelPlan{
 		Channels:        []ResolvedChannel{*ch},
 		FallbackEnabled: false,
+		MaxHttpAttempts: DefaultFallbackMaxHttpAttempts,
+		MaxWaitSeconds:  DefaultFallbackMaxWaitSeconds,
 	}, nil
 }
 
