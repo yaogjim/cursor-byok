@@ -25,6 +25,7 @@ const optionRefs = ref([]);
 const isOpen = ref(false);
 const activeIndex = ref(-1);
 const menuStyle = ref({});
+const listStyle = ref({});
 
 const normalizedOptions = computed(() => props.options.map((option) => {
   if (typeof option === "string") {
@@ -54,6 +55,7 @@ function focusActiveOption() {
   nextTick(() => {
     const option = optionRefs.value[activeIndex.value];
     option?.focus();
+    option?.scrollIntoView({ block: "nearest" });
   });
 }
 
@@ -80,6 +82,7 @@ function closeMenu({ restoreFocus = false } = {}) {
   activeIndex.value = -1;
   optionRefs.value = [];
   menuStyle.value = {};
+  listStyle.value = {};
 
   if (restoreFocus) {
     nextTick(() => buttonRef.value?.focus());
@@ -204,10 +207,17 @@ function updatePosition() {
       shift({ padding: 12 }),
       size({
         apply({ rects, elements, availableHeight }) {
+          const chrome = 8;
+          const maxHeight = Math.max(0, Math.floor(availableHeight - chrome));
           Object.assign(elements.floating.style, {
             minWidth: `${rects.reference.width}px`,
-            maxHeight: `${Math.max(availableHeight, 160)}px`,
           });
+          const nextListStyle = { maxHeight: `${maxHeight}px` };
+          listStyle.value = nextListStyle;
+          const list = elements.floating.querySelector("[data-select-list]");
+          if (list) {
+            Object.assign(list.style, nextListStyle);
+          }
         },
         padding: 12,
       }),
@@ -311,7 +321,7 @@ onBeforeUnmount(() => {
         :class="menuClass"
         :style="menuStyle"
       >
-        <ul role="listbox" class="overflow-y-auto py-1">
+        <ul role="listbox" data-select-list class="overflow-y-auto py-1" :style="listStyle">
           <li v-for="(option, index) in normalizedOptions" :key="option.value">
             <button
               :ref="(el) => setOptionRef(el, index)"

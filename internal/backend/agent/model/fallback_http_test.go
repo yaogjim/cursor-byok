@@ -178,10 +178,53 @@ func fallbackAttemptByChannel(t *testing.T, events []observability.Event, channe
 	return observability.Event{}
 }
 
-func TestFallbackHTTPDefaultBudgetIsThreePlusTwo(t *testing.T) {
+func startOpenAITransportReset(t *testing.T) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			http.Error(writer, "no hijack", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(server.Close)
+	return server, &hits
+}
+
+func requireHTTPHits(t *testing.T, got []int32, want []int32) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("hits len = %d, want %d (%v vs %v)", len(got), len(want), got, want)
+	}
+	var totalGot, totalWant int32
+	for i := range got {
+		totalGot += got[i]
+		totalWant += want[i]
+		if got[i] > int32(providerRequestMaxAttempts) {
+			t.Fatalf("channel %d exceeded per-channel cap 3: %v", i, got)
+		}
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("hits = %v, want %v", got, want)
+		}
+	}
+	if totalGot != totalWant {
+		t.Fatalf("total HTTP attempts = %d, want %d", totalGot, totalWant)
+	}
+}
+
+func TestFallbackHTTPDefaultBudgetCoversThirdChannel(t *testing.T) {
 	primary, primaryHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusTooManyRequests}})
 	second, secondHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusTooManyRequests}})
-	third, thirdHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusTooManyRequests}})
+	third, thirdHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
 	plan := &legacyruntime.ChannelPlan{
 		Channels: []legacyruntime.ResolvedChannel{
 			openaiHTTPChannel("ch-a", primary),
@@ -193,15 +236,152 @@ func TestFallbackHTTPDefaultBudgetIsThreePlusTwo(t *testing.T) {
 		MaxWaitSeconds:  8,
 	}
 	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("third channel should succeed under coverage-first budget, got %v", err)
+	}
+	requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{3, 1, 1})
+}
+
+func TestFallbackHTTPFiveChannelsBudgetFiveCoversLast(t *testing.T) {
+	var hits [5]*atomic.Int32
+	channels := make([]legacyruntime.ResolvedChannel, 5)
+	ids := []string{"ch-a", "ch-b", "ch-c", "ch-d", "ch-e"}
+	for i := 0; i < 4; i++ {
+		server, channelHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+		hits[i] = channelHits
+		channels[i] = openaiHTTPChannel(ids[i], server)
+	}
+	okServer, okHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
+	hits[4] = okHits
+	channels[4] = openaiHTTPChannel(ids[4], okServer)
+	plan := &legacyruntime.ChannelPlan{
+		Channels:        channels,
+		FallbackEnabled: true,
+		MaxHttpAttempts: 5,
+		MaxWaitSeconds:  8,
+	}
+	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("fifth channel should succeed under coverage-first budget, got %v", err)
+	}
+	got := []int32{hits[0].Load(), hits[1].Load(), hits[2].Load(), hits[3].Load(), hits[4].Load()}
+	requireHTTPHits(t, got, []int32{1, 1, 1, 1, 1})
+}
+
+func TestFallbackHTTPFiveChannelsBudgetNineCoverageFirst(t *testing.T) {
+	var hits [5]*atomic.Int32
+	channels := make([]legacyruntime.ResolvedChannel, 5)
+	ids := []string{"ch-a", "ch-b", "ch-c", "ch-d", "ch-e"}
+	for i, id := range ids {
+		server, channelHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+		hits[i] = channelHits
+		channels[i] = openaiHTTPChannel(id, server)
+	}
+	plan := &legacyruntime.ChannelPlan{
+		Channels:        channels,
+		FallbackEnabled: true,
+		MaxHttpAttempts: 9,
+		MaxWaitSeconds:  8,
+	}
+	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
 	if err == nil {
 		t.Fatal("expected chain to exhaust")
 	}
-	if primaryHits.Load() != 3 || secondHits.Load() != 2 || thirdHits.Load() != 0 {
-		t.Fatalf("default 3+2 hits = %d/%d/%d, want 3/2/0", primaryHits.Load(), secondHits.Load(), thirdHits.Load())
+	got := []int32{hits[0].Load(), hits[1].Load(), hits[2].Load(), hits[3].Load(), hits[4].Load()}
+	requireHTTPHits(t, got, []int32{3, 3, 1, 1, 1})
+}
+
+func TestFallbackHTTPCoverageTransportAnd503(t *testing.T) {
+	cases := []struct {
+		name      string
+		startFail func(*testing.T) (*httptest.Server, *atomic.Int32)
+	}{
+		{name: "502", startFail: func(t *testing.T) (*httptest.Server, *atomic.Int32) {
+			return startOpenAIScript(t, []httpScriptStep{{status: http.StatusBadGateway}})
+		}},
+		{name: "503", startFail: func(t *testing.T) (*httptest.Server, *atomic.Int32) {
+			return startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+		}},
+		{name: "504", startFail: func(t *testing.T) (*httptest.Server, *atomic.Int32) {
+			return startOpenAIScript(t, []httpScriptStep{{status: http.StatusGatewayTimeout}})
+		}},
+		{name: "transport", startFail: startOpenAITransportReset},
 	}
-	if total := primaryHits.Load() + secondHits.Load() + thirdHits.Load(); total != 5 {
-		t.Fatalf("total HTTP attempts = %d, want 5 (sixth must not be sent)", total)
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			primary, primaryHits := test.startFail(t)
+			second, secondHits := test.startFail(t)
+			third, thirdHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
+			plan := &legacyruntime.ChannelPlan{
+				Channels: []legacyruntime.ResolvedChannel{
+					openaiHTTPChannel("ch-a", primary),
+					openaiHTTPChannel("ch-b", second),
+					openaiHTTPChannel("ch-c", third),
+				},
+				FallbackEnabled: true,
+				MaxHttpAttempts: 5,
+				MaxWaitSeconds:  8,
+			}
+			err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
+			if err != nil {
+				t.Fatalf("%s: third channel should succeed, got %v", test.name, err)
+			}
+			requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{3, 1, 1})
+		})
 	}
+}
+
+func TestFallbackHTTPIncompatibleChannelDoesNotConsumeCoverageReservation(t *testing.T) {
+	primary, primaryHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+	incompatible, incompatibleHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
+	third, thirdHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+	fourth, fourthHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+	fifth, fifthHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
+	plan := &legacyruntime.ChannelPlan{
+		Channels: []legacyruntime.ResolvedChannel{
+			openaiHTTPChannel("ch-a", primary),
+			anthropicHTTPChannel("ch-b", incompatible),
+			openaiHTTPChannel("ch-c", third),
+			openaiHTTPChannel("ch-d", fourth),
+			openaiHTTPChannel("ch-e", fifth),
+		},
+		FallbackEnabled: true,
+		MaxHttpAttempts: 5,
+		MaxWaitSeconds:  8,
+	}
+	req := fallbackHTTPRequest()
+	req.Tools = []json.RawMessage{json.RawMessage(`{"type":"function"}`)}
+	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), req, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("fifth compatible channel should succeed, got %v", err)
+	}
+	requireHTTPHits(t,
+		[]int32{primaryHits.Load(), incompatibleHits.Load(), thirdHits.Load(), fourthHits.Load(), fifthHits.Load()},
+		[]int32{2, 0, 1, 1, 1},
+	)
+}
+
+func TestFallbackHTTPChannelCountExceedsBudgetDoesNotExceedAttempts(t *testing.T) {
+	var hits [5]*atomic.Int32
+	channels := make([]legacyruntime.ResolvedChannel, 5)
+	ids := []string{"ch-a", "ch-b", "ch-c", "ch-d", "ch-e"}
+	for i, id := range ids {
+		server, channelHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusServiceUnavailable}})
+		hits[i] = channelHits
+		channels[i] = openaiHTTPChannel(id, server)
+	}
+	plan := &legacyruntime.ChannelPlan{
+		Channels:        channels,
+		FallbackEnabled: true,
+		MaxHttpAttempts: 2,
+		MaxWaitSeconds:  8,
+	}
+	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
+	if err == nil {
+		t.Fatal("expected chain to exhaust when 5 channels share budget 2")
+	}
+	got := []int32{hits[0].Load(), hits[1].Load(), hits[2].Load(), hits[3].Load(), hits[4].Load()}
+	requireHTTPHits(t, got, []int32{1, 1, 0, 0, 0})
 }
 
 func TestFallbackHTTPConfiguredAttemptBudgets(t *testing.T) {
@@ -210,7 +390,7 @@ func TestFallbackHTTPConfiguredAttemptBudgets(t *testing.T) {
 		attempts int
 		want     []int32
 	}{
-		{name: "2", attempts: 2, want: []int32{2, 0, 0}},
+		{name: "2", attempts: 2, want: []int32{1, 1, 0}},
 		{name: "7", attempts: 7, want: []int32{3, 3, 1}},
 		{name: "9", attempts: 9, want: []int32{3, 3, 3}},
 	}
@@ -567,8 +747,8 @@ func TestFallbackHTTPRouterClampsLowAttemptBudget(t *testing.T) {
 		MaxWaitSeconds:  8,
 	}
 	_ = newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
-	if primaryHits.Load() != 2 || secondHits.Load() != 0 || thirdHits.Load() != 0 {
-		t.Fatalf("clamped min attempts hits = %d/%d/%d, want 2/0/0", primaryHits.Load(), secondHits.Load(), thirdHits.Load())
+	if primaryHits.Load() != 1 || secondHits.Load() != 1 || thirdHits.Load() != 0 {
+		t.Fatalf("clamped min attempts hits = %d/%d/%d, want 1/1/0", primaryHits.Load(), secondHits.Load(), thirdHits.Load())
 	}
 }
 

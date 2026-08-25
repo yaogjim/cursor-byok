@@ -1210,9 +1210,9 @@ cli-model-pool.yaml + stdin prompt
 - `maxHttpAttempts: int`：缺失/0 默认 5；保存合法范围 2–9。
 - `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30，单位为秒。
 
-归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时字段保留但不参与运行。
+归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时字段保留但不参与运行。
 
-每次 fallback chain 创建一个 `FallbackRetryBudget(maxHttpAttempts, maxWaitSeconds)`。每渠道分配 `min(remainingAttempts, 3)`；真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
+每次 fallback chain 创建一个 `FallbackRetryBudget(maxHttpAttempts, maxWaitSeconds)`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, 3)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `3+1+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `3+3+1+1+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
 
 wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认 4s。普通单渠道 `FallbackBudget == nil` 时继续使用 4s。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
 
@@ -1222,7 +1222,9 @@ wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait 
 
 保存必须对含派生 ID 的完整 adapter 集合完成引用、自引用、重复和预算校验，随后才在序列化 payload 时删除 `id`；Go 后端重新计算 ID。导入导出、禁用回显和旧配置 roundtrip 使用同一纯投影合同，不得让 `appState` 与 `configProjection` 对禁用字段采用不同语义。
 
-`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供“全链最大 HTTP 尝试次数（默认 5）”和“全链最大等待秒数（默认 8）”。帮助文本必须说明：单渠道最多 3、实际按剩余预算分配、alias 自身不发请求、已有输出后不切换，以及跨 Provider 的费用、隐私、模型语义和工具兼容风险。逻辑 alias 的“保存并测试”只保存并提示使用运行验证；物理渠道仍可单独测试。
+`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供“全链最大 HTTP 尝试次数（默认 5）”和“全链最大等待秒数（默认 8）”。帮助文本必须说明：单渠道最多 3、实际按剩余预算分配、alias 自身不发请求、已有输出后不切换，以及跨 Provider 的费用、隐私、模型语义和工具兼容风险。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
+
+逻辑 alias 的“保存并测试”及单卡片“测试”只保存或阻止直接 endpoint 请求，并提示使用运行验证；物理渠道仍可单独测试。“测试全部”只调度物理 adapter，静默跳过逻辑 alias，不显示保存提示，也不把跳过计入批量测试总数。
 
 `provider_fallback_attempt` 或同一 metadata 事件补充白名单字段：`chain_max_attempts`、`chain_max_wait_ms`、`chain_attempts_used/remaining`、`chain_wait_used_ms/remaining_ms`、`channel_allocation_max_attempts`、`retry_delay_ms`。字段只记录整数、受控枚举和渠道/调用关联 ID，不记录 body、headers、URL query 或凭据；`tools/log-analyzer` allowlist 与测试同步更新。整链保持同一 `model_call_id` 且只产生一个 `model_call_final`。
 
@@ -1266,8 +1268,8 @@ Provider 保存失败不改变当前内存/磁盘配置；运行时预算异常�
 
 ### 14.9.9 验证合同与追踪
 
-- Provider config/resolver：旧配置默认 5/8、2–9/1–30 边界、非零越界失败、runtime clamp、禁用保留、YAML/JSON roundtrip。
-- Provider HTTP：真实 `httptest` 覆盖 3+2、1+3+1、配置 2/7/9、第 N+1 次不发送、单渠道 ≤3、共享 wait、超预算 `Retry-After`、取消、raw byte/model event 后候选为 0、跨 Provider 不兼容跳过、同一 `model_call_id` 和唯一 final。
+- Provider config/resolver：旧配置默认 5/8、2–9/1–30 边界、非零越界失败、runtime clamp、禁用保留、YAML/JSON roundtrip；1 primary + 4 candidates 合法且保持顺序，第 5 个 candidate 拒绝。
+- Provider HTTP：真实 `httptest` 覆盖 3 渠道/5 attempts 的 `3+1+1` 且第三渠道成功、5 渠道/5 attempts 的全覆盖、5 渠道/9 attempts 的 `3+3+1+1+1`、transport 与 502/503/504 覆盖切换、预算小于渠道数时按序停止、第 N+1 次不发送、单渠道 ≤3、共享 wait、超预算 `Retry-After`、取消、raw byte/model event 后候选为 0、跨 Provider 不兼容跳过、同一 `model_call_id` 和唯一 final。
 - 前端：保存前校验/序列化后无 id、合法/悬空/自引用/重复、禁用/旧配置/import-export；浏览器覆盖预算边界、逻辑标记、风险提示、无候选和回显，控制台无错误。
 - CLI fake agent：模型顺序、每模型一次、stdin/argv、pre-output 切换、thinking/assistant/tool/mutation 后禁止、错误分类、取消/进程组、write/worktree、journal 脱敏、fallback alias 拒绝。
 - CLI runtime：先 dry-run/fake agent，再受控本机 18090 Ask；真实 pre-output 故障切换和 signal/worktree 行为若环境无法安全注入，明确登记 env/test gap，不借 mock 证据升级状态。
@@ -1282,7 +1284,7 @@ Provider 保存失败不改变当前内存/磁盘配置；运行时预算异常�
 已闭合自由裁量：预算范围、per-channel 固定上限、500 错误 allowlist、thinking 门禁、stdin、worktree、journal 白名单、进程级一次性、loopback endpoint、fallback alias 拒绝和回滚均为确定合同。低层可自由选择 YAML/NDJSON 库、内部 package 划分和 full-jitter RNG 注入方式，但不得改变外部行为或隐私字段。
 
 - **正向模拟**：IDE override B → child B → ChannelPlan 读取预算 → primary/candidate 共享预算 → 唯一 final；CLI 配置 → models/BYOK 双预检 → stdin 启动物理模型 → NDJSON 成功 → metadata-only terminal。
-- **最高风险失败模拟**：primary 3 次 429 后只给候选 2 次；raw byte 后立即停止。CLI 在 thinking 后失败进入 `needs_review`，即使未出现 assistant/tool/mutation 也不切模型；write 文件变化同样停止。
+- **最高风险失败模拟**：5 个兼容渠道共享默认 5 attempts 时按 `1+1+1+1+1` 覆盖；任一 raw byte 后立即停止。CLI 在 thinking 后失败进入 `needs_review`，即使未出现 assistant/tool/mutation 也不切模型；write 文件变化同样停止。
 - **迁移/回滚模拟**：旧 YAML 缺字段得到 5/8；关闭 fallback 恢复单渠道；移除 CLI 配置不影响 backend；发布包扫描拒绝独立 module marker。
 - **独立首轮模拟**：只读 reviewer 于 2026-08-24 发现 wait=0 哨兵、CLI 模型 ID/API Key 哈希、typed 错误来源、超预算 `Retry-After`、write argv、worktree 指纹、500 切换和取消宽限期存在临场自由裁量；Design Gate 判定不通过。
 - **首轮修订**：已把上述事项闭合为 fallback-budget 存在即直接覆盖 wait（含 0）、API Key 仅内存哈希、typed 分类缺失 fail-closed、Retry-After 超预算结束本渠道、write 省略 mode 且强制生成 worktree、全文件内容指纹、500 只同渠道重试、SIGTERM 后 2 秒 SIGKILL，并固定配置路径和 YAML 字段闭集。

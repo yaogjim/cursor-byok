@@ -333,9 +333,6 @@ async function handleTestAllModelAdapters() {
     return;
   }
   const plan = selectAdaptersForEndpointTest(filteredAdapters.value);
-  if (plan.skippedLogical.length) {
-    message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
-  }
   const adapters = plan.toTest.slice();
   if (adapters.length === 0) {
     return;

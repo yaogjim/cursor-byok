@@ -339,9 +339,11 @@ providerFallback:
 
 - 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds`；合法非零值必须原样保存、导入导出和回显。
 - 保存入口对非零越界值严格报错；运行时解析再做 `2–9 / 1–30` 防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
-- 单渠道 HTTP attempt 上限固定为 3，不开放 UI 配置。渠道分配为 `min(chain_remaining_attempts, 3)`，因此默认链可以形成 `3+2`，多渠道也可以因前序实际用量形成 `1+3+1`。
+- 单渠道 HTTP attempt 上限固定为 3，不开放 UI 配置。启用 fallback 时采用“保证渠道覆盖，再用剩余预算重试”：先为当前请求下每个后续兼容渠道预留 1 次 attempt，当前渠道最多使用 `min(chain_remaining_attempts - reserved_attempts, 3)`；当预算不足以覆盖全部渠道时按配置顺序各执行 1 次，预算耗尽后的链尾不发送 HTTP。典型分配为：3 渠道/5 attempts → `3+1+1`，5 渠道/5 attempts → `1+1+1+1+1`，5 渠道/9 attempts → `3+3+1+1+1`。
 - 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道 4 秒默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
 - fallback 禁用时保留预算字段但不生效，运行路径继续使用单渠道 P0 合同。
+- 每条显式 fallback 链最多包含 5 个物理渠道：1 个主渠道与 1–4 个有序候选。渠道上限与 HTTP attempt 预算彼此独立；默认 5 attempts 可保证 5 个兼容渠道各获得 1 次机会。若显式配置的 attempt 预算小于渠道数，则按配置顺序覆盖到预算耗尽，未获得预留的链尾不发送 HTTP；运行时不得突破共享预算。
+- 模型配置的“测试全部”只测试物理 adapter，静默跳过逻辑 alias；单独点击逻辑 alias 的测试仍提示其虚拟 endpoint 不可直接测试，整链必须通过实际运行验证。
 
 **允许切换的错误类别**（首 model event 前安全窗口，且无副作用）：
 

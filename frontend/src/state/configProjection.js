@@ -26,6 +26,8 @@ export const DEFAULT_PROVIDER_FALLBACK = Object.freeze({
   maxWaitSeconds: 8,
 });
 
+export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
+
 export const PROVIDER_FALLBACK_LIMITS = Object.freeze({
   maxHttpAttempts: Object.freeze({ min: 2, max: 9 }),
   maxWaitSeconds: Object.freeze({ min: 1, max: 30 }),
@@ -226,8 +228,8 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
     if (isLogicalRoutingAdapter(adapterByID.get(fb.primaryChannelID))) {
       return `${prefix} 的 Fallback 主渠道必须是未启用 Fallback 的物理渠道`;
     }
-    if (!fb.candidateChannelIDs.length || fb.candidateChannelIDs.length > 2) {
-      return `${prefix} 的 Fallback 候选渠道数量必须为 1–2 个`;
+    if (!fb.candidateChannelIDs.length || fb.candidateChannelIDs.length > MAX_PROVIDER_FALLBACK_CANDIDATES) {
+      return `${prefix} 的 Fallback 候选渠道数量必须为 1–${MAX_PROVIDER_FALLBACK_CANDIDATES} 个`;
     }
     const seenInChain = new Set([fb.primaryChannelID, asString(adapter?.id)].filter(Boolean));
     for (const cid of fb.candidateChannelIDs) {

@@ -37,6 +37,7 @@ const (
 	DefaultProviderFallbackMaxWaitSeconds  = 8
 	MinProviderFallbackMaxWaitSeconds      = 1
 	MaxProviderFallbackMaxWaitSeconds      = 30
+	MaxProviderFallbackCandidates          = 4
 
 	MinMaxConcurrentRequests = 1
 	MaxMaxConcurrentRequests = 16
@@ -92,13 +93,13 @@ type UpdatesConfig struct {
 
 // ProviderFallbackConfig 表示显式有序的 provider fallback 链配置。
 // 默认关闭（Enabled=false）；启用后 chain 由 PrimaryChannelID 与有序
-// CandidateChannelIDs 显式定义，最多支持主渠道 + 2 个候选。
+// CandidateChannelIDs 显式定义，最多支持主渠道 + 4 个候选。
 type ProviderFallbackConfig struct {
 	// Enabled 表示是否启用 fallback；默认 false。
 	Enabled bool `json:"enabled" yaml:"enabled"`
 	// PrimaryChannelID 表示首先尝试的渠道 ID；仅 Enabled=true 时有意义。
 	PrimaryChannelID string `json:"primaryChannelID" yaml:"primaryChannelID"`
-	// CandidateChannelIDs 表示有序候选渠道 ID 列表，最多 2 个；仅 Enabled=true 时有意义。
+	// CandidateChannelIDs 表示有序候选渠道 ID 列表，最多 4 个；仅 Enabled=true 时有意义。
 	CandidateChannelIDs []string `json:"candidateChannelIDs" yaml:"candidateChannelIDs"`
 	// MaxHttpAttempts 是整条 fallback 链共享的 HTTP 尝试上限。缺失/0 归一化为 5，合法范围 2–9。
 	MaxHttpAttempts int `json:"maxHttpAttempts,omitempty" yaml:"maxHttpAttempts,omitempty"`
@@ -510,8 +511,8 @@ func validateProviderFallbacks(normalized []ModelAdapterConfig, knownIDs map[str
 		if _, logical := logicalIDs[primary]; logical {
 			return fmt.Errorf("模型适配器 providerFallback.primaryChannelID 必须引用未启用 fallback 的物理渠道 %q", primary)
 		}
-		if len(fb.CandidateChannelIDs) == 0 || len(fb.CandidateChannelIDs) > 2 {
-			return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 数量必须为 1–2 个，当前为 %d 个", len(fb.CandidateChannelIDs))
+		if len(fb.CandidateChannelIDs) == 0 || len(fb.CandidateChannelIDs) > MaxProviderFallbackCandidates {
+			return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 数量必须为 1–%d 个，当前为 %d 个", MaxProviderFallbackCandidates, len(fb.CandidateChannelIDs))
 		}
 		// seenInChain 防重复；预置 primary 与当前渠道自身 ID
 		seenInChain := map[string]struct{}{

@@ -32,6 +32,7 @@ import {
   formatFallbackBudgetInput,
   isLogicalRoutingAdapter,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
+  MAX_PROVIDER_FALLBACK_CANDIDATES,
   maxConcurrentRequestsFieldError,
   parseFallbackBudgetInput,
   providerFallbackBudgetFieldError,
@@ -394,23 +395,55 @@ const fallbackPrimaryOptions = computed(() =>
   ),
 );
 
-// 候选渠道1选项：排除主渠道 + 候选2
-const fallbackCandidate1Options = computed(() =>
-  fallbackChannelBaseOptions.value.filter(
-    (o) => !o.value
-      || (o.value !== draft.providerFallback.primaryChannelID
-        && o.value !== (draft.providerFallback.candidateChannelIDs[1] || "")),
-  ),
+const fallbackNoChannels = computed(() =>
+  draft.providerFallback.enabled && otherAdapters.value.length === 0,
 );
 
-// 候选渠道2选项：排除主渠道 + 候选1
-const fallbackCandidate2Options = computed(() =>
-  fallbackChannelBaseOptions.value.filter(
-    (o) => !o.value
-      || (o.value !== draft.providerFallback.primaryChannelID
-        && o.value !== (draft.providerFallback.candidateChannelIDs[0] || "")),
-  ),
-);
+const fallbackCandidateSlotIndexes = computed(() => {
+  if (fallbackNoChannels.value || !draft.providerFallback.primaryChannelID) {
+    return [];
+  }
+  const ids = draft.providerFallback.candidateChannelIDs || [];
+  const slots = [];
+  for (let index = 0; index < MAX_PROVIDER_FALLBACK_CANDIDATES; index += 1) {
+    if (index > 0 && !ids[index - 1]) {
+      break;
+    }
+    slots.push(index);
+  }
+  return slots;
+});
+
+function candidateSlotValue(index) {
+  return draft.providerFallback.candidateChannelIDs[index] ?? "";
+}
+
+function candidateSlotOptions(index) {
+  const ids = draft.providerFallback.candidateChannelIDs || [];
+  const taken = new Set(
+    [draft.providerFallback.primaryChannelID, ...ids.filter((_, slotIndex) => slotIndex !== index)].filter(Boolean),
+  );
+  return fallbackChannelBaseOptions.value.filter((option) => !option.value || !taken.has(option.value));
+}
+
+function candidateSlotLabel(index) {
+  const required = index === 0 ? "必填" : "可选";
+  return `备选渠道 ${index + 1}（第 ${index + 2} 优先，${required}）`;
+}
+
+function setCandidateSlot(index, val) {
+  const value = String(val || "").trim();
+  const current = Array.isArray(draft.providerFallback.candidateChannelIDs)
+    ? draft.providerFallback.candidateChannelIDs.slice()
+    : [];
+  if (!value) {
+    draft.providerFallback.candidateChannelIDs = current.slice(0, index);
+    return;
+  }
+  const next = current.slice();
+  next[index] = value;
+  draft.providerFallback.candidateChannelIDs = next;
+}
 
 // 是否跨 Provider（OpenAI/Anthropic 混用）
 const isCrossProviderFallback = computed(() => {
@@ -424,35 +457,6 @@ const isCrossProviderFallback = computed(() => {
     ids.map((id) => appState.modelAdapters.find((x) => x.id === id)?.type || "").filter(Boolean),
   );
   return types.size > 1;
-});
-
-// 启用时无其他渠道可选
-const fallbackNoChannels = computed(() =>
-  draft.providerFallback.enabled && otherAdapters.value.length === 0,
-);
-
-// 候选渠道1（双向绑定槽位0，清空时同步清槽位1）
-const candidate1 = computed({
-  get() {
-    return draft.providerFallback.candidateChannelIDs[0] ?? "";
-  },
-  set(val) {
-    const v = String(val || "").trim();
-    const c2 = draft.providerFallback.candidateChannelIDs[1] ?? "";
-    draft.providerFallback.candidateChannelIDs = v ? (c2 ? [v, c2] : [v]) : [];
-  },
-});
-
-// 候选渠道2（双向绑定槽位1）
-const candidate2 = computed({
-  get() {
-    return draft.providerFallback.candidateChannelIDs[1] ?? "";
-  },
-  set(val) {
-    const v = String(val || "").trim();
-    const c1 = draft.providerFallback.candidateChannelIDs[0] ?? "";
-    draft.providerFallback.candidateChannelIDs = c1 ? (v ? [c1, v] : [c1]) : [];
-  },
 });
 
 function createFallbackBudgetModel(key) {
@@ -846,18 +850,16 @@ watch(
                 :options="fallbackPrimaryOptions"
               />
             </label>
-            <label v-if="!fallbackNoChannels && draft.providerFallback.primaryChannelID" class="flex flex-col gap-1">
-              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 1（第 2 优先，必填）</span>
+            <label
+              v-for="slotIndex in fallbackCandidateSlotIndexes"
+              :key="slotIndex"
+              class="flex flex-col gap-1"
+            >
+              <span class="text-xs text-[var(--color-text-secondary)]">{{ candidateSlotLabel(slotIndex) }}</span>
               <Select
-                v-model="candidate1"
-                :options="fallbackCandidate1Options"
-              />
-            </label>
-            <label v-if="!fallbackNoChannels && candidate1" class="flex flex-col gap-1">
-              <span class="text-xs text-[var(--color-text-secondary)]">备选渠道 2（第 3 优先，可选）</span>
-              <Select
-                v-model="candidate2"
-                :options="fallbackCandidate2Options"
+                :model-value="candidateSlotValue(slotIndex)"
+                :options="candidateSlotOptions(slotIndex)"
+                @update:model-value="setCandidateSlot(slotIndex, $event)"
               />
             </label>
           </div>

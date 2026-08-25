@@ -41,12 +41,19 @@
 
 用户明确选择不修改当前真实 `grok-HA` 配置，本次也未读取后改写该文件、未占用或重启 18080/18090。因此可声明“容量能力已实现并经非零 fixture 验证”，当前在线 `grok-HA` 仍为无限并发，不能声明在线容量风险已启用关闭。
 
-### 0.5 `v0.0.49.5` 发布候选
+### 0.5 `v0.0.49.6` 本地发布
 
-用户于 2026-08-25 确认本轮更新采用版本号 `0.0.49.5`。版本事实源 `build/config.yml`、Wails macOS/Windows/Linux 构建元数据、`release-notes.md` 与归档 `releaselog/0.0.49.5.md` 已按该版本对齐；发布说明覆盖多层模型路由、配置写事务、可选物理上游容量和独立 CLI 模型池，并保留真实 `grok-HA` 未启用容量限制、CLI 两模型故障切换与 Wails 视觉验收未闭合的边界。README 的“当前稳定发布”仍指向已实际发布的 `v0.0.49.3`，只有 GitHub Release 完成后才切换，不提前宣称 `v0.0.49.5` 已发布。
+本次本地发布版本使用 `0.0.49.6`。版本事实源 `build/config.yml`、Wails macOS/Windows/Linux 构建元数据、`release-notes.md` 与归档 `releaselog/0.0.49.6.md` 已按该版本对齐；发布说明包含 Provider fallback 覆盖优先预算分配、五物理渠道配置与测试交互修正，以及此前已验证的多层模型路由、配置写事务和可选物理上游容量能力。README 的“当前稳定发布”仍指向已公开的 `v0.0.49.3`；本次按用户要求只生成本地资产，不创建或更新 GitHub Release。
+
+### 0.6 Fallback 配置交互修正（自动化验收完成，视觉待补）
+
+2026-08-25 已完成本轮配置交互调整，并纳入本次提交及 `0.0.49.6` 本地发布候选。“测试全部”继续只调度物理 adapter，但现在静默跳过逻辑 alias，不再弹出“已保存/需实际运行验证”的误导提示；单独点击逻辑 alias 测试仍保留运行验证提示。通用 Select 的视口可用高度现在施加到真实 `ul` 滚动容器，并保留键盘聚焦时的就近滚动，修复长列表只能用方向键看到后续 adapter 的问题。
+
+Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidates，总共最多 5 个物理渠道。前端候选槽改为数据驱动的连续 4 槽，后一槽只在前一槽已选时显示，清空中间槽会截断后续槽；每个下拉继续排除 primary、逻辑 alias 和其他槽已选渠道。前后端共享上限校验，第 5 candidate 被拒绝；resolver 保持原循环并经测试证明五通道顺序完整投影。全链预算合同未改变：默认 5 attempts / 8 seconds，范围 2–9 / 1–30，单渠道最多 3，渠道增多不保证链尾一定获得 HTTP attempt。
+
+验证通过：`node frontend/scripts/test-config-projection.mjs`；后端 config/client/model 定向测试；`go test ./internal/... -count=1`；`npm run build --prefix frontend`；受改文件 lint、gofmt 与 `git diff --check`。测试/build 只有既有 macOS deployment target、`--localstorage-file` 和 chunk-size warning。构建生成的 i18n 文件已恢复，不纳入变更。本机仍缺少 `wails3` 和 `task`，没有可用开发 UI 端口；为避免扰动运行中 Cursor 的 18080/18090，未做真实窗口视觉点击，因此当前状态为 `verified-partial`，缺口仅为 UI 视觉交互证据。
 
 ### 0. Agent 执行证据与完成门禁治理
-
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 

@@ -539,9 +539,66 @@ func TestFallbackEnabled_RequestBuildErrorBlocksFallback(t *testing.T) {
 	}
 }
 
-// TestFallbackEnabled_SharedAttemptBudget_3Channels_2PerChannel 验证3渠道、每渠道分配2次
-// 时总调用不超过 fallbackChainTotalAttempts（5）的共享预算上限（需求3：3+2预算测试）。
-func TestFallbackEnabled_SharedAttemptBudget_3Channels_2PerChannel(t *testing.T) {
+func TestAllocateFallbackChannelAttemptsCoverageFirst(t *testing.T) {
+	cases := []struct {
+		name       string
+		remaining  int
+		subsequent int
+		want       int
+	}{
+		{name: "3ch_budget5_first", remaining: 5, subsequent: 2, want: 3},
+		{name: "3ch_budget5_second", remaining: 2, subsequent: 1, want: 1},
+		{name: "3ch_budget5_third", remaining: 1, subsequent: 0, want: 1},
+		{name: "5ch_budget5_first", remaining: 5, subsequent: 4, want: 1},
+		{name: "5ch_budget9_first", remaining: 9, subsequent: 4, want: 3},
+		{name: "5ch_budget9_second", remaining: 6, subsequent: 3, want: 3},
+		{name: "5ch_budget9_third", remaining: 3, subsequent: 2, want: 1},
+		{name: "5ch_budget2_first", remaining: 2, subsequent: 4, want: 1},
+		{name: "5ch_budget2_second", remaining: 1, subsequent: 3, want: 1},
+		{name: "exhausted", remaining: 0, subsequent: 2, want: 0},
+		{name: "single_channel", remaining: 5, subsequent: 0, want: 3},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			got := allocateFallbackChannelAttempts(test.remaining, test.subsequent)
+			if got != test.want {
+				t.Fatalf("allocate(%d, %d) = %d, want %d", test.remaining, test.subsequent, got, test.want)
+			}
+			if got > test.remaining {
+				t.Fatalf("allocation %d exceeds remaining %d", got, test.remaining)
+			}
+			if got > providerRequestMaxAttempts {
+				t.Fatalf("allocation %d exceeds per-channel cap %d", got, providerRequestMaxAttempts)
+			}
+		})
+	}
+}
+
+func TestCountSubsequentReservableChannelsSkipsIncompatible(t *testing.T) {
+	channels := []legacyruntime.ResolvedChannel{
+		makeTestChannel("ch-a", "openai"),
+		makeTestChannel("ch-b", "anthropic"),
+		makeTestChannel("ch-c", "openai"),
+	}
+	req := StreamRequest{
+		Tools: []json.RawMessage{json.RawMessage(`{"type":"function"}`)},
+	}
+	if got := countSubsequentReservableChannels(req, channels, 0); got != 1 {
+		t.Fatalf("reservable after primary = %d, want 1 (skip incompatible anthropic)", got)
+	}
+	compatible := []legacyruntime.ResolvedChannel{
+		makeTestChannel("ch-a", "openai"),
+		makeTestChannel("ch-b", "openai"),
+		makeTestChannel("ch-c", "openai"),
+	}
+	if got := countSubsequentReservableChannels(StreamRequest{}, compatible, 0); got != 2 {
+		t.Fatalf("reservable all-compatible = %d, want 2", got)
+	}
+}
+
+// TestFallbackEnabled_SharedAttemptBudget_ReservesCoverage 验证 3 渠道共享默认预算时
+// 总调用不突破上限，且分配器为后续兼容渠道保留覆盖机会。
+func TestFallbackEnabled_SharedAttemptBudget_ReservesCoverage(t *testing.T) {
 	// 每次调用都返回 429（可重试），但 attempt=1 确保 fallbackExtractAttemptsUsed 返回 allocated
 	errs := make([]error, 20)
 	for i := range errs {

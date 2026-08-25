@@ -21,6 +21,7 @@ import {
   validateProviderFallbackAdapters,
   validateProviderFallbackBudget,
   DEFAULT_MAX_CONCURRENT_REQUESTS,
+  MAX_PROVIDER_FALLBACK_CANDIDATES,
   MAX_CONCURRENT_REQUESTS_LIMITS,
   maxConcurrentRequestsFieldError,
   normalizeMaxConcurrentRequests,
@@ -106,6 +107,7 @@ assertEqual(DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts, 5, "default maxHttpAttemp
 assertEqual(DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds, 8, "default maxWaitSeconds");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxHttpAttempts, { min: 2, max: 9 }, "attempt limits");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxWaitSeconds, { min: 1, max: 30 }, "wait limits");
+assertEqual(MAX_PROVIDER_FALLBACK_CANDIDATES, 4, "fallback chain allows 1 primary + 4 candidates");
 
 const fbOff = normalizeProviderFallback(null);
 assertEqual(fbOff.enabled, false, "null fallback enabled");
@@ -461,6 +463,44 @@ const dupPersist = prepareModelAdaptersForPersist(
 );
 assert(!dupPersist.ok && /重复/.test(dupPersist.error), `duplicate candidates: ${dupPersist.error}`);
 
+const adapterC = physicalAdapter("backend-c", "C", "https://c.example.com/v1");
+const adapterD = physicalAdapter("backend-d", "D", "https://d.example.com/v1");
+const adapterE = physicalAdapter("backend-e", "E", "https://e.example.com/v1");
+const adapterF = physicalAdapter("backend-f", "F", "https://f.example.com/v1");
+const fourCandidatePersist = prepareModelAdaptersForPersist(
+  [adapterA, adapterB, adapterC, adapterD, adapterE, adapterF, {
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB, adapterC.id, adapterD.id, adapterE.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(fourCandidatePersist.ok, `4 candidates should persist: ${fourCandidatePersist.error}`);
+assertEqual(
+  fourCandidatePersist.payloadAdapters[6].providerFallback.candidateChannelIDs,
+  [idB, adapterC.id, adapterD.id, adapterE.id],
+  "4 candidates must keep order through persist projection",
+);
+
+const fiveCandidatePersist = prepareModelAdaptersForPersist(
+  [adapterA, adapterB, adapterC, adapterD, adapterE, adapterF, {
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB, adapterC.id, adapterD.id, adapterE.id, adapterF.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !fiveCandidatePersist.ok && /1–4/.test(fiveCandidatePersist.error),
+  `5 candidates must be rejected: ${fiveCandidatePersist.error}`,
+);
+
 const disabledEcho = prepareModelAdaptersForPersist(
   [{
     ...logicalAdapter,
@@ -602,14 +642,10 @@ const testModelAdapterCalls = [];
 function fakeTestModelAdapter(adapter) {
   testModelAdapterCalls.push(adapter.id);
 }
-const skippedHints = [];
-if (endpointPlan.skippedLogical.length) {
-  skippedHints.push(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
-}
 endpointPlan.toTest.forEach(fakeTestModelAdapter);
 assertEqual(testModelAdapterCalls, [idA, idB], "spy: logical alias must not call testModelAdapter");
 assertEqual(testModelAdapterCalls.length, 2, "spy: physical channels still tested");
-assertEqual(skippedHints, [LOGICAL_ROUTING_RUNTIME_VERIFY_HINT], "skipped logical tests use the same hint");
+assertEqual(endpointPlan.skippedLogical.length, 2, "batch plan still reports skipped logical aliases");
 
 const singleLogicalPlan = selectAdaptersForEndpointTest([logicalAdapter]);
 assertEqual(singleLogicalPlan.toTest, [], "single logical test plan is empty");
@@ -773,11 +809,37 @@ const outOfRangeCapacityPersist = persistCapacityRoundtrip([
 ]);
 assert(!outOfRangeCapacityPersist.ok, "out-of-range capacity must fail persist");
 
+function extractSourceFunction(source, name) {
+  const marker = `function ${name}`;
+  const start = source.indexOf(marker);
+  if (start < 0) {
+    throw new Error(`missing function ${name}`);
+  }
+  const brace = source.indexOf("{", start);
+  if (brace < 0) {
+    throw new Error(`missing body for ${name}`);
+  }
+  let depth = 0;
+  for (let index = brace; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
+    }
+  }
+  throw new Error(`unclosed function ${name}`);
+}
+
 const frontendSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const projectionSource = readFileSync(path.join(frontendSrc, "state/configProjection.js"), "utf8");
 const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
+const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
 
 assert(projectionSource.endsWith("\n"), "configProjection.js must end with a trailing newline");
 assert(
@@ -839,6 +901,36 @@ assert(
 assert(
   /handleTestAllModelAdapters[\s\S]*selectAdaptersForEndpointTest/.test(modelConfigSource),
   "batch test must explicitly skip logical aliases",
+);
+const singleTestHandler = extractSourceFunction(modelConfigSource, "handleTestModelAdapter");
+assert(
+  singleTestHandler.includes("skippedLogical") && singleTestHandler.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT"),
+  "single logical alias test must keep the runtime verify hint",
+);
+const batchTestHandler = extractSourceFunction(modelConfigSource, "handleTestAllModelAdapters");
+assert(batchTestHandler.includes("selectAdaptersForEndpointTest"), "batch test must use the shared endpoint-test plan");
+assert(
+  !batchTestHandler.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT") && !batchTestHandler.includes("skippedLogical"),
+  "batch test must silently skip logical aliases without a hint popup",
+);
+assert(
+  projectionSource.includes("MAX_PROVIDER_FALLBACK_CANDIDATES")
+    && /candidateChannelIDs\.length\s*>\s*MAX_PROVIDER_FALLBACK_CANDIDATES/.test(projectionSource),
+  "validate must use the centralized candidate cap",
+);
+assert(editorSource.includes("MAX_PROVIDER_FALLBACK_CANDIDATES"), "ModelEditor must use the centralized candidate cap");
+assert(!/const candidate1 = computed/.test(editorSource), "candidate slots must not hardcode candidate1");
+assert(!/const candidate2 = computed/.test(editorSource), "candidate slots must not hardcode candidate2");
+assert(
+  /v-for="slotIndex in fallbackCandidateSlotIndexes"/.test(editorSource),
+  "candidate slots must be data-driven",
+);
+assert(!/Math\.max\(\s*availableHeight\s*,\s*160\s*\)/.test(selectSource), "Select must not force height past the viewport");
+assert(selectSource.includes("data-select-list"), "Select must mark the real scroll container");
+assert(
+  /<ul\b[^>]*data-select-list[\s\S]*?overflow-y-auto[\s\S]*?:style="listStyle"/.test(selectSource)
+    || /<ul\b[^>]*data-select-list[\s\S]*?:style="listStyle"[\s\S]*?overflow-y-auto/.test(selectSource),
+  "Select maxHeight must land on the overflowing ul, not the clipped outer shell",
 );
 
 console.log("config projection tests passed");

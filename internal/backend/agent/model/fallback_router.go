@@ -78,9 +78,50 @@ func fallbackChainBudgetFromPlan(plan *legacyruntime.ChannelPlan) (int, time.Dur
 	return attempts, time.Duration(waitSeconds) * time.Second
 }
 
+// countSubsequentReservableChannels 统计从 currentIdx 之后、按实际切换顺序
+// 会被尝试的兼容渠道数。不兼容候选不占预留；兼容性基准随“将被尝试”的渠道推进，
+// 与 streamWithFallback 在失败后查找下一候选的方式一致。
+func countSubsequentReservableChannels(req StreamRequest, channels []legacyruntime.ResolvedChannel, currentIdx int) int {
+	if currentIdx < 0 || currentIdx >= len(channels) {
+		return 0
+	}
+	from := channels[currentIdx]
+	count := 0
+	for idx := currentIdx + 1; idx < len(channels); idx++ {
+		if ok, _ := checkFallbackChannelCompatibility(req, from, channels[idx]); !ok {
+			continue
+		}
+		count++
+		from = channels[idx]
+	}
+	return count
+}
+
+// allocateFallbackChannelAttempts 按“保证渠道覆盖，再用剩余预算重试”分配当前渠道的 HTTP 次数。
+// 每个后续可尝试/兼容渠道预留 1 次；当前渠道使用 remaining-reserved，且不超过 providerRequestMaxAttempts。
+// 当剩余预算不足以覆盖当前+全部后续时，仍给当前 1 次（按顺序覆盖），不突破 remainingAttempts。
+func allocateFallbackChannelAttempts(remainingAttempts, subsequentReservable int) int {
+	if remainingAttempts <= 0 {
+		return 0
+	}
+	if subsequentReservable < 0 {
+		subsequentReservable = 0
+	}
+	reserved := subsequentReservable
+	if reserved > remainingAttempts-1 {
+		reserved = remainingAttempts - 1
+	}
+	usable := remainingAttempts - reserved
+	if usable > providerRequestMaxAttempts {
+		usable = providerRequestMaxAttempts
+	}
+	return usable
+}
+
 // streamWithFallback 执行多渠道 fallback 循环。
 // 共享预算规则：
-//   - HTTP attempt 总上限 fallbackChainTotalAttempts（5），每渠道单次分配不超过 providerRequestMaxAttempts（3）。
+//   - HTTP attempt 总上限由 ChannelPlan 决定（默认 fallbackChainTotalAttempts），每渠道单次分配不超过 providerRequestMaxAttempts（3）。
+//   - 覆盖优先：为每个后续实际可尝试/兼容渠道预留至少 1 次 HTTP；当前渠道最多使用 remaining-reserved。
 //   - sleep/backoff 预算 fallbackChainMaxWait（8s）通过 wall-clock 扣减方式传入各渠道；
 //     不使用 context.WithTimeout，避免连带截断正在进行的 HTTP 请求。
 //   - 安全门禁（原始字节、model event、context cancel、非可重试错误）任一触发即阻断 fallback。
@@ -125,10 +166,13 @@ func (r *FallbackAwareRouter) streamWithFallback(
 			}
 		}
 
-		// 计算本渠道的 attempt 分配（不超过单渠道默认上限）
-		perChannelAttempts := remainingAttempts
-		if perChannelAttempts > providerRequestMaxAttempts {
-			perChannelAttempts = providerRequestMaxAttempts
+		// 覆盖优先：后续实际可尝试/兼容渠道各预留 1 次，当前渠道使用剩余额度（不超过单渠道上限）。
+		perChannelAttempts := allocateFallbackChannelAttempts(
+			remainingAttempts,
+			countSubsequentReservableChannels(req, plan.Channels, channelIdx),
+		)
+		if perChannelAttempts <= 0 {
+			break
 		}
 
 		channelReq := applyChannelToRequest(req, &channel, idleTimeout)

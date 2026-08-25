@@ -7,6 +7,33 @@ import (
 	legacyruntime "cursor/internal/runtime"
 )
 
+func TestResolveChannelPlanProjectsFourCandidatesInOrder(t *testing.T) {
+	adapters := testPhysicalAdapterSet(6)
+	ids := adapterIDs(t, adapters)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    ids[1],
+		CandidateChannelIDs: []string{ids[2], ids[3], ids[4], ids[5]},
+	}
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	plan, err := resolveModelAdapterChannelPlan(normalized, normalized[0].ID)
+	if err != nil {
+		t.Fatalf("resolve plan: %v", err)
+	}
+	if !plan.FallbackEnabled || len(plan.Channels) != 5 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	want := []string{ids[1], ids[2], ids[3], ids[4], ids[5]}
+	for i, channelID := range want {
+		if plan.Channels[i].ID != channelID {
+			t.Fatalf("plan.Channels[%d].ID = %q, want %q", i, plan.Channels[i].ID, channelID)
+		}
+	}
+}
+
 func TestResolveChannelPlanCarriesNormalizedBudget(t *testing.T) {
 	adapters, idA, idB, idC := testFallbackChain(t)
 	adapters[0].ProviderFallback = ProviderFallbackConfig{

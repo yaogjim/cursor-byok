@@ -187,6 +187,29 @@ func TestNormalizeModelAdapterConfigsRejectsUnknownReasoningEffort(t *testing.T)
 
 // ──── ProviderFallback 校验测试 ────────────────────────────────────────────────
 
+func testPhysicalAdapterSet(n int) []ModelAdapterConfig {
+	adapters := make([]ModelAdapterConfig, n)
+	for i := 0; i < n; i++ {
+		item := testModelAdapter("ch-"+strconv.Itoa(i), i+1)
+		item.BaseURL = "https://api" + strconv.Itoa(i) + ".example.com/v1"
+		adapters[i] = item
+	}
+	return adapters
+}
+
+func adapterIDs(t *testing.T, adapters []ModelAdapterConfig) []string {
+	t.Helper()
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize adapter set: %v", err)
+	}
+	ids := make([]string, len(normalized))
+	for i := range normalized {
+		ids[i] = normalized[i].ID
+	}
+	return ids
+}
+
 func testFallbackAdapters() []ModelAdapterConfig {
 	a := testModelAdapter("ch-a", 1)
 	b := testModelAdapter("ch-b", 2)
@@ -309,19 +332,44 @@ func TestProviderFallbackRejectsDuplicateCandidates(t *testing.T) {
 	}
 }
 
-func TestProviderFallbackRejectsTooManyCandidates(t *testing.T) {
-	adapters := testFallbackAdapters()
-	normalizedAll, _ := NormalizeModelAdapterConfigs(adapters)
-	idB := normalizedAll[1].ID
-
-	// 3 个候选（超过最大 2 个）
+func TestProviderFallbackAcceptsFourCandidates(t *testing.T) {
+	adapters := testPhysicalAdapterSet(6)
+	ids := adapterIDs(t, adapters)
 	adapters[0].ProviderFallback = ProviderFallbackConfig{
 		Enabled:             true,
-		PrimaryChannelID:    idB,
-		CandidateChannelIDs: []string{idB, idB, idB},
+		PrimaryChannelID:    ids[1],
+		CandidateChannelIDs: []string{ids[2], ids[3], ids[4], ids[5]},
 	}
-	if _, err := NormalizeModelAdapterConfigs(adapters); err == nil {
-		t.Fatal("more than 2 candidateChannelIDs should be rejected")
+	got, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("4 candidates should pass: %v", err)
+	}
+	gotIDs := got[0].ProviderFallback.CandidateChannelIDs
+	want := []string{ids[2], ids[3], ids[4], ids[5]}
+	if len(gotIDs) != 4 {
+		t.Fatalf("candidates = %#v, want %#v", gotIDs, want)
+	}
+	for i := range want {
+		if gotIDs[i] != want[i] {
+			t.Fatalf("candidates = %#v, want %#v", gotIDs, want)
+		}
+	}
+}
+
+func TestProviderFallbackRejectsTooManyCandidates(t *testing.T) {
+	adapters := testPhysicalAdapterSet(7)
+	ids := adapterIDs(t, adapters)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    ids[1],
+		CandidateChannelIDs: []string{ids[2], ids[3], ids[4], ids[5], ids[6]},
+	}
+	_, err := NormalizeModelAdapterConfigs(adapters)
+	if err == nil {
+		t.Fatal("more than 4 candidateChannelIDs should be rejected")
+	}
+	if !strings.Contains(err.Error(), "1–4") {
+		t.Fatalf("error should mention 1–4, got %v", err)
 	}
 }
 

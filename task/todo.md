@@ -4,6 +4,74 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: fallback-coverage-first-budget-20260825
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（用户确认“保证渠道覆盖，再用剩余预算重试”；工作决策基线 §10.5 + 系统 Design §14.9.4）
+DELIVERY_STATUS: accepted（实现、定向测试、race、vet、前端投影检查和 diff 门禁通过；已纳入 0.0.49.6 提交）
+
+### CONTEXT
+
+- 运行证据 `f4c6e4d2-5bd4-4265-98ec-0aa9bfa99b2b` 证明旧分配把默认 5 attempts 贪婪分成 `3+2+0`：前两个 transport 渠道耗尽预算，第三个已配置且可用渠道从未发送 HTTP。
+- 用户已确认根因级修复：启用 fallback 时先为每个后续兼容渠道预留 1 次 attempt，再把剩余预算用于前序渠道重试；全链 attempt/wait、单渠道最多 3、输出/副作用/context/错误 allowlist 和兼容性门禁保持不变。
+- 最多 5 个物理渠道；默认 5 attempts 必须形成全覆盖，9 attempts 对 5 渠道形成 `3+3+1+1+1`。若显式预算小于渠道数，则按配置顺序各 1 次直到预算耗尽，不突破共享预算。
+- 不修改真实 BYOK 配置、公共 proto、MITM/CA/证书、系统代理、18080/18090、前端交互和发布版本；本工作包已按用户要求提交并推送，发布构建另行生成且不上传 GitHub。
+
+### ACTIVE SLICES
+
+- [completed] `coverage-contract`：工作决策基线与系统 Design 已替换旧 `min(remaining,3)`/`3+2+0` 合同，冻结覆盖优先算法、预算不足边界和验收矩阵。
+- [completed] `coverage-tdd`：真实 HTTP fixture 覆盖三渠道、五渠道、transport、503、预算 5/9/2 以及不兼容候选预留计算。
+- [completed] `coverage-runtime`：router 按后续兼容渠道数预留 attempt，当前渠道只使用剩余额度且继续受单渠道 3 次上限与共享预算约束。
+- [in_progress] `coverage-verification-closeout`：运行相关/全量测试、race/vet、diff/lint/review，随后同步证据和交付状态。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 前两个 transport 或 503 渠道失败时，第三个兼容健康渠道必须收到 HTTP 并可成功终止；五渠道默认预算必须到达第五渠道。
+- 任意配置下总 HTTP attempt 不超过共享预算，单渠道不超过 3；等待预算、安全门禁、兼容性与同上游组跳过语义不放宽。
+- 回滚仅需恢复旧分配器与对应测试/文档；配置 schema 和持久化数据无迁移。
+
+## Previous Work Package: Fallback 配置交互
+
+WORK_PACKAGE_ID: fallback-config-interaction-20260825
+STATUS: completed
+RISK_LEVEL: medium
+OWNER: orchestrator
+DESIGN_READINESS: approved（工作决策基线 §10.5 + 系统 Design §14.9.4/14.9.5）
+DELIVERY_STATUS: verified-partial（实现、定向/全量自动化和生产构建通过；本机缺少 Wails v3/task，未执行真实窗口视觉交互）
+
+### CONTEXT
+
+- 用户确认：“测试全部”静默跳过逻辑 alias；单独测试逻辑 alias 保留实际运行验证提示。
+- fallback 链上限调整为总共 5 个物理渠道，即 1 个 primary + 1–4 个 candidates；默认全链预算继续为 5 attempts / 8 seconds，范围继续为 2–9 / 1–30，渠道增多不扩大全链预算。
+- 修复通用 Select 长列表的视口高度和滚动容器错位，使鼠标与键盘都能访问全部可用物理 adapter。
+- 不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、真实 BYOK 配置、发布版本；本工作包此前已提交，当前发布版本为 0.0.49.6，构建产物不上传 GitHub。
+
+### ACTIVE SLICES
+
+- [completed] `fallback-contract-tests`：需求/设计合同已补充 5 通道、批量/单独测试语义和预算边界；前端投影、后端校验与 resolver 顺序回归已添加。
+- [completed] `fallback-ui-bugs`：批量测试移除逻辑 alias 保存提示；Select 将 Floating UI 可用高度施加到真实 `ul` 滚动容器，并保留键盘聚焦滚动。
+- [completed] `fallback-five-channels`：前端候选槽改为 4 槽数据驱动，后端权威上限改为 4 candidates；清空中间槽截断后续，候选排重和逻辑 alias 排除保持。
+- [completed] `fallback-verify-closeout`：前端投影、后端定向、`internal/...` 全量、生产构建、lint/diff 门禁通过；本机缺少 Wails v3/task，未扰动运行中 18080/18090，视觉交互记录为环境缺口。
+
+### FINAL VERIFICATION EVIDENCE
+
+- `node frontend/scripts/test-config-projection.mjs`：通过；覆盖 4 candidates 保存/顺序、第 5 candidate 拒绝、批量静默跳过、单独提示保留和 Select 真实滚动容器合同。
+- `go test ./internal/backend/server/config ./internal/client ./internal/backend/agent/model -count=1`：三包通过；仅有既有 macOS deployment target linker warning。
+- `go test ./internal/... -count=1`：全部 internal package 通过；同样仅有既有 linker warning。
+- `npm run build --prefix frontend`：Vite production build 通过（121 modules）；仅有既有 `--localstorage-file` 与 chunk-size warning。构建自动改写的 i18n 生成文件已恢复，未纳入本包。
+- `ReadLints`：受改源文件无诊断；`git diff --check` 与 gofmt 检查在收口时通过。
+- 浏览器边界：本机无 `wails3` 与 `task`，且没有可用浏览器 tab/开发 UI 端口；为避免占用运行中 Cursor 的 18080/18090，本轮不启动替代服务，视觉交互保持 `env/test gap`。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 1 primary + 4 candidates 可保存并按序投影，第 5 candidate 被前后端拒绝；默认预算与运行算法不变。
+- “测试全部”只调度物理 adapter 且不弹逻辑 alias 保存提示；单独逻辑 alias 测试仍提示运行验证。
+- 长下拉可滚动并选择末项；浏览器不可用时必须记录环境缺口，不用源码断言冒充视觉证据。
+- 回退到旧版前须先把新配置缩回最多 2 candidates；否则旧版严格校验会拒绝配置。
+
+## Previous Work Package: 配置写竞态与物理上游容量
+
 WORK_PACKAGE_ID: config-race-upstream-capacity-20260825
 STATUS: completed
 RISK_LEVEL: high
@@ -16,7 +84,7 @@ DELIVERY_STATUS: accepted（能力实现、受控非零 fixture、全量门禁�
 - 用户已批准 `.cursor/plans/配置竞态与上游容量风险精简计划_ff017475.plan.md`，目标是关闭普通 UI 保存与运行时 `lastAgentModelHash` 更新互相覆盖的进程内竞态，并提供默认关闭的物理上游共享容量限制。
 - 三种配置写语义固定为：普通保存保留最新 hash；hash-only 更新只 patch 该字段且相同值 no-op；完整导入显式全量替换并允许替换 hash。
 - `maxConcurrentRequests` 只挂物理 adapter：缺失/0 不限流，1–16 有效；逻辑 alias 必须为 0，同 provider + 规范化 Base URL + API Key 的物理 adapter 必须值一致。
-- 用户已确认本轮发布候选版本使用 `0.0.49.5`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.5.md` 必须保持一致。README 的“当前稳定发布”继续指向已发布版本，待真实 Release 完成后再切换。
+- 用户已确认本轮本地发布版本使用 `0.0.49.6`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.6.md` 必须保持一致。README 的“当前稳定发布”继续指向已公开版本；本次构建资产不上传 GitHub。
 - 不修改真实 `~/.cursor-local-assistant-v2/config.yaml`，不占用或重启 18080/18090；不修改公共 proto、MITM/CA/证书、系统代理或发布隔离。
 
 ### COMPLETED SLICES
@@ -33,7 +101,7 @@ DELIVERY_STATUS: accepted（能力实现、受控非零 fixture、全量门禁�
 - 根 module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...` 全部通过。
 - 前端：`node scripts/test-config-projection.mjs` 和 `npm run build` 通过；仅有既有 chunk-size 与 Node localstorage 参数 warning。
 - CLI module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./...` 通过；日志分析器 module 的 test/race/vet 通过。
-- macOS 客户端：在 Apple Silicon / macOS 14.6.1 使用隔离临时工具链运行 `task build`，生成版本 `0.0.49.5` 的 `bin/macos-arm64.dmg`（约 23 MiB，SHA-256 `8ad056b49386841ba2cd1a8a3cff7ae3489948f38e9be47373da693090d93841`）；`hdiutil verify`、DMG 只读挂载、Info.plist/buildinfo 版本、Mach-O arm64 检查及 app adhoc `codesign --verify --deep --strict` 均通过。产物受 `bin/` ignore 规则保护，不纳入 Git；未执行 Developer ID 签名或 notarization。
+- macOS 客户端：在 Apple Silicon / macOS 14.6.1 的既有历史验证曾生成版本 `0.0.49.5` 的 `bin/macos-arm64.dmg`（约 23 MiB，SHA-256 `8ad056b49386841ba2cd1a8a3cff7ae3489948f38e9be47373da693090d93841`）；`hdiutil verify`、DMG 只读挂载、Info.plist/buildinfo 版本、Mach-O arm64 检查及 app adhoc `codesign --verify --deep --strict` 均通过。产物受 `bin/` ignore 规则保护，不纳入 Git；未执行 Developer ID 签名或 notarization。
 - 最终检查：`git diff --check` 通过；`proto/`、`internal/mitm/`、`internal/certs/` 无 diff；本工作包未执行真实 BYOK 配置写入，也未占用或重启运行中端口。
 
 ### ACCEPTANCE BOUNDARY AND ROLLBACK
