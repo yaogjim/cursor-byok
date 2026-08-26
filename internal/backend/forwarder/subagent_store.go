@@ -734,20 +734,10 @@ func writeSubagentJSONAtomic(path string, payload any, perm os.FileMode) error {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	renamed = true
-	// fsync 父目录以确保 rename 在 Linux (ext4/xfs) 上持久化。
-	// POSIX 保证 rename 的原子性但不保证目录条目的持久性；
-	// 不吞 Open/Sync/Close 错误。
-	dirFd, openErr := os.Open(dir)
-	if openErr != nil {
-		return fmt.Errorf("open parent dir for fsync: %w", openErr)
-	}
-	syncErr := dirFd.Sync()
-	closeErr := dirFd.Close()
-	if syncErr != nil {
-		return fmt.Errorf("fsync parent dir: %w", syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close parent dir fd: %w", closeErr)
+	// fsync 父目录以确保 rename 在支持目录同步的平台上持久化。
+	// Windows 不支持对目录句柄执行 Sync；syncDirectory 会按平台跳过。
+	if err := syncDirectory(dir); err != nil {
+		return fmt.Errorf("fsync parent dir: %w", err)
 	}
 	return nil
 }
