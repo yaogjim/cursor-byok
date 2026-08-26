@@ -59,6 +59,18 @@ export function saveUserConfig(payload) {
   return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
 }
 
+export function copyGatewayToken() {
+  return withApiLogging("CopyGatewayToken", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.CopyGatewayToken`),
+  );
+}
+
+export function rotateGatewayToken() {
+  return withApiLogging("RotateGatewayToken", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RotateGatewayToken`),
+  );
+}
+
 export function exportUserConfig(path) {
   return withApiLogging("ExportUserConfig", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.ExportUserConfig`, path),
@@ -121,6 +133,18 @@ export function startProxyService() {
 
 export function stopProxyService() {
   return withApiLogging("StopProxy", () => StopProxy());
+}
+
+export function startGatewayService() {
+  return withApiLogging("StartGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartGateway`),
+  );
+}
+
+export function stopGatewayService() {
+  return withApiLogging("StopGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StopGateway`),
+  );
 }
 
 export function getLogCaptureStatus() {

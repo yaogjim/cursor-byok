@@ -2,6 +2,7 @@
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import LocaleSelect from "@/components/LocaleSelect.vue";
+import GatewayCard from "@/components/GatewayCard.vue";
 import Select from "@/components/ui/Select.vue";
 import Switch from "@/components/ui/Switch.vue";
 import { useMessage } from "@/composables/useMessage";
@@ -286,6 +287,8 @@ onMounted(async () => {
         />
       </div>
     </Card>
+
+    <GatewayCard />
 
     <Card>
       <div class="flex items-center justify-between gap-4">

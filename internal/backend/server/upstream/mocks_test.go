@@ -62,6 +62,25 @@ func TestBuildAvailableModelEntriesUsesDisabledVariantWhenReasoningEffortUnset(t
 	}
 }
 
+func TestCursorAvailableModelsProjectsChannelHashNotProviderModelID(t *testing.T) {
+	entries := buildAvailableModelEntries([]legacyruntime.ModelAdapterConfig{{
+		ID:          "abcdef0123456789",
+		DisplayName: "Grok",
+		ModelID:     "grok-3",
+		Type:        "openai",
+		TooltipData: "note",
+	}})
+	if len(entries) != 1 {
+		t.Fatalf("entry count = %d", len(entries))
+	}
+	if entries[0]["name"] != "abcdef0123456789" || entries[0]["serverModelName"] != "abcdef0123456789" {
+		t.Fatalf("cursor model projection = %#v", entries[0])
+	}
+	if entries[0]["name"] == "grok-3" || entries[0]["serverModelName"] == "grok-3" {
+		t.Fatal("cursor model projection used provider modelID")
+	}
+}
+
 func TestEncodeCLIModelsUsesAgentModelDetailsWireFormat(t *testing.T) {
 	payload := map[string]any{"models": buildCLIModelDetails([]legacyruntime.ModelAdapterConfig{{ID: "channel-a", DisplayName: "Model A", APIKey: "provider-secret", BaseURL: "https://provider.example/v1"}})}
 	encoded, err := encodeMockProto("aiserver.v1.GetUsableModelsResponse", payload)

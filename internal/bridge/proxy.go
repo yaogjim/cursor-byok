@@ -81,6 +81,16 @@ func (s *ProxyService) StopProxy() (ProxyState, error) {
 	return s.core.StopProxy()
 }
 
+// StartGateway 只启动独立模型 Gateway，不启动 Cursor backend 或 MITM。
+func (s *ProxyService) StartGateway() (ProxyState, error) {
+	return s.core.StartGateway()
+}
+
+// StopGateway 只停止独立模型 Gateway。
+func (s *ProxyService) StopGateway() (ProxyState, error) {
+	return s.core.StopGateway()
+}
+
 // GetState 用于处理与 GetState 相关的逻辑。
 func (s *ProxyService) GetState() ProxyState {
 	return s.core.GetState()
@@ -192,6 +202,16 @@ func (s *ProxyService) ClearCursorSettings() error {
 // ShutdownForQuit 用于处理与 ShutdownForQuit 相关的逻辑。
 func (s *ProxyService) ShutdownForQuit() {
 	s.core.ShutdownForQuit()
+}
+
+// CopyGatewayToken 仅通过显式复制接口返回 Gateway token。
+func (s *ProxyService) CopyGatewayToken() (string, error) {
+	return s.core.CopyGatewayToken()
+}
+
+// RotateGatewayToken 轮换 Gateway token，并只把新 token 返回给这次调用。
+func (s *ProxyService) RotateGatewayToken() (string, error) {
+	return s.core.RotateGatewayToken()
 }
 
 // IsWindows 用于处理与 IsWindows 相关的逻辑。

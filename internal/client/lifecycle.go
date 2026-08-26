@@ -48,6 +48,14 @@ type ProxyState struct {
 	NetProxyPACIgnored bool `json:"netProxyPacIgnored"`
 	// NetProxyDescription 表示当前出站网络代理摘要，已移除凭据。
 	NetProxyDescription string `json:"netProxyDescription"`
+	// GatewayEnabled 表示配置中的 Chat Gateway 开关。
+	GatewayEnabled bool `json:"gatewayEnabled"`
+	// GatewayListenAddr 表示 Chat Gateway 实际监听地址。
+	GatewayListenAddr string `json:"gatewayListenAddr"`
+	// GatewayRunning 表示 Chat Gateway 是否已启动。
+	GatewayRunning bool `json:"gatewayRunning"`
+	// GatewayLastError 表示独立的 Gateway 错误，不影响 Cursor 启停结果。
+	GatewayLastError string `json:"gatewayLastError"`
 	// LastError 表示当前声明中的 LastError。
 	LastError string `json:"lastError"`
 }
@@ -115,6 +123,8 @@ func (s *ProxyService) StartProxy() (ProxyState, error) {
 		return s.GetState(), startErr
 	}
 
+	s.reconcileGateway(cfg)
+
 	s.setLastError(nil)
 	s.emitState()
 	state := s.GetState()
@@ -178,6 +188,7 @@ func (s *ProxyService) GetState() ProxyState {
 	s.mu.RLock()
 	lastError := s.lastError
 	cursorSettingsApplied := s.cursorSettingsApplied
+	gatewayLastError := s.gatewayLastError
 	s.mu.RUnlock()
 	backendListenAddr := ""
 	backendRunning := false
@@ -185,6 +196,7 @@ func (s *ProxyService) GetState() ProxyState {
 		backendListenAddr = s.backendHost.ListenAddr()
 		backendRunning = s.backendHost.IsRunning()
 	}
+	gatewayListenAddr, gatewayRunning, gatewayRuntimeError := s.snapshotGateway()
 	netProxy := netproxy.CurrentStatus()
 	return ProxyState{
 		ListenAddr:            proxySnap.ListenAddr,
@@ -202,6 +214,10 @@ func (s *ProxyService) GetState() ProxyState {
 		NetProxyHTTPS:         netProxy.HTTPSProxy,
 		NetProxyPACIgnored:    netProxy.PACIgnored,
 		NetProxyDescription:   netProxy.Description,
+		GatewayEnabled:        s.currentGatewayEnabled(),
+		GatewayListenAddr:     gatewayListenAddr,
+		GatewayRunning:        gatewayRunning,
+		GatewayLastError:      gatewayStateError(gatewayLastError, gatewayRuntimeError),
 		LastError:             lastError,
 	}
 }
@@ -256,6 +272,11 @@ func (s *ProxyService) ShutdownForQuit() {
 	defer cancel()
 	var finalErr error
 
+	if s.gatewayConfigUnsubscribe != nil {
+		s.gatewayConfigUnsubscribe()
+		s.gatewayConfigUnsubscribe = nil
+	}
+	s.stopGatewayBestEffort()
 	if s.proxy != nil {
 		if err := s.proxy.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			finalErr = err

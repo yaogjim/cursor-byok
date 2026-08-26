@@ -102,6 +102,12 @@ func (manager *Manager) SaveLastAgentModelHash(ctx context.Context, value string
 	return err
 }
 
+func (manager *Manager) SaveGatewayToken(ctx context.Context, value string) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		return manager.store.SaveGatewayToken(ctx, value)
+	})
+}
+
 func (manager *Manager) commitStoreWrite(notify bool, write func() (Config, bool, error)) (Config, error) {
 	if manager == nil || manager.store == nil {
 		return Config{}, fmt.Errorf("config manager is not initialized")

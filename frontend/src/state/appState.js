@@ -13,6 +13,7 @@ import {
   shouldTestModelAdapterEndpoint,
   validateProviderFallbackAdapters,
   validateUpstreamCapacityAdapters,
+  normalizeGatewayConfig,
 } from "@/state/configProjection";
 import {
   checkForUpdates,
@@ -34,8 +35,12 @@ import {
   saveUserConfig,
   startProxyService,
   stopProxyService,
+  startGatewayService,
+  stopGatewayService,
   testModelAdapter,
   fetchModelAdapterModels,
+  copyGatewayToken as copyGatewayTokenApi,
+  rotateGatewayToken as rotateGatewayTokenApi,
 } from "@/services/clientApi";
 import {
   normalizeReasoningEffort,
@@ -624,6 +629,7 @@ function normalizeConfig(source) {
       checkOnStartup: asBoolean(updates.checkOnStartup),
     },
     lastAgentModelHash: asString(raw.lastAgentModelHash),
+    gateway: normalizeGatewayConfig(raw.gateway),
   };
 }
 
@@ -667,6 +673,12 @@ function serializeConfigPayload(normalized) {
     advertising: normalized.advertising,
     updates: normalized.updates,
     lastAgentModelHash: normalized.lastAgentModelHash,
+    gateway: {
+      enabled: normalized.gateway.enabled,
+      listenAddr: normalized.gateway.listenAddr,
+      tokenConfigured: normalized.gateway.tokenConfigured,
+      publicModels: normalized.gateway.publicModels,
+    },
   };
 }
 
@@ -692,6 +704,12 @@ function buildConfigPayloadFromState(source = appState) {
     advertising: preferences.advertising,
     updates: preferences.updates,
     lastAgentModelHash: source.lastAgentModelHash,
+    gateway: {
+      enabled: source.gatewayEnabled,
+      listenAddr: source.gatewayListenAddr,
+      tokenConfigured: source.gatewayTokenConfigured,
+      publicModels: source.gatewayPublicModels,
+    },
   }));
 }
 
@@ -714,6 +732,10 @@ function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
   appState.appearanceTheme = normalized.appearance.theme;
   appState.advertisingEnabled = normalized.advertising.enabled;
   appState.updateCheckOnStartup = normalized.updates.checkOnStartup;
+  appState.gatewayEnabled = normalized.gateway.enabled;
+  appState.gatewayListenAddr = normalized.gateway.listenAddr;
+  appState.gatewayTokenConfigured = normalized.gateway.tokenConfigured;
+  appState.gatewayPublicModels = normalized.gateway.publicModels.map((item) => ({ ...item }));
   return normalized;
 }
 
@@ -778,6 +800,9 @@ function applyProxyState(raw) {
   appState.netProxyHttps = asString(state.netProxyHttps);
   appState.netProxyPacIgnored = asBoolean(state.netProxyPacIgnored);
   appState.netProxyDescription = asString(state.netProxyDescription);
+  appState.gatewayRunning = asBoolean(state.gatewayRunning);
+  appState.gatewayRuntimeListenAddr = asString(state.gatewayListenAddr);
+  appState.gatewayLastError = asString(state.gatewayLastError);
 }
 
 function handleProxyStateEvent(event) {
@@ -994,6 +1019,13 @@ export const appState = reactive({
   logCleanupRunning: false,
   providerStreamIdleTimeout: cachedConfig.providerStreamIdleTimeout,
   lastAgentModelHash: cachedConfig.lastAgentModelHash,
+  gatewayEnabled: cachedConfig.gateway.enabled,
+  gatewayListenAddr: cachedConfig.gateway.listenAddr,
+  gatewayTokenConfigured: cachedConfig.gateway.tokenConfigured,
+  gatewayPublicModels: cachedConfig.gateway.publicModels.map((item) => ({ ...item })),
+  gatewayRunning: asBoolean(cachedState.gatewayRunning),
+  gatewayRuntimeListenAddr: asString(cachedState.gatewayRuntimeListenAddr),
+  gatewayLastError: asString(cachedState.gatewayLastError),
   homeMetrics: createEmptyHomeMetrics(),
   homeMetricsLoading: false,
   homeMetricsResetting: false,
@@ -1052,6 +1084,9 @@ watchSyncEffect(() => {
         netProxyHttps: appState.netProxyHttps,
         netProxyPacIgnored: appState.netProxyPacIgnored,
         netProxyDescription: appState.netProxyDescription,
+        gatewayRunning: appState.gatewayRunning,
+        gatewayRuntimeListenAddr: appState.gatewayRuntimeListenAddr,
+        gatewayLastError: appState.gatewayLastError,
       }),
     );
   } catch (_error) {
@@ -1315,6 +1350,12 @@ export async function persistUserConfig() {
     },
     updates: {
       checkOnStartup: asBoolean(appState.updateCheckOnStartup),
+    },
+    gateway: {
+      enabled: appState.gatewayEnabled,
+      listenAddr: appState.gatewayListenAddr,
+      tokenConfigured: appState.gatewayTokenConfigured,
+      publicModels: appState.gatewayPublicModels,
     },
   });
 }
@@ -1654,6 +1695,44 @@ export async function stopService() {
   }
 }
 
+export async function startGateway() {
+  if (appState.serviceBusy) {
+    return { ok: false, error: "服务状态更新中，请稍后再试" };
+  }
+  appState.serviceBusy = true;
+  try {
+    const saved = await persistUserConfig();
+    if (!saved.ok) {
+      return saved;
+    }
+    const state = await startGatewayService();
+    applyProxyState(state);
+    return { ok: true, error: "" };
+  } catch (error) {
+    await syncServiceState().catch(() => {});
+    return { ok: false, error: toUserError(error) };
+  } finally {
+    appState.serviceBusy = false;
+  }
+}
+
+export async function stopGateway() {
+  if (appState.serviceBusy) {
+    return { ok: false, error: "服务状态更新中，请稍后再试" };
+  }
+  appState.serviceBusy = true;
+  try {
+    const state = await stopGatewayService();
+    applyProxyState(state);
+    return { ok: true, error: "" };
+  } catch (error) {
+    await syncServiceState().catch(() => {});
+    return { ok: false, error: toUserError(error) };
+  } finally {
+    appState.serviceBusy = false;
+  }
+}
+
 export async function toggleService() {
   if (appState.serviceRunning) {
     return stopService();
@@ -1714,6 +1793,16 @@ export async function confirmUpdatePrompt() {
 export function toUserError(error) {
   const message = extractErrorMessage(error);
   return message || GENERIC_SERVICE_ERROR;
+}
+
+export async function copyGatewayToken() {
+  return copyGatewayTokenApi();
+}
+
+export async function rotateGatewayToken() {
+  const token = await rotateGatewayTokenApi();
+  appState.gatewayTokenConfigured = true;
+  return token;
 }
 
 export async function bootstrapAppState() {

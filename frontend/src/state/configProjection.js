@@ -452,3 +452,47 @@ export function validateUpstreamCapacityAdapters(source, { allAdapters } = {}) {
   }
   return "";
 }
+
+export const DEFAULT_GATEWAY_LISTEN_ADDR = "127.0.0.1:18091";
+export const MAX_GATEWAY_PUBLIC_MODELS = 32;
+
+export const DEFAULT_GATEWAY_CONFIG = Object.freeze({
+  enabled: false,
+  listenAddr: DEFAULT_GATEWAY_LISTEN_ADDR,
+  tokenConfigured: false,
+  publicModels: Object.freeze([]),
+});
+
+export function normalizeGatewayConfig(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const models = Array.isArray(raw.publicModels) ? raw.publicModels : [];
+  const publicModels = [];
+  const seen = new Set();
+  for (const item of models) {
+    const id = asString(item?.id);
+    const targetAdapterID = asString(item?.targetAdapterID);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    publicModels.push({ id, targetAdapterID });
+    if (publicModels.length >= MAX_GATEWAY_PUBLIC_MODELS) {
+      break;
+    }
+  }
+  return {
+    enabled: asBoolean(raw.enabled),
+    listenAddr: asString(raw.listenAddr) || DEFAULT_GATEWAY_LISTEN_ADDR,
+    tokenConfigured: asBoolean(raw.tokenConfigured),
+    publicModels,
+  };
+}
+
+export function gatewayPublicModelInvalid(model, adapters) {
+  const target = asString(model?.targetAdapterID);
+  if (!target) {
+    return true;
+  }
+  const list = Array.isArray(adapters) ? adapters : [];
+  return !list.some((adapter) => asString(adapter?.id) === target);
+}

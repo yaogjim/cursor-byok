@@ -53,7 +53,12 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 验证通过：`node frontend/scripts/test-config-projection.mjs`；后端 config/client/model 定向测试；`go test ./internal/... -count=1`；`npm run build --prefix frontend`；受改文件 lint、gofmt 与 `git diff --check`。测试/build 只有既有 macOS deployment target、`--localstorage-file` 和 chunk-size warning。构建生成的 i18n 文件已恢复，不纳入变更。本机仍缺少 `wails3` 和 `task`，没有可用开发 UI 端口；为避免扰动运行中 Cursor 的 18080/18090，未做真实窗口视觉点击，因此当前状态为 `verified-partial`，缺口仅为 UI 视觉交互证据。
 
-### 0. Agent 执行证据与完成门禁治理
+### 0.7 Multi-Client Chat Gateway 阶段 0/1（实现完成，证据部分闭合）
+
+2026-08-25/26 已按已批准计划交付最小纵向切片，`delivery_status=verified-partial`，未提交、未推送。合同见工作决策基线 §10.10、系统 Design §14.11 和 `task/todo.md` 的 `multi-client-chat-gateway-phase0-1-20260825`。独立 `internal/gateway` 监听默认 `127.0.0.1:18091`，默认关闭、loopback + Bearer；复用现有 Provider Gateway/Router；token 不进普通投影/导出/localStorage/日志；默认导出剥离 token 后再导入会 overlay 现有 token。自动门禁（定向五包、`internal/...`、相关 race、`go vet ./internal/...`、前端投影/build、`git diff --check`）通过；`proto/`、MITM、certs 无 diff。真实 Cherry/OpenAI SDK、Wails 视觉验收和 Cursor 全量回归仍是证据缺口，不得标 accepted。本包不扰动运行中 18080/18090。
+
+- **阶段 1 补充验证（2026-08-26）**：修复 OpenAI Chat 纯文本 `content` 数组兼容性，补充流式首块 `assistant` 角色，并严格拒绝非 `null` 的空 `tools` 数组。新增真实 TCP listener smoke 在隔离 `127.0.0.1:18091` 上依次验证 `/v1/models`、非流式 Chat 和流式 Chat；Provider 使用内存 fixture，未连接真实上游。`18080`、`18090` 未被启动、停止或替换。
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 

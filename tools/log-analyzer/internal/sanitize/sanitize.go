@@ -11,7 +11,7 @@ const maxPathRunes = 160
 var (
 	identifierSegment = regexp.MustCompile(`(?i)^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f-]{27,}|\d{8,})$`)
 	allowedFields     = map[string]struct{}{
-		"method": {}, "status_code": {}, "client_kind": {}, "message_case": {},
+		"method": {}, "status_code": {}, "client_kind": {}, "client_protocol": {}, "public_model_id": {}, "message_case": {},
 		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "append_seqno": {},
 		"host": {}, "connection_id": {}, "traffic_class": {}, "action": {},
 		"tls_role": {}, "path": {}, "host_hint": {}, "source": {}, "port": {},

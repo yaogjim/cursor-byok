@@ -425,3 +425,58 @@ Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID�
 - 上游组身份只在进程内以 SHA-256 表示；API Key、Base URL 和组 hash 均不得进入日志、错误、事件或持久配置。槽覆盖一次物理渠道的完整 Stream，包含同渠道 HTTP retry；切换候选前释放旧槽。
 - 有限容量下每个物理渠道最多等待固定 2 秒，不保证 FIFO。容量等待不消费真实 HTTP attempt，也不计入 Provider fallback 的 retry/backoff 等待预算。超时返回 typed `capacity_unavailable`；只有在零 HTTP、零原始响应字节、零 model event、零副作用窗口内才可切到不同上游组，同组候选直接跳过。父 context 取消立即返回原始取消错误并禁止 fallback。
 - 默认 `0` 保持历史无限并发行为。删除字段或设为 `0` 即回滚容量能力；当前真实 `grok-HA` 配置按用户决定不设置非零限制，因此本合同的实现与受控测试不能表述为当前在线环境已经启用容量保护。
+
+### 10.10 Multi-Client Chat Gateway 最小合同
+
+本节冻结独立 Chat Gateway 的阶段 0/1 合同。ACP、Responses、工具调用和独立生命周期不在本阶段范围。
+
+**不变量**
+
+- Cursor IDE/CLI 继续独占 `127.0.0.1:18080` / `127.0.0.1:18090` 以及现有 Connect/Protobuf、MITM、history 和工具桥。Gateway 使用独立 `http.Server`，默认 `127.0.0.1:18091`，不注册到 Cursor Host mux。
+- Gateway 默认关闭，只允许 loopback + Bearer。Gateway 启停或失败不得阻止 Cursor 启动、停止或恢复设置：Cursor 启动成功后再启动 Gateway；Gateway 启动失败只记录独立错误；Gateway 停止失败不能阻止 MITM、Cursor 设置和 Backend 清理。
+- 外部请求不得写 `lastAgentModelHash`，不得暴露 Provider API Key/Base URL，不得调用 Cursor 工具桥。
+- Gateway 与 Cursor 共用同一 config manager 和现有 `DefaultProviderGateway` / Router / fallback / retry / 包级容量 limiter。禁止复制第二套 Router 或 limiter。
+- 公开模型别名只经 `gateway.publicModels[{id,targetAdapterID}]` 显式映射解析，不回落到 Provider `modelID` 或 16 位内部 hash。目标 adapter 变化后显示映射失效并要求重选，不自动迁移。
+
+**配置、token 与权限**
+
+- 最小字段：`gateway.enabled`、`gateway.listenAddr`、后端生成的 `gateway.token`、`gateway.publicModels`。不含 ACP 字段和逐协议权限。
+- 普通配置保存必须保留 token；默认导出剥离 token 后的再导入，在导入文档未带 token 时 overlay 现有 token，避免无意识轮换。导入 YAML 若显式含 token 则全量替换。token 不进入普通 JSON/Wails 投影、默认导出、`localStorage` 或日志。只通过显式复制/轮换接口读取。
+- `config.yaml` 与写入用临时文件权限为 `0600`。首次写入 Gateway schema 前创建同权限 `.bak-pre-gateway` 备份。旧版本二进制再次保存会丢弃未知的 `gateway` 字段，这是明确的降级边界。
+
+**阶段 1 协议**
+
+- `GET /v1/models` 与最小 `POST /v1/chat/completions`：纯文本 messages、`stream=false` 聚合、`stream=true` SSE、usage、取消和 OpenAI 风格错误。
+- 请求含 tools、多模态 content 或 reasoning 扩展时返回明确 4xx。阶段 2 之前 Gateway 不执行工具。
+
+**回滚**
+
+- 关闭 `gateway.enabled` 即停止独立入口，不影响 Cursor 18080/18090。删除 `gateway` 块并恢复备份可回到旧 schema；旧版本保存会丢字段，需先保留 `.bak-pre-gateway`。
+
+**验收与证据边界**
+
+- 自动门禁：401/404、模型列表无敏感字段、流与非流文本、取消、fallback 前置失败、外部请求不写 hash、config 权限/备份/token 红线、根模块相关 test/race/vet、前端投影/build、`git diff --check`；`proto/`、`internal/mitm/`、`internal/certs/` 无非预期变化。
+- 真实门禁：OpenAI SDK 或 Cherry Studio 完成一轮聊天，以及 Cursor 全量回归。自动化不能替代真实客户端 smoke；本机不得扰动运行中的 18080/18090。
+- Cursor 承重 characterization 只覆盖：18090 `/healthz`、Bidi/RunSSE procedure 注册、Cursor 模型哈希投影、`/v1/traces`，以及现有 fallback/capacity 测试合同。不为全部 Cursor mock 路由制作大规模 golden。
+
+### 10.11 Chat 工具调用与 OpenCode 合同
+
+本节冻结阶段 2 的 OpenAI-compatible Chat 工具合同；阶段 1 的文本能力与安全边界继续有效。
+
+- 入站支持 OpenAI `tools[].function`、`tool_choice` 缺省或 `auto`、`parallel_tool_calls` 布尔值、assistant `tool_calls[]`、`role=tool`、`tool_call_id` 和多工具 ID。旧 `functions/function_call`、多模态和 reasoning 扩展仍返回明确 4xx。
+- Gateway 将工具描述原样交给现有 Provider Gateway；assistant 工具调用和 tool result 投影到现有 `Message.ToolCalls` / `ToolCallID`。Gateway 不执行工具、不调用 Cursor 工具桥、不写 `lastAgentModelHash`。
+- Provider 的完成工具事件按原 `CallID`、工具名和完整参数 JSON 对外返回；不得重新生成调用 ID。Anthropic `finish_reason=tool_use` 对外规范化为 OpenAI `tool_calls`。
+- 非流响应在 `message.tool_calls` 返回完整调用并以 `finish_reason=tool_calls` 结束。SSE 以可累加的 `delta.tool_calls` 返回完整调用，随后唯一终态与 `[DONE]`；通用工具允许在 Provider 收口后一次性发送完整参数，不要求 Gateway 伪造参数增量。
+- 任意 ModelEvent 产生后禁止跨渠道切换；HTTP SSE 已写出后发生错误只能在当前流内发送错误终态，禁止拼接其他 Provider 输出。
+- 真实验收使用本机 OpenCode `1.2.25` 自定义 Provider，由 OpenCode 执行 read/shell/edit；自动 fixture 不能替代真实客户端。共享容量验收必须证明 Cursor 与 Gateway 命中同一物理上游时共用进程级限制。
+- 回滚仅恢复阶段 1 对工具字段的 4xx；不得回退文本 Chat、token、公开别名、配置权限或 Cursor 隔离合同。
+
+### 10.12 Responses API 与 Codex 合同
+
+- 本阶段以本机 Codex `0.144.4` 的 HTTP SSE 行为为准，新增 `POST /v1/responses`；自定义 Provider 的 `base_url` 指向 Gateway `/v1`，`wire_api` 固定为 `responses`。
+- 入站支持 `model`、`instructions`、`input` 中的文本 message、`function_call`、`function_call_output`、function tools、`tool_choice=auto`、`parallel_tool_calls`、reasoning item 回放、`store=false` 和 `stream=true`。
+- `store=true`、WebSocket、`previous_response_id`、hosted/custom/freeform tools、图片、压缩请求体及无法安全投影的 typed item 明确 4xx；Codex `namespace`、`web_search` 与 `tool_search` 描述仅作为客户端本地能力跳过，不能展平或由 Gateway 执行；不提前实现服务端状态或任意 Provider 私有事件。
+- SSE 至少输出 `response.created`、文本 `response.output_text.delta`、完整工具 `response.output_item.done`、失败事件和唯一 `response.completed`。Codex 必须依靠 `response.completed` 收口，不以 `[DONE]` 代替业务终态。
+- function call/output 的 `call_id` 原样回放；reasoning 的 encrypted content 只有能保持 Provider 身份和 fallback 兼容性时才转发，否则明确拒绝，不跨不兼容渠道降级。
+- Gateway 不执行工具、不写 Cursor 当前模型；Codex 自行执行 shell/patch。真实验收使用隔离 `CODEX_HOME`、自定义 Provider 和 read-only/write 两轮任务，不读取用户登录凭据。
+- 回滚只移除 `/v1/responses`；Chat、模型别名、token、容量和 Cursor 路径保持。

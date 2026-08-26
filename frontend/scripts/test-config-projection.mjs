@@ -27,6 +27,8 @@ import {
   normalizeMaxConcurrentRequests,
   validateMaxConcurrentRequests,
   validateUpstreamCapacityAdapters,
+  normalizeGatewayConfig,
+  DEFAULT_GATEWAY_CONFIG,
 } from "../src/state/configProjection.js";
 
 function assertEqual(actual, expected, label) {
@@ -932,5 +934,36 @@ assert(
     || /<ul\b[^>]*data-select-list[\s\S]*?:style="listStyle"[\s\S]*?overflow-y-auto/.test(selectSource),
   "Select maxHeight must land on the overflowing ul, not the clipped outer shell",
 );
+
+const gateway = normalizeGatewayConfig({
+  enabled: true,
+  listenAddr: "127.0.0.1:18091",
+  token: "leaked-secret-token",
+  tokenConfigured: true,
+  publicModels: [{ id: "public-a", targetAdapterID: "adapter-a" }],
+});
+assertEqual(
+  gateway,
+  {
+    enabled: true,
+    listenAddr: "127.0.0.1:18091",
+    tokenConfigured: true,
+    publicModels: [{ id: "public-a", targetAdapterID: "adapter-a" }],
+  },
+  "gateway projection must drop token",
+);
+assert(!Object.prototype.hasOwnProperty.call(gateway, "token"), "normalized gateway must not have token");
+assertEqual(normalizeGatewayConfig(undefined), { ...DEFAULT_GATEWAY_CONFIG, publicModels: [] }, "gateway defaults");
+
+assert(!appStateSource.includes("appState.gatewayToken "), "appState must not keep gateway token");
+assert(appStateSource.includes("tokenConfigured"), "appState must project tokenConfigured only");
+assert(!appStateSource.includes("token: normalized.gateway.token"), "serializeConfigPayload must not write gateway token");
+assert(!appStateSource.includes("gatewayToken:"), "localStorage cache must not include gatewayToken");
+const gatewayCardSource = readFileSync(path.join(frontendSrc, "components/GatewayCard.vue"), "utf8");
+assert(gatewayCardSource.includes("copyGatewayToken"), "GatewayCard must copy via explicit API");
+assert(gatewayCardSource.includes("rotateGatewayToken"), "GatewayCard must rotate via explicit API");
+assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must not store token in appState");
+const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
+assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
 
 console.log("config projection tests passed");

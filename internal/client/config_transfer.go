@@ -39,7 +39,7 @@ func (s *ProxyService) ExportUserConfig(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取当前配置失败: %w", err)
 	}
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(serverconfig.StripGatewayToken(cfg))
 	if err != nil {
 		return "", fmt.Errorf("序列化导出配置失败: %w", err)
 	}
@@ -68,6 +68,13 @@ func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
 	cfg, err := decodeImportedUserConfig(data)
 	if err != nil {
 		return serverconfig.Config{}, err
+	}
+	current, err := s.loadUserConfig()
+	if err != nil {
+		return serverconfig.Config{}, err
+	}
+	if strings.TrimSpace(cfg.Gateway.Token) == "" {
+		cfg = serverconfig.OverlayGatewayToken(cfg, current.Gateway.Token)
 	}
 	if err := s.replaceUserConfig(cfg); err != nil {
 		return serverconfig.Config{}, fmt.Errorf("保存导入配置失败: %w", err)
@@ -121,7 +128,7 @@ func writeExportedUserConfig(path string, data []byte) error {
 }
 
 func ensureConfigImportAllowed(state ProxyState) error {
-	if state.BackendRunning || state.ProxyRunning || state.Running {
+	if state.BackendRunning || state.ProxyRunning || state.Running || state.GatewayRunning {
 		return errors.New("服务运行中不能导入完整配置，请先停止服务")
 	}
 	return nil

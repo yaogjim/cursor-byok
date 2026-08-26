@@ -13,6 +13,7 @@ import (
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/certs"
 	"cursor/internal/cursoraccount"
+	"cursor/internal/gateway"
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
@@ -72,6 +73,11 @@ type ProxyService struct {
 	modelTestMu sync.RWMutex
 	// modelTestResults 保存当前进程内的模型测速结果。
 	modelTestResults map[string]ModelAdapterTestResult
+
+	gatewayMu                sync.Mutex
+	gateway                  *gateway.Server
+	gatewayLastError         string
+	gatewayConfigUnsubscribe func()
 }
 
 type LogCaptureStatus struct {
@@ -133,6 +139,18 @@ func (s *ProxyService) ensureBackendHost() error {
 		return err
 	}
 	s.backendHost = host
+	if manager := host.ConfigManager(); manager != nil && s.gatewayConfigUnsubscribe == nil {
+		s.gatewayConfigUnsubscribe = manager.Subscribe(func(next serverconfig.Config) {
+			s.gatewayMu.Lock()
+			instance := s.gateway
+			running := instance != nil && instance.Running()
+			s.gatewayMu.Unlock()
+			if running || !next.Gateway.Enabled {
+				s.reconcileGateway(next)
+				s.emitState()
+			}
+		})
+	}
 	return nil
 }
 

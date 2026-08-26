@@ -41,6 +41,12 @@ const (
 
 	MinMaxConcurrentRequests = 1
 	MaxMaxConcurrentRequests = 16
+
+	DefaultGatewayListenAddr = "127.0.0.1:18091"
+	MaxGatewayPublicModels   = 32
+	GatewayTokenByteLength   = 32
+	PreGatewayBackupSuffix   = ".bak-pre-gateway"
+	configFilePerm           = 0o600
 )
 
 type ModelAdapterConfig struct {
@@ -153,6 +159,7 @@ type Config struct {
 	Advertising               AdvertisingConfig    `json:"advertising" yaml:"advertising"`
 	Updates                   UpdatesConfig        `json:"updates" yaml:"updates"`
 	LastAgentModelHash        string               `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
+	Gateway                   GatewayConfig        `json:"gateway" yaml:"gateway"`
 }
 
 func DefaultConfig() Config {
@@ -178,6 +185,7 @@ func DefaultConfig() Config {
 		Updates: UpdatesConfig{
 			CheckOnStartup: false,
 		},
+		Gateway: DefaultGatewayConfig(),
 	}
 }
 
@@ -212,6 +220,11 @@ func NormalizeConfig(input Config) (Config, error) {
 		return Config{}, err
 	}
 	output.ModelAdapters = adapters
+	gateway, err := NormalizeGatewayConfig(input.Gateway)
+	if err != nil {
+		return Config{}, err
+	}
+	output.Gateway = gateway
 	return output, nil
 }
 

@@ -68,6 +68,7 @@ func (s *ProxyService) saveUserConfig(cfg UserConfig) error {
 		return err
 	}
 	s.emitUserConfigChanged(normalized)
+	s.reconcileGatewayIfServiceRunning(normalized)
 	return nil
 }
 
@@ -92,7 +93,23 @@ func (s *ProxyService) replaceUserConfig(cfg UserConfig) error {
 		return err
 	}
 	s.emitUserConfigChanged(normalized)
+	s.reconcileGatewayIfServiceRunning(normalized)
 	return nil
+}
+
+func (s *ProxyService) reconcileGatewayIfServiceRunning(cfg UserConfig) {
+	if s == nil || s.backendHost == nil {
+		return
+	}
+	// 独立 Gateway 运行时不依赖 Cursor backend 已监听。配置关闭必须能停止
+	// 已独立运行的 Gateway；启用配置仍由显式 StartGateway 或 Cursor 启动触发。
+	if !cfg.Gateway.Enabled {
+		s.reconcileGateway(cfg)
+		return
+	}
+	if s.backendHost.IsRunning() {
+		s.reconcileGateway(cfg)
+	}
 }
 
 func (s *ProxyService) emitUserConfigChanged(cfg UserConfig) {

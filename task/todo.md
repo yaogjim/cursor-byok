@@ -4,6 +4,158 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: multi-client-acp-phase5-20260826
+STATUS: blocked
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: blocked（本机仅发现 ACP Agent 服务端，缺少可端到端验收的 ACP Client/编辑器）
+DELIVERY_STATUS: blocked
+
+### CONTEXT
+
+- 阶段 2 Chat tools 已通过 OpenCode 1.2.25 隔离真实工具循环；阶段 3 `/v1/responses` 已通过 Codex 0.144.4 隔离真实 `exec_command` 工具循环；阶段 4 独立生命周期与 metadata-only 入站观测已实现并自动验证。
+- 本机可用的 `agent acp`/`opencode acp` 是 ACP Agent 服务端，不能冒充 ACP Client；未读取用户凭据或 prompt，也没有可验证 initialize/session/prompt/cancel/update 的真实编辑器。
+- 在真实 ACP Client 到位前，禁止声称 ACP v1 完成，禁止把服务端自测当成端到端验收，且不提前抽取共享 Agent Core。
+
+### ACTIVE SLICES
+
+- [blocked] `gateway-acp-v1`：等待一个真实 ACP Client/编辑器及其允许的隔离验收环境。
+
+### UNBLOCK CONDITION
+
+- 提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界。届时先作 metadata-only 探针，再冻结协议与权限合同。
+
+## Previous Work Package: Responses API 与 Codex
+
+WORK_PACKAGE_ID: multi-client-responses-gateway-phase3-20260826
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（已批准计划阶段 3 + Codex 0.144.4 本机 metadata-only 校准 + 工作决策基线 §10.12 + 系统 Design §14.13）
+DELIVERY_STATUS: verified（自动矩阵与隔离 Codex 真实工具循环通过；Provider 为内存 fixture，未连接外部 API）
+
+### CONTEXT
+
+- 本机 Codex `0.144.4` 自定义 Provider 使用 `wire_api="responses"` 和 HTTP SSE，要求 `response.completed`；普通 function 的完整 `response.output_item.done` 是工具循环关键事件。
+- Codex 同时携带 `namespace`/`web_search`/`tool_search` 本地能力描述与可执行 function；Gateway 跳过前者，只转发 function，绝不展平或执行任何客户端工具。
+- 实现覆盖 `instructions`、typed text input、function call/output、reasoning replay、usage、created/text/tool/completed/failed SSE 生命周期和不支持参数 4xx。
+
+### ACTIVE SLICES
+
+- [completed] `gateway-phase3-design`：冻结实际 Codex 子集与 namespace/web_search 跳过边界。
+- [completed] `gateway-phase3-code`：实现 `/v1/responses` typed input、工具和 SSE 终态。
+- [completed] `gateway-phase3-verify`：隔离 `CODEX_HOME` + 临时 Gateway + 内存 Provider fixture 完成 Codex `exec_command` read 工具循环；Gateway 不执行工具。
+
+### FINAL VERIFICATION EVIDENCE
+
+- Responses：`go test ./internal/gateway -run '^TestCodex' -count=1 -v -timeout=120s` 与工具循环 `-race` 通过；Codex 0.144.4 在隔离 `CODEX_HOME` 中先以 read-only 自己执行 `exec_command` 读取临时文件，再以 workspace-write 自己创建临时文件，两轮均回传 tool output 并收到唯一 `response.completed`。
+- 生命周期/观测：`go test ./internal/gateway ./internal/client ./internal/backend/server/config -count=1` 通过；独立 Start/Stop 测试确认 backend/MITM/Cursor 设置均未运行。ProcessSink 测试确认只落 `client_protocol`、`public_model_id`、method/path/status/字节数且不含 token/正文。
+- 根模块：`go test ./internal/... -count=1 -timeout=300s` 通过；组合 `go test -race ./internal/gateway ./internal/backend/agent/model ./internal/backend/server/config ./internal/client ./internal/backend -count=1` 通过；相关 `go vet` 通过。
+- 前端：`node frontend/scripts/test-config-projection.mjs` 与 `npm run build --prefix frontend` 通过（122 modules）；仅有既有 localstorage/chunk warning。
+- 分析器：`tools/log-analyzer` 全模块 `go test ./...` 与 `go vet ./...` 通过。
+- 最终门禁：`gofmt`、`git diff --check` 通过；`proto/`、`internal/mitm/`、`internal/certs/` 无 diff。分支 `gateway`、HEAD `eb1702a` 未变；未 commit、未 push。Cursor PID 2407 仍独占 127.0.0.1:18080/18090，最终无 18091 listener。
+
+### ACCEPTANCE AND ROLLBACK
+
+- `response.completed` 唯一，失败只发 `response.failed`；普通 function 的 call_id、item id、参数和 tool output 无损回放。
+- 回滚只移除 `/v1/responses`，不得回退 Chat、配置、容量、独立生命周期或 Cursor 合同。
+
+## Previous Work Package: 独立 Gateway 生命周期与观测
+
+WORK_PACKAGE_ID: multi-client-gateway-runtime-phase4-20260826
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（批准计划阶段 4 + 系统 Design §14.14）
+DELIVERY_STATUS: verified
+
+### ACTIVE SLICES
+
+- [completed] 独立 `StartGateway`/`StopGateway` API 和 Gateway card 控件只操作 `18091`；Cursor `StopProxy` 不再停止 Gateway，进程退出仍有界关闭。
+- [completed] 独立 lifecycle 测试证明 Gateway 可在 backend/MITM/Cursor 设置均未运行时启停。
+- [completed] metadata-only 入站 `request_started`/`request_finished` 观测与 analyzer allowlist；不记录 token、正文、工具参数或 Provider 凭据。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 自动验证覆盖独立启停、Cursor 状态隔离、Chat/Responses、ProcessSink metadata 脱敏和 analyzer allowlist。
+- 回滚恢复 Cursor StopProxy 对 Gateway 的停止耦合及移除独立入口；不触碰 `18080`/`18090`、MITM 或 Provider Router。
+
+### POST-REVIEW CLOSEOUT（2026-08-26）
+
+- [completed] `responses-mixed-output-order`：修复混合文本/工具输出的 SSE 与最终 `response.output` `output_index` 不一致；首个文本增量预留文本槽位，工具项使用后续索引，并新增混合顺序回归测试。
+- [completed] `gateway-runtime-protection`：独立 Gateway 热更新先绑定新 listener，绑定失败保留旧 listener；配置导入在 Gateway 独立运行时拒绝；异常 listener 退出的错误投影到 Gateway 状态。
+- [completed] `gateway-usage-projection`：Responses `total_tokens` 按输入与输出 token 计算，缓存 token 仅投影到 `input_tokens_details.cached_tokens`。
+- 验证：定向 test/race/vet、根模块全量 `go test ./...` 与 `go vet ./...`、前端配置投影/build、`tools/log-analyzer` test/vet 均通过；protected `proto/`、`internal/mitm/`、`internal/certs/` 无 diff；现有 Cursor `18080`/`18090` listener 未受影响，未残留 `18091` listener。
+
+
+WORK_PACKAGE_ID: multi-client-chat-gateway-phase2-20260826
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（已批准计划阶段 2 + OpenCode 1.2.25 本机 metadata-only 校准 + 工作决策基线 §10.11 + 系统 Design §14.12）
+DELIVERY_STATUS: verified（实现、真实 OpenCode 隔离工具循环、共享容量、test/race/vet 通过；未连接真实外部 Provider）
+
+### CONTEXT
+
+- 本机 OpenCode `1.2.25` 使用 OpenAI-compatible `POST {baseURL}/chat/completions`，最小工具循环包含 `tools`、assistant `tool_calls`、`role=tool`、`tool_call_id`、`stream=true` 与 `stream_options.include_usage`。
+- Gateway 只转发工具描述、模型 tool call 和客户端返回的 tool result；OpenCode 执行 read/shell/edit。禁止调用 Cursor 工具桥或在 Gateway 内执行工具。
+- 复用现有 `ProviderRequest.Tools`、`Message.ToolCalls`、`Message.ToolCallID` 和 `ModelEvent.ToolInvocation`。任意 ModelEvent 已由 fallback router 标记为输出，禁止跨渠道切换；SSE 已写后错误只能在当前流内终结，禁止拼接另一个 Provider。
+- 本阶段不加入多模态、reasoning 扩展、Responses、ACP、远程监听或客户端专属鉴权；不修改 proto、MITM、certs，不扰动 18080/18090。
+
+### ACTIVE SLICES
+
+- [completed] `gateway-phase2-recon`：核验 OpenCode 版本、请求形态、现有 OpenAI/Anthropic 工具事件与 fallback 安全窗口。
+- [completed] `gateway-phase2-design`：冻结 tools/tool_calls/tool result、多调用 ID、`finish_reason=tool_calls` 和流式终态合同。
+- [completed] `gateway-phase2-code`：实现 Chat 工具请求、历史回放、非流/流式 tool calls；Gateway 不执行工具。
+- [completed] `gateway-phase2-verify`：OpenCode 1.2.25 通过隔离 18091 完成真实 read 工具循环；共享容量 fixture 峰值为 1；Gateway test/race/vet/diff 通过。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 单/多工具 ID、参数 JSON、assistant tool_calls 与 tool result 必须无损关联；Anthropic `tool_use` 对外规范化为 OpenAI `tool_calls`。
+- 非流响应返回完整 `message.tool_calls` 和 `finish_reason=tool_calls`；SSE 返回可累加的 `delta.tool_calls`、唯一终态和 `[DONE]`。
+- 任意模型事件或 SSE 输出后 provider 错误不得跨渠道拼流；Gateway 工具执行次数必须恒为 0，`lastAgentModelHash` 不变。
+- 回滚恢复阶段 1 对 tools 的 400，并保持文本 Chat、配置和 Cursor 合同不变。
+
+## Previous Work Package: Multi-Client Chat Gateway 阶段 0/1
+
+WORK_PACKAGE_ID: multi-client-chat-gateway-phase0-1-20260825
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（工作决策基线 §10.10 + 系统 Design §14.11 + `.cursor/plans/placeholder_6b5e8b5a.plan.md`）
+DELIVERY_STATUS: verified-partial（实现与自动门禁通过；真实 OpenAI SDK/Cherry 一轮聊天、Wails 视觉验收和 Cursor 全量回归仍是证据缺口）
+
+### CONTEXT
+
+- 已批准计划改为纵向切片：先复用现有 Router 交付最小 Chat Gateway，再补工具、Responses、独立生命周期；ACP 另设后续设计门。Cursor 始终是不可回归的最高优先级。
+- 阶段 0/1 范围：冻结最小合同；独立 `127.0.0.1:18091`、默认关闭、loopback-only、Bearer；`GET /v1/models` 与纯文本 `POST /v1/chat/completions`；复用 DefaultProviderGateway/Router/fallback/retry/capacity；禁止复制 limiter、禁止写 `lastAgentModelHash`；最小 gateway 配置与 token 红线；config/temp `0600` 与首次 schema 备份；Gateway 生命周期随当前服务但失败隔离；最小 UI 卡片。
+- 不触碰 proto、MITM、certs；不扰动真实 18080/18090；不做阶段 2+。
+
+### ACTIVE SLICES
+
+- [completed] `gateway-design-baseline`：工作决策基线 §10.10、系统 Design §14.11 与本工作包已冻结合同、阶段边界、回滚、导入 token overlay 和 Cursor 承重 characterization 范围。
+- [completed] `gateway-chat-mvp`：独立 `internal/gateway` HTTP server、配置/token/0600、生命周期隔离、最小 UI 与计划自动验收测试。
+- [pending] `gateway-chat-tools`：阶段 2，不在本包。
+- [pending] `gateway-responses`：阶段 3，不在本包。
+- [pending] `gateway-independent-runtime`：阶段 4，不在本包。
+- [pending] `gateway-acp-v1`：阶段 5，不在本包。
+
+### FINAL VERIFICATION EVIDENCE
+
+- 定向：`go test ./internal/backend/server/config ./internal/gateway ./internal/client ./internal/backend ./internal/backend/server/upstream -count=1 -timeout=180s` 通过；覆盖 401/403 loopback、404 别名、模型列表无 token/API Key/Base URL/内部 hash、非流聚合与 SSE、tools/multimodal/reasoning 400、stale mapping 400、取消、fallback 前置失败不写 hash、0600+`.bak-pre-gateway`、旧 struct 再保存丢字段、普通保存/剥离导出后再导入 overlay token、显式 YAML token 才替换、Gateway 启动失败不写 Cursor lastError。
+- 根相关：`go test ./internal/... -count=1 -timeout=300s` 通过；`go test -race` 对上述五包通过；`go vet ./internal/...` 通过。仅有既有 macOS deployment target linker warning。
+- 前端：`node frontend/scripts/test-config-projection.mjs` 通过；`npm run build --prefix frontend` 通过（122 modules）。Gateway 文案已同步四语种 locale 与生成的 `frontend/src/i18n/generated/catalog.json`；构建产生的 `dist/` 未纳入 Git。仅有既有 `--localstorage-file` 与 chunk-size warning。
+- 保护路径：`git diff --check` 通过；`proto/`、`internal/mitm/`、`internal/certs/` 无 diff。最终收口复核确认分支仍为 `gateway`、HEAD 仍为 `eb1702a`，未 commit、未 push，未扰动运行中 18080/18090。
+- 真实缺口：未跑真实 OpenAI SDK / Cherry Studio 一轮聊天；本机无 `wails3`/`task`，未做 Wails 窗口视觉点击；未做 Cursor 全量回归。阶段 1 已完成隔离 TCP listener smoke，但其 Provider 是内存 fixture，不替代真实上游客户端验收。故不得标 `accepted`。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 自动：401/404、模型列表无敏感字段、流/非流文本、取消、fallback 前置失败、不写 hash、token 不进 JSON/导出/localStorage/日志、默认导出后再导入 overlay 现有 token、0600+备份、相关 test/race/vet、前端投影/build、`git diff --check`；proto/MITM/certs 无非预期 diff。
+- 真实：OpenAI SDK 或 Cherry 一轮聊天、Cursor 全量回归。本包缺少真实客户端/Wails 视觉证据，只能 `verified-partial`。
+- 回滚：`gateway.enabled=false`；保留 `.bak-pre-gateway` 以防旧版本保存丢字段。
+
+## Previous Work Package: Fallback 覆盖优先预算
+
 WORK_PACKAGE_ID: fallback-coverage-first-budget-20260825
 STATUS: completed
 RISK_LEVEL: high

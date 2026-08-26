@@ -1322,6 +1322,87 @@ resolver 把 limit 与瞬态组 key 投影到 `ResolvedChannel`，router 再覆�
 
 验收必须包含配置两方向交错和 race、hash no-op/replace、同组峰值、异组隔离、retry 持槽、capacity fallback、同组跳过、取消无泄漏、前端默认/边界/roundtrip，以及根 module test/race/vet、前端 build 和差异检查。当前真实 `grok-HA` 按用户决定保持缺失/`0`；因此只允许声明容量能力经受控非零 fixture 验证，不得声明当前在线上游已经受容量保护。
 
+## 14.11 DESIGN-MULTI-CLIENT-CHAT-GATEWAY-001：最小 Chat Gateway
+
+- **Design Readiness**：`approved`（计划 `.cursor/plans/placeholder_6b5e8b5a.plan.md`）。
+- **决策时间**：2026-08-25。
+- **范围边界**：阶段 1 只交付独立 18091 的 models + 纯文本 Chat Completions。不改 proto、MITM、certs，不扰动真实 18080/18090，不做 tools/Responses/ACP/独立生命周期。
+
+### 14.11.1 拓扑与生命周期
+
+```text
+Cursor IDE/CLI --> 18080/18090 --> 现有 Cursor Host mux --> Router
+Cherry/OpenAI SDK --> 18091 + Bearer --> internal/gateway http.Server --> DefaultProviderGateway/Router
+```
+
+Gateway 是独立 `http.Server`，默认关闭、loopback-only。阶段 1 随当前服务启动：Cursor（backend + MITM + 设置注入）成功后再启动 Gateway。Gateway 启动失败写入独立 `GatewayLastError`，不回滚 Cursor。停止时先尽力停 Gateway，失败也不阻止 MITM/设置/Backend 清理。阶段 4 之前不宣称可脱离 Cursor Integration 单独运行。
+
+### 14.11.2 复用与禁止复制
+
+请求经现有 `forwarder.DefaultProviderGateway` 进入 Router/fallback/retry/包级容量 limiter。`stream=false` 由 handler 聚合 `ModelEvent`。Gateway 不得复制 limiter，不得调用 `SaveLastAgentModelHash`。公开别名解析发生在进入 Router 之前，Router 只看到 target adapter ID。
+
+### 14.11.3 配置、token 与降级
+
+最小 YAML：`enabled`、`listenAddr`、`token`、`publicModels`. token 由后端生成。`SaveUserConfig` 在锁内 overlay 磁盘 token，与 hash overlay 并列。默认导出调用 `StripGatewayToken`；再导入时若文档 token 为空则 overlay 现有 token，显式带 token 的 YAML 才替换。JSON/Wails 使用 `json:"-"`，前端投影和 localStorage 只有 `tokenConfigured`。复制/轮换是显式 Wails 方法。配置与临时文件 `0600`；首次写入 `gateway` 键前备份 `.bak-pre-gateway`。旧版本 struct 无该字段，再次保存会丢块。
+
+- **阶段 1 HTTP 合同**
+
+- 鉴权失败 401；未知公开别名 404；stale mapping 400 `mapping_invalid`；tools/multimodal/reasoning 400。
+- `GET /v1/models` 只返回有效公开别名，不含 token、API Key、Base URL、内部 hash。
+- `POST /v1/chat/completions` 支持纯文本 `content` 字符串或仅含 `text` parts 的数组、非流聚合、SSE、usage、取消。
+
+- 阶段 1 补充验证：`TestGatewayHTTPServerSmoke` 在独立 TCP `127.0.0.1:18091` 上使用生成 token 验证 `/v1/models`、非流式 Chat 和流式 Chat（首块含 `assistant` 角色与 `[DONE]`）；Provider 为内存 fixture，未替代真实 OpenAI SDK/Cherry Studio。
+
+### 14.11.5 Cursor 回归门禁
+
+只补承重 characterization：`GET /healthz` 返回 `ok`；`POST /aiserver.v1.BidiService/BidiAppend` 与 `POST /agent.v1.AgentService/RunSSE` 已注册；`POST /v1/traces` 为兼容 200；AvailableModels 投影 16 位渠道 hash 而不是 provider `modelID`。fallback/capacity 继续以现有定向测试为合同。Gateway 实现不得改变这些 Cursor procedure。
+
+## 14.12 DESIGN-MULTI-CLIENT-CHAT-TOOLS-001：Chat 工具透传
+
+- **Design Readiness**：`approved`（已批准计划阶段 2；OpenCode 1.2.25 本机 metadata-only 校准）。
+- **边界**：Gateway 是 Model-provider facade，只转发工具定义、模型调用和客户端工具结果；工具执行器属于 OpenCode，不接 Cursor 工具桥。
+
+### 14.12.1 入站与 canonical 映射
+
+`tools[].function` 保持原始 JSON 进入 `ProviderRequest.Tools`。assistant `tool_calls[]` 转为 `Message.ToolCalls`，`role=tool` 转为 `Message{Role:"tool", ToolCallID, Name, Content}`。调用 ID 必须原样回放，禁止生成替代 ID。`tool_choice` 仅接受缺省、`null` 或 `auto`；`parallel_tool_calls` 接受布尔值并作为请求 knob 透传；旧 functions、非标准 tool choice、reasoning 和多模态明确 4xx。
+
+### 14.12.2 出站与流式语义
+
+`ModelEventKindToolLikeCompleted` 的 `ToolInvocation` 聚合为 OpenAI `tool_calls`。非流响应返回完整数组；SSE 对每个完成调用发送一次完整 `delta.tool_calls`，index 按事件顺序稳定递增。Provider 没有通用参数增量时不伪造增量。任意工具调用存在时终态统一为 `tool_calls`，Anthropic `tool_use` 不向外泄漏为非 OpenAI finish reason。
+
+现有 fallback router 在任意 ModelEvent 后关闭切换窗口；Gateway 不复制该状态机。HTTP 头或 SSE 数据写出后错误只写当前 SSE error，不重新调用其他 Provider。
+
+### 14.12.3 验收
+
+覆盖单/多工具、ID/参数关联、assistant 回放、tool result、OpenAI/Anthropic finish reason、非流/SSE、输出后失败不拼流、Gateway 零工具执行和 hash 不变。真实门禁是 OpenCode 自定义 Provider 完成 read/shell/edit 循环，并在隔离 fixture 证明 Cursor 与 Gateway 共用进程级容量限制。
+
+## 14.13 DESIGN-MULTI-CLIENT-RESPONSES-001：Codex Responses 子集
+
+- **Design Readiness**：`approved`（已批准计划阶段 3；Codex 0.144.4 本机 metadata-only 校准）。
+- **协议事实**：Codex 自定义 Provider 只使用 HTTP Responses SSE；`response.completed` 是硬终态，function 参数增量不足以替代完整 `response.output_item.done`。
+
+### 14.13.1 入站映射
+
+`instructions` 作为 system message。typed `input` 的 text message、function_call 和 function_call_output 映射到现有 Message；function tools 转为现有 OpenAI 工具 JSON。reasoning item 保存 encrypted content、item id、status 与 summary 供同 Provider stateless replay。`store` 只允许 false；`tool_choice` 只允许 auto；stream 首版只允许 true。
+
+hosted/custom/freeform tools、图片、previous response state、WebSocket 和压缩体返回 4xx。Codex 随普通 function 一同发送的 `namespace`、`web_search` 和 `tool_search` 描述只代表 Codex 本地能力：Gateway 跳过它们，不展平、不转发、更不执行。`prompt_cache_key` 只可作为本次 ConversationID 的非敏感路由值，不建立服务端会话状态。
+
+### 14.13.2 SSE 生命周期
+
+先发送 `response.created`。文本用 `response.output_text.delta`；工具完成时发送包含 name/call_id/arguments 的 `response.output_item.done`。成功必须且只能发送一次 `response.completed`，其中包含 response id、output、usage 和完成状态；失败发送 `response.failed` 并结束，不再输出 completed。`[DONE]` 仅兼容可选，不能承担业务终态。
+
+### 14.13.3 安全和验收
+
+Gateway 不执行 Codex 工具。fallback 继续由 Router 的输出与兼容性门禁控制；reasoning replay 不允许跨不兼容 Provider 降级。验收覆盖 typed input、call/output 关联、reasoning 回放、usage、错误终态、取消和输出后禁止拼流；真实 smoke 使用隔离 CODEX_HOME，先 read-only，再由 Codex 自己执行 shell/patch。
+
+## 14.14 DESIGN-MULTI-CLIENT-GATEWAY-RUNTIME-001：独立生命周期与入站观测
+
+Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只创建 `18091` listener 并复用已构造的 config manager、Provider Gateway、Router、fallback、retry 与容量 limiter；不调用 `Host.Start`、不监听 `18080`/`18090`、不启动 MITM、不注入账号、不写 Cursor 设置。Cursor `StopProxy` 不停止独立 Gateway；进程退出仍以有界关闭停止它。
+
+入站观测复用现有 process sink 的 `request_started`/`request_finished` 事件，不修改 MITM 或公共 schema。事件只含 HTTP method/path/status/字节数、`client_protocol` 和公开别名 `public_model_id`；不记录 Authorization、token、请求正文、tool 参数或 Provider 凭据。物理 `channel_id` 继续只由已有 Provider fallback 事件产生，避免在入口伪造渠道事实。日志分析器 allowlist 仅新增上述两个入站字段。
+
+验收必须证明 Gateway 可在 Cursor backend/MITM/Cursor 设置均未运行时启动和停止，且 Cursor 停止不会影响其 listener；反向启动/停止不改变 Cursor 状态。UI/API 和观测失败保持 Gateway 独立错误，不污染 Cursor `lastError`。
+
 ## 15. 核心不变量
 
 后续任何实现、合并或重构都必须保护以下不变量：
