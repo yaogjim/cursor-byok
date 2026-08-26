@@ -14,6 +14,7 @@ import {
   validateProviderFallbackAdapters,
   validateUpstreamCapacityAdapters,
   normalizeGatewayConfig,
+  gatewayPublicModelInvalid,
 } from "@/state/configProjection";
 import {
   checkForUpdates,
@@ -21,6 +22,7 @@ import {
   exportUserConfig as exportUserConfigFile,
   getAppVersion,
   getHomeMetricsSummary,
+  getHomeMetricsReport,
   resetHomeMetricsSummary,
   getLogCaptureStatus,
   getModelAdapterTestResults,
@@ -33,6 +35,11 @@ import {
   openLogsDirectory,
   openModelConfig,
   saveUserConfig,
+  saveGatewayConfig,
+  saveModelAdapters,
+  saveCursorConfig,
+  saveSystemSettings,
+  saveHomeMetrics,
   startProxyService,
   stopProxyService,
   startGatewayService,
@@ -570,6 +577,7 @@ function delay(ms) {
 
 function createEmptyHomeMetrics() {
   return {
+    providerCallsTotal: 0,
     turnsTotal: 0,
     validTurnsTotal: 0,
     invalidTurnsTotal: 0,
@@ -642,16 +650,37 @@ function asNullableRate(value) {
 
 function normalizeHomeMetrics(source) {
   const raw = source && typeof source === "object" ? source : {};
-  const providerCallsTotal = asPositiveInteger(raw.providerCallsTotal ?? raw.turnsTotal);
   return {
-    turnsTotal: providerCallsTotal,
-    validTurnsTotal: providerCallsTotal,
-    invalidTurnsTotal: 0,
+    providerCallsTotal: asPositiveInteger(raw.providerCallsTotal),
+    turnsTotal: asPositiveInteger(raw.turnsTotal),
+    validTurnsTotal: asPositiveInteger(raw.validTurnsTotal),
+    invalidTurnsTotal: asPositiveInteger(raw.invalidTurnsTotal),
     requestTokensTotal: asPositiveInteger(raw.requestTokensTotal),
     promptTokensTotal: asPositiveInteger(raw.promptTokensTotal),
     cacheReadTokens: asPositiveInteger(raw.cacheReadTokens),
     cacheWriteTokens: asPositiveInteger(raw.cacheWriteTokens),
     cacheHitRate: asNullableRate(raw.cacheHitRate),
+  };
+}
+
+function normalizeHomeMetricsReport(raw) {
+  const data = raw && typeof raw === "object" ? raw : {};
+  const daily = Array.isArray(data.daily) ? data.daily.map((item) => ({
+    date: asString(item?.date),
+    providerCalls: asPositiveInteger(item?.providerCalls),
+    turnsTotal: asPositiveInteger(item?.turnsTotal),
+    validTurnsTotal: asPositiveInteger(item?.validTurnsTotal),
+    invalidTurnsTotal: asPositiveInteger(item?.invalidTurnsTotal),
+    requestTokens: asPositiveInteger(item?.requestTokens),
+    promptTokens: asPositiveInteger(item?.promptTokens),
+    cacheReadTokens: asPositiveInteger(item?.cacheReadTokens),
+    cacheWriteTokens: asPositiveInteger(item?.cacheWriteTokens),
+  })).filter((item) => item.date) : [];
+  return {
+    range: asString(data.range) || "all",
+    timezone: asString(data.timezone) || "UTC",
+    summary: normalizeHomeMetrics(data.summary),
+    daily,
   };
 }
 
@@ -713,11 +742,187 @@ function buildConfigPayloadFromState(source = appState) {
   }));
 }
 
-function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
+const CONFIG_SECTION_SCOPES = ["cursor", "gateway", "models", "settings"];
+const ROUTE_PATH_TO_CONFIG_SCOPE = {
+  "/cursor": "cursor",
+  "/gateway": "gateway",
+  "/models": "models",
+  "/settings": "settings",
+};
+
+const savedConfigSectionSnapshots = reactive({
+  cursor: "",
+  gateway: "",
+  models: "",
+  settings: "",
+});
+
+const GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR = "Gateway 公开模型仍指向当前适配器；删除或更改适配器标识前，请先在网关集成页更新映射";
+
+function unresolvedGatewayPublicModelsError(adapters) {
+  if (!asArray(appState.gatewayPublicModels).some((item) => gatewayPublicModelInvalid(item, adapters))) {
+    return "";
+  }
+  return GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR;
+}
+
+function snapshotCursorSection(source = appState) {
+  return JSON.stringify({
+    routingMode: normalizeRouteMode(source.routingMode),
+  });
+}
+
+function snapshotGatewaySection(source = appState) {
+  return JSON.stringify({
+    enabled: Boolean(source.gatewayEnabled),
+    listenAddr: asString(source.gatewayListenAddr),
+    publicModels: asArray(source.gatewayPublicModels).map((item) => ({
+      id: asString(item?.id),
+      targetAdapterID: asString(item?.targetAdapterID),
+    })),
+  });
+}
+
+function snapshotSettingsSection(source = appState) {
+  return JSON.stringify({
+    observabilityMode: asString(source.observabilityMode),
+    observabilityRetentionDays: Number(source.observabilityRetentionDays) || 0,
+    observabilityMaxDiskMB: Number(source.observabilityMaxDiskMB) || 0,
+    appearanceTheme: normalizeTheme(source.appearanceTheme),
+    advertisingEnabled: Boolean(source.advertisingEnabled),
+    updateCheckOnStartup: Boolean(source.updateCheckOnStartup),
+  });
+}
+
+function snapshotModelsSection(source = appState) {
+  return JSON.stringify(normalizeModelAdapters(source.modelAdapters));
+}
+
+function snapshotConfigSection(scope, source = appState) {
+  if (scope === "cursor") {
+    return snapshotCursorSection(source);
+  }
+  if (scope === "gateway") {
+    return snapshotGatewaySection(source);
+  }
+  if (scope === "models") {
+    return snapshotModelsSection(source);
+  }
+  if (scope === "settings") {
+    return snapshotSettingsSection(source);
+  }
+  return "";
+}
+
+function applyConfigSectionSnapshot(scope, raw) {
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (scope === "cursor") {
+    appState.routingMode = normalizeRouteMode(parsed.routingMode);
+    return;
+  }
+  if (scope === "gateway") {
+    appState.gatewayEnabled = Boolean(parsed.enabled);
+    appState.gatewayListenAddr = asString(parsed.listenAddr);
+    appState.gatewayPublicModels = asArray(parsed.publicModels).map((item) => ({
+      id: asString(item?.id),
+      targetAdapterID: asString(item?.targetAdapterID),
+    }));
+    return;
+  }
+  if (scope === "models") {
+    appState.modelAdapters = normalizeModelAdapters(parsed);
+    return;
+  }
+  if (scope === "settings") {
+    appState.observabilityMode = asString(parsed.observabilityMode);
+    appState.observabilityRetentionDays = Number(parsed.observabilityRetentionDays) || 0;
+    appState.observabilityMaxDiskMB = Number(parsed.observabilityMaxDiskMB) || 0;
+    appState.appearanceTheme = normalizeTheme(parsed.appearanceTheme);
+    appState.advertisingEnabled = Boolean(parsed.advertisingEnabled);
+    appState.updateCheckOnStartup = Boolean(parsed.updateCheckOnStartup);
+  }
+}
+
+function captureConfigSectionSnapshot(scope) {
+  if (!CONFIG_SECTION_SCOPES.includes(scope)) {
+    return;
+  }
+  savedConfigSectionSnapshots[scope] = snapshotConfigSection(scope);
+}
+
+function captureAllConfigSectionSnapshots() {
+  for (const scope of CONFIG_SECTION_SCOPES) {
+    captureConfigSectionSnapshot(scope);
+  }
+}
+
+export function isConfigSectionDirty(scope) {
+  if (!CONFIG_SECTION_SCOPES.includes(scope)) {
+    return false;
+  }
+  if (scope === "models" && appState.modelsEditorDraftDirty) {
+    return true;
+  }
+  return snapshotConfigSection(scope) !== savedConfigSectionSnapshots[scope];
+}
+
+export function setModelsEditorDraftDirty(value) {
+  appState.modelsEditorDraftDirty = Boolean(value);
+}
+
+export function configSectionStatusText(scope) {
+  if (appState.configSaving) {
+    return "保存中";
+  }
+  if (isConfigSectionDirty(scope)) {
+    return "有未保存更改";
+  }
+  return "已保存";
+}
+
+export function routePathToConfigScope(path) {
+  return ROUTE_PATH_TO_CONFIG_SCOPE[asString(path)] || "";
+}
+
+export function isRouteConfigDirty(path) {
+  const scope = routePathToConfigScope(path);
+  return Boolean(scope && isConfigSectionDirty(scope));
+}
+
+export function discardConfigSectionDraft(scope) {
+  if (!CONFIG_SECTION_SCOPES.includes(scope)) {
+    return;
+  }
+  if (scope === "models") {
+    appState.modelsEditorDraftDirty = false;
+  }
+  const saved = savedConfigSectionSnapshots[scope];
+  if (!saved) {
+    return;
+  }
+  applyConfigSectionSnapshot(scope, saved);
+}
+
+function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = "" } = {}) {
   const normalized = normalizeConfig(config);
   if (modelAdaptersOnly) {
+    const preserveModelsDraft = savedScope !== "all" && savedScope !== "models" && isConfigSectionDirty("models");
+    const preservedModels = preserveModelsDraft ? snapshotConfigSection("models") : "";
     appState.modelAdapters = normalized.modelAdapters;
+    if (preservedModels) {
+      applyConfigSectionSnapshot("models", preservedModels);
+    } else {
+      captureConfigSectionSnapshot("models");
+    }
     return normalized;
+  }
+  const preserved = {};
+  if (savedScope !== "all") {
+    for (const scope of CONFIG_SECTION_SCOPES) {
+      if (scope !== savedScope && isConfigSectionDirty(scope)) {
+        preserved[scope] = snapshotConfigSection(scope);
+      }
+    }
   }
   appState.modelAdapters = normalized.modelAdapters;
   appState.observabilityMode = normalized.observability.mode;
@@ -736,6 +941,13 @@ function applyConfigToState(config, { modelAdaptersOnly = false } = {}) {
   appState.gatewayListenAddr = normalized.gateway.listenAddr;
   appState.gatewayTokenConfigured = normalized.gateway.tokenConfigured;
   appState.gatewayPublicModels = normalized.gateway.publicModels.map((item) => ({ ...item }));
+  for (const scope of CONFIG_SECTION_SCOPES) {
+    if (preserved[scope]) {
+      applyConfigSectionSnapshot(scope, preserved[scope]);
+      continue;
+    }
+    captureConfigSectionSnapshot(scope);
+  }
   return normalized;
 }
 
@@ -743,7 +955,7 @@ async function loadPersistedUserConfig() {
   return normalizeConfig(await loadUserConfig());
 }
 
-async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) {
+async function persistConfigPayload(config, { modelAdaptersOnly = false, savedScope = "all" } = {}) {
   if (appState.configSaving) {
     return { ok: false, error: "已有配置操作正在进行，请稍后再试" };
   }
@@ -758,6 +970,15 @@ async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) 
       error: prepared.error,
     };
   }
+  if (modelAdaptersOnly) {
+    const mappingError = unresolvedGatewayPublicModelsError(prepared.adaptersWithIds);
+    if (mappingError) {
+      return {
+        ok: false,
+        error: mappingError,
+      };
+    }
+  }
   const payload = serializeConfigPayload({
     ...normalized,
     modelAdapters: prepared.payloadAdapters,
@@ -765,9 +986,16 @@ async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) 
 
   appState.configSaving = true;
   try {
-    await saveUserConfig(payload);
+    if (modelAdaptersOnly) {
+      await saveModelAdapters(payload);
+    } else {
+      await saveUserConfig(payload);
+    }
     const persisted = await loadPersistedUserConfig();
-    applyConfigToState(persisted, { modelAdaptersOnly });
+    applyConfigToState(persisted, {
+      modelAdaptersOnly,
+      savedScope: modelAdaptersOnly ? "models" : savedScope,
+    });
     return {
       ok: true,
       error: "",
@@ -777,6 +1005,56 @@ async function persistConfigPayload(config, { modelAdaptersOnly = false } = {}) 
       ok: false,
       error: toUserError(error),
     };
+  } finally {
+    appState.configSaving = false;
+  }
+}
+
+async function persistScopedConfig(scope) {
+  if (appState.configSaving) {
+    return { ok: false, error: "已有配置操作正在进行，请稍后再试" };
+  }
+  const payload = buildConfigPayloadFromState();
+  if (scope === "gateway") {
+    const invalid = asArray(appState.gatewayPublicModels).some((item) => (
+      gatewayPublicModelInvalid(item, appState.modelAdapters)
+    ));
+    if (invalid) {
+      return { ok: false, error: "公开模型映射已失效或未选择目标适配器" };
+    }
+  }
+  if (scope === "models") {
+    const prepared = prepareModelAdaptersForPersist(
+      normalizeModelAdapters(appState.modelAdapters),
+      (adaptersWithIds) => validateModelAdapters(adaptersWithIds),
+    );
+    if (!prepared.ok) {
+      return { ok: false, error: prepared.error };
+    }
+    const mappingError = unresolvedGatewayPublicModelsError(prepared.adaptersWithIds);
+    if (mappingError) {
+      return { ok: false, error: mappingError };
+    }
+    payload.modelAdapters = prepared.payloadAdapters;
+  }
+  const runners = {
+    cursor: saveCursorConfig,
+    gateway: saveGatewayConfig,
+    models: saveModelAdapters,
+    settings: saveSystemSettings,
+  };
+  const runner = runners[scope];
+  if (!runner) {
+    return { ok: false, error: "未知配置范围" };
+  }
+  appState.configSaving = true;
+  try {
+    await runner(payload);
+    const persisted = await loadPersistedUserConfig();
+    applyConfigToState(persisted, { savedScope: scope });
+    return { ok: true, error: "" };
+  } catch (error) {
+    return { ok: false, error: toUserError(error) };
   } finally {
     appState.configSaving = false;
   }
@@ -987,6 +1265,7 @@ export const appState = reactive({
   backendRunning: asBoolean(cachedState.backendRunning),
   proxyRunning: asBoolean(cachedState.proxyRunning),
   serviceBusy: false,
+  gatewayBusy: false,
   serviceLastError: asString(cachedState.serviceLastError),
   serviceListenAddr: asString(cachedState.serviceListenAddr),
   backendListenAddr: asString(cachedState.backendListenAddr),
@@ -1002,6 +1281,7 @@ export const appState = reactive({
   netProxyDescription: asString(cachedState.netProxyDescription),
 
   configSaving: false,
+  modelsEditorDraftDirty: false,
   observabilityMode: cachedConfig.observability.mode,
   observabilityRetentionDays: cachedConfig.observability.retentionDays,
   observabilityMaxDiskMB: cachedConfig.observability.maxDiskMB,
@@ -1030,6 +1310,10 @@ export const appState = reactive({
   homeMetricsLoading: false,
   homeMetricsResetting: false,
   homeMetricsError: "",
+  homeMetricsRange: "7d",
+  homeMetricsReport: { range: "7d", timezone: "UTC", summary: createEmptyHomeMetrics(), daily: [] },
+  homeMetricsReportLoading: false,
+  homeMetricsReportError: "",
 
   updateState: "idle",
   updateMandatory: false,
@@ -1044,6 +1328,15 @@ export const appState = reactive({
   updatePromptVisible: false,
   updatePromptKind: "idle",
   updatePromptBusy: false,
+});
+
+captureAllConfigSectionSnapshots();
+
+export const configSectionDirty = reactive({
+  cursor: computed(() => isConfigSectionDirty("cursor")),
+  gateway: computed(() => isConfigSectionDirty("gateway")),
+  models: computed(() => isConfigSectionDirty("models")),
+  settings: computed(() => isConfigSectionDirty("settings")),
 });
 
 export function applyAppearanceTheme(value) {
@@ -1360,6 +1653,10 @@ export async function persistUserConfig() {
   });
 }
 
+export async function persistScopedUserConfig(scope) {
+  return persistScopedConfig(scope);
+}
+
 export async function exportUserConfigToFile(path) {
   return exportUserConfigFile(path);
 }
@@ -1382,21 +1679,24 @@ export async function importUserConfigFromFile(path) {
 }
 
 export async function saveIncludeCacheWriteInHitRate(value) {
-  const currentConfig = await loadPersistedUserConfig();
+  if (appState.configSaving) {
+    return { ok: false, error: "已有配置操作正在进行，请稍后再试" };
+  }
   const previousValue = appState.includeCacheWriteInHitRate;
   const nextValue = asBoolean(value);
   appState.includeCacheWriteInHitRate = nextValue;
-  const result = await persistConfigPayload({
-    ...currentConfig,
-    homeMetrics: {
-      ...currentConfig.homeMetrics,
-      includeCacheWriteInHitRate: nextValue,
-    },
-  });
-  if (!result.ok) {
+  appState.configSaving = true;
+  try {
+    await saveHomeMetrics(buildConfigPayloadFromState());
+    const persisted = await loadPersistedUserConfig();
+    applyConfigToState(persisted, { savedScope: "" });
+    return { ok: true, error: "" };
+  } catch (error) {
     appState.includeCacheWriteInHitRate = previousValue;
+    return { ok: false, error: toUserError(error) };
+  } finally {
+    appState.configSaving = false;
   }
-  return result;
 }
 
 export async function saveRoutingMode(mode) {
@@ -1416,8 +1716,7 @@ export async function reloadUserConfig(options = {}) {
 }
 
 export async function saveModelAdapterAt(index, adapter) {
-  const currentConfig = await loadPersistedUserConfig();
-  const nextAdapters = normalizeModelAdapters(currentConfig.modelAdapters);
+  const nextAdapters = normalizeModelAdapters(appState.modelAdapters);
   const nextAdapter = normalizeModelAdapter(adapter);
   const targetIndex = index >= 0 && index < nextAdapters.length ? index : nextAdapters.length;
 
@@ -1427,6 +1726,7 @@ export async function saveModelAdapterAt(index, adapter) {
     nextAdapters.push(nextAdapter);
   }
 
+  const currentConfig = await loadPersistedUserConfig();
   const result = await persistConfigPayload(
     {
       ...currentConfig,
@@ -1452,8 +1752,7 @@ export async function fetchAvailableModelIDs(payload) {
 }
 
 export async function deleteModelAdapterAt(index) {
-  const currentConfig = await loadPersistedUserConfig();
-  const nextAdapters = normalizeModelAdapters(currentConfig.modelAdapters);
+  const nextAdapters = normalizeModelAdapters(appState.modelAdapters);
 
   if (index < 0 || index >= nextAdapters.length) {
     return {
@@ -1464,6 +1763,7 @@ export async function deleteModelAdapterAt(index) {
 
   nextAdapters.splice(index, 1);
 
+  const currentConfig = await loadPersistedUserConfig();
   return persistConfigPayload(
     {
       ...currentConfig,
@@ -1533,8 +1833,7 @@ function buildNextDisplayName(existingAdapters, sourceName) {
 }
 
 export async function duplicateModelAdapterAt(index) {
-  const currentConfig = await loadPersistedUserConfig();
-  const nextAdapters = normalizeModelAdapters(currentConfig.modelAdapters);
+  const nextAdapters = normalizeModelAdapters(appState.modelAdapters);
 
   if (index < 0 || index >= nextAdapters.length) {
     return {
@@ -1552,6 +1851,7 @@ export async function duplicateModelAdapterAt(index) {
 
   nextAdapters.splice(index + 1, 0, duplicate);
 
+  const currentConfig = await loadPersistedUserConfig();
   return persistConfigPayload(
     {
       ...currentConfig,
@@ -1638,6 +1938,29 @@ export async function syncHomeMetrics() {
   }
 }
 
+export async function syncHomeMetricsReport(range = appState.homeMetricsRange) {
+  appState.homeMetricsReportLoading = true;
+  appState.homeMetricsReportError = "";
+  try {
+    const report = normalizeHomeMetricsReport(await getHomeMetricsReport(range));
+    appState.homeMetricsRange = report.range;
+    appState.homeMetricsReport = report;
+    applyHomeMetrics(report.summary);
+    return { ok: true, error: "", report };
+  } catch (error) {
+    appState.homeMetricsReportError = toUserError(error);
+    appState.homeMetricsReport = {
+      range: asString(range) || appState.homeMetricsRange || "all",
+      timezone: "UTC",
+      summary: createEmptyHomeMetrics(),
+      daily: [],
+    };
+    return { ok: false, error: appState.homeMetricsReportError, report: appState.homeMetricsReport };
+  } finally {
+    appState.homeMetricsReportLoading = false;
+  }
+}
+
 export async function resetHomeMetrics() {
   if (appState.homeMetricsResetting) {
     return { ok: false, error: "统计重置正在进行" };
@@ -1645,7 +1968,8 @@ export async function resetHomeMetrics() {
   appState.homeMetricsResetting = true;
   try {
     await resetHomeMetricsSummary();
-    return await syncHomeMetrics();
+    await syncHomeMetrics();
+    return await syncHomeMetricsReport();
   } catch (error) {
     appState.homeMetricsError = toUserError(error);
     return {
@@ -1661,12 +1985,11 @@ export async function startService() {
   if (appState.serviceBusy) {
     return { ok: false, error: "服务状态更新中，请稍后再试" };
   }
+  if (isConfigSectionDirty("cursor")) {
+    return { ok: false, error: "请先保存本页" };
+  }
   appState.serviceBusy = true;
   try {
-    const saved = await persistUserConfig();
-    if (!saved.ok) {
-      return saved;
-    }
     const state = await startProxyService();
     applyProxyState(state);
     return { ok: true, error: "" };
@@ -1696,15 +2019,14 @@ export async function stopService() {
 }
 
 export async function startGateway() {
-  if (appState.serviceBusy) {
-    return { ok: false, error: "服务状态更新中，请稍后再试" };
+  if (appState.gatewayBusy) {
+    return { ok: false, error: "Gateway 状态更新中，请稍后再试" };
   }
-  appState.serviceBusy = true;
+  if (isConfigSectionDirty("gateway")) {
+    return { ok: false, error: "请先保存本页" };
+  }
+  appState.gatewayBusy = true;
   try {
-    const saved = await persistUserConfig();
-    if (!saved.ok) {
-      return saved;
-    }
     const state = await startGatewayService();
     applyProxyState(state);
     return { ok: true, error: "" };
@@ -1712,15 +2034,15 @@ export async function startGateway() {
     await syncServiceState().catch(() => {});
     return { ok: false, error: toUserError(error) };
   } finally {
-    appState.serviceBusy = false;
+    appState.gatewayBusy = false;
   }
 }
 
 export async function stopGateway() {
-  if (appState.serviceBusy) {
-    return { ok: false, error: "服务状态更新中，请稍后再试" };
+  if (appState.gatewayBusy) {
+    return { ok: false, error: "Gateway 状态更新中，请稍后再试" };
   }
-  appState.serviceBusy = true;
+  appState.gatewayBusy = true;
   try {
     const state = await stopGatewayService();
     applyProxyState(state);
@@ -1729,7 +2051,7 @@ export async function stopGateway() {
     await syncServiceState().catch(() => {});
     return { ok: false, error: toUserError(error) };
   } finally {
-    appState.serviceBusy = false;
+    appState.gatewayBusy = false;
   }
 }
 
@@ -1818,5 +2140,5 @@ export async function bootstrapAppState() {
     appState.appVersion = "";
   }
   await syncServiceState().catch(() => {});
-  await syncHomeMetrics().catch(() => {});
+  await syncHomeMetricsReport().catch(() => {});
 }

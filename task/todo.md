@@ -25,6 +25,38 @@ DELIVERY_STATUS: blocked
 
 - 提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界。届时先作 metadata-only 探针，再冻结协议与权限合同。
 
+## Previous Work Package: 双集成导航与数据概览
+
+WORK_PACKAGE_ID: dual-nav-overview-20260826
+STATUS: completed（代码与决策/架构文档已落地；Wails 视觉验收未做）
+RISK_LEVEL: medium
+OWNER: orchestrator
+DESIGN_READINESS: approved（`.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md` + 工作决策基线 §7.4/§10.13 + 系统 Design §4.1/§10.1/§14.15）
+DELIVERY_STATUS: verified-partial（实现已对照源码落入五页导航、section 保存与 daily 报告；本轮只改文档，未重跑 Go/前端命令，也未做 Wails 窗口视觉点击）
+
+### CONTEXT
+
+- 已批准方案二：主窗口改为「数据概览 / Cursor 集成 / 网关集成 / 上游模型 / 系统设置」五页同层导航。Cursor 与 Gateway 并列，不把 Gateway 做成根节点。
+- 同时修复 token 复制、启用/启动语义、Gateway 保存范围，以及首页统计口径；趋势和日历热力图只使用 `usage.json` 的 `daily[]`。
+- 不修改 Cursor 18080/18090、MITM、工具桥；不新增远程监听或 Gateway 协议；不用 `recent_events` 伪造完整热力图。
+
+### ACTIVE SLICES
+
+- [completed] `rebuild-dual-navigation`：主窗口 `1100×720`（最小 `980×640`）、侧栏、五条路由与旧 `/config`→`/settings`、`/model-config`→`/models` 重定向。
+- [completed] `build-five-pages`：数据概览、Cursor 集成、网关集成、上游模型、系统设置搬入主窗口；模型配置不再独立开窗。
+- [completed] `scope-config-persistence`：`SaveCursorConfig` / `SaveGatewayConfig` / `SaveModelAdapters` / `SaveSystemSettings` 在存储锁内合并对应 section；前端每页 dirty，离开未保存页需确认。
+- [completed] `fix-gateway-workflows`：复制 token 走 `copy-text-to-clipboard` 并区分未生成/WebView 拒绝/成功；「配置为启用」与「启动/停止 Gateway」分离；dirty 时禁止静默启动。
+- [completed] `build-overview-analytics`：`GetHomeMetricsReport` 按 `7d`/`30d`/`all` 过滤 `daily[]` 并聚合 KPI；趋势图与日历热力图时区 UTC；无小时热力图、无自定义/近 1 小时/今日范围。
+- [completed] `document-sync`：已把菜单层级、保存范围、运行隔离和 daily 报告合同写入工作决策基线、系统 Design、本文件与 `docs/process.md`。
+- [pending-evidence] `wails-visual-verify`：五页导航、窗口尺寸、复制 token、无 token、WebView 剪贴板失败、启用但未运行、独立启停、趋势范围和窄窗口布局的 Wails 手工点击。未执行，不得标完成。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 五页可切换；保存一页不得覆盖另一页最新字段或 Gateway token。
+- Gateway 启停只影响 18091；失败不阻止 Cursor。概览 KPI 与图表使用同一 `range`，重置只清零 usage 聚合。
+- 本包文档收口不声称 Go/前端命令已在本轮重跑，也不声称 Wails 视觉验证已完成。
+- 回滚导航不得恢复整文件 `persistUserConfig` 作为五页保存路径。
+
 ## Previous Work Package: Responses API 与 Codex
 
 WORK_PACKAGE_ID: multi-client-responses-gateway-phase3-20260826

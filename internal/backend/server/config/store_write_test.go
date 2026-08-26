@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -97,6 +98,197 @@ func TestStoreSaveLastAgentModelHashNoopSkipsWrite(t *testing.T) {
 	}
 	if !after.ModTime().Equal(info.ModTime()) || after.Size() != info.Size() {
 		t.Fatalf("no-op rewrote the file: before=%v/%d after=%v/%d", info.ModTime(), info.Size(), after.ModTime(), after.Size())
+	}
+}
+
+func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.LastAgentModelHash = "live-hash"
+		cfg.Appearance.Theme = "dark"
+		cfg.Advertising.Enabled = true
+		cfg.Routing.Mode = "upstream"
+		cfg.Observability.Mode = "basic"
+		cfg.Gateway.Enabled = false
+		cfg.Gateway.ListenAddr = DefaultGatewayListenAddr
+		cfg.ModelAdapters = []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+	})
+	adapterID := seed.ModelAdapters[0].ID
+
+	stale := seed
+	stale.LastAgentModelHash = "stale-ui-hash"
+	stale.Appearance.Theme = "light"
+	stale.Advertising.Enabled = false
+	stale.Routing.Mode = "local"
+	stale.Observability.Mode = "full"
+	stale.ModelAdapters = []ModelAdapterConfig{testModelAdapter("ch-b", 1)}
+	stale.Gateway.Enabled = true
+	stale.Gateway.Token = ""
+	stale.Gateway.TokenConfigured = false
+	stale.Gateway.PublicModels = []GatewayPublicModel{{ID: "grok", TargetAdapterID: adapterID}}
+
+	got, err := store.SaveGatewayConfig(context.Background(), stale.Gateway)
+	if err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+	if !got.Gateway.Enabled || got.Gateway.ListenAddr != DefaultGatewayListenAddr {
+		t.Fatalf("gateway = %+v", got.Gateway)
+	}
+	if len(got.Gateway.PublicModels) != 1 || got.Gateway.PublicModels[0].ID != "grok" {
+		t.Fatalf("publicModels = %#v", got.Gateway.PublicModels)
+	}
+	if strings.TrimSpace(got.Gateway.Token) == "" || !got.Gateway.TokenConfigured {
+		t.Fatal("enabled gateway should generate a token")
+	}
+	if got.Appearance.Theme != "dark" || !got.Advertising.Enabled || got.Routing.Mode != "upstream" {
+		t.Fatalf("gateway save overwrote other pages: %+v", got)
+	}
+	if got.LastAgentModelHash != "live-hash" || len(got.ModelAdapters) != 1 || got.ModelAdapters[0].DisplayName != "ch-a" {
+		t.Fatalf("gateway save overwrote adapters/hash: %+v", got)
+	}
+
+	cleared := got.Gateway
+	cleared.Token = ""
+	cleared.TokenConfigured = false
+	again, err := store.SaveGatewayConfig(context.Background(), cleared)
+	if err != nil {
+		t.Fatalf("SaveGatewayConfig() second error = %v", err)
+	}
+	if again.Gateway.Token != got.Gateway.Token {
+		t.Fatalf("gateway token overwritten: %q vs %q", again.Gateway.Token, got.Gateway.Token)
+	}
+
+	cursor := stale
+	cursor.Routing.Mode = "local"
+	cursor.ProviderStreamIdleTimeout = 45
+	savedCursor, err := store.SaveCursorConfig(context.Background(), cursor)
+	if err != nil {
+		t.Fatalf("SaveCursorConfig() error = %v", err)
+	}
+	if savedCursor.Routing.Mode != "local" || savedCursor.ProviderStreamIdleTimeout != 45 {
+		t.Fatalf("cursor section not saved: %+v", savedCursor)
+	}
+	if savedCursor.Appearance.Theme != "dark" || !savedCursor.Gateway.Enabled || savedCursor.Gateway.Token != got.Gateway.Token {
+		t.Fatalf("cursor save overwrote other pages: %+v", savedCursor)
+	}
+
+	settings := stale
+	settings.Appearance.Theme = "light"
+	settings.Advertising.Enabled = false
+	settings.Observability.Mode = "full"
+	savedSettings, err := store.SaveSystemSettings(context.Background(), settings)
+	if err != nil {
+		t.Fatalf("SaveSystemSettings() error = %v", err)
+	}
+	if savedSettings.Appearance.Theme != "light" || savedSettings.Advertising.Enabled || savedSettings.Observability.Mode != "full" {
+		t.Fatalf("settings section not saved: %+v", savedSettings)
+	}
+	if savedSettings.Routing.Mode != "local" || !savedSettings.Gateway.Enabled || savedSettings.Gateway.Token != got.Gateway.Token {
+		t.Fatalf("settings save overwrote other pages: %+v", savedSettings)
+	}
+
+	emptyCursor := DefaultConfig()
+	emptyCursor.Routing.Mode = "upstream"
+	emptyCursor.ProviderStreamIdleTimeout = 0
+	emptyCursor.BackendListenAddr = ""
+	emptyCursor.ProxyListenAddr = ""
+	preservedCursor, err := store.SaveCursorConfig(context.Background(), emptyCursor)
+	if err != nil {
+		t.Fatalf("SaveCursorConfig() empty payload error = %v", err)
+	}
+	if preservedCursor.Routing.Mode != "upstream" {
+		t.Fatalf("empty cursor payload lost routing: %+v", preservedCursor)
+	}
+	if preservedCursor.ProviderStreamIdleTimeout != 45 {
+		t.Fatalf("empty cursor payload overwrote timeout: %+v", preservedCursor)
+	}
+	if preservedCursor.BackendListenAddr != seed.BackendListenAddr || preservedCursor.ProxyListenAddr != seed.ProxyListenAddr {
+		t.Fatalf("empty cursor payload overwrote listen addrs: %+v", preservedCursor)
+	}
+
+	adapters := append(append([]ModelAdapterConfig{}, savedSettings.ModelAdapters...), testModelAdapter("ch-c", 2))
+	savedAdapters, err := store.SaveModelAdapters(context.Background(), adapters)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+	if len(savedAdapters.ModelAdapters) != 2 || savedAdapters.ModelAdapters[1].DisplayName != "ch-c" {
+		t.Fatalf("adapters section not saved: %+v", savedAdapters.ModelAdapters)
+	}
+	if savedAdapters.Appearance.Theme != "light" || savedAdapters.Routing.Mode != "upstream" || !savedAdapters.Gateway.Enabled {
+		t.Fatalf("adapter save overwrote other pages: %+v", savedAdapters)
+	}
+}
+
+func TestStoreSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = []ModelAdapterConfig{testModelAdapter("physical", 1)}
+	})
+	adapterID := seed.ModelAdapters[0].ID
+	gateway := seed.Gateway
+	gateway.PublicModels = []GatewayPublicModel{{ID: "public-a", TargetAdapterID: adapterID}}
+	if _, err := store.SaveGatewayConfig(context.Background(), gateway); err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+
+	if _, err := store.SaveModelAdapters(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "公开模型") {
+		t.Fatalf("delete mapped adapter error = %v", err)
+	}
+
+	renamed := seed.ModelAdapters[0]
+	renamed.DisplayName = "renamed-physical"
+	if _, err := store.SaveModelAdapters(context.Background(), []ModelAdapterConfig{renamed}); err == nil || !strings.Contains(err.Error(), "公开模型") {
+		t.Fatalf("rename mapped adapter error = %v", err)
+	}
+
+	got, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(got.ModelAdapters) != 1 || got.ModelAdapters[0].DisplayName != "physical" {
+		t.Fatalf("rejected save mutated adapters: %+v", got.ModelAdapters)
+	}
+	if len(got.Gateway.PublicModels) != 1 || got.Gateway.PublicModels[0].TargetAdapterID != adapterID {
+		t.Fatalf("rejected save mutated publicModels: %+v", got.Gateway.PublicModels)
+	}
+
+	extra := append(append([]ModelAdapterConfig{}, seed.ModelAdapters...), testModelAdapter("other", 2))
+	saved, err := store.SaveModelAdapters(context.Background(), extra)
+	if err != nil {
+		t.Fatalf("adding unmapped adapter error = %v", err)
+	}
+	if len(saved.ModelAdapters) != 2 || saved.Gateway.PublicModels[0].TargetAdapterID != adapterID {
+		t.Fatalf("valid adapter save = %+v", saved)
+	}
+}
+
+func TestStoreSaveHomeMetricsDoesNotOverwriteOtherSections(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.Appearance.Theme = "dark"
+		cfg.Gateway.Enabled = true
+		cfg.Gateway.Token = "live-token"
+		cfg.HomeMetrics.IncludeCacheWriteInHitRate = false
+		cfg.ModelAdapters = []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
+	})
+
+	stale := seed
+	stale.Appearance.Theme = "light"
+	stale.Gateway.Token = ""
+	stale.HomeMetrics.IncludeCacheWriteInHitRate = true
+	stale.ModelAdapters = []ModelAdapterConfig{testModelAdapter("ch-b", 1)}
+	got, err := store.SaveHomeMetrics(context.Background(), stale)
+	if err != nil {
+		t.Fatalf("SaveHomeMetrics() error = %v", err)
+	}
+	if !got.HomeMetrics.IncludeCacheWriteInHitRate {
+		t.Fatal("home metrics section not saved")
+	}
+	if got.Appearance.Theme != "dark" || got.Gateway.Token != seed.Gateway.Token {
+		t.Fatalf("home metrics save overwrote other pages: %+v", got)
+	}
+	if len(got.ModelAdapters) != 1 || got.ModelAdapters[0].DisplayName != "ch-a" {
+		t.Fatalf("home metrics save overwrote adapters: %+v", got.ModelAdapters)
 	}
 }
 

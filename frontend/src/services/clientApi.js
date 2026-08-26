@@ -59,11 +59,42 @@ export function saveUserConfig(payload) {
   return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
 }
 
+export function saveGatewayConfig(payload) {
+  return withApiLogging("SaveGatewayConfig", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveGatewayConfig`, payload),
+  );
+}
+
+export function saveModelAdapters(payload) {
+  return withApiLogging("SaveModelAdapters", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveModelAdapters`, payload),
+  );
+}
+
+export function saveCursorConfig(payload) {
+  return withApiLogging("SaveCursorConfig", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveCursorConfig`, payload),
+  );
+}
+
+export function saveSystemSettings(payload) {
+  return withApiLogging("SaveSystemSettings", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveSystemSettings`, payload),
+  );
+}
+
+export function saveHomeMetrics(payload) {
+  return withApiLogging("SaveHomeMetrics", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveHomeMetrics`, payload),
+  );
+}
+
 export function copyGatewayToken() {
   return withApiLogging("CopyGatewayToken", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.CopyGatewayToken`),
   );
 }
+
 
 export function rotateGatewayToken() {
   return withApiLogging("RotateGatewayToken", () =>
@@ -111,6 +142,12 @@ export function getProxyState() {
 
 export function getHomeMetricsSummary() {
   return withApiLogging("GetHomeMetricsSummary", () => GetHomeMetricsSummary());
+}
+
+export function getHomeMetricsReport(range) {
+  return withApiLogging("GetHomeMetricsReport", () =>
+    Call.ByName(`${METRICS_SERVICE_NAME}.GetHomeMetricsReport`, range),
+  );
 }
 
 export function resetHomeMetricsSummary() {

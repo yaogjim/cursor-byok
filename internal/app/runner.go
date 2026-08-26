@@ -36,7 +36,7 @@ import (
 
 const (
 	// appName 表示当前模块中的 appName 状态值。
-	appName = "Cursor助手"
+	appName = "Gateway-byok"
 	// adRefreshInterval 表示后台广告拉取间隔。
 	adRefreshInterval = 3 * time.Minute
 	// disableWebViewSandboxEnv allows affected VDI users to opt out of the WebView2 sandbox.
@@ -218,10 +218,10 @@ func Run(resources EmbeddedResources) error {
 
 	mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:               appName,
-		Width:               700,
-		Height:              530,
-		MinWidth:            700,
-		MinHeight:           530,
+		Width:               1100,
+		Height:              720,
+		MinWidth:            980,
+		MinHeight:           640,
 		DisableResize:       false,
 		Frameless:           goruntime.GOOS == "windows",
 		URL:                 "/",

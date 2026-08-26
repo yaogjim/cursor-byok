@@ -87,6 +87,13 @@ func TestCopyAndRotateGatewayToken(t *testing.T) {
 	if loaded.Gateway.Token != rotated {
 		t.Fatalf("persisted token = %q", loaded.Gateway.Token)
 	}
+	projected := serverconfig.RedactGatewayTokenForUI(loaded)
+	if projected.Gateway.Token != "" {
+		t.Fatalf("frontend projection leaked token = %q", projected.Gateway.Token)
+	}
+	if !projected.Gateway.TokenConfigured {
+		t.Fatal("frontend projection dropped tokenConfigured")
+	}
 }
 
 func TestExportUserConfigStripsGatewayToken(t *testing.T) {

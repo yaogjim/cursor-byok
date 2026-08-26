@@ -3,26 +3,26 @@
 #
 # The lines below are called `modelines`. See `:help modeline`
 
-name: "Cursor助手"
+name: "Gateway-byok"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.0.49.6"
+version: "0.0.50.0"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "Cursor助手"
-vendor: "Cursor助手"
+description: "Gateway-byok"
+vendor: "Gateway-byok"
 homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/Cursor助手"
-    dst: "/usr/local/bin/Cursor助手"
+  - src: "./bin/Gateway-byok"
+    dst: "/usr/local/bin/Gateway-byok"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/Cursor助手.png"
-  - src: "./build/linux/Cursor助手.desktop"
-    dst: "/usr/share/applications/Cursor助手.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/Gateway-byok.png"
+  - src: "./build/linux/Gateway-byok.desktop"
+    dst: "/usr/share/applications/Gateway-byok.desktop"
 
 # Default dependencies for Debian 12/Ubuntu 22.04+ with WebKit 4.1
 depends:

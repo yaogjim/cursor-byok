@@ -24,6 +24,7 @@ import {
   OPENAI_EXTRA_PARAMS_DEFAULT_JSON,
   runModelAdapterTest,
   saveModelAdapterAt,
+  setModelsEditorDraftDirty,
   toUserError,
   validateModelAdapters,
 } from "@/state/appState";
@@ -81,6 +82,7 @@ const draft = reactive(normalizeModelAdapter(props.adapter));
 if (!draft.type) {
   draft.type = "openai";
 }
+const editorBaseline = ref(JSON.stringify(normalizeModelAdapter(draft)));
 const lastTestAdapterID = ref("");
 const localTestFailure = ref("");
 const availableModelIDs = ref(draft.modelID ? [draft.modelID] : []);
@@ -239,6 +241,8 @@ async function persistDraft() {
   } else {
     Object.assign(draft, adapter);
   }
+  editorBaseline.value = JSON.stringify(normalizeModelAdapter(draft));
+  setModelsEditorDraftDirty(false);
   return {
     ok: true,
     error: "",
@@ -300,6 +304,14 @@ async function handleTest() {
     localTestFailure.value = toUserError(error);
   }
 }
+
+watch(
+  draft,
+  () => {
+    setModelsEditorDraftDirty(JSON.stringify(normalizeModelAdapter(draft)) !== editorBaseline.value);
+  },
+  { deep: true, immediate: true },
+);
 
 watch(
   directModelTestResult,
@@ -367,6 +379,7 @@ watch(
 
 onBeforeUnmount(() => {
   window.clearTimeout(modelListDebounceTimer);
+  setModelsEditorDraftDirty(false);
 });
 
 // ── providerFallback UI 支持 ──

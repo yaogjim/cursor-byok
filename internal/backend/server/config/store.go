@@ -147,6 +147,146 @@ func (store *Store) SaveUserConfig(_ context.Context, cfg Config) (Config, error
 	return normalized, nil
 }
 
+func (store *Store) SaveGatewayConfig(_ context.Context, gateway GatewayConfig) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	gateway.Token = disk.Gateway.Token
+	merged.Gateway = gateway
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	normalized, err = ensureGatewayToken(normalized)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveModelAdapters(_ context.Context, adapters []ModelAdapterConfig) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.ModelAdapters = adapters
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := validateGatewayPublicModelTargets(normalized); err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveCursorConfig(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	if cfg.ProviderStreamIdleTimeout > 0 {
+		merged.ProviderStreamIdleTimeout = cfg.ProviderStreamIdleTimeout
+	}
+	if strings.TrimSpace(cfg.BackendListenAddr) != "" {
+		merged.BackendListenAddr = cfg.BackendListenAddr
+	}
+	if strings.TrimSpace(cfg.ProxyListenAddr) != "" {
+		merged.ProxyListenAddr = cfg.ProxyListenAddr
+	}
+	merged.Routing = cfg.Routing
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveSystemSettings(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.Observability = cfg.Observability
+	merged.Appearance = cfg.Appearance
+	merged.Advertising = cfg.Advertising
+	merged.Updates = cfg.Updates
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveHomeMetrics(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.HomeMetrics = cfg.HomeMetrics
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
 func (store *Store) SaveLastAgentModelHash(_ context.Context, value string) (Config, bool, error) {
 	if store == nil || strings.TrimSpace(store.path) == "" {
 		return Config{}, false, errors.New("配置存储未初始化")

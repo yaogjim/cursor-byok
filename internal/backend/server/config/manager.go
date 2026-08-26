@@ -88,6 +88,41 @@ func (manager *Manager) SaveUserConfig(ctx context.Context, cfg Config) (Config,
 	})
 }
 
+func (manager *Manager) SaveGatewayConfig(ctx context.Context, gateway GatewayConfig) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveGatewayConfig(ctx, gateway)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveModelAdapters(ctx context.Context, adapters []ModelAdapterConfig) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveModelAdapters(ctx, adapters)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveCursorConfig(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveCursorConfig(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveSystemSettings(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveSystemSettings(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveHomeMetrics(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveHomeMetrics(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
 func (manager *Manager) LastAgentModelHash() string {
 	if manager == nil {
 		return ""

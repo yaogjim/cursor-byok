@@ -268,3 +268,30 @@ func TestStripGatewayTokenRemovesSecret(t *testing.T) {
 		t.Fatal("StripGatewayToken mutated the original")
 	}
 }
+
+func TestRedactGatewayTokenForUIKeepsConfiguredFlag(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Gateway.Token = "secret-token"
+	cfg.Gateway.TokenConfigured = true
+	redacted := RedactGatewayTokenForUI(cfg)
+	if redacted.Gateway.Token != "" {
+		t.Fatalf("redact leaked token: %+v", redacted.Gateway)
+	}
+	if !redacted.Gateway.TokenConfigured {
+		t.Fatal("redact dropped tokenConfigured")
+	}
+	if cfg.Gateway.Token != "secret-token" {
+		t.Fatal("RedactGatewayTokenForUI mutated the original")
+	}
+	encoded, err := json.Marshal(redacted)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "secret-token") || strings.Contains(text, `"token"`) {
+		t.Fatalf("JSON leaked token: %s", text)
+	}
+	if !strings.Contains(text, `"tokenConfigured":true`) {
+		t.Fatalf("JSON missing tokenConfigured: %s", text)
+	}
+}

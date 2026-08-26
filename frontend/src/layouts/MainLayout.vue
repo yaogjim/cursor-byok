@@ -2,6 +2,7 @@
 import { Browser, Window } from "@wailsio/runtime";
 import LocaleSelect from "@/components/LocaleSelect.vue";
 import { useMessage } from "@/composables/useMessage";
+import { isMainWindowPath } from "@/router";
 import {
   appState,
   checkForAppUpdates,
@@ -10,15 +11,13 @@ import {
 } from "@/state/appState";
 import { isWindows } from "@/utils/isWindows";
 import { computed, onMounted, onUnmounted } from "vue";
-import { useRoute } from "vue-router";
-import Logo from "@/assets/logo.png";
+import { RouterLink, useRoute } from "vue-router";
 
 const route = useRoute();
 const message = useMessage();
-const showIcon = computed(() => route.meta.showIcon !== false);
-const title = computed(() => route.meta.title ?? "Cursor助手｜永久免费｜自定义API");
+const title = computed(() => route.meta.title ?? "数据概览");
 const directlyClose = computed(() => route.meta.directlyClose === true);
-const showFooter = computed(() => route.path === "/");
+const showFooter = computed(() => isMainWindowPath(route.path));
 const AUTHOR_REPOSITORY_URL = "https://github.com/leookun/cursor-byok";
 const AUTHOR_LABEL = "@leookun";
 const usageDocsURL = "https://docs.leokun.cn";
@@ -50,6 +49,56 @@ const proxyBadgeTitle = computed(() => {
   return "当前出站请求未使用系统代理";
 });
 
+const cursorNavStatus = computed(() => {
+  if (appState.serviceLastError && !appState.serviceRunning) {
+    return "error";
+  }
+  if (appState.serviceRunning) {
+    return "running";
+  }
+  return "stopped";
+});
+
+const gatewayNavStatus = computed(() => {
+  if (!appState.gatewayEnabled) {
+    return "disabled";
+  }
+  if (appState.gatewayLastError && !appState.gatewayRunning) {
+    return "error";
+  }
+  if (appState.gatewayRunning) {
+    return "running";
+  }
+  return "stopped";
+});
+
+const navItems = computed(() => [
+  { path: "/", label: "概览", title: "数据概览" },
+  { path: "/cursor", label: "Cursor", title: "Cursor 集成", status: cursorNavStatus.value },
+  {
+    path: "/gateway",
+    label: "网关",
+    title: "网关集成",
+    status: gatewayNavStatus.value,
+    badge: gatewayNavStatus.value === "disabled" ? "未启用" : "",
+  },
+  { path: "/models", label: "模型", title: "上游模型" },
+  { path: "/settings", label: "设置", title: "系统设置" },
+]);
+
+function statusDotClass(status) {
+  if (status === "running") {
+    return "bg-emerald-500";
+  }
+  if (status === "error") {
+    return "bg-[var(--color-solid-error)]";
+  }
+  if (status === "disabled") {
+    return "border border-[var(--color-border-strong)] bg-transparent";
+  }
+  return "bg-[var(--color-text-muted)]";
+}
+
 async function minimizeWindow() {
   await Window.Minimise();
 }
@@ -59,13 +108,6 @@ async function closeWindow() {
     await Window.Close();
     return;
   }
-  // const confirmed = await showModal({
-  //   title: "确认关闭",
-  //   content: "程序将会最小化到托盘，彻底关闭请在托盘退出，关闭后无法使用Cursor",
-  // });
-  // if (!confirmed) {
-  //   return;
-  // }
   await new Promise((resolve) => setTimeout(resolve, 200));
   await Window.Hide();
 }
@@ -122,7 +164,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden flex-col">
+  <div class="flex h-screen w-screen min-h-0 min-w-0 overflow-hidden flex-col">
     <div
       class="fixed top-0 w-screen h-[40px] z-9999 w-full"
       style="--wails-draggable: drag"
@@ -134,7 +176,6 @@ onUnmounted(() => {
       :class="{ '!justify-center': !isWindows }"
     >
       <div class="center-row gap-2" style="font-family: var(--font-num);">
-        <!-- <img v-if="showIcon" :src="Logo" class="w-[18px] h-[18px]" /> -->
         <div>{{ title }}</div>
       </div>
       <div
@@ -156,9 +197,37 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <main class="flex-1 min-h-0 overflow-hidden flex flex-col w-full">
-      <router-view />
-    </main>
+    <div class="flex min-h-0 min-w-0 flex-1">
+      <aside
+        class="flex w-[184px] shrink-0 flex-col gap-1 border-r border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-3"
+      >
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          :title="item.title"
+          class="center-row h-[34px] gap-2 rounded-[8px] px-3 text-sm transition-colors duration-150"
+          :class="route.path === item.path
+            ? 'bg-[var(--color-success-bg)] text-[var(--color-text)]'
+            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]'"
+        >
+          <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
+          <span
+            v-if="item.badge"
+            class="shrink-0 text-[10px] leading-none text-[var(--color-text-muted)]"
+          >{{ item.badge }}</span>
+          <span
+            v-else-if="item.status"
+            class="h-2 w-2 shrink-0 rounded-full"
+            :class="statusDotClass(item.status)"
+          />
+        </RouterLink>
+      </aside>
+
+      <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <router-view />
+      </main>
+    </div>
 
     <footer
       v-if="showFooter"
@@ -168,6 +237,7 @@ onUnmounted(() => {
         v-if="proxyBadgeText"
         class="center-row  border-none gap-[2px]  border-none  px-[0px] py-[3px] leading-none "
         aria-live="polite"
+        :title="proxyBadgeTitle"
       >
         <span class="icon-[mdi--wifi] text-[15px]"></span>
         <span class="truncate">{{ proxyBadgeText }}</span>

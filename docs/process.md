@@ -3,7 +3,7 @@
 > 本文档记录项目当前状态、待完成事项、版本完成情况和时间线，是面向维护者的进展摘要。
 > 详细实施阶段、逐步要求、路径范围和验收标准以 `[task/todo.md](../task/todo.md)` 为准。
 > 每个阶段通过验收后，必须在同一次收尾中更新 `task/todo.md` 的执行结果和本文档的进展归档；没有验证证据的事项不得标为完成。
-> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 / 2026-08-25 会话运行记录。
+> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 / 2026-08-25 / 2026-08-26 会话运行记录。
 
 ## 一、待完成的内容
 
@@ -59,6 +59,15 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 - **阶段 1 补充验证（2026-08-26）**：修复 OpenAI Chat 纯文本 `content` 数组兼容性，补充流式首块 `assistant` 角色，并严格拒绝非 `null` 的空 `tools` 数组。新增真实 TCP listener smoke 在隔离 `127.0.0.1:18091` 上依次验证 `/v1/models`、非流式 Chat 和流式 Chat；Provider 使用内存 fixture，未连接真实上游。`18080`、`18090` 未被启动、停止或替换。
 
+### 0.8 双集成导航与数据概览（实现已落地，Wails 视觉未做）
+
+2026-08-26 已按已批准计划 `.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md` 把主窗口改成五页同层导航，`delivery_status=verified-partial`。合同见工作决策基线 §7.4/§10.13、系统 Design §4.1/§10.1/§14.15，任务证据见 `task/todo.md` 的 `dual-nav-overview-20260826`。
+
+- 页面：数据概览 `/`、Cursor 集成 `/cursor`、网关集成 `/gateway`、上游模型 `/models`、系统设置 `/settings`。侧栏短名为「概览 / Cursor / 网关 / 模型 / 设置」。Cursor 与 Gateway 同层，不是父子模块。旧 `/config`、`/model-config` 分别重定向到设置和模型页。主窗口默认 `1100×720`，最小 `980×640`。
+- 保存：`SaveGatewayConfig` 只合并启用状态、监听地址和公开模型映射，磁盘 token 保留；Cursor / 模型 / 系统设置各有独立 section 入口。启停只使用已保存配置；Gateway dirty 时提示先保存本页。
+- 运行隔离：Gateway 仍只操作 `127.0.0.1:18091`，不启动 MITM，不改变 18080/18090。复制 token 区分尚未生成、WebView 拒绝和成功。
+- 数据概览：`GetHomeMetricsReport` 从 `usage.json` 的 `daily[]` 按 `7d` / `30d` / `all` 过滤并聚合 KPI；时区固定 UTC。首期没有近 1 小时、今日、自定义范围，也没有小时热力图；不用 `recent_events` 冒充完整日历。
+- 本轮文档收口只修改决策基线、系统 Design、`task/todo.md` 和本文，未重跑 Go/前端命令，未做 Wails 窗口视觉点击。不得声称视觉验收已完成，不得标 accepted。
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -241,6 +250,7 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 ### 2. 按时间索引
 
+- **2026-08-26**：按已批准双集成导航计划落地五页同层控制面、Gateway section 保存/运行隔离和数据概览 `GetHomeMetricsReport`（`7d`/`30d`/`all`，UTC daily）。决策基线 §7.4/§10.13、系统 Design §4.1/§10.1/§14.15 与 `task/todo.md` 的 `dual-nav-overview-20260826` 已同步。本轮只改文档；Wails 视觉点击未做，交付保持 `verified-partial`。
 - **2026-08-24**：198 远程 CLI 方案 A 隧道落地；浏览器终端由 ttyd 换成 WeTTY。随后修复 HTTPS 反代下 WeTTY helmet 只放行 `ws://`、浏览器 `wss://` 被 CSP 拦导致终端约 10 秒断开的问题；再将 `X-Frame-Options` 从 `DENY` 改为 `SAMEORIGIN`（并加 `frame-ancestors 'self'`），避免 WeTTY 同源 xterm 配置 iframe 被拦。`https://172.16.23.198/` 仍为 HTTPS + HTTP Basic，7681 仅 loopback。
 - **2026-08-22（`v0.0.49.2`）**：完成 Agent transcript reasoning/thinking 公开投影修复、全套验证、三平台资产构建与 GitHub Release。发布提交和标签均指向 `487856170b29380671477e843d7fec15250323ae`；远端资产与本地 SHA-256 一致；`v0.0.49.1` 保持不可变；未完成 exporter 与 subagent recorder 未纳入补丁版。
 

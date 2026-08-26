@@ -106,9 +106,13 @@ func (s *ProxyService) SetBaseURL(baseURL string) (ProxyState, error) {
 	return s.core.SetBaseURL(baseURL)
 }
 
-// LoadUserConfig 用于处理与 LoadUserConfig 相关的逻辑。
+// LoadUserConfig 返回给前端的配置不含 Gateway token 明文。
 func (s *ProxyService) LoadUserConfig() (UserConfig, error) {
-	return s.core.LoadUserConfig()
+	cfg, err := s.core.LoadUserConfig()
+	if err != nil {
+		return cfg, err
+	}
+	return serverconfig.RedactGatewayTokenForUI(cfg), nil
 }
 
 // SaveUserConfig 用于处理与 SaveUserConfig 相关的逻辑。
@@ -116,14 +120,42 @@ func (s *ProxyService) SaveUserConfig(cfg UserConfig) error {
 	return s.core.SaveUserConfig(cfg)
 }
 
-// ExportUserConfig 将当前完整配置导出为 YAML 文件。
+// SaveGatewayConfig 只保存 Gateway 配置块，避免覆盖其他页面草稿。
+func (s *ProxyService) SaveGatewayConfig(cfg UserConfig) error {
+	return s.core.SaveGatewayConfig(cfg)
+}
+
+// SaveModelAdapters 只保存上游模型配置块。
+func (s *ProxyService) SaveModelAdapters(cfg UserConfig) error {
+	return s.core.SaveModelAdapters(cfg)
+}
+
+// SaveCursorConfig 只保存 Cursor 集成配置块。
+func (s *ProxyService) SaveCursorConfig(cfg UserConfig) error {
+	return s.core.SaveCursorConfig(cfg)
+}
+
+// SaveSystemSettings 只保存系统设置配置块。
+func (s *ProxyService) SaveSystemSettings(cfg UserConfig) error {
+	return s.core.SaveSystemSettings(cfg)
+}
+
+// SaveHomeMetrics 只保存首页统计口径。
+func (s *ProxyService) SaveHomeMetrics(cfg UserConfig) error {
+	return s.core.SaveHomeMetrics(cfg)
+}
+
 func (s *ProxyService) ExportUserConfig(path string) (string, error) {
 	return s.core.ExportUserConfig(path)
 }
 
 // ImportUserConfig 从 YAML 文件校验并替换当前完整配置。
 func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
-	return s.core.ImportUserConfig(path)
+	cfg, err := s.core.ImportUserConfig(path)
+	if err != nil {
+		return cfg, err
+	}
+	return serverconfig.RedactGatewayTokenForUI(cfg), nil
 }
 
 // GetCursorAccountStatus 返回 cursor-byok 独立 Cursor 账号的脱敏状态。

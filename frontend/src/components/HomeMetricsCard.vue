@@ -161,12 +161,20 @@ const cacheTooltipContent = computed(() => {
 
 const turnsTooltipContent = computed(() =>
   [
-    "按历史记录里扫描到的回合 summary 汇总。",
+    "按历史记录里扫描到的回合 summary 汇总，不是上游 LLM 调用次数。",
     "",
     `总轮次：${formatMetricValue(props.metrics?.turnsTotal)}`,
     `有效轮次：${formatMetricValue(props.metrics?.validTurnsTotal)}`,
     `异常轮次：${formatMetricValue(props.metrics?.invalidTurnsTotal)}`,
     `有效占比：${formatRateLabel(validTurnsRate.value)}`,
+  ].join("\n"),
+);
+
+const providerCallsTooltipContent = computed(() =>
+  [
+    "按实际上游 LLM 调用次数汇总，与对话轮次不是同一口径。",
+    "",
+    `LLM 调用：${formatMetricValue(props.metrics?.providerCallsTotal)}`,
   ].join("\n"),
 );
 
@@ -302,9 +310,9 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
       </div>
 
       <div
-        class="mt-[-4px] grid grid-cols-4 gap-0 overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] h-[130px]"
+        class="mt-[-4px] grid grid-cols-2 min-[1100px]:grid-cols-5 gap-px overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-border)]"
       >
-        <div class="min-w-0 px-4 py-4 flex flex-col justify-between">
+        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
           <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>缓存命中率</span>
             <Tooltip>
@@ -332,9 +340,7 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           <CacheHitRateChart :rate="selectedCacheHitRate" />
         </div>
 
-        <div
-          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
-        >
+        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
           <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>对话轮次</span>
             <Tooltip :content="turnsTooltipContent" />
@@ -360,9 +366,26 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           </div>
         </div>
 
-        <div
-          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
-        >
+        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
+          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+            <span>LLM 调用</span>
+            <Tooltip :content="providerCallsTooltipContent" />
+          </div>
+          <div>
+            <div
+              class="truncate text-[30px] leading-none text-[var(--color-text)]"
+              style="font-family: var(--font-num)"
+              :title="formatInteger(metrics.providerCallsTotal)"
+            >
+              {{ formatCompactInteger(metrics.providerCallsTotal) }}
+            </div>
+            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+              上游调用次数
+            </div>
+          </div>
+        </div>
+
+        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
           <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>Token 消耗</span>
             <Tooltip :content="tokensTooltipContent" />
@@ -384,9 +407,7 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           </div>
         </div>
 
-        <div
-          class="min-w-0 border-l border-[var(--color-border)] px-4 py-4 flex flex-col justify-between"
-        >
+        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
           <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
             <span>价值估算</span>
             <Tooltip :content="costTooltipContent" />
@@ -407,6 +428,12 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
             </div>
           </div>
         </div>
+      </div>
+      <div
+        v-if="error"
+        class="rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs text-[var(--color-error-text)]"
+      >
+        {{ error }}
       </div>
     </div>
   </div>

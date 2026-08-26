@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "0.0.49.6"
+		"file_version": "0.0.50.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.0.49.6",
-			"CompanyName": "Cursor助手",
-			"FileDescription": "Cursor助手",
-			"LegalCopyright": "© 2026, Cursor助手",
-			"ProductName": "Cursor助手",
-			"Comments": "Cursor助手"
+			"ProductVersion": "0.0.50.0",
+			"CompanyName": "Gateway-byok",
+			"FileDescription": "Gateway-byok",
+			"LegalCopyright": "© 2026, Gateway-byok",
+			"ProductName": "Gateway-byok",
+			"Comments": "Gateway-byok"
 		}
 	}
 }

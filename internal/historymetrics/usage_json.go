@@ -7,6 +7,19 @@ import (
 	"os"
 )
 
+type usageDaily struct {
+	Date              string `json:"date"`
+	ProviderCalls     int64  `json:"provider_calls"`
+	TurnsTotal        int64  `json:"turns_total"`
+	ValidTurnsTotal   int64  `json:"valid_turns_total"`
+	InvalidTurnsTotal int64  `json:"invalid_turns_total"`
+	InputTokens       int64  `json:"input_tokens"`
+	OutputTokens      int64  `json:"output_tokens"`
+	CacheReadTokens   int64  `json:"cache_read_tokens"`
+	CacheWriteTokens  int64  `json:"cache_write_tokens"`
+	TotalTokens       int64  `json:"total_tokens"`
+}
+
 type usageFileDocument struct {
 	Totals struct {
 		ProviderCalls     int64 `json:"provider_calls"`
@@ -19,6 +32,7 @@ type usageFileDocument struct {
 		CacheWriteTokens  int64 `json:"cache_write_tokens"`
 		TotalTokens       int64 `json:"total_tokens"`
 	} `json:"totals"`
+	Daily []usageDaily `json:"daily"`
 }
 
 func LoadUsageSummary(path string) (Summary, error) {
@@ -51,5 +65,20 @@ func LoadUsageSummary(path string) (Summary, error) {
 		CacheReadTokens:    totals.CacheReadTokens,
 		CacheWriteTokens:   totals.CacheWriteTokens,
 		CacheHitRate:       cacheHitRateFromTotals(totals),
+		Daily:              normalizeDaily(doc.Daily),
 	}, nil
+}
+
+func normalizeDaily(items []usageDaily) []DailySummary {
+	result := make([]DailySummary, 0, len(items))
+	for _, item := range items {
+		result = append(result, DailySummary{
+			Date: item.Date, ProviderCalls: item.ProviderCalls, TurnsTotal: item.TurnsTotal,
+			ValidTurnsTotal: item.ValidTurnsTotal, InvalidTurnsTotal: item.InvalidTurnsTotal,
+			InputTokens: item.InputTokens, OutputTokens: item.OutputTokens,
+			RequestTokens: item.TotalTokens, PromptTokens: item.InputTokens + item.CacheReadTokens + item.CacheWriteTokens,
+			CacheReadTokens: item.CacheReadTokens, CacheWriteTokens: item.CacheWriteTokens,
+		})
+	}
+	return result
 }

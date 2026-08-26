@@ -165,6 +165,31 @@ flowchart LR
 
 注释：控制面负责“用户配置与本地服务生命周期”，流量面负责“让 Cursor 请求进入本地 backend”，Agent Runtime 负责“把 Cursor Agent 协议翻译成用户模型调用并回灌工具结果”。
 
+### 4.1 控制面双集成导航
+
+主窗口控制面按已批准计划拆成五条同层路由，由 [`frontend/src/router/index.js`](../frontend/src/router/index.js) 与 [`frontend/src/layouts/MainLayout.vue`](../frontend/src/layouts/MainLayout.vue) 共用一个壳。产品名称与保存合同见工作决策基线 §10.13。
+
+```mermaid
+flowchart LR
+    App[主窗口 1100x720]
+    App --> Overview["数据概览 /"]
+    App --> Cursor["Cursor 集成 /cursor"]
+    App --> Gateway["网关集成 /gateway"]
+    App --> Models["上游模型 /models"]
+    App --> Settings["系统设置 /settings"]
+    Cursor --> Runtime[共享模型运行时]
+    Gateway --> Runtime
+    Models --> Runtime
+```
+
+实现约束：
+
+- 侧栏短名为「概览 / Cursor / 网关 / 模型 / 设置」；页面标题使用完整名称。Cursor 与 Gateway 显示运行状态圆点；Gateway 未启用显示「未启用」，运行失败显示告警。
+- 旧 `/config` 重定向到 `/settings`，旧 `/model-config` 重定向到 `/models`。模型配置不再打开独立窗口。
+- 离开 dirty 页面时由路由守卫确认并丢弃本页草稿；各页通过 `SaveCursorConfig` / `SaveGatewayConfig` / `SaveModelAdapters` / `SaveSystemSettings` 做 section 合并，不提交整份用户配置覆盖其他页。
+- 启停 Cursor 只走 `StartProxy` / `StopProxy`；启停 Gateway 只走独立 `StartGateway` / `StopGateway`。两者不共用一个 `serviceBusy` 语义去阻塞对方生命周期。
+- 本小节描述当前源码中的导航与保存接线。Wails 窗口视觉点击不属于本 PRD 的已确认运行证据。
+
 ## 5. 模块职责边界
 
 | 模块 | 主要路径 | 职责 | 不应承担的职责 |
@@ -406,6 +431,33 @@ flowchart TD
 - `conversation.lock` 保护同一 conversation 的并发写入。
 - `logs/traces/<session>/events.jsonl` 和 payload 文件是版本化诊断输入，不是业务事实源；客户端不得反向读取它们驱动路由、会话或 UI 状态。
 - `basic` 日志禁止正文；用户明确启用的本机 `full` 可以保存写盘前已清除凭据的业务原文。广告缓存、更新临时包、审计文件和任何日志模式都不得包含 API Key、Authorization、Cookie 或完整敏感 headers。
+
+### 10.1 数据概览 metrics report 数据流
+
+数据概览不扫描 `context.json` 或 `recent_events` 现场重算历史。趋势、日历热力图和范围内 KPI 都从 `usage.json` 的 `daily[]` 投影。
+
+```mermaid
+flowchart TD
+    ProviderEvents[Provider / turn 终态] --> UsageStore[forwarder UsageFileStore]
+    UsageStore --> UsageJson["usage.json daily[]"]
+    UsageJson --> LoadSummary[historymetrics.LoadUsageSummary]
+    LoadSummary --> FilterRange["GetHomeMetricsReport range=7d|30d|all"]
+    FilterRange --> Report["HomeMetricsReport range timezone summary daily"]
+    Report --> HomeUI[数据概览 KPI / 趋势 / 日历]
+    HomeUI -->|刷新| FilterRange
+    HomeUI -->|重置| ResetUsage[ResetHomeMetricsSummary]
+    ResetUsage --> UsageStore
+```
+
+合同：
+
+- Wails 入口是 [`internal/bridge/metrics.go`](../internal/bridge/metrics.go) 的 `GetHomeMetricsReport(rangeName)`；前端经 `getHomeMetricsReport` 写入 `appState.homeMetricsReport`。
+- `range` 只实现 `7d`、`30d`、`all`，未知值归一为 `all`。`7d`/`30d` 按 UTC 日历日截取含今天在内的最近 N 天；空日期由前端热力图按区间补零，后端不虚构小时桶。
+- `timezone` 固定返回 `UTC`，与现有 usage 写入口径一致。页面必须标明该时区。
+- `summary` 由过滤后的 `daily[]` 再聚合：`providerCallsTotal`、`turnsTotal`、`validTurnsTotal`、`invalidTurnsTotal`、Token 与缓存命中率。`providerCallsTotal` 不得被前端映射成 `turnsTotal`。
+- 全量 KPI 仍可通过 `GetHomeMetricsSummary` 读取；概览趋势切换必须以 report 接口为准，保证 KPI 与图表使用同一范围。
+- 重置只调用 `UsageFileStore.Reset()`，清零聚合与 `daily[]`，不删除会话 history。
+- 读取失败必须把错误投影到页面并提供重试；无 `daily[]` 时保留零值 KPI 并显示「暂无按日数据」。
 
 ## 11. 模型适配与 provider 数据流
 
@@ -1402,6 +1454,34 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 入站观测复用现有 process sink 的 `request_started`/`request_finished` 事件，不修改 MITM 或公共 schema。事件只含 HTTP method/path/status/字节数、`client_protocol` 和公开别名 `public_model_id`；不记录 Authorization、token、请求正文、tool 参数或 Provider 凭据。物理 `channel_id` 继续只由已有 Provider fallback 事件产生，避免在入口伪造渠道事实。日志分析器 allowlist 仅新增上述两个入站字段。
 
 验收必须证明 Gateway 可在 Cursor backend/MITM/Cursor 设置均未运行时启动和停止，且 Cursor 停止不会影响其 listener；反向启动/停止不改变 Cursor 状态。UI/API 和观测失败保持 Gateway 独立错误，不污染 Cursor `lastError`。
+
+## 14.15 DESIGN-DUAL-NAV-OVERVIEW-001：双集成导航与数据概览
+
+- **Design Readiness**：`approved`（计划 `.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md`）。
+- **决策时间**：2026-08-26。
+- **适用范围**：主窗口导航壳、五页路由、section 保存、Gateway token 复制与启停文案、数据概览 daily 报告。
+- **不包含**：把 Gateway 提升为产品根节点；修改 Cursor 18080/18090、MITM、工具桥；新增远程监听或 Gateway 协议；用 `recent_events` 伪造完整热力图；小时级热力图。
+
+### 14.15.1 导航与窗口
+
+五页共用主窗口：`/` 数据概览、`/cursor` Cursor 集成、`/gateway` 网关集成、`/models` 上游模型、`/settings` 系统设置。旧路由重定向见 §4.1。主窗口默认 `1100×720`、最小 `980×640`，由 [`internal/app/runner.go`](../internal/app/runner.go) 创建。`App.vue` / `MainLayout.vue` 以 `MAIN_NAV_PATHS` 判断主窗口、广告和更新，不再用 `route.path === "/"`。
+
+### 14.15.2 Section 保存与运行隔离
+
+配置存储在锁内 `readLatest → merge section → Normalize → 原子写入`：
+
+| 入口 | 合并字段 | 必须保留 |
+| --- | --- | --- |
+| `SaveGatewayConfig` | `gateway.enabled`、`listenAddr`、`publicModels` | 磁盘 token、其他页面、`lastAgentModelHash` |
+| `SaveCursorConfig` | `routing`、`BackendListenAddr`、`ProxyListenAddr`、`ProviderStreamIdleTimeout` | Gateway、模型、系统设置、hash |
+| `SaveModelAdapters` | `modelAdapters` | Gateway token、系统设置、Cursor 字段；映射目标失效则拒绝 |
+| `SaveSystemSettings` | `observability`、`appearance`、`advertising`、`updates` | Gateway token、Cursor 运行配置、模型 |
+
+前端每页独立 dirty；启停只读已保存配置。Gateway 启动失败不回滚 Cursor；Cursor 启停不操作 18091。
+
+### 14.15.3 概览报告
+
+见 §10.1。首期范围仅 `7d` / `30d` / `all`。本设计不把 Wails 视觉点击写成已确认证据。
 
 ## 15. 核心不变量
 

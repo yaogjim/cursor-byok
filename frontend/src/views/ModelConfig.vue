@@ -9,13 +9,15 @@ import { useConfigTransfer } from "@/composables/useConfigTransfer";
 import Sortable from "sortablejs";
 import {
   appState,
+  configSectionDirty,
+  configSectionStatusText,
   createEmptyModelAdapter,
   deleteModelAdapterAt,
   duplicateModelAdapterAt,
   getModelAdapterTestResultByID,
+  persistScopedUserConfig,
   reloadUserConfig,
   runModelAdapterTest,
-  saveModelAdapterOrder,
   startModelAdapterTest,
   toUserError,
 } from "@/state/appState";
@@ -44,7 +46,6 @@ const editorIndex = ref(-1);
 const editorAdapter = ref(null);
 const editorSession = ref(0);
 const modelGrid = ref(null);
-const sortSaving = ref(false);
 const batchActiveCalls = new Set();
 let batchStopRequested = false;
 let sortable = null;
@@ -182,20 +183,12 @@ function syncSortable() {
   }
   sortable.option(
     "disabled",
-    sortSaving.value || appState.configSaving || batchTesting.value,
+    appState.configSaving || batchTesting.value,
   );
   sortable.sort(filteredAdapters.value.map((adapter) => adapter.id), false);
 }
 
-async function restoreModelOrder(previousAdapters) {
-  try {
-    await reloadUserConfig({ modelAdaptersOnly: true });
-  } catch (_error) {
-    appState.modelAdapters = previousAdapters;
-  }
-}
-
-async function handleModelSort(event) {
+function handleModelSort(event) {
   const oldIndex = event.oldDraggableIndex ?? event.oldIndex;
   const newIndex = event.newDraggableIndex ?? event.newIndex;
   if (
@@ -234,22 +227,8 @@ async function handleModelSort(event) {
       sort: index + 1,
     }));
 
-  sortSaving.value = true;
   appState.modelAdapters = nextAdapters;
-  try {
-    const result = await saveModelAdapterOrder(nextAdapters.map((adapter) => adapter.id));
-    if (!result.ok) {
-      await restoreModelOrder(previousAdapters);
-      showActionError("排序失败", result.error);
-    }
-  } catch (error) {
-    await restoreModelOrder(previousAdapters);
-    showActionError("排序失败", toUserError(error));
-  } finally {
-    sortSaving.value = false;
-    await nextTick();
-    syncSortable();
-  }
+  void nextTick().then(syncSortable);
 }
 
 watch(
@@ -288,6 +267,15 @@ async function handleDuplicateModelAdapter(index) {
   if (!result.ok) {
     showActionError("复制失败", result.error);
   }
+}
+
+async function handleSavePage() {
+  const result = await persistScopedUserConfig("models");
+  if (!result.ok) {
+    showActionError("保存失败", result.error);
+    return;
+  }
+  message("本页配置已保存");
 }
 
 function getAdapterTestResult(adapter) {
@@ -390,6 +378,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex h-full min-h-0 flex-col pt-0 text-[var(--color-text)] overflow-hidden">
     <div class="shrink-0 pb-4">
+      <div class="flex items-start justify-between gap-4 px-4 pb-3">
+        <div class="text-xs text-[var(--color-text-muted)]">
+          Gateway 的公开模型别名在网关集成页管理；本页只管理上游适配器。
+        </div>
+        <span
+          class="shrink-0 text-xs"
+          :class="configSectionDirty.models ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--color-text-muted)]'"
+        >
+          {{ configSectionStatusText("models") }}
+        </span>
+      </div>
       <div class="flex items-center justify-between gap-4 px-4">
         <div class="center-row gap-2">
           <button
@@ -409,26 +408,29 @@ onBeforeUnmount(() => {
         <div class="center-row gap-2">
           <Button
             variant="default"
-            :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy || appState.serviceRunning || appState.backendRunning || appState.proxyRunning"
+            :disabled="appState.configSaving || batchTesting || configTransferBusy || appState.serviceRunning || appState.backendRunning || appState.proxyRunning"
             @click="handleImportConfig"
           >
             导入配置
           </Button>
           <Button
             variant="default"
-            :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy"
+            :disabled="appState.configSaving || batchTesting || configTransferBusy"
             @click="handleExportConfig"
           >
             导出配置
           </Button>
           <Button
             variant="default"
-            :disabled="sortSaving || appState.configSaving || configTransferBusy || (!batchTesting && filteredAdapters.length === 0)"
+            :disabled="appState.configSaving || configTransferBusy || (!batchTesting && filteredAdapters.length === 0)"
             @click="handleTestAllModelAdapters"
           >
             {{ batchButtonText }}
           </Button>
-          <Button variant="primary" :disabled="sortSaving || appState.configSaving || batchTesting || configTransferBusy" @click="openEditor()">新增模型</Button>
+          <Button variant="primary" :disabled="appState.configSaving || batchTesting || configTransferBusy" @click="openEditor()">新增模型</Button>
+          <Button variant="primary" :disabled="appState.configSaving || batchTesting || configTransferBusy" @click="handleSavePage">
+            {{ appState.configSaving ? "保存中..." : "保存本页" }}
+          </Button>
         </div>
       </div>
     </div>
@@ -453,7 +455,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="model-sort-handle absolute left-2 top-2 z-10 center-row h-[30px] w-[30px] shrink-0 touch-none cursor-grab justify-center rounded-[6px] border border-transparent bg-transparent text-transparent opacity-0 outline-none transition-[opacity,color,border-color,background-color] focus-visible:border-[#10AD5D] focus-visible:bg-[#333333] focus-visible:text-white focus-visible:opacity-100 active:cursor-grabbing group-hover:border-[#454545] group-hover:bg-[#333333] group-hover:text-white group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
-              :disabled="sortSaving || appState.configSaving || batchTesting"
+              :disabled="appState.configSaving || batchTesting"
               aria-label="拖拽排序"
               title="拖拽排序"
               @click.stop
@@ -490,14 +492,14 @@ onBeforeUnmount(() => {
               <div class="center-row shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
                 <Button
                   variant="default"
-                  :disabled="sortSaving || appState.configSaving || batchTesting || isAdapterTesting(adapter)"
+                  :disabled="appState.configSaving || batchTesting || isAdapterTesting(adapter)"
                   @click="handleTestModelAdapter(adapter)"
                 >
                   {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
                 </Button>
-                <Button variant="default" :disabled="sortSaving || appState.configSaving" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
-                <Button variant="default" :disabled="sortSaving || appState.configSaving" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
-                <Button variant="text" :disabled="sortSaving || appState.configSaving"
+                <Button variant="default" :disabled="appState.configSaving" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
+                <Button variant="default" :disabled="appState.configSaving" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
+                <Button variant="text" :disabled="appState.configSaving"
                   @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</Button>
               </div>
             </div>

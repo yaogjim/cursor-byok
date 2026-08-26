@@ -7,7 +7,7 @@ includes:
   linux: ./build/linux/Taskfile.yml
 
 vars:
-  APP_NAME: "Cursor助手"
+  APP_NAME: "Gateway-byok"
   BIN_DIR: "bin"
   APP_VERSION:
     sh: 'go run ./scripts/release version -config ./build/config.yml'

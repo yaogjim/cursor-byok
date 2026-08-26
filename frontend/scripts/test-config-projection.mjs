@@ -966,4 +966,22 @@ assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must
 const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
 
+const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
+const routerSource = readFileSync(path.join(frontendSrc, "router/index.js"), "utf8");
+assert(appStateSource.includes('"/models": "models"'), "models route must map to models section");
+assert(appStateSource.includes("snapshotModelsSection"), "models section must have a dirty snapshot");
+assert(appStateSource.includes("modelsEditorDraftDirty"), "editor draft must participate in models dirty");
+assert(appStateSource.includes("unresolvedGatewayPublicModelsError"), "model save must check gateway public models");
+const includeCacheWriteSaver = extractSourceFunction(appStateSource, "saveIncludeCacheWriteInHitRate");
+assert(includeCacheWriteSaver.includes("saveHomeMetrics"), "cache hit-rate toggle must use section save");
+assert(!includeCacheWriteSaver.includes("persistConfigPayload"), "cache hit-rate toggle must not full-save user config");
+assert(clientApiSource.includes("SaveHomeMetrics"), "client API must expose SaveHomeMetrics");
+assert(modelConfigSource.includes("configSectionStatusText(\"models\")"), "models page must show section status");
+assert(modelConfigSource.includes("persistScopedUserConfig(\"models\")"), "models page must save its own section");
+assert(modelConfigSource.includes("handleSavePage"), "models page must offer save-this-page");
+const sortHandler = extractSourceFunction(modelConfigSource, "handleModelSort");
+assert(!sortHandler.includes("saveModelAdapterOrder"), "model sort must stay a page draft until save");
+assert(routerSource.includes("isRouteConfigDirty"), "router must confirm leaving dirty config pages");
+assert(editorSource.includes("setModelsEditorDraftDirty"), "ModelEditor must report unsaved draft dirty");
+
 console.log("config projection tests passed");

@@ -38,6 +38,157 @@ func (s *ProxyService) loadUserConfig() (UserConfig, error) {
 }
 
 // SaveUserConfig 用于处理与 SaveUserConfig 相关的逻辑。
+// SaveGatewayConfig 只保存 Gateway 配置块，保留其他页面和 token 字段。
+func (s *ProxyService) SaveGatewayConfig(cfg UserConfig) error {
+	if s == nil {
+		return nil
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ConfigManager().SaveGatewayConfig(ctx, cfg.Gateway)
+	} else if s.store != nil {
+		normalized, err = s.store.SaveGatewayConfig(ctx, cfg.Gateway)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	s.reconcileGatewayIfServiceRunning(normalized)
+	return nil
+}
+
+// SaveModelAdapters 只保存模型适配器配置块。
+func (s *ProxyService) SaveModelAdapters(cfg UserConfig) error {
+	if s == nil {
+		return nil
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ConfigManager().SaveModelAdapters(ctx, cfg.ModelAdapters)
+	} else if s.store != nil {
+		normalized, err = s.store.SaveModelAdapters(ctx, cfg.ModelAdapters)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	return nil
+}
+
+// SaveCursorConfig 只保存 Cursor 集成配置块。
+func (s *ProxyService) SaveCursorConfig(cfg UserConfig) error {
+	if s == nil {
+		return nil
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ConfigManager().SaveCursorConfig(ctx, cfg)
+	} else if s.store != nil {
+		normalized, err = s.store.SaveCursorConfig(ctx, cfg)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	return nil
+}
+
+// SaveSystemSettings 只保存系统设置配置块。
+func (s *ProxyService) SaveSystemSettings(cfg UserConfig) error {
+	if s == nil {
+		return nil
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ConfigManager().SaveSystemSettings(ctx, cfg)
+	} else if s.store != nil {
+		normalized, err = s.store.SaveSystemSettings(ctx, cfg)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	return nil
+}
+
+// SaveHomeMetrics 只保存首页缓存命中率口径，避免覆盖其他页面草稿。
+func (s *ProxyService) SaveHomeMetrics(cfg UserConfig) error {
+	if s == nil {
+		return nil
+	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	app := application.Get()
+	ctx := context.Background()
+	if app != nil {
+		ctx = app.Context()
+	}
+	var (
+		normalized UserConfig
+		err        error
+	)
+	if s.backendHost != nil {
+		normalized, err = s.backendHost.ConfigManager().SaveHomeMetrics(ctx, cfg)
+	} else if s.store != nil {
+		normalized, err = s.store.SaveHomeMetrics(ctx, cfg)
+	} else {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	s.emitUserConfigChanged(normalized)
+	return nil
+}
+
 func (s *ProxyService) SaveUserConfig(cfg UserConfig) error {
 	if s == nil {
 		return nil
@@ -117,7 +268,7 @@ func (s *ProxyService) emitUserConfigChanged(cfg UserConfig) {
 	if app == nil {
 		return
 	}
-	app.Event.Emit("user-config:changed", cfg)
+	app.Event.Emit("user-config:changed", serverconfig.RedactGatewayTokenForUI(cfg))
 }
 
 // resolveUserConfigPath 用于处理与 resolveUserConfigPath 相关的逻辑。

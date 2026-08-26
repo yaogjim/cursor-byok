@@ -174,6 +174,31 @@ func StripGatewayToken(cfg Config) Config {
 	return cfg
 }
 
+// RedactGatewayTokenForUI clears plaintext token for LoadUserConfig/events.
+// TokenConfigured is preserved so the UI can still copy/rotate via dedicated APIs.
+func RedactGatewayTokenForUI(cfg Config) Config {
+	cfg.Gateway.Token = ""
+	if cfg.Gateway.PublicModels == nil {
+		cfg.Gateway.PublicModels = []GatewayPublicModel{}
+	}
+	return cfg
+}
+
+func validateGatewayPublicModelTargets(cfg Config) error {
+	known := knownAdapterIDs(cfg.ModelAdapters)
+	for _, item := range cfg.Gateway.PublicModels {
+		target := strings.TrimSpace(item.TargetAdapterID)
+		id := strings.TrimSpace(item.ID)
+		if target == "" {
+			return fmt.Errorf("gateway.publicModels %q 未选择目标适配器", id)
+		}
+		if _, exists := known[target]; !exists {
+			return fmt.Errorf("gateway.publicModels %q 指向的适配器将失效，请先更新网关公开模型映射", id)
+		}
+	}
+	return nil
+}
+
 func knownAdapterIDs(adapters []ModelAdapterConfig) map[string]struct{} {
 	ids := make(map[string]struct{}, len(adapters))
 	for _, adapter := range adapters {

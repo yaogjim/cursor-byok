@@ -5,7 +5,7 @@
 - **本地决策基线**：`noad@e9b6d701d63f3cc315676afffaddc3128c7db7cc`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
 - **原始主线基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **记录范围**：截至客户端体验治理代码提交；运行时窗口和网络零请求验收仍按功能差异 PRD 与上游同步说明执行
+- **记录范围**：截至双集成导航与数据概览合同；运行时窗口、Wails 视觉点击和网络零请求验收仍按功能差异 PRD 与上游同步说明执行
 - **状态**：决策基线；不等同于全部决策已经实现
 
 ## 1. 文档职责
@@ -22,6 +22,7 @@
 
 - [`Cursor BYOK 功能可用、隐私与稳定性验证路线图`](../.cursor/plans/cursor_byok_功能可用、隐私与稳定性验证路线图_22a7548b.plan.md)
 - [`客户端体验治理`](../.cursor/plans/客户端体验治理_64db96aa.plan.md)
+- [`双集成导航与数据概览改造计划`](../.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md)
 
 ## 2. 产品目标
 
@@ -214,6 +215,18 @@ updates:
 - 状态机为 `check -> available -> 用户确认下载 -> downloading -> ready -> 用户确认安装`。
 - `mandatory` 只能改变提示，不能跳过下载或安装确认。
 - 资源必须是当前项目 GitHub Release 的 HTTPS 地址，必须有 SHA-256，限制包体大小，并在取消、错误和退出时清理临时包。
+
+### 7.4 双集成主导航
+
+主窗口采用五页同层导航，页面标题使用完整名称，侧栏可用短名。Cursor 与 Gateway 是并列集成，不是父子模块。完整合同见 §10.13。
+
+| 页面标题 | 侧栏短名 | 路由 |
+| --- | --- | --- |
+| 数据概览 | 概览 | `/` |
+| Cursor 集成 | Cursor | `/cursor` |
+| 网关集成 | 网关 | `/gateway` |
+| 上游模型 | 模型 | `/models` |
+| 系统设置 | 设置 | `/settings` |
 
 ## 8. 非目标与待决策事项
 
@@ -480,3 +493,46 @@ Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID�
 - function call/output 的 `call_id` 原样回放；reasoning 的 encrypted content 只有能保持 Provider 身份和 fallback 兼容性时才转发，否则明确拒绝，不跨不兼容渠道降级。
 - Gateway 不执行工具、不写 Cursor 当前模型；Codex 自行执行 shell/patch。真实验收使用隔离 `CODEX_HOME`、自定义 Provider 和 read-only/write 两轮任务，不读取用户登录凭据。
 - 回滚只移除 `/v1/responses`；Chat、模型别名、token、容量和 Cursor 路径保持。
+
+### 10.13 双集成导航与数据概览合同
+
+本节冻结已批准计划 `.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md` 的产品结构、保存边界和概览报告接口。它补充 §7 客户端体验与 §10.10–§10.12 Gateway 合同，不改变 Cursor 18080/18090、MITM、工具桥或 Gateway 协议能力。
+
+**产品结构**
+
+- 五个页面同属主窗口，不再把模型配置做成独立窗口：数据概览 `/`、Cursor 集成 `/cursor`、网关集成 `/gateway`、上游模型 `/models`、系统设置 `/settings`。
+- 侧栏短名固定为「概览 / Cursor / 网关 / 模型 / 设置」；页面标题使用完整名称。
+- Cursor 与 Gateway 是同层集成：都是本工具接入外部客户端或开发工具的并列入口。禁止把 Gateway 做成产品根节点，也禁止把 Cursor 降为 Gateway 子项。
+- 旧路由兼容：`/config` 重定向到 `/settings`，`/model-config` 重定向到 `/models`。
+- 主窗口默认 `1100×720`，最小 `980×640`。底部版本、代理状态、教程、作者和语言入口是主窗口全局元素。
+- 概览页只读展示 Cursor / Gateway 运行状态，不再复制「启用 Gateway」开关。
+
+**Gateway 保存范围**
+
+- 网关集成页保存只合并 `gateway.enabled`、`gateway.listenAddr`、`gateway.publicModels`。
+- token 不由本页草稿提交；存储层在锁内读取最新配置后保留磁盘 token，启用时按现有规则生成。
+- 对应入口为 `SaveGatewayConfig`。同层还有 `SaveCursorConfig`（routing、Cursor 监听/超时）、`SaveModelAdapters`（只合并 `modelAdapters` 并重校验 Gateway 映射）、`SaveSystemSettings`（observability、appearance、advertising、updates）。
+- 所有 section 保存都在存储锁内读最新配置、合并本页字段、校验、原子写入并返回最新投影；不把 token 放入普通 JSON/Wails 返回。
+- `gatewayEnabled` 是配置意图，`gatewayRunning` 是运行时事实，`dirty` 是前端本页草稿。启动/停止只使用已保存配置；本页 dirty 时必须提示「请先保存本页」，不得静默提交其他页草稿。
+
+**Gateway 运行隔离**
+
+- Gateway 继续使用独立 `http.Server` 与独立生命周期，默认 `127.0.0.1:18091`。
+- 启动 Gateway 不启动 Cursor MITM，不改变 `127.0.0.1:18080` / `127.0.0.1:18090`，不注入 Cursor 设置，不写 `lastAgentModelHash`。
+- Gateway 启停失败只进入独立 Gateway 错误；不得阻止 Cursor 启动、停止或恢复设置。
+- 复制 token 必须区分「尚未生成」「复制被 WebView 拒绝」「复制成功」；失败不得显示成功。token 明文不写入页面常驻状态、配置投影或日志。
+
+**数据概览 daily 报告接口**
+
+- 概览趋势与日历热力图的权威接口是 Wails `MetricsService.GetHomeMetricsReport(range)`。
+- 首期 `range` 只接受 `7d`、`30d`、`all`；未知值归一为 `all`。计划中的「近 1 小时 / 今日 / 自定义」尚未成为已交付合同。
+- 返回体至少包含：`range`、`timezone`（当前固定 `UTC`）、按该范围聚合的 `summary`（`providerCallsTotal`、`turnsTotal`、有效/异常轮次、Token、缓存命中率）、以及 `daily[]`。
+- `daily[]` 只来自已持久化的 `usage.json` 日桶；禁止用仅保留约 500 条的 `recent_events` 冒充完整热力图。首期不做小时级热力图。
+- 无按日数据时 KPI 可为零并显示「暂无按日数据」；读取失败必须在页面显式展示错误和重试，不得只把 `error` 传给组件而不渲染。
+- `providerCallsTotal` 与 `turnsTotal` 不得互相映射。重置统计只清零 usage 聚合，不删除会话历史。
+
+**验收与证据边界**
+
+- 自动门禁属于实现与回归范围：section 保存互不覆盖、token 保留、Gateway 独立启停、`GetHomeMetricsReport` 范围过滤、前端投影/build。
+- Wails 手工视觉验收（五页导航、窗口尺寸、复制 token、启用但未运行、趋势范围、窄窗口布局）是独立证据；未实际点击前不得标为已完成。
+- 回滚导航与 section 保存不得恢复「保存一页覆盖另一页」的整文件用户配置提交；关闭 `gateway.enabled` 仍只停止独立入口。
