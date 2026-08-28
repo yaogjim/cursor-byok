@@ -121,6 +121,33 @@ func TestBuildUpstreamRequestAllowsAuthenticatedControlPlaneIdentity(t *testing.
 	}
 }
 
+func TestBuildUpstreamRequestPreservesInboundIdentityWhenRequested(t *testing.T) {
+	request := newUpstreamTestRequest(t)
+	target, err := url.Parse("https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	built, _, err := buildUpstreamRequest(&RequestContext{
+		Request:   request,
+		TargetURL: target,
+		Method:    http.MethodPost,
+		Headers:   request.Header.Clone(),
+		Mode:      server.ModeLocal,
+		Deps:      &Dependencies{},
+	}, nil, ForwardOptions{PreserveInboundIdentity: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if built.Header.Get("Authorization") != "Bearer incoming-identity" {
+		t.Fatalf("authorization = %q, want inbound identity", built.Header.Get("Authorization"))
+	}
+	if built.Header.Get("x-cursor-checksum") != "incoming-checksum" {
+		t.Fatalf("checksum = %q, want inbound checksum", built.Header.Get("x-cursor-checksum"))
+	}
+}
+
 func newUpstreamTestRequest(t *testing.T) *http.Request {
 	t.Helper()
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://backend.local/test", nil)

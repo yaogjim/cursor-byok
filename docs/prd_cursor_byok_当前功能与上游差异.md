@@ -514,3 +514,53 @@ MERGE_MSG 记录的 **8 个文本冲突**：
 - 非阻塞残余测试风险：缺少 `IsConnected` 精确路由测试；缺少 `ForceBackgroundShell` × replay trim 交叉测试。
 - 未用 `-tags gui` 专项编译 `tools/log-analyzer/cmd/log-analyzer-gui`。
 - 用户已确认创建本地 merge commit 并推进 `noad`。本记录仍不宣称已 push；运行时未验证边界仍成立。
+
+## 15. `gateway-duo` Cursor 双渠道能力移植（未提交工作树）
+
+- **工作包**：`cursor-dual-channel-gateway-duo-20260827`
+- **记录时间**：`2026-08-27`
+- **基线**：`gateway@334f538bedab3a27ce82e4c7ef772e2553c40be2`
+- **当前分支**：`gateway-duo`（HEAD 仍为 `334f538`）
+- **状态**：已实现待验收 / `verified-partial`；**未 commit、未 push**
+- **证据口径**：自动化测试全部为 synthetic / httptest；不得声称真实 Cursor 双渠道 e2e 已验证
+
+### 15.1 实际落地
+
+| 能力 | 目标行为 | 当前状态 |
+| --- | --- | --- |
+| 真实 auth 整组保留 / 缺失注入 | `state.vscdb` 已有非空 `accessToken` 时保留整组 Cursor auth（含 refresh / email / membership），不注入本地 auth；缺失或空时才注入完整本地 auth 组；Statsig gate override 仍执行 | 已实现；synthetic 状态库测试覆盖保留、缺失注入与重复调用首组保持 |
+| 官方目录 + 本地目录 | 合并官方模型目录与本地 adapter hash 目录；LocalRelayToken 不拉取官方目录；官方失败时降级为纯本地目录 | 已实现；httptest 覆盖合并、未知 protobuf 字段保留、LocalRelayToken 跳过官方拉取 |
+| Bidi / RunSSE 按模型显式分流 | 本地 adapter hash 命中走现有 BYOK forwarder；未命中走官方 upstream；Unknown 是独立状态 | 已实现；httptest 覆盖本地命中、官方未命中、RunSSE 等待 BidiAppend |
+| 无隐式 fallback | 空 / `auto` / `fast` / `default` 与未知模型不升 Official，也不落到第一个本地 adapter；配置解析失败 fail closed | 已实现；定向测试覆盖 |
+| 官方 Authorization 透传 | 官方 upstream 保留入站 Authorization；禁止把 LocalRelayToken 发到官方 | 已实现；httptest 覆盖官方 headers 保留 |
+| 未知路径透明回源 | MITM 未分类路径透明回源且不改写 Authorization；不扩大 TAB / 插件 / MCP / FileSync / Repository / Docs 外发范围 | 已实现；path 级分类与透传测试覆盖 |
+| Connect trailer / envelope gzip / content-type | Connect unary 允许 message 后的 end-stream trailer；envelope gzip 与 HTTP `Content-Encoding` gzip 分开；入站 `connect+proto` 按兼容 envelope / content-type 回写 | 已实现；脱敏 fixture 测试覆盖 |
+
+本轮未修改 `proto/`。MITM 改为 path 级是否送本地 backend，以便官方 Agent 由 backend 按模型决策；CONNECT 仍按既有 host 白名单解密。
+
+### 15.2 阶段 5 评估（评估后不纳入本次代码改动）
+
+下列结论只说明本轮**没有**为这些主题改 Go 代码，不是功能完成或已验证声明：
+
+- 带 path 的 `/v1/models`：gateway 已有测试和实现，本轮不改。
+- OpenAI `/custom`：已有，本轮不改。
+- `required_permissions`：未找到 Go 对应字段，未凭提交标题盲移植。
+- compaction / 并发恢复：已有独立复杂实现，无复现缺陷时不替换。
+- custom context：已是配置能力，不与双渠道耦合。
+
+### 15.3 自动化证据
+
+只记录已实际跑过的结果。未连接真实 Cursor 账号或官方 API。
+
+- `git diff --check` 通过。
+- `go test -timeout 3m ./internal/...` 通过（约 19s）。
+- `go vet ./internal/...` 通过。
+- `go test -race -timeout 5m ./internal/cursor ./internal/mitm ./internal/backend/server/upstream ./internal/backend/agent/protocol` 通过。
+- 仅有既有 macOS deployment target linker warning。
+
+### 15.4 未验证边界
+
+- 未用真实 Cursor 账号登录，未对官方 API 做端到端双渠道对话。
+- 未停止或替换运行中的 `18080` / `18090` 代理，因此真实 Cursor 客户端选择官方模型与本地模型的运行时验收不在本次证据范围内。
+- 本轮没有 commit、没有 push；远程分支不因本工作树自动更新。
+- UI、统计、开机启动不在本包范围。

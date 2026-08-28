@@ -4,6 +4,55 @@
 
 ## Active Work Package
 
+WORK_PACKAGE_ID: cursor-dual-channel-gateway-duo-20260827
+STATUS: completed
+RISK_LEVEL: high
+OWNER: orchestrator
+DESIGN_READINESS: approved（已批准计划：将 Cursor 双渠道能力移植到 gateway）
+DELIVERY_STATUS: verified-partial（自动测试全部通过；无真实 Cursor 账号或官方 API 端到端验证）
+
+### CONTEXT
+
+- 基线 `gateway@334f538`；当前分支 `gateway-duo`；HEAD 仍为 `334f538`；工作树未 commit、未 push。
+- 已批准目标是官方模型与本地 BYOK 共存，而不是双令牌写入 `state.vscdb`：已有真实 Cursor auth 时整组保留、仅缺失时注入；官方目录与本地目录合并展示；BidiAppend/RunSSE 按模型显式分流；官方请求透传入站 Authorization 且禁止 LocalRelayToken；MITM 未知路径透明回源；无隐式 fallback。
+- 本包不纳入 UI、统计、开机启动；不修改 `proto/`；全部自动化证据为 synthetic / httptest。不得声称真实 Cursor 双渠道 e2e 已验证。
+
+### ACTIVE SLICES
+
+- [completed] `auth-preserve-if-present`：`state.vscdb` 已有非空 `accessToken` 时保留整组 Cursor auth（含 refresh/email/membership），不注入任何本地 auth 值；缺失或空时才注入完整本地 auth 组；Statsig gate override 仍执行。
+- [completed] `merged-catalog`：官方目录 + 本地 adapter hash 目录；LocalRelayToken 不拉取官方目录；Connect unary trailer、envelope gzip 与 HTTP gzip 分离、入站 content-type / Connect envelope 回写已修复。
+- [completed] `model-explicit-route`：BidiAppend/RunSSE 按模型 ID 分流 Local / Official / Unknown；空 / `auto` / `fast` / `default` 不升 Official；未知模型不落到第一个本地 adapter。
+- [completed] `official-auth-passthrough`：官方 upstream 保留入站 Authorization；禁止把 LocalRelayToken 发到官方。
+- [completed] `mitm-unmanaged-passthrough`：未分类路径透明回源且不改写 Authorization；不扩大 TAB / 插件 / MCP / FileSync / Repository / Docs 外发范围。
+- [completed] `auto-verify`：synthetic / httptest 全量 `internal` 测试、核心包 race、vet 通过。
+- [evaluated-excluded] `stage-5-protocol-extras`：评估后不纳入本次代码改动，见 STAGE 5 EVALUATION。
+
+### FINAL VERIFICATION EVIDENCE
+
+- 工作树：分支 `gateway-duo`，HEAD `334f538bedab3a27ce82e4c7ef772e2553c40be2`，未 commit、未 push。
+- `git diff --check` 通过。
+- `go test -timeout 3m ./internal/...` 通过（约 19s）。
+- `go vet ./internal/...` 通过。
+- `go test -race -timeout 5m ./internal/cursor ./internal/mitm ./internal/backend/server/upstream ./internal/backend/agent/protocol` 通过。
+- 测试全部为 synthetic / httptest；未连接真实 Cursor 账号或官方 API，不得标 `accepted`。
+- 仅有既有 macOS deployment target linker warning。
+
+### STAGE 5 EVALUATION（评估后不纳入本次代码改动，不是功能完成声明）
+
+- 带 path 的 `/v1/models`：gateway 已有测试和实现，本轮不改。
+- OpenAI `/custom`：已有，本轮不改。
+- `required_permissions`：未找到 Go 对应字段，未凭提交标题盲移植。
+- compaction / 并发恢复：已有独立复杂实现，无复现缺陷时不替换。
+- custom context：已是配置能力，不与双渠道耦合。
+
+### ACCEPTANCE AND ROLLBACK
+
+- 自动：auth 整组保留/缺失注入、目录合并、模型显式分流、官方 Authorization 透传、未知路径透明回源、无隐式 fallback、Connect trailer/gzip/content-type、相关 test/race/vet、`git diff --check`。
+- 真实：真实 Cursor 账号 + 官方 API 双渠道一轮对话仍是证据缺口。
+- 回滚：丢弃 `gateway-duo` 未提交工作树即可回到 `gateway@334f538`；不得回退 Chat Gateway、独立生命周期或五页导航。
+
+## Previous Work Package: Multi-Client ACP 阶段 5
+
 WORK_PACKAGE_ID: multi-client-acp-phase5-20260826
 STATUS: blocked
 RISK_LEVEL: high

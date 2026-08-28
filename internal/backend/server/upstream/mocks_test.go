@@ -3,6 +3,7 @@ package upstream
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"cursor/gen/agentv1"
@@ -20,8 +21,8 @@ func TestBuildCLIModelDetailsPreservesChannelMetadata(t *testing.T) {
 
 	got := buildCLIModelDetails(adapters)
 	want := []map[string]any{
-		{"modelId": "channel-a", "displayModelId": "channel-a", "displayName": "Model A", "displayNameShort": "Model A", "apiKeyCredentials": map[string]any{"apiKey": "provider-secret-a", "baseUrl": "https://provider-a.example/v1"}},
-		{"modelId": "channel-b", "displayModelId": "channel-b", "displayName": "Model B", "displayNameShort": "Model B", "apiKeyCredentials": map[string]any{"apiKey": "", "baseUrl": ""}},
+		{"modelId": "channel-a", "displayModelId": "channel-a", "displayName": "Model A", "displayNameShort": "Model A"},
+		{"modelId": "channel-b", "displayModelId": "channel-b", "displayName": "Model B", "displayNameShort": "Model B"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("build CLI model details: got %v, want %v", got, want)
@@ -102,8 +103,11 @@ func TestEncodeCLIModelsUsesAgentModelDetailsWireFormat(t *testing.T) {
 	if model.GetDisplayName() != "Model A" || model.GetDisplayNameShort() != "Model A" {
 		t.Fatalf("decoded display names: name=%q short=%q", model.GetDisplayName(), model.GetDisplayNameShort())
 	}
-	if credentials := model.GetApiKeyCredentials(); credentials == nil || credentials.GetApiKey() != "provider-secret" || credentials.GetBaseUrl() != "https://provider.example/v1" {
-		t.Fatalf("decoded relay credentials: %#v", credentials)
+	if credentials := model.GetApiKeyCredentials(); credentials != nil {
+		t.Fatalf("catalog leaked provider credentials: %#v", credentials)
+	}
+	if strings.Contains(string(encoded), "provider-secret") || strings.Contains(string(encoded), "https://provider.example/v1") {
+		t.Fatal("encoded catalog contained provider credentials")
 	}
 }
 

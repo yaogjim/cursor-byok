@@ -3,7 +3,7 @@
 > 本文档记录项目当前状态、待完成事项、版本完成情况和时间线，是面向维护者的进展摘要。
 > 详细实施阶段、逐步要求、路径范围和验收标准以 `[task/todo.md](../task/todo.md)` 为准。
 > 每个阶段通过验收后，必须在同一次收尾中更新 `task/todo.md` 的执行结果和本文档的进展归档；没有验证证据的事项不得标为完成。
-> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 / 2026-08-25 / 2026-08-26 会话运行记录。
+> 当前状态依据：仓库、Git 历史、项目计划及 2026-08-22 / 2026-08-24 / 2026-08-25 / 2026-08-26 / 2026-08-27 会话运行记录。
 
 ## 一、待完成的内容
 
@@ -68,6 +68,17 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 - 运行隔离：Gateway 仍只操作 `127.0.0.1:18091`，不启动 MITM，不改变 18080/18090。复制 token 区分尚未生成、WebView 拒绝和成功。
 - 数据概览：`GetHomeMetricsReport` 从 `usage.json` 的 `daily[]` 按 `7d` / `30d` / `all` 过滤并聚合 KPI；时区固定 UTC。首期没有近 1 小时、今日、自定义范围，也没有小时热力图；不用 `recent_events` 冒充完整日历。
 - 本轮文档收口只修改决策基线、系统 Design、`task/todo.md` 和本文，未重跑 Go/前端命令，未做 Wails 窗口视觉点击。不得声称视觉验收已完成，不得标 accepted。
+
+### 0.9 Cursor 双渠道能力移植（实现完成，真实运行未验证）
+
+2026-08-27 已按已批准计划在 `gateway-duo` 工作树落地 Cursor 官方模型与本地 BYOK 共存，`delivery_status=verified-partial`，未提交、未推送。基线 `gateway@334f538`，当前 HEAD 仍为该提交。任务证据见 `task/todo.md` 的 `cursor-dual-channel-gateway-duo-20260827`，工作树记录见 `docs/prd_cursor_byok_当前功能与上游差异.md` §15。
+
+- 已有非空 Cursor `accessToken` 时整组 auth 保留，不注入本地身份字段；缺失或空时才注入完整本地 auth 组；Statsig gate override 仍执行。
+- 模型目录合并官方目录与本地 adapter hash；BidiAppend/RunSSE 按模型显式分流 Local / Official / Unknown；空 / `auto` / `fast` / `default` 与未知模型不隐式升 Official，也不落到第一个本地 adapter。
+- 官方 upstream 透传入站 Authorization，禁止发送 LocalRelayToken；MITM 未分类路径透明回源且不改写 Authorization；不扩大 TAB / 插件 / MCP / FileSync / Repository / Docs 外发范围。
+- Connect unary trailer、envelope gzip 与 HTTP gzip 分离、入站 content-type / Connect envelope 回写已修复。
+- 阶段 5 评估后不纳入本次代码改动（不是功能完成声明）：带 path 的 `/v1/models` 与 OpenAI `/custom` 在 gateway 已有；`required_permissions` 未找到 Go 对应字段，未凭提交标题盲移植；compaction / 并发恢复已有独立复杂实现，无复现缺陷时不替换；custom context 已是配置能力，不与双渠道耦合。
+- 验证：`git diff --check`、`go test -timeout 3m ./internal/...`、`go vet ./internal/...`、核心包 `go test -race` 通过。全部为 synthetic / httptest。未用真实 Cursor 账号或官方 API 做端到端验证，不得声称真实双渠道 e2e 已验证，不得标 accepted。
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -250,6 +261,7 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 ### 2. 按时间索引
 
+- **2026-08-27**：在 `gateway-duo` 工作树按已批准计划落地 Cursor 双渠道：真实 auth 整组保留/缺失注入、官方+本地目录、Bidi/RunSSE 按模型显式分流、官方 Authorization 透传且禁止 LocalRelayToken、未知路径透明回源、无隐式 fallback、Connect trailer/envelope gzip/content-type 修复。自动 `internal` test/vet 与核心包 race 通过，全为 synthetic/httptest；未做真实 Cursor 账号或官方 API e2e。阶段 5 其余项评估后不纳入本次代码改动。未 commit、未 push。交付 `verified-partial`。
 - **2026-08-26**：按已批准双集成导航计划落地五页同层控制面、Gateway section 保存/运行隔离和数据概览 `GetHomeMetricsReport`（`7d`/`30d`/`all`，UTC daily）。决策基线 §7.4/§10.13、系统 Design §4.1/§10.1/§14.15 与 `task/todo.md` 的 `dual-nav-overview-20260826` 已同步。本轮只改文档；Wails 视觉点击未做，交付保持 `verified-partial`。
 - **2026-08-24**：198 远程 CLI 方案 A 隧道落地；浏览器终端由 ttyd 换成 WeTTY。随后修复 HTTPS 反代下 WeTTY helmet 只放行 `ws://`、浏览器 `wss://` 被 CSP 拦导致终端约 10 秒断开的问题；再将 `X-Frame-Options` 从 `DENY` 改为 `SAMEORIGIN`（并加 `frame-ancestors 'self'`），避免 WeTTY 同源 xterm 配置 iframe 被拦。`https://172.16.23.198/` 仍为 HTTPS + HTTP Basic，7681 仅 loopback。
 - **2026-08-22（`v0.0.49.2`）**：完成 Agent transcript reasoning/thinking 公开投影修复、全套验证、三平台资产构建与 GitHub Release。发布提交和标签均指向 `487856170b29380671477e843d7fec15250323ae`；远端资产与本地 SHA-256 一致；`v0.0.49.1` 保持不可变；未完成 exporter 与 subagent recorder 未纳入补丁版。

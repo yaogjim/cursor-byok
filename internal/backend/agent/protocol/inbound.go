@@ -35,6 +35,49 @@ func NormalizeRequestID(requestID string) string {
 	return strings.TrimSpace(requestID)
 }
 
+// ReadRequestedModelID 从 AgentClientMessage 读取本轮显式模型 ID。
+// 优先 requested_model.model_id，其次 model_details.model_id；变体字符串只保留冒号前的模型 ID。
+func ReadRequestedModelID(message *agentv1.AgentClientMessage) string {
+	if message == nil {
+		return ""
+	}
+	if runRequest := message.GetRunRequest(); runRequest != nil {
+		return firstNonEmpty(readRequestedModelID(runRequest.GetRequestedModel()), strings.TrimSpace(runRequest.GetModelDetails().GetModelId()))
+	}
+	if prewarm := message.GetPrewarmRequest(); prewarm != nil {
+		return firstNonEmpty(readRequestedModelID(prewarm.GetRequestedModel()), strings.TrimSpace(prewarm.GetModelDetails().GetModelId()))
+	}
+	return ""
+}
+
+func readRequestedModelID(model *agentv1.RequestedModel) string {
+	if model == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(model.GetModelId())
+	if raw == "" {
+		return ""
+	}
+	if model.GetIsVariantStringRepresentation() {
+		if index := strings.LastIndex(raw, ":"); index > 0 {
+			prefix := strings.TrimSpace(raw[:index])
+			if prefix != "" {
+				return prefix
+			}
+		}
+	}
+	return raw
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // DecodeAgentClientMessage 解析 hex 文本为 AgentClientMessage，并返回消息类型标签。
 func DecodeAgentClientMessage(hexData string) (*agentv1.AgentClientMessage, string, error) {
 	trimmed := strings.TrimSpace(hexData)

@@ -458,31 +458,36 @@ func (s *ProxyServer) newGoproxyHandler() *goproxy.ProxyHttpServer {
 		return action, host
 	}))
 
-	// MITM 解密后：Cursor 白名单域名转发到 backend server，其余请求由 goproxy 直连回源。
+	// CONNECT 仍按 host 白名单 MITM。解密后只把受管 path 送本地 backend，其余透明回源。
 	proxy.OnRequest().DoFunc(func(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-		req.Header.Del(HeaderServerUpstreamURL)
-
-		host := hostFromHTTPRequest(req)
-		if isWhitelistedRelayHost(host) {
-			if shouldHandleLocalCORSPreflight(req) {
-				return req, buildLocalCORSPreflightResponse(req)
-			}
-			raw := requestURL(req)
-			if parsedRaw, rawErr := rawURLForRelay(req); rawErr == nil {
-				raw = parsedRaw
-			}
-			resp, err := s.forwardToServer(req, connectStateFromCtx(ctx))
-			if err != nil {
-				logger.Errorf("转发失败： %s %s %v", req.Method, raw, err)
-				return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "bad gateway")
-			}
-
-			return req, resp
-		}
-
-		return req, nil
+		return s.interceptRequest(req, ctx)
 	})
 	return proxy
+}
+
+// interceptRequest 在 MITM 解密后按 path 分类：受管路径转发 backend，非受管路径透明回源。
+// 官方 Authorization 原样保留；MITM 不写入 LocalRelayToken。
+func (s *ProxyServer) interceptRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	if req != nil {
+		req.Header.Del(HeaderServerUpstreamURL)
+	}
+	host := hostFromHTTPRequest(req)
+	if !shouldForwardToLocalBackend(host, httpRequestMethod(req), httpRequestPath(req)) {
+		return req, nil
+	}
+	if shouldHandleLocalCORSPreflight(req) {
+		return req, buildLocalCORSPreflightResponse(req)
+	}
+	raw := requestURL(req)
+	if parsedRaw, rawErr := rawURLForRelay(req); rawErr == nil {
+		raw = parsedRaw
+	}
+	resp, err := s.forwardToServer(req, connectStateFromCtx(ctx))
+	if err != nil {
+		logger.Errorf("转发失败： %s %s %v", req.Method, raw, err)
+		return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, "bad gateway")
+	}
+	return req, resp
 }
 
 func connectActionNameFromState(ctx *goproxy.ProxyCtx) string {

@@ -389,6 +389,36 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		HTTPClient:           netproxy.NewHTTPClient(30000 * time.Second),
 		Capture:              host.observability,
 	}
+	availableModels := upstream.MergedCatalogAction(routeDeps, upstream.CompatRouteConfig{
+		Name:          "available_models",
+		StatusCode:    http.StatusOK,
+		MockProtoType: "aiserver.v1.AvailableModelsResponse",
+		MockBuilder:   upstream.AvailableModelsMockBuilder,
+	})
+	usableModels := upstream.MergedCatalogAction(routeDeps, upstream.CompatRouteConfig{
+		Name:          "usable_models",
+		StatusCode:    http.StatusOK,
+		MockProtoType: "aiserver.v1.GetUsableModelsResponse",
+		MockBuilder:   upstream.UsableModelsMockBuilder,
+	})
+	defaultModelForCli := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name:          "default_model_for_cli",
+		StatusCode:    http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelForCliResponse",
+	})
+	defaultModel := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name:          "default_model",
+		StatusCode:    http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelResponse",
+	})
+	defaultModelNudge := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name:          "default_model_nudge",
+		StatusCode:    http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelNudgeDataResponse",
+	})
+	agentSessions := upstream.NewAgentSessionStore()
+	bidiRoute := upstream.AgentRouteAction(routeDeps, agentSessions, agentModule.LocalBidiHandler)
+	runSSERoute := upstream.AgentRouteAction(routeDeps, agentSessions, agentModule.LocalRunSSE)
 
 	host.mux = server.New(
 		server.Use(
@@ -413,12 +443,14 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		server.POST(legacyBidiAppendProcedure,
 			server.Name("bidi_append"),
 			server.ConnectUnary(),
-			server.Local(server.HTTPHandlerAction(agentModule.LocalBidiHandler)),
+			server.Local(bidiRoute),
+			server.Upstream(bidiRoute),
 		),
 		server.POST(legacyRunSSEProcedure,
 			server.Name("run_sse"),
 			server.ConnectStream(),
-			server.Local(server.HTTPHandlerAction(agentModule.LocalRunSSE)),
+			server.Local(runSSERoute),
+			server.Upstream(runSSERoute),
 		),
 		server.POST("/aiserver.v1.AiService/ServerTime",
 			server.Name("server_time"),
@@ -453,52 +485,32 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		server.POST("/aiserver.v1.AiService/AvailableModels",
 			server.Name("available_models"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "available_models",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.AvailableModelsResponse",
-				MockBuilder:   upstream.AvailableModelsMockBuilder,
-			})),
+			server.Local(availableModels),
+			server.Upstream(availableModels),
 		),
 		server.POST("/aiserver.v1.AiService/GetUsableModels",
 			server.Name("usable_models"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "usable_models",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetUsableModelsResponse",
-				MockBuilder:   upstream.UsableModelsMockBuilder,
-			})),
+			server.Local(usableModels),
+			server.Upstream(usableModels),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModelForCli",
 			server.Name("default_model_for_cli"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model_for_cli",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelForCliResponse",
-				MockBuilder:   upstream.DefaultModelForCliMockBuilder,
-			})),
+			server.Local(defaultModelForCli),
+			server.Upstream(defaultModelForCli),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModel",
 			server.Name("default_model"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelResponse",
-				MockBuilder:   upstream.DefaultModelMockBuilder,
-			})),
+			server.Local(defaultModel),
+			server.Upstream(defaultModel),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModelNudgeData",
 			server.Name("default_model_nudge"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model_nudge",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelNudgeDataResponse",
-				MockBuilder:   upstream.DefaultModelNudgeMockBuilder,
-			})),
+			server.Local(defaultModelNudge),
+			server.Upstream(defaultModelNudge),
 		),
 		server.POST("/aiserver.v1.AnalyticsService/BootstrapStatsig",
 			server.Name("bootstrap_statsig"),

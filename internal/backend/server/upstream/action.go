@@ -143,6 +143,32 @@ func MockProtoAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFun
 	}
 }
 
+// MergedCatalogAction returns official catalog protobuf plus local BYOK models.
+// Official fetch failures degrade to the local catalog only and do not change
+// Agent routing.
+func MergedCatalogAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
+	return func(ctx *server.Context) error {
+		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
+		if err != nil {
+			return err
+		}
+		return handleMergedCatalog(reqCtx, route)
+	}
+}
+
+// OfficialDefaultModelAction returns the official default-model protobuf.
+// LocalRelayToken and official fetch failures fail closed instead of projecting
+// the first local adapter.
+func OfficialDefaultModelAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
+	return func(ctx *server.Context) error {
+		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
+		if err != nil {
+			return err
+		}
+		return handleOfficialDefaultModel(reqCtx, route)
+	}
+}
+
 func newCompatRouteObjects(ctx *server.Context, deps Dependencies, cfg CompatRouteConfig) (*RequestContext, *Route, error) {
 	if ctx == nil || ctx.Request == nil {
 		return nil, nil, nil
