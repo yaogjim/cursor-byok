@@ -69,6 +69,49 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 - 数据概览：`GetHomeMetricsReport` 从 `usage.json` 的 `daily[]` 按 `7d` / `30d` / `all` 过滤并聚合 KPI；时区固定 UTC。首期没有近 1 小时、今日、自定义范围，也没有小时热力图；不用 `recent_events` 冒充完整日历。
 - 本轮文档收口只修改决策基线、系统 Design、`task/todo.md` 和本文，未重跑 Go/前端命令，未做 Wails 窗口视觉点击。不得声称视觉验收已完成，不得标 accepted。
 
+### 0.9 v5 四页控制面（自动化验证通过，视觉与真实授权部分待补）
+
+2026-08-26 已按已批准 v5 计划完成四页控制面实现，当前 `delivery_status=verified-partial`。合同见工作决策基线 §7.5/§10.14、系统 Design §4.2/§10.2/§14.16，详细任务与命令证据见 `task/todo.md` 的 `ui-v5-shell-20260826`。
+
+- IA：总览 `/`、接入 `/access?client=gateway|cursor|codex|claude`、模型 `/models`、设置 `/settings`。旧 `/cursor`、`/gateway` 重定向到对应 client；接入页按 master-detail 展示真实 Cursor/Gateway，Codex/Claude 为生产 unsupported 空态。
+- 保存：继续 per-scope；接入标签脏点是 Cursor/Gateway 脏状态并集；路由切换、顶层离开和兼容路径均按 scope 检查未保存修改。模型页和设置页保留独立保存、导入导出与错误状态。
+- 主题：枚举为 `light` / `dark` / `system`，默认缺失或未知值回退 `light`；`system` 持久化并在运行时跟随操作系统主题变化。
+- 统计：`24h` 消费 `usage.json` 持久小时桶，`30d/all` 消费日桶；报告返回真实空态，不从 `recent_events` 或 fixture 补造活动。小时 schema、迁移、保留、并发写入和报告测试已覆盖。
+- 运行控制：Cursor 启动调用真实 `LaunchCursor`，应用未发现或启动失败会返回明确错误；未批准有界 `RestartProxy`，页面不使用 stop/start 模拟重启。
+- 模型与设置：模型页已完成真实计数、筛选、搜索、列表/栅格、排序、编辑/测试/复制/删除、批量取消和完整配置导入导出；设置页已完成基本设置、会话与日志、网络与请求、数据与恢复四段面板，计划中控件保持禁用且无副作用。
+
+自动化验证已通过：`node frontend/scripts/test-config-projection.mjs`、前端 Node 路由/指标测试、`npm run build --prefix frontend`（121 modules）、`go test ./... -count=1`、`go vet ./...`、`ReadLints` 和 `git diff --check`。构建仍只有既有 Node `--localstorage-file` 与 chunk-size warning，Go 测试仍只有既有 macOS deployment target linker warning。
+
+证据缺口：本机没有可用 Wails runtime/`wails3`，因此四页真实窗口点击、980×640 窄窗口、系统主题 OS 变化和拖拽区视觉验收未执行；Codex/Claude 真实授权、续期、配置同步和 ACP 端到端验收分别等待独立后端/真实客户端 Design Gate。故当前状态保持 `verified-partial`，不得标为 accepted。
+
+### 0.11 中断恢复与错误传播治理（实现完成，真实故障注入部分待补）
+
+2026-08-28 已完成中断恢复工作包实现，`delivery_status=verified-partial`。HTTP 524 仅在零输出、零工具进度窗口进入精确 retry/fallback；RunSSE terminal 保留脱敏 HTTP 状态、错误分类、Request ID 和真实 retry decision。安全 automatic-continuation 已接入 RunSSE/Bidi actor，默认关闭、每 turn 最多一次，只允许已有文本/思考且无工具、副作用、checkpoint 或取消的场景，并创建新的 `model_call_id`、独立 usage/trace、重叠剥离和无进展熔断。
+
+流诊断补齐 header/首末字节/body 结束、close cause、partial boundary 和 transport outcome；observability rotation 只由存储设置触发，退出先 drain、超时再取消并记录原因和结果；SCM/FSSync/checkpoint/client TLS 预期噪声降级，真实 provider/5xx/timeout/upstream TLS 失败保持 ERROR；fallback `_fbN` 不再污染业务 `model_call_id`，成功解码 Bidi 不再误标 `decode_error`。相关 package 定向 test/vet、日志分析器测试、`git diff --check` 与根模块构建通过。真实 Cursor 多段 continuation 和真实 TCP RST/TLS 故障注入未执行，故不得标 accepted。
+
+### 0.10 模型页保存身份变更（自动化复现与修复通过，视觉未点）
+
+2026-08-28 修复模型管理页编辑后保存失败。用户截图两类症状：`模型适配器 providerFallback.primaryChannelID 引用了不存在的渠道 "dce4005402c60e65"`，以及切换 OpenAI/Anthropic 后 `模型 1 的模型标识不能为空`。任务证据见 `task/todo.md` 的 `model-save-identity-remap-20260828`。
+
+- 根因 1：渠道 ID 由身份字段派生；前端原先剥 ID 后再保存，后端重算 ID，fallback 仍引用旧 ID。`SaveModelAdapters` / `SaveUserConfig` 现在使用请求携带的旧 ID 与磁盘 adapter 精确 remap；新 adapter 的 ID 为空，等数量删除加新增不会被误配为身份变更。
+- 根因 2：HEAD 类型切换把 `draft.modelID` 置空。现在保留当前标识，只补缺省 endpoint / thinking effort。
+- 真悬空渠道引用、空模型标识仍拒绝。未改 proto、MITM、证书、18080/18090。
+- 本轮未做 Wails 窗口点击，不得标 accepted。
+
+### 0.12 Codex/Claude 接入详情与模型管理 UI（自动化通过，Wails 视觉未点）
+
+2026-08-28 已按用户确认的三张截图区域应用到真实前端，`delivery_status=verified-partial`。范围仅限 Codex 接入详情、Claude Code 接入详情和模型管理主体；未改主导航、总览、Gateway、Cursor、设置。Codex 使用 OpenAI 品牌图标，Claude Code 使用 Anthropic 品牌图标与品牌橙色。因无真实订阅授权 API，接入详情展示 0 账号空态「暂无授权账号」，授权/同步/测试/保存按钮全部 disabled 且无 click handler，不写入截图演示账号。模型页保留真实模型数据，并应用提供商筛选、彩色 chip、无图标的导入/导出、清除全部确认和精简操作菜单。浅色仍为新配置默认主题。
+
+验证：`npm run build --prefix frontend`；`npm run test:config-projection --prefix frontend`；`node --test frontend/src/router/access.test.js`；相关文件 `git diff --check`。配置投影测试已对齐禁用「添加授权」空态和完整提供商 Tab。本机没有可用 Wails runtime，未做真实窗口视觉点击，故不得标 accepted。
+
+### 0.13 本地编译 macOS v0.0.50.3
+
+2026-08-28 按用户要求将版本号升到 `0.0.50.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.50.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布（仍为已发布的 v0.0.50.1）。
+
+验证：`PATH=/Users/yaogj/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（约 22 MiB）。挂载后 Info.plist 版本为 `0.0.50.3`，可执行文件为 Mach-O arm64 且包含注入版本 `0.0.50.3`，adhoc codesign，`hdiutil verify` VALID，SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+
+
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
 本治理包已接通五项能力：按 `model_call_id` 聚合内部 reasoning replay；metadata-only `execution_evidence` 账本；mutation 后 verification stale 判定；证据不足时最多一次提醒续跑的完成门禁；agent/subagent prompt、`turn_completed` 和 debug recorder 的白名单诊断。账本只接受结构化 ToolCall 与终态 result，成功 mutation/verification 使用最终持久 sequence，tool result 与 evidence 同一追加批次写入；重复 result、跨 turn、restart、subagent recovery、unknown MCP、pending/failed/canceled 均按保守规则处理。完成门禁从最新持久 canonical history 重建，不依赖可能滞后的 live 索引；纯问答与 Ask/Plan 不受编辑门禁影响。
@@ -250,6 +293,8 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 ### 2. 按时间索引
 
+- **2026-08-28**：修复模型页保存时身份字段变化导致 fallback 渠道 ID 悬空，以及切换 OpenAI/Anthropic 清空模型标识。`SaveModelAdapters`/`SaveUserConfig` 使用请求旧 ID 与磁盘 adapter 精确 remap；新 adapter 不携带旧 ID，删除加新增不会误配。类型切换保留当前 `modelID`。定向 Go/前端测试与生产构建通过；未做 Wails 视觉点击。详见 `task/todo.md` 的 `model-save-identity-remap-20260828`。
+- **2026-08-26**：冻结 v5 四页控制面阶段 0 合同（`/access?client=...`、per-scope dirty、真实计数、完整配置导入导出文案、`system` 主题、持久小时桶、Cursor 启动/重启安全语义、Codex/Claude 非生产 fixture）。决策基线 §7.5/§10.14、系统 Design §4.2/§10.2/§14.16 与 `task/todo.md` 的 `ui-v5-shell-20260826` 已同步。本轮只改文档，实现未开始，不得标完成。ACP 工作包保持 blocked。
 - **2026-08-26**：按已批准双集成导航计划落地五页同层控制面、Gateway section 保存/运行隔离和数据概览 `GetHomeMetricsReport`（`7d`/`30d`/`all`，UTC daily）。决策基线 §7.4/§10.13、系统 Design §4.1/§10.1/§14.15 与 `task/todo.md` 的 `dual-nav-overview-20260826` 已同步。本轮只改文档；Wails 视觉点击未做，交付保持 `verified-partial`。
 - **2026-08-24**：198 远程 CLI 方案 A 隧道落地；浏览器终端由 ttyd 换成 WeTTY。随后修复 HTTPS 反代下 WeTTY helmet 只放行 `ws://`、浏览器 `wss://` 被 CSP 拦导致终端约 10 秒断开的问题；再将 `X-Frame-Options` 从 `DENY` 改为 `SAMEORIGIN`（并加 `frame-ancestors 'self'`），避免 WeTTY 同源 xterm 配置 iframe 被拦。`https://172.16.23.198/` 仍为 HTTPS + HTTP Basic，7681 仅 loopback。
 - **2026-08-22（`v0.0.49.2`）**：完成 Agent transcript reasoning/thinking 公开投影修复、全套验证、三平台资产构建与 GitHub Release。发布提交和标签均指向 `487856170b29380671477e843d7fec15250323ae`；远端资产与本地 SHA-256 一致；`v0.0.49.1` 保持不可变；未完成 exporter 与 subagent recorder 未纳入补丁版。

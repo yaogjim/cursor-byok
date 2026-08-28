@@ -542,18 +542,20 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request, state *connectStat
 	serverReq.Header.Set(HeaderTraceID, correlation.TraceID)
 	serverReq.Header.Set(HeaderParentSpanID, correlation.SpanID)
 	removeHopByHop(serverReq.Header)
+	startedCapability, startedOperation, startedImplementation := classifyMITMRequest(requestPath)
 	s.recordCapture(captureContext, observability.Event{
 		Layer:               "mitm",
 		Event:               "backend_forward_started",
-		Capability:          "unknown",
-		Operation:           "transport.forward",
+		Capability:          startedCapability,
+		Operation:           startedOperation,
 		Direction:           observability.DirectionCursorToProxy,
 		Route:               redactedPath,
 		ExecutionTarget:     "backend",
 		Protocol:            "http",
 		Status:              "started",
 		SemanticOutcome:     observability.OutcomeStarted,
-		ImplementationState: observability.ImplementationImplemented,
+		ImplementationState: startedImplementation,
+		Severity:            observability.SeverityInfo,
 		RequestBytes:        requestBytes,
 		Fields: backendForwardFields(targetHost, incoming.Method, requestPath, actionBackendForward, state, map[string]any{
 			"method":      incoming.Method,
@@ -575,15 +577,16 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request, state *connectStat
 		s.recordCapture(captureContext, observability.Event{
 			Layer:               "mitm",
 			Event:               "backend_forward_finished",
-			Capability:          "unknown",
-			Operation:           "transport.forward",
+			Capability:          startedCapability,
+			Operation:           startedOperation,
 			Direction:           observability.DirectionProxyInternal,
 			Route:               redactedPath,
 			ExecutionTarget:     "backend",
 			Protocol:            "http",
 			Status:              "error",
 			SemanticOutcome:     observability.OutcomeFailed,
-			ImplementationState: observability.ImplementationImplemented,
+			ImplementationState: startedImplementation,
+			Severity:            forwardFinishSeverity(0, true),
 			ErrorCategory:       "backend_unavailable",
 			DurationMS:          time.Since(startedAt).Milliseconds(),
 			RequestBytes:        requestBytes,
@@ -601,15 +604,16 @@ func (s *ProxyServer) forwardToServer(incoming *http.Request, state *connectStat
 	s.recordCapture(captureContext, observability.Event{
 		Layer:               "mitm",
 		Event:               "backend_forward_finished",
-		Capability:          "unknown",
-		Operation:           "transport.forward",
+		Capability:          startedCapability,
+		Operation:           startedOperation,
 		Direction:           observability.DirectionProxyInternal,
 		Route:               redactedPath,
 		ExecutionTarget:     "backend",
 		Protocol:            "http",
 		Status:              httpStatus(resp.StatusCode),
 		SemanticOutcome:     forwardSemanticOutcome(resp.StatusCode),
-		ImplementationState: observability.ImplementationImplemented,
+		ImplementationState: startedImplementation,
+		Severity:            forwardFinishSeverity(resp.StatusCode, false),
 		ErrorCategory:       httpErrorCategory(resp.StatusCode),
 		DurationMS:          time.Since(startedAt).Milliseconds(),
 		RequestBytes:        requestBytes,
@@ -920,15 +924,9 @@ func (w *httpErrorFilterWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	lower := strings.ToLower(msg)
-	if strings.Contains(lower, "tls: first record does not look like a tls handshake") {
-		logger.Infof("proxy ignore handshake mismatch: %s", msg)
-		observeHTTPServerLog(captureFromWriter(w), msg)
-		return len(p), nil
-	}
-	if strings.Contains(lower, "tls handshake error") {
-		logger.Errorf("proxy tls handshake error: %s", msg)
-		observeHTTPServerLog(captureFromWriter(w), msg)
+	if observation, ok := parseHTTPServerTLSLog(msg); ok {
+		recordMitmCapture(captureFromWriter(w), context.Background(), handshakeEvent(observation, nil))
+		logSampledHandshake("proxy", observation, msg)
 		return len(p), nil
 	}
 
@@ -957,7 +955,7 @@ func (l *goproxyLogAdapter) Printf(format string, args ...interface{}) {
 	}
 	lower := strings.ToLower(msg)
 	if observation, ok := observeGoproxyLog(captureFromAdapter(l), sessionsFromAdapter(l), msg); ok {
-		logSampledGoproxyHandshake(observation, msg)
+		logSampledHandshake("goproxy", observation, msg)
 		return
 	}
 	if strings.Contains(lower, "tls: first record does not look like a tls handshake") {
@@ -986,19 +984,30 @@ func sessionsFromAdapter(l *goproxyLogAdapter) *connectSessionStore {
 	return l.sessions
 }
 
-func logSampledGoproxyHandshake(observation handshakeObservation, msg string) {
+func logSampledHandshake(prefix string, observation handshakeObservation, msg string) {
+	classified := classifyHandshake(observation)
+	if !isClientHandshakeNoise(classified.ErrorCategory) {
+		logger.Errorf(
+			"%s tls_handshake_failed: host=%s category=%s direction=%s",
+			firstNonEmpty(prefix, "proxy"),
+			firstNonEmpty(observation.Host, observation.Remote, "-"),
+			firstNonEmpty(classified.ErrorCategory, "-"),
+			firstNonEmpty(classified.Direction, "-"),
+		)
+		return
+	}
 	decision := handshakeAppSampler.Observe(handshakeAppLogKey(observation))
 	if !decision.ShouldLog {
 		return
 	}
 	if !decision.Summary {
-		logger.Infof("goproxy: %s", msg)
+		logger.Warnf("%s: %s", firstNonEmpty(prefix, "proxy"), msg)
 		return
 	}
-	classified := classifyHandshake(observation)
-	logger.Infof(
-		"goproxy tls_handshake_failed: host=%s category=%s direction=%s total=%d sampled=%d",
-		firstNonEmpty(observation.Host, "-"),
+	logger.Warnf(
+		"%s tls_handshake_failed: host=%s category=%s direction=%s total=%d sampled=%d",
+		firstNonEmpty(prefix, "proxy"),
+		firstNonEmpty(observation.Host, observation.Remote, "-"),
 		firstNonEmpty(classified.ErrorCategory, "-"),
 		firstNonEmpty(classified.Direction, "-"),
 		decision.Total,

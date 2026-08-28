@@ -2,20 +2,21 @@
 import { Browser, Window } from "@wailsio/runtime";
 import LocaleSelect from "@/components/LocaleSelect.vue";
 import { useMessage } from "@/composables/useMessage";
+import { ACCESS_PATH, accessRouteLocation, parseAccessClient } from "@/router/access";
 import { isMainWindowPath } from "@/router";
 import {
   appState,
   checkForAppUpdates,
+  configSectionDirty,
   syncServiceState,
   updateViewState,
 } from "@/state/appState";
 import { isWindows } from "@/utils/isWindows";
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
 
 const route = useRoute();
 const message = useMessage();
-const title = computed(() => route.meta.title ?? "数据概览");
 const directlyClose = computed(() => route.meta.directlyClose === true);
 const showFooter = computed(() => isMainWindowPath(route.path));
 const AUTHOR_REPOSITORY_URL = "https://github.com/leookun/cursor-byok";
@@ -49,54 +50,79 @@ const proxyBadgeTitle = computed(() => {
   return "当前出站请求未使用系统代理";
 });
 
-const cursorNavStatus = computed(() => {
-  if (appState.serviceLastError && !appState.serviceRunning) {
-    return "error";
-  }
+const accessConnectedCount = computed(() => {
+  let count = 0;
   if (appState.serviceRunning) {
-    return "running";
-  }
-  return "stopped";
-});
-
-const gatewayNavStatus = computed(() => {
-  if (!appState.gatewayEnabled) {
-    return "disabled";
-  }
-  if (appState.gatewayLastError && !appState.gatewayRunning) {
-    return "error";
+    count += 1;
   }
   if (appState.gatewayRunning) {
-    return "running";
+    count += 1;
   }
-  return "stopped";
+  return count;
 });
 
-const navItems = computed(() => [
-  { path: "/", label: "概览", title: "数据概览" },
-  { path: "/cursor", label: "Cursor", title: "Cursor 集成", status: cursorNavStatus.value },
-  {
-    path: "/gateway",
-    label: "网关",
-    title: "网关集成",
-    status: gatewayNavStatus.value,
-    badge: gatewayNavStatus.value === "disabled" ? "未启用" : "",
+const lastStateRefreshAt = ref(null);
+const lastStateRefreshText = computed(() => {
+  const value = lastStateRefreshAt.value;
+  if (!(value instanceof Date)) {
+    return "";
+  }
+  const hour = String(value.getHours()).padStart(2, "0");
+  const minute = String(value.getMinutes()).padStart(2, "0");
+  return `状态更新于 ${hour}:${minute}`;
+});
+const lastAccessClient = ref(parseAccessClient(route.query.client));
+
+watch(
+  () => (route.path === ACCESS_PATH ? parseAccessClient(route.query.client) : ""),
+  (client) => {
+    if (client) {
+      lastAccessClient.value = client;
+    }
   },
-  { path: "/models", label: "模型", title: "上游模型" },
-  { path: "/settings", label: "设置", title: "系统设置" },
+  { immediate: true },
+);
+
+const accessTabTo = computed(() => accessRouteLocation(lastAccessClient.value));
+
+const navItems = computed(() => [
+  {
+    path: "/",
+    to: "/",
+    label: "总览",
+    title: "数据概览",
+    icon: "icon-[mdi--home-outline]",
+  },
+  {
+    path: ACCESS_PATH,
+    to: accessTabTo.value,
+    label: "接入",
+    title: "接入中心",
+    icon: "icon-[mdi--lightning-bolt-outline]",
+    badge: accessConnectedCount.value > 0 ? `${accessConnectedCount.value} 已接入` : "",
+    dirty: Boolean(configSectionDirty.access),
+  },
+  {
+    path: "/models",
+    to: "/models",
+    label: "模型",
+    title: "上游模型",
+    icon: "icon-[mdi--server-outline]",
+    badge: String((appState.modelAdapters || []).length),
+    dirty: Boolean(configSectionDirty.models),
+  },
+  {
+    path: "/settings",
+    to: "/settings",
+    label: "设置",
+    title: "系统设置",
+    icon: "icon-[mdi--cog-outline]",
+    dirty: Boolean(configSectionDirty.settings),
+  },
 ]);
 
-function statusDotClass(status) {
-  if (status === "running") {
-    return "bg-emerald-500";
-  }
-  if (status === "error") {
-    return "bg-[var(--color-solid-error)]";
-  }
-  if (status === "disabled") {
-    return "border border-[var(--color-border-strong)] bg-transparent";
-  }
-  return "bg-[var(--color-text-muted)]";
+function isNavActive(item) {
+  return route.path === item.path;
 }
 
 async function minimizeWindow() {
@@ -147,10 +173,24 @@ async function handleOpenUsageDocs() {
   }
 }
 
+async function syncStateWithTimestamp() {
+  await syncServiceState();
+  lastStateRefreshAt.value = new Date();
+}
+
+async function handleRefreshState() {
+  try {
+    await syncStateWithTimestamp();
+  } catch (error) {
+    showActionError("刷新失败", error);
+  }
+}
+
 onMounted(() => {
+  void syncStateWithTimestamp().catch(() => {});
   proxyStateTimer = window.setInterval(() => {
     if (showFooter.value) {
-      void syncServiceState().catch(() => {});
+      void syncStateWithTimestamp().catch(() => {});
     }
   }, proxyStatePollIntervalMs);
 });
@@ -164,82 +204,92 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-screen w-screen min-h-0 min-w-0 overflow-hidden flex-col">
-    <div
-      class="fixed top-0 w-screen h-[40px] z-9999 w-full"
-      style="--wails-draggable: drag"
-    ></div>
-
+  <div class="flex h-screen w-screen min-h-0 min-w-0 overflow-hidden flex-col bg-[var(--color-app-bg)]">
     <header
-      class="flex h-[40px] center-row px-[20px] w-full min-h-0 shrink-0 justify-between relative"
+      class="app-tabbar"
+      :class="{ 'app-tabbar--mac': !isWindows }"
       style="--wails-draggable: drag"
-      :class="{ '!justify-center': !isWindows }"
     >
-      <div class="center-row gap-2" style="font-family: var(--font-num);">
-        <div>{{ title }}</div>
+      <div class="app-brand shrink-0">
+        <div class="app-brand-mark" aria-hidden="true">C</div>
+        <div class="app-brand-name">Cursor 助手</div>
       </div>
-      <div
-        v-if="isWindows"
-        class="absolute right-[10px] top-[8px] z-99999 center-row gap-[1px]"
-      >
-        <button
-          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
-          @click="minimizeWindow"
-        >
-          <span class="icon-[ic--round-minus]"></span>
-        </button>
-        <button
-          class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
-          @click="closeWindow"
-        >
-          <span class="icon-[ic--round-close]"></span>
-        </button>
-      </div>
-    </header>
 
-    <div class="flex min-h-0 min-w-0 flex-1">
-      <aside
-        class="flex w-[184px] shrink-0 flex-col gap-1 border-r border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-3"
-      >
+      <nav class="app-tabs relative z-10" aria-label="主导航" style="--wails-draggable: no-drag">
         <RouterLink
           v-for="item in navItems"
           :key="item.path"
-          :to="item.path"
+          :to="item.to"
           :title="item.title"
-          class="center-row h-[34px] gap-2 rounded-[8px] px-3 text-sm transition-colors duration-150"
-          :class="route.path === item.path
-            ? 'bg-[var(--color-success-bg)] text-[var(--color-text)]'
-            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]'"
+          class="app-tab"
+          :class="isNavActive(item) ? 'is-active' : ''"
+          :aria-current="isNavActive(item) ? 'page' : undefined"
         >
-          <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
+          <span :class="[item.icon, 'text-[17px]']" aria-hidden="true" />
+          <span>{{ item.label }}</span>
+          <span v-if="item.badge" class="app-tab-tag" :class="item.path === ACCESS_PATH && accessConnectedCount > 0 ? 'is-live' : ''">
+            {{ item.badge }}
+          </span>
           <span
-            v-if="item.badge"
-            class="shrink-0 text-[10px] leading-none text-[var(--color-text-muted)]"
-          >{{ item.badge }}</span>
-          <span
-            v-else-if="item.status"
-            class="h-2 w-2 shrink-0 rounded-full"
-            :class="statusDotClass(item.status)"
+            v-if="item.dirty"
+            class="app-tab-dirty"
+            aria-label="有未保存更改"
           />
         </RouterLink>
-      </aside>
+      </nav>
 
-      <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <router-view />
-      </main>
-    </div>
+      <div class="app-tabbar-r relative z-10" style="--wails-draggable: no-drag">
+        <span v-if="lastStateRefreshText" class="app-state-updated">
+          {{ lastStateRefreshText }}
+        </span>
+        <button
+          type="button"
+          class="app-icon-btn"
+          title="刷新运行状态"
+          aria-label="刷新运行状态"
+          @click="handleRefreshState"
+        >
+          <span class="icon-[mdi--refresh] text-[18px]" aria-hidden="true" />
+        </button>
+        <div
+          v-if="isWindows"
+          class="ml-1 flex items-center gap-[1px]"
+        >
+          <button
+            type="button"
+            class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
+            aria-label="最小化"
+            @click="minimizeWindow"
+          >
+            <span class="icon-[ic--round-minus]" />
+          </button>
+          <button
+            type="button"
+            class="text-[20px] center-row justify-center w-[30px] h-[23px] rounded-[4px] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] cursor-pointer"
+            aria-label="关闭"
+            @click="closeWindow"
+          >
+            <span class="icon-[ic--round-close]" />
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <router-view />
+    </main>
 
     <footer
       v-if="showFooter"
-      class="flex !pr-1 h-[30px] shrink-0 items-center gap-[8px] border-t border-[var(--color-border)] px-[14px] text-[12px] text-[var(--color-text-secondary)]"
+      class="app-statusbar"
     >
       <div
         v-if="proxyBadgeText"
-        class="center-row  border-none gap-[2px]  border-none  px-[0px] py-[3px] leading-none "
+        class="center-row gap-[2px] px-[0px] py-[3px] leading-none"
         aria-live="polite"
         :title="proxyBadgeTitle"
       >
-        <span class="icon-[mdi--wifi] text-[15px]"></span>
+        <span class="icon-[mdi--wifi] text-[15px]" />
         <span class="truncate">{{ proxyBadgeText }}</span>
       </div>
       <button
@@ -254,10 +304,10 @@ onUnmounted(() => {
       </button>
       <button
         type="button"
-        class="center-row shrink-0 gap-[2px]  cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
+        class="center-row shrink-0 gap-[2px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
         @click="handleOpenUsageDocs"
       >
-        <span class="icon-[mdi--file-document-outline] text-[15px]"></span>
+        <span class="icon-[mdi--file-document-outline] text-[15px]" />
         <span>使用教程</span>
       </button>
       <button
@@ -265,7 +315,7 @@ onUnmounted(() => {
         class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
         @click="handleOpenAuthorHome"
       >
-        <span class="icon-[mdi--github] text-[14px]"></span>
+        <span class="icon-[mdi--github] text-[14px]" />
         <span>{{ AUTHOR_LABEL }}</span>
       </button>
       <div
@@ -280,7 +330,7 @@ onUnmounted(() => {
             <div
               class="h-full rounded-full bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-primary-hover)]"
               :style="updateViewState.footerProgressStyle"
-            ></div>
+            />
           </div>
           <span class="shrink-0 text-[var(--color-text)]">{{
             updateViewState.footerProgressText

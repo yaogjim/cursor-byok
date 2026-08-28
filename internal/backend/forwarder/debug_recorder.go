@@ -91,6 +91,10 @@ func (recorder *debugRecorder) LogBidiRaw(ctx context.Context, requestID string,
 	event["append_seqno"] = appendSeqno
 	event["status"] = strings.TrimSpace(status)
 	event["data_len"] = len(dataHex)
+	event["payload_bytes"] = len(dataHex)
+	if strings.EqualFold(strings.TrimSpace(status), "decode_error") {
+		event["decode_error"] = true
+	}
 	event["payload_omitted"] = "raw_sensitive_content"
 	for key, value := range extra {
 		event[key] = value
@@ -182,8 +186,18 @@ func (recorder *debugRecorder) LogProviderArtifact(ctx context.Context, requestI
 		return
 	}
 	payload = omitProviderRawArtifactContent(payload)
+	canonicalID, artifactID, channelIndex := splitFallbackArtifactModelCallID(modelCallID)
+	if payload != nil {
+		if payloadCanonical := strings.TrimSpace(readStringValue(payload["model_call_id"])); payloadCanonical != "" {
+			canonicalID = payloadCanonical
+		}
+	}
 	fields := map[string]any{
-		"model_call_id": strings.TrimSpace(modelCallID),
+		"model_call_id": canonicalID,
+	}
+	if artifactID != "" && artifactID != canonicalID {
+		fields["artifact_model_call_id"] = artifactID
+		fields["fallback_channel_index"] = channelIndex
 	}
 	if mode == "full" {
 		fields["payload"] = payload
@@ -399,7 +413,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		}
 	}
 	fields := make(map[string]any)
-	for _, key := range append([]string{"append_seqno", "byte_len", "client_kind", "data_len", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome"}, turnDiagnosticFieldKeys()...) {
+	for _, key := range append([]string{"append_seqno", "byte_len", "client_kind", "data_len", "payload_bytes", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome", "continued_from_model_call_id", "continuation_index", "reason", "skip_reason", "missing_blob_keys", "missing_blob_key_count", "artifact_model_call_id", "fallback_channel_index"}, append(streamDiagnosticFieldKeys(), turnDiagnosticFieldKeys()...)...) {
 		if value, ok := rawEvent[key]; ok {
 			fields[key] = value
 		} else if value, ok := payloadFields[key]; ok {
@@ -441,7 +455,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		}
 		metadata["raw_omitted"] = true
 		payloadData = metadata
-		decodeError = true
+		decodeError = strings.EqualFold(debugString(rawEvent, "status"), "decode_error") || readBoolValue(rawEvent["decode_error"])
 	}
 	projectPaths := debugProjectPaths(rawEvent, payloadFields)
 	if len(projectPaths) > 0 {
@@ -870,6 +884,8 @@ func summarizeDebugArtifactPayload(payload map[string]any) map[string]any {
 		"request_id",
 		"run_id",
 		"model_call_id",
+		"artifact_model_call_id",
+		"fallback_channel_index",
 		"provider",
 		"openai_endpoint",
 		"model",

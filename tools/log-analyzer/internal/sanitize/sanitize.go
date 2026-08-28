@@ -22,6 +22,11 @@ var (
 		"chain_attempts_used": {}, "chain_attempts_remaining": {},
 		"chain_wait_used_ms": {}, "chain_wait_remaining_ms": {},
 		"channel_allocation_max_attempts": {}, "retry_delay_ms": {},
+		"header_at": {}, "first_byte_at": {}, "last_byte_at": {}, "body_end_at": {},
+		"first_event_at": {}, "last_effective_content_at": {},
+		"close_cause": {}, "partial_boundary": {}, "transport_outcome": {},
+		"completion_marker": {}, "http_status": {},
+		"artifact_model_call_id": {}, "fallback_channel_index": {}, "payload_bytes": {},
 	}
 )
 
@@ -66,6 +71,10 @@ func AllowlistedFields(input map[string]any) map[string]any {
 }
 
 func ForbiddenKey(key string) bool {
+	trimmed := strings.TrimSpace(key)
+	if _, ok := allowedFields[trimmed]; ok {
+		return false
+	}
 	normalized := normalizeFieldKey(key)
 	switch normalized {
 	case "authorization", "proxyauthorization", "cookie", "setcookie", "apikey", "xapikey",

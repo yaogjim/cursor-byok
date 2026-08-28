@@ -83,6 +83,7 @@ function readThemeColor(name, fallback) {
 const chartTheme = computed(() => {
   // Depend on the state so the canvas is redrawn after a runtime theme change.
   void appState.appearanceTheme;
+  void appState.effectiveAppearanceTheme;
   return {
     success: readThemeColor("--color-chart-success", "rgb(74 222 128)"),
     track: readThemeColor("--color-chart-track", "rgb(215 222 232)"),
@@ -106,9 +107,9 @@ const chartData = computed(() => ({
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
-  cutout: "82%",
+  cutout: "78%",
   rotation: -90,
-  circumference: 180,
+  circumference: 360,
   animation: {
     duration: 450,
   },
@@ -127,12 +128,12 @@ const chartOptions = {
 <template>
   <div class="flex flex-col items-center gap-3">
     <div
-      class="relative h-[82px] w-[132px] shrink-0"
+      class="relative h-[96px] w-[96px] shrink-0"
       role="img"
       :aria-label="`缓存命中率 ${label}`"
     >
       <Doughnut class="h-full w-full" :data="chartData" :options="chartOptions" />
-      <div class="pointer-events-none absolute inset-x-0 bottom-[10px] flex justify-center">
+      <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
         <div
           class="text-[20px] leading-none text-[var(--color-text)]"
           style="font-family: var(--font-num)"

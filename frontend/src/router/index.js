@@ -1,17 +1,23 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import Home from "@/views/Home.vue";
-import CursorView from "@/views/CursorView.vue";
-import GatewayView from "@/views/GatewayView.vue";
+import AccessView from "@/views/AccessView.vue";
 import ModelConfig from "@/views/ModelConfig.vue";
 import SettingsView from "@/views/SettingsView.vue";
 import { showModal } from "@/composables/useModal";
 import {
   discardConfigSectionDraft,
-  isRouteConfigDirty,
+  isConfigSectionDirty,
   routePathToConfigScope,
 } from "@/state/appState";
+import {
+  ACCESS_PATH,
+  accessLeaveConfigScopes,
+  accessRouteLocation,
+  canonicalizeAccessRoute,
+  sameAccessNavigation,
+} from "@/router/access";
 
-export const MAIN_NAV_PATHS = ["/", "/cursor", "/gateway", "/models", "/settings"];
+export const MAIN_NAV_PATHS = ["/", ACCESS_PATH, "/models", "/settings"];
 
 const MAIN_WINDOW_META = {
   showIcon: true,
@@ -20,7 +26,18 @@ const MAIN_WINDOW_META = {
 };
 
 export function isMainWindowPath(path) {
-  return MAIN_NAV_PATHS.includes(path);
+  if (MAIN_NAV_PATHS.includes(path)) {
+    return true;
+  }
+  return path === "/cursor" || path === "/gateway";
+}
+
+export function leaveConfigScopes(from, to) {
+  if (from?.path === ACCESS_PATH) {
+    return accessLeaveConfigScopes(from, to);
+  }
+  const scope = routePathToConfigScope(from?.path, from?.query);
+  return scope ? [scope] : [];
 }
 
 const router = createRouter({
@@ -32,14 +49,9 @@ const router = createRouter({
       meta: { ...MAIN_WINDOW_META, title: "数据概览" },
     },
     {
-      path: "/cursor",
-      component: CursorView,
-      meta: { ...MAIN_WINDOW_META, title: "Cursor 集成" },
-    },
-    {
-      path: "/gateway",
-      component: GatewayView,
-      meta: { ...MAIN_WINDOW_META, title: "网关集成" },
+      path: ACCESS_PATH,
+      component: AccessView,
+      meta: { ...MAIN_WINDOW_META, title: "接入中心" },
     },
     {
       path: "/models",
@@ -50,6 +62,14 @@ const router = createRouter({
       path: "/settings",
       component: SettingsView,
       meta: { ...MAIN_WINDOW_META, title: "系统设置" },
+    },
+    {
+      path: "/cursor",
+      redirect: () => accessRouteLocation("cursor"),
+    },
+    {
+      path: "/gateway",
+      redirect: () => accessRouteLocation("gateway"),
     },
     {
       path: "/config",
@@ -63,11 +83,13 @@ const router = createRouter({
 });
 
 router.beforeEach(async (to, from) => {
-  if (!from.matched.length || to.path === from.path) {
-    return true;
+  const canonicalAccess = canonicalizeAccessRoute(to);
+  if (!from.matched.length || sameAccessNavigation(to, from)) {
+    return canonicalAccess || true;
   }
-  if (!isRouteConfigDirty(from.path)) {
-    return true;
+  const scopes = leaveConfigScopes(from, to);
+  if (!scopes.some((scope) => isConfigSectionDirty(scope))) {
+    return canonicalAccess || true;
   }
   const confirmed = await showModal({
     title: "有未保存更改",
@@ -78,8 +100,10 @@ router.beforeEach(async (to, from) => {
   if (!confirmed) {
     return false;
   }
-  discardConfigSectionDraft(routePathToConfigScope(from.path));
-  return true;
+  for (const scope of scopes) {
+    discardConfigSectionDraft(scope);
+  }
+  return canonicalAccess || true;
 });
 
 export default router;

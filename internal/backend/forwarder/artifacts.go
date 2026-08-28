@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -116,7 +117,7 @@ func (recorder *artifactRecorder) persistLatestRequestPrefix(conversationID stri
 		}
 		item.LatestRequestPrefix = &ConversationRequestPrefix{
 			RequestID:               strings.TrimSpace(requestID),
-			ModelCallID:             firstNonEmpty(strings.TrimSpace(modelCallID), strings.TrimSpace(requestID)),
+			ModelCallID:             firstNonEmpty(canonicalModelCallID(modelCallID), strings.TrimSpace(requestID)),
 			Provider:                strings.TrimSpace(prefix.Provider),
 			OpenAIEndpoint:          strings.TrimSpace(prefix.OpenAIEndpoint),
 			Model:                   strings.TrimSpace(prefix.Model),
@@ -169,6 +170,28 @@ func (recorder *artifactRecorder) ensureSession(requestID string, modelCallID st
 
 func artifactSessionKey(requestID string, modelCallID string) string {
 	return strings.TrimSpace(requestID) + "::" + strings.TrimSpace(modelCallID)
+}
+
+func canonicalModelCallID(modelCallID string) string {
+	canonical, _, _ := splitFallbackArtifactModelCallID(modelCallID)
+	return canonical
+}
+
+func splitFallbackArtifactModelCallID(modelCallID string) (canonical string, artifactID string, channelIndex int) {
+	canonical = strings.TrimSpace(modelCallID)
+	index := strings.LastIndex(canonical, "_fb")
+	if index <= 0 {
+		return canonical, "", 0
+	}
+	suffix := canonical[index+3:]
+	if suffix == "" {
+		return canonical, "", 0
+	}
+	parsed, err := strconv.Atoi(suffix)
+	if err != nil || parsed < 0 {
+		return canonical, "", 0
+	}
+	return canonical[:index], canonical, parsed
 }
 
 func (recorder *artifactRecorder) resolveConversationContext(requestID string) (string, int64) {

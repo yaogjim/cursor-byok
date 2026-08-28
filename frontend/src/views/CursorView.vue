@@ -10,11 +10,19 @@ import {
   configSectionDirty,
   configSectionStatusText,
   persistScopedUserConfig,
+  reloadUserConfig,
   ROUTE_MODE_OPTIONS,
   syncServiceState,
   toUserError,
   toggleService,
 } from "@/state/appState";
+
+defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+});
 
 const message = useMessage();
 const routeModeOptions = ROUTE_MODE_OPTIONS;
@@ -52,102 +60,116 @@ async function handleSavePage() {
   }
   message("本页配置已保存");
 }
+
+async function handleReloadPage() {
+  try {
+    await reloadUserConfig();
+  } catch (error) {
+    showActionError("重新加载失败", toUserError(error));
+  }
+}
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-4 overflow-y-auto scroll-shadow-bottom p-4 pt-0 text-[var(--color-text)]">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 class="text-base font-medium">Cursor 集成</h2>
-        <div class="text-sm text-[var(--color-text-secondary)]">
-          Cursor 的本地代理和 Backend 运行控制
+  <Card
+    :padded="false"
+    class="compact-card h-full p-0"
+  >
+    <div v-if="!embedded" class="page-title-row px-4 pt-4">
+      <h2 class="page-title">Cursor 集成</h2>
+    </div>
+    <div class="compact-card-body">
+      <div class="card-h">
+        <div>
+          <h2 class="card-title">Cursor 深度集成</h2>
+          <div class="card-sub">本地代理、Backend 与控制面账号</div>
         </div>
-      </div>
-      <div class="center-row gap-2">
         <span
-          class="text-xs"
-          :class="configSectionDirty.cursor ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--color-text-muted)]'"
+          class="status-pill"
+          :class="appState.serviceRunning ? 'is-ok' : (appState.serviceLastError ? 'is-err' : 'is-off')"
         >
-          {{ configSectionStatusText("cursor") }}
+          <i aria-hidden="true" />
+          {{ appViewState.serviceStatusText }}
         </span>
-        <Button @click="handleRefreshState">刷新</Button>
-        <Button variant="primary" :disabled="appState.configSaving" @click="handleSavePage">
-          {{ appState.configSaving ? "保存中..." : "保存本页" }}
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <span class="field-l">本地服务</span>
+          <div class="row-inline min-h-10 flex-wrap">
+            <span class="mono-chip">{{ cursorProxyAddr() }}</span>
+            <span class="mono-chip">{{ cursorBackendAddr() }}</span>
+          </div>
+        </div>
+        <label class="field">
+          <span class="field-l">路由模式</span>
+          <Select
+            v-model="appState.routingMode"
+            :options="routeModeOptions"
+            placeholder="选择模式"
+          />
+        </label>
+      </div>
+
+      <div
+        v-if="appState.serviceLastError"
+        class="mt-3 rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]"
+      >
+        {{ appState.serviceLastError }}
+      </div>
+      <div
+        v-if="configSectionDirty.cursor && !appState.serviceRunning"
+        class="mt-2 text-xs text-[var(--color-warning-text)]"
+      >
+        请先保存本页
+      </div>
+
+      <div class="hr" />
+
+      <div class="setting-row">
+        <div class="setting-l">
+          <div class="setting-t">Cursor 设置</div>
+          <div class="setting-s">
+            {{ appState.cursorSettingsApplied ? "本地代理设置已应用" : "本地代理设置尚未应用" }}
+          </div>
+        </div>
+        <span
+          class="status-pill"
+          :class="appState.cursorSettingsApplied ? 'is-ok' : 'is-off'"
+        >
+          {{ appState.cursorSettingsApplied ? "已应用" : "未应用" }}
+        </span>
+      </div>
+
+      <CursorAccountCard flush />
+    </div>
+
+    <div class="config-action-bar">
+      <div class="config-action-buttons">
+        <Button
+          class="btn-sm"
+          :class="appState.serviceRunning ? 'btn-risk' : ''"
+          :disabled="appState.serviceBusy || (configSectionDirty.cursor && !appState.serviceRunning)"
+          @click="handleToggleService"
+        >
+          {{ appState.serviceRunning ? "停止服务" : "启动服务" }}
+        </Button>
+        <Button class="btn-sm" @click="handleRefreshState">刷新</Button>
+      </div>
+      <span
+        class="config-action-status spread"
+        :class="configSectionDirty.cursor ? 'is-dirty' : ''"
+      >
+        {{ configSectionStatusText("cursor") }}
+      </span>
+      <div class="config-action-buttons">
+        <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadPage">
+          重新加载
+        </Button>
+        <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.cursor" @click="handleSavePage">
+          {{ appState.configSaving ? "保存中..." : "保存 Cursor 配置" }}
         </Button>
       </div>
     </div>
-
-    <Card>
-      <div class="flex flex-col gap-4">
-        <div class="center-row justify-between gap-4">
-          <div class="flex min-w-0 flex-col gap-2">
-            <div class="center-row gap-2">
-              <span
-                class="h-2.5 w-2.5 rounded-full"
-                :class="appState.serviceRunning ? 'bg-emerald-500' : 'bg-[var(--color-text-muted)]'"
-              />
-              <div class="text-sm" :class="appViewState.serviceStatusClass">
-                {{ appViewState.serviceStatusText }}
-              </div>
-            </div>
-            <div class="text-sm text-[var(--color-text-secondary)]">
-              代理 {{ cursorProxyAddr() }}　Backend {{ cursorBackendAddr() }}
-            </div>
-          </div>
-          <Button
-            variant="primary"
-            :disabled="appState.serviceBusy || (configSectionDirty.cursor && !appState.serviceRunning)"
-            @click="handleToggleService"
-          >
-            <span class="icon-[mdi--pause] text-[16px]" v-if="appState.serviceRunning"></span>
-            <span class="icon-[mdi--play] text-[16px]" v-else></span>
-            <span>{{ appState.serviceRunning ? "停止 Cursor 服务" : "启动 Cursor 服务" }}</span>
-          </Button>
-        </div>
-        <div
-          v-if="configSectionDirty.cursor && !appState.serviceRunning"
-          class="text-xs text-amber-700 dark:text-amber-300"
-        >
-          请先保存本页
-        </div>
-
-        <div
-          v-if="appState.serviceLastError"
-          class="rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]"
-        >
-          {{ appState.serviceLastError }}
-        </div>
-      </div>
-    </Card>
-
-    <Card>
-      <div class="flex flex-col gap-4">
-        <div class="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h2 class="text-base font-medium">连接与路由</h2>
-            <div class="text-sm text-[var(--color-text-secondary)]">
-              控制白名单主链路请求走本地服务，还是回到原始 Cursor 上游地址
-            </div>
-          </div>
-          <div class="w-[220px] max-w-full">
-            <Select
-              v-model="appState.routingMode"
-              :options="routeModeOptions"
-              placeholder="选择模式"
-            />
-          </div>
-        </div>
-        <div class="text-sm text-[var(--color-text-secondary)]">
-          本地代理：{{ cursorProxyAddr() }}　Backend：{{ cursorBackendAddr() }}　Cursor 设置：{{
-            appState.cursorSettingsApplied ? "已应用" : "未应用"
-          }}
-        </div>
-        <div class="text-xs text-[var(--color-text-muted)]">
-          Gateway 不改变上述 Cursor 链路，使用独立端口 127.0.0.1:18091。
-        </div>
-      </div>
-    </Card>
-
-    <CursorAccountCard />
-  </div>
+  </Card>
 </template>

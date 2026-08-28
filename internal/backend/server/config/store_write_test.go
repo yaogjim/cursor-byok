@@ -219,6 +219,47 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 	}
 }
 
+func TestStoreSectionSavePreservesSystemTheme(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.Appearance.Theme = "system"
+		cfg.Advertising.Enabled = true
+		cfg.Routing.Mode = "upstream"
+	})
+	if seed.Appearance.Theme != "system" {
+		t.Fatalf("seed theme = %q, want system", seed.Appearance.Theme)
+	}
+
+	cursor := seed
+	cursor.Appearance.Theme = "dark"
+	cursor.Routing.Mode = "local"
+	savedCursor, err := store.SaveCursorConfig(context.Background(), cursor)
+	if err != nil {
+		t.Fatalf("SaveCursorConfig() error = %v", err)
+	}
+	if savedCursor.Appearance.Theme != "system" || !savedCursor.Advertising.Enabled {
+		t.Fatalf("cursor save overwrote settings: %+v", savedCursor)
+	}
+	if savedCursor.Routing.Mode != "local" {
+		t.Fatalf("cursor routing = %q, want local", savedCursor.Routing.Mode)
+	}
+
+	settings := savedCursor
+	settings.Appearance.Theme = "system"
+	settings.Advertising.Enabled = false
+	settings.Routing.Mode = "upstream"
+	savedSettings, err := store.SaveSystemSettings(context.Background(), settings)
+	if err != nil {
+		t.Fatalf("SaveSystemSettings() error = %v", err)
+	}
+	if savedSettings.Appearance.Theme != "system" || savedSettings.Advertising.Enabled {
+		t.Fatalf("settings section not saved: %+v", savedSettings)
+	}
+	if savedSettings.Routing.Mode != "local" {
+		t.Fatalf("settings save overwrote other pages: %+v", savedSettings)
+	}
+}
+
 func TestStoreSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 	store := newWriteTestStore(t)
 	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
@@ -237,28 +278,256 @@ func TestStoreSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 
 	renamed := seed.ModelAdapters[0]
 	renamed.DisplayName = "renamed-physical"
-	if _, err := store.SaveModelAdapters(context.Background(), []ModelAdapterConfig{renamed}); err == nil || !strings.Contains(err.Error(), "公开模型") {
+	renamedSave, err := store.SaveModelAdapters(context.Background(), []ModelAdapterConfig{renamed})
+	if err != nil {
 		t.Fatalf("rename mapped adapter error = %v", err)
+	}
+	if renamedSave.ModelAdapters[0].ID == adapterID {
+		t.Fatal("renaming a mapped adapter must recompute its derived channel ID")
+	}
+	if renamedSave.Gateway.PublicModels[0].TargetAdapterID != renamedSave.ModelAdapters[0].ID {
+		t.Fatalf("public model target = %q, want remapped %q", renamedSave.Gateway.PublicModels[0].TargetAdapterID, renamedSave.ModelAdapters[0].ID)
 	}
 
 	got, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if len(got.ModelAdapters) != 1 || got.ModelAdapters[0].DisplayName != "physical" {
-		t.Fatalf("rejected save mutated adapters: %+v", got.ModelAdapters)
+	if len(got.ModelAdapters) != 1 || got.ModelAdapters[0].DisplayName != "renamed-physical" {
+		t.Fatalf("rename save adapters = %+v", got.ModelAdapters)
 	}
-	if len(got.Gateway.PublicModels) != 1 || got.Gateway.PublicModels[0].TargetAdapterID != adapterID {
-		t.Fatalf("rejected save mutated publicModels: %+v", got.Gateway.PublicModels)
+	if len(got.Gateway.PublicModels) != 1 || got.Gateway.PublicModels[0].TargetAdapterID != got.ModelAdapters[0].ID {
+		t.Fatalf("rename save publicModels = %+v", got.Gateway.PublicModels)
 	}
 
-	extra := append(append([]ModelAdapterConfig{}, seed.ModelAdapters...), testModelAdapter("other", 2))
+	extra := append(append([]ModelAdapterConfig{}, got.ModelAdapters...), testModelAdapter("other", 2))
 	saved, err := store.SaveModelAdapters(context.Background(), extra)
 	if err != nil {
 		t.Fatalf("adding unmapped adapter error = %v", err)
 	}
-	if len(saved.ModelAdapters) != 2 || saved.Gateway.PublicModels[0].TargetAdapterID != adapterID {
+	if len(saved.ModelAdapters) != 2 || saved.Gateway.PublicModels[0].TargetAdapterID != got.ModelAdapters[0].ID {
 		t.Fatalf("valid adapter save = %+v", saved)
+	}
+}
+
+func TestStoreSaveModelAdaptersRemapsFallbackWhenPhysicalIdentityChanges(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[0].ProviderFallback.PrimaryChannelID
+	oldCandidate := seed.ModelAdapters[0].ProviderFallback.CandidateChannelIDs[0]
+	if oldPrimary != seed.ModelAdapters[1].ID {
+		t.Fatalf("seed primary = %q, want physical %q", oldPrimary, seed.ModelAdapters[1].ID)
+	}
+	gateway := seed.Gateway
+	gateway.PublicModels = []GatewayPublicModel{{ID: "public-a", TargetAdapterID: oldPrimary}}
+	if _, err := store.SaveGatewayConfig(context.Background(), gateway); err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+	if _, _, err := store.SaveLastAgentModelHash(context.Background(), oldPrimary); err != nil {
+		t.Fatalf("SaveLastAgentModelHash() error = %v", err)
+	}
+
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[1].APIKey = "rotated-key"
+	saved, err := store.SaveModelAdapters(context.Background(), edited)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() after apiKey rotation error = %v", err)
+	}
+	newPrimary := saved.ModelAdapters[1].ID
+	if newPrimary == oldPrimary {
+		t.Fatal("rotating apiKey must recompute the physical channel ID")
+	}
+	fb := saved.ModelAdapters[0].ProviderFallback
+	if fb.PrimaryChannelID != newPrimary {
+		t.Fatalf("primaryChannelID = %q, want remapped %q (old %q)", fb.PrimaryChannelID, newPrimary, oldPrimary)
+	}
+	if len(fb.CandidateChannelIDs) != 1 || fb.CandidateChannelIDs[0] != oldCandidate {
+		t.Fatalf("candidateChannelIDs = %#v, want unchanged %q", fb.CandidateChannelIDs, oldCandidate)
+	}
+	if saved.LastAgentModelHash != newPrimary {
+		t.Fatalf("lastAgentModelHash = %q, want remapped %q", saved.LastAgentModelHash, newPrimary)
+	}
+	if len(saved.Gateway.PublicModels) != 1 || saved.Gateway.PublicModels[0].TargetAdapterID != newPrimary {
+		t.Fatalf("public model target = %#v, want remapped %q", saved.Gateway.PublicModels, newPrimary)
+	}
+}
+
+func TestStoreSaveModelAdaptersRemapsFallbackWhenCandidateAPIKeyChanges(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[0].ProviderFallback.PrimaryChannelID
+	oldCandidate := seed.ModelAdapters[0].ProviderFallback.CandidateChannelIDs[0]
+	if oldCandidate != seed.ModelAdapters[2].ID {
+		t.Fatalf("seed candidate = %q, want physical %q", oldCandidate, seed.ModelAdapters[2].ID)
+	}
+
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[2].APIKey = "rotated-candidate-key"
+	saved, err := store.SaveModelAdapters(context.Background(), edited)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() after candidate apiKey rotation error = %v", err)
+	}
+	newCandidate := saved.ModelAdapters[2].ID
+	if newCandidate == oldCandidate {
+		t.Fatal("rotating candidate apiKey must recompute the physical channel ID")
+	}
+	fb := saved.ModelAdapters[0].ProviderFallback
+	if fb.PrimaryChannelID != oldPrimary {
+		t.Fatalf("primaryChannelID = %q, want unchanged %q", fb.PrimaryChannelID, oldPrimary)
+	}
+	if len(fb.CandidateChannelIDs) != 1 || fb.CandidateChannelIDs[0] != newCandidate {
+		t.Fatalf("candidateChannelIDs = %#v, want remapped %q", fb.CandidateChannelIDs, newCandidate)
+	}
+}
+
+func TestStoreSaveModelAdaptersRemapsFallbackWhenOpenAITypeBecomesAnthropic(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[1].ID
+
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[1].Type = "anthropic"
+	edited[1].OpenAIEndpoint = ""
+	edited[1].AnthropicThinkingEffort = "high"
+	saved, err := store.SaveModelAdapters(context.Background(), edited)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() after type change error = %v", err)
+	}
+	newPrimary := saved.ModelAdapters[1].ID
+	if newPrimary == oldPrimary {
+		t.Fatal("switching openai to anthropic must recompute the physical channel ID")
+	}
+	if saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID != newPrimary {
+		t.Fatalf("primaryChannelID = %q, want remapped %q", saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID, newPrimary)
+	}
+}
+
+func TestStoreSaveModelAdaptersRemapsFallbackWhenModelIDChanges(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[1].ID
+
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[1].ModelID = "rotated-model"
+	saved, err := store.SaveModelAdapters(context.Background(), edited)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() after modelID change error = %v", err)
+	}
+	newPrimary := saved.ModelAdapters[1].ID
+	if newPrimary == oldPrimary {
+		t.Fatal("changing modelID must recompute the physical channel ID")
+	}
+	if saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID != newPrimary {
+		t.Fatalf("primaryChannelID = %q, want remapped %q", saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID, newPrimary)
+	}
+}
+
+func TestStoreSaveUserConfigRemapsFallbackWhenPhysicalIdentityChanges(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.LastAgentModelHash = "live-hash"
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[1].ID
+	stale := seed
+	stale.LastAgentModelHash = "stale-ui-hash"
+	stale.ModelAdapters = cloneWriteTestAdapters(seed.ModelAdapters)
+	stale.ModelAdapters[1].APIKey = "rotated-key"
+	saved, err := store.SaveUserConfig(context.Background(), stale)
+	if err != nil {
+		t.Fatalf("SaveUserConfig() after apiKey rotation error = %v", err)
+	}
+	if saved.LastAgentModelHash != "live-hash" {
+		t.Fatalf("hash = %q, want live-hash", saved.LastAgentModelHash)
+	}
+	newPrimary := saved.ModelAdapters[1].ID
+	if newPrimary == oldPrimary {
+		t.Fatal("rotating apiKey must recompute the physical channel ID")
+	}
+	if saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID != newPrimary {
+		t.Fatalf("primaryChannelID = %q, want remapped %q", saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID, newPrimary)
+	}
+}
+
+func TestStoreSaveModelAdaptersStillRejectsTrueDanglingFallback(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[0].ProviderFallback.PrimaryChannelID = "dce4005402c60e65"
+	_, err := store.SaveModelAdapters(context.Background(), edited)
+	if err == nil || !strings.Contains(err.Error(), `模型适配器 providerFallback.primaryChannelID 引用了不存在的渠道 "dce4005402c60e65"`) {
+		t.Fatalf("dangling primaryChannelID error = %v", err)
+	}
+}
+
+func TestStoreSaveModelAdaptersDoesNotRemapDeletedChannelToNewAdapter(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = writeTestFallbackAdapters(t)
+	})
+	oldPrimary := seed.ModelAdapters[1].ID
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	replacement := testModelAdapter("replacement", 2)
+	replacement.BaseURL = "https://replacement.example.com/v1"
+	edited[1] = replacement
+
+	_, err := store.SaveModelAdapters(context.Background(), edited)
+	if err == nil || !strings.Contains(err.Error(), oldPrimary) {
+		t.Fatalf("delete+add replacement error = %v, want dangling old channel %q", err, oldPrimary)
+	}
+}
+
+func TestNormalizeConfigWithoutPreviousAdaptersReproducesMissingChannelError(t *testing.T) {
+	previous, err := NormalizeModelAdapterConfigs(writeTestFallbackAdapters(t))
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterConfigs() error = %v", err)
+	}
+	oldPrimary := previous[1].ID
+	edited := cloneWriteTestAdapters(previous)
+	edited[1].APIKey = "rotated-key"
+	_, err = NormalizeConfig(Config{
+		ModelAdapters: edited,
+		Gateway:       DefaultGatewayConfig(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "模型适配器 providerFallback.primaryChannelID 引用了不存在的渠道") {
+		t.Fatalf("NormalizeConfig() without previous adapters error = %v, want missing-channel symptom (old primary %q)", err, oldPrimary)
+	}
+	if !strings.Contains(err.Error(), oldPrimary) {
+		t.Fatalf("NormalizeConfig() error = %v, want stale primary %q", err, oldPrimary)
+	}
+}
+
+func TestNormalizeConfigRemapsStaleFallbackAfterPhysicalAPIKeyChange(t *testing.T) {
+	previous, err := NormalizeModelAdapterConfigs(writeTestFallbackAdapters(t))
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterConfigs() error = %v", err)
+	}
+	oldPrimary := previous[1].ID
+	edited := cloneWriteTestAdapters(previous)
+	edited[1].APIKey = "rotated-key"
+	got, err := normalizeConfig(Config{
+		ModelAdapters: edited,
+		Gateway:       DefaultGatewayConfig(),
+	}, previous)
+	if err != nil {
+		t.Fatalf("normalizeConfig() after apiKey rotation error = %v", err)
+	}
+	newPrimary := got.ModelAdapters[1].ID
+	if newPrimary == oldPrimary {
+		t.Fatal("rotating apiKey must recompute the physical channel ID")
+	}
+	if got.ModelAdapters[0].ProviderFallback.PrimaryChannelID != newPrimary {
+		t.Fatalf("primaryChannelID = %q, want remapped %q", got.ModelAdapters[0].ProviderFallback.PrimaryChannelID, newPrimary)
 	}
 }
 
@@ -400,6 +669,10 @@ func seedWriteTestConfig(t *testing.T, store *Store, mutate func(*Config)) Confi
 		t.Fatalf("seed Save() error = %v", err)
 	}
 	return saved
+}
+
+func cloneWriteTestAdapters(adapters []ModelAdapterConfig) []ModelAdapterConfig {
+	return append([]ModelAdapterConfig{}, adapters...)
 }
 
 func writeTestFallbackAdapters(t *testing.T) []ModelAdapterConfig {

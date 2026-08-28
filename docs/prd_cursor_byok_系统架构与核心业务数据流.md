@@ -189,6 +189,33 @@ flowchart LR
 - 离开 dirty 页面时由路由守卫确认并丢弃本页草稿；各页通过 `SaveCursorConfig` / `SaveGatewayConfig` / `SaveModelAdapters` / `SaveSystemSettings` 做 section 合并，不提交整份用户配置覆盖其他页。
 - 启停 Cursor 只走 `StartProxy` / `StopProxy`；启停 Gateway 只走独立 `StartGateway` / `StopGateway`。两者不共用一个 `serviceBusy` 语义去阻塞对方生命周期。
 - 本小节描述当前源码中的导航与保存接线。Wails 窗口视觉点击不属于本 PRD 的已确认运行证据。
+- 已批准但未实现的四页 IA、`/access` 路由与小时桶见 §4.2、§10.2 与 §14.16；不得把那些合同写成当前源码行为。
+
+### 4.2 控制面 v5 四页导航（已批准，未实现）
+
+已批准的下一代控制面改为顶部四页，由未来的 `MainLayout` 顶部标签栏与 `/access` 接入中心承载。产品名称与保存合同见工作决策基线 §10.14。在代码落地前，本小节不是当前运行证据。
+
+```mermaid
+flowchart LR
+    App[主窗口 1100x720]
+    App --> Overview["总览 /"]
+    App --> Access["接入 /access?client="]
+    App --> Models["模型 /models"]
+    App --> Settings["设置 /settings"]
+    Access --> Cursor["client=cursor"]
+    Access --> Gateway["client=gateway"]
+    Access --> Future["codex/claude 生产未开通"]
+    Cursor --> Runtime[共享模型运行时]
+    Gateway --> Runtime
+    Models --> Runtime
+```
+
+目标约束：
+
+- 旧 `/cursor` → `/access?client=cursor`，`/gateway` → `/access?client=gateway`；`/config` → `/settings`，`/model-config` → `/models` 保持。
+- 接入内部切换与离开页面都按当前 client 对应 scope 做 dirty 确认；保存仍是单 scope，禁止总保存。
+- 接入/模型计数来自真实状态。Codex/Claude 生产面板为空态或 unsupported。
+- 窗口最小尺寸仍为 `980×640`；系统主题与小时报告见 §10.2 / §14.16。
 
 ## 5. 模块职责边界
 
@@ -458,6 +485,31 @@ flowchart TD
 - 全量 KPI 仍可通过 `GetHomeMetricsSummary` 读取；概览趋势切换必须以 report 接口为准，保证 KPI 与图表使用同一范围。
 - 重置只调用 `UsageFileStore.Reset()`，清零聚合与 `daily[]`，不删除会话 history。
 - 读取失败必须把错误投影到页面并提供重试；无 `daily[]` 时保留零值 KPI 并显示「暂无按日数据」。
+- 已批准的 `24h` 小时桶尚未实现，见 §10.2。当前已交付合同仍仅为 daily `7d|30d|all`。
+
+### 10.2 v5 小时 usage 报告（已批准，未实现）
+
+v5 总览需要 `24h` 小时粒度，但小时序列不得从 `recent_events` 推断。必须先扩展 `usage.json` 持久小时聚合，再扩展 `GetHomeMetricsReport`。
+
+```mermaid
+flowchart TD
+    ProviderEvents[Provider / turn 终态] --> UsageStore[forwarder UsageFileStore]
+    UsageStore --> Daily["usage.json daily[]"]
+    UsageStore --> Hourly["usage.json hourly[] 持久 UTC 小时桶"]
+    Daily --> DayReport["range=30d|all|7d granularity=day"]
+    Hourly --> HourReport["range=24h granularity=hour"]
+    DayReport --> Report["HomeMetricsReport range granularity timezone dataVersion summary buckets"]
+    HourReport --> Report
+    Report --> HomeUI[总览 KPI / 趋势 / 52周日热力图]
+```
+
+合同：
+
+- 小时桶在写入 usage 时与日桶一并原子更新；保留至少最近 48 个完整 UTC 小时，更旧小时可修剪。日桶仍服务 `30d`/`all` 与 52 周热力图。
+- 旧文件无 `hourly` 时：日报告继续可读；`24h` 返回空桶并显式「无小时数据」，禁止用日桶、正弦图或 `recent_events` 补造。
+- 报告字段至少包括 `range`、`granularity`、UTC 起止、`dataVersion`/`generatedAt`、桶数组和同一版本 `summary`。`24h` 不得展示日数据冒充小时；`30d`/`all` 不得伪造小时数据。
+- Token 与缓存命中率使用双轴或独立轨道。重置清零 daily 与 hourly，不删除 `history/<conversation-id>/`。
+- 回滚小时 UI 时保留已迁移的小时字段和既有 `7d|30d|all` 日报告。
 
 ## 11. 模型适配与 provider 数据流
 
@@ -1481,9 +1533,291 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 
 ### 14.15.3 概览报告
 
-见 §10.1。首期范围仅 `7d` / `30d` / `all`。本设计不把 Wails 视觉点击写成已确认证据。
+见 §10.1。首期范围仅 `7d` / `30d` / `all`。本设计不把 Wails 视觉点击写成已确认证据。v5 小时桶与四页 IA 见 §14.16，尚未实现。
 
-## 15. 核心不变量
+## 14.16 DESIGN-V5-UI-001：四页控制面、小时统计与账号 fixture 门控
+
+- **Design Readiness**：`approved`（已批准计划「v5 界面重构复审后的完整实施计划」；原型 `docs/cursor-assistant-v5.html`）。
+- **决策时间**：2026-08-26。
+- **实现状态**：未开始。阶段 0 只冻结文档；不得把四页 UI、`system` 主题、小时桶、打开 Cursor 或 Codex/Claude 授权写成已交付。
+- **适用范围**：主窗口 IA、`/access` 路由与 scope 脏状态、真实计数、完整配置导入导出文案、`appearance.theme=system`、持久小时 usage、Cursor 启动/重启安全语义、Codex/Claude UI 契约与生产门控。
+- **不包含**：把原型静态 JS/示例数据迁入产品；用 `recent_events` 推断小时曲线；生产构建内嵌 fixture 账号；未过 Design Gate 的真实 Codex/Claude 授权；修改 Cursor 18080/18090、MITM、工具桥或 Gateway 协议。
+
+### 14.16.1 导航与脏状态
+
+当前源码仍为 §4.1 五页。目标路由为 `/`、`/access?client=gateway|cursor|codex|claude`、`/models`、`/settings`。旧 `/cursor`、`/gateway` 重定向到对应 client。守卫按当前 client 解析单个 scope；接入标签脏点为已支持客户端 scope 的 OR；保存继续走既有 section 入口。
+
+### 14.16.2 统计与主题
+
+小时聚合必须进入 `usage.json` 持久字段，见 §10.2。`system` 主题持久化枚举、运行时解析并同步窗口背景，默认仍为 `light`。
+
+### 14.16.3 Cursor 生命周期与账号门控
+
+`RestartProxy` 未批准前不展示重启。`LaunchCursor` 必须区分未发现/权限失败/启动失败，不得把路由跳转当成功。Codex/Claude fixture 仅测试或 DEV 模块；生产为空态/`unsupported`。真实授权另开 Design Gate。
+
+### 14.16.4 模型导入导出
+
+模型页导入导出文案必须标明完整配置。新的仅模型格式不得静默改变现有 YAML/token overlay。
+
+## 14.17 DESIGN-INTERRUPT-RECOVERY-001：中断恢复、自动续写、错误传播与生命周期
+
+- **Design ID**：`DESIGN-INTERRUPT-RECOVERY-001`
+- **Design Readiness**：`approved`（用户 2026-08-27 确认执行并批准当前计划；本轮只冻结文档，不是已实现声明）
+- **决策时间**：2026-08-27
+- **关联计划**：`.cursor/plans/interrupt_recovery_hardening_330c266b.plan.md`
+- **需求锚点**：工作决策基线 §6.2、§10.5、§10.15
+- **继承且不得改写**：§14.5 `DESIGN-PROVIDER-DISCONNECT-001`、§14.7 / §14.9 `DESIGN-P1-SUBAGENT-FALLBACK-001` 的 post-output replay gate、三层结果、`model_call_id` 幂等 final、500 仅同渠道重试、529 不在 retry/fallback allowlist、fallback 默认关闭与共享预算。
+- **适用范围**：HTTP 524 精确 allowlist、同一 turn 的 automatic-continuation、provider 错误到 RunSSE/Connect terminal 的跨层投影、流诊断字段、session rotation 与 shutdown drain/cancel、TLS/SCM/FSSync/checkpoint 预期噪声。
+- **不包含**：调查 `api.aigo0.com` 等源站性能；新增未经批准的 `RestartProxy`；改变 SCM/FSSync 对 Cursor 的 HTTP 响应语义；修改 `proto/`、证书、MITM CONNECT/whitelist、18080/18090；把 continuation 接到 Gateway Chat/Responses 或 subagent child；默认开启 continuation。
+- **UI**：`N/A`（本工作包不要求新控制面；配置为可回滚 YAML/schema 开关，缺省关闭。若后续暴露 UI，必须另开切片且不得改变默认 disabled）。
+
+### 14.17.1 问题机制、已核实事实与目标
+
+**表面痛点**：provider 流在 Cloudflare/网关 524、reset/TLS close、idle 或进程退出时中断后，观测把 typed HTTP 状态或可恢复窗口投影成 `transport`/`not_recorded`，`retryable`/`IsRetryable` 与真实动作不一致；已有文本的截断只能失败，不能在安全门内用新 pass 续写；session rotation 与预期 404/TLS 噪声污染 ERROR。
+
+**根因 / 承重不变量**：
+
+1. retry/fallback 资格由**动作 allowlist** 决定，观测分类 `server_5xx` 不能代替动作。当前 `isRetryableHTTPStatus` 为 429/500/502/503/504，`isFallbackEligibleHTTPStatus` 为 429/502/503/504；524 被 `ClassifyHTTPStatus` 归入 `server_5xx`，但两个 allowlist 都不含 524。
+2. `providerRetryObservation` 对全部 `ProviderErrorServer5xx` 写 `retryable=true`，RunSSE `ErrorDetails.IsRetryable` 在 `buildRunSSEStructuredErrorWithDetail` 中硬编码 `true`，与真实 decision 脱节。
+3. P0 明确禁止原 attempt 在已有输出后普通重放；这不等于禁止**新** `model_call_id` 的安全续写。缺少独立 continuation 状态机时，实现者会把续写误接成 retry/fallback。
+4. `observability.Controller.Reconfigure` 在任意 settings/fingerprint 变化时同步 `previous.Close()`；`observabilitySettings` 把 routing/model 字段打进 fingerprint，存在轮换 recorder、阻塞或误伤在途流的路径。
+5. HTTP 2xx 头、body 首字节、有效内容与 completion marker 被压缩成同一“成功/失败”，无法区分 header completion 与 stream/body completion。
+
+**所选机制**：在零输出窗口把 524 **精确**加入既有 retry/fallback allowlist；用独立 `providerActionContinue` 创建同一 turn 的 child pass；把 typed HTTP 状态、retry decision、Request ID 和 header/body 时间线作为跨层合同；收窄 rotation 触发并把 shutdown 变成 drain-then-cancel；把预期噪声从 app-level ERROR 解耦。
+
+**证伪条件**：若 524 在已有 raw byte/模型事件/工具/checkpoint 后仍 retry 或 fallback；若 continuation 复用原 `model_call_id` 或在工具进度后继续；若 typed 524 在 terminal 变成 `transport`/`not_recorded`；若 `IsRetryable=true` 但系统不会再试；若 session rotation 取消在途 provider 请求——则设计被证伪，必须停止该切片。
+
+**已核实事实（`evidence_status=verified`）**：
+
+| 事实 | 锚点 |
+| --- | --- |
+| 同渠道 HTTP retry allowlist 为 429/500/502/503/504 | `internal/backend/agent/model/retry.go` `isRetryableHTTPStatus` |
+| fallback HTTP allowlist 为 429/502/503/504；500 禁止切换 | `fallback_router.go` `isFallbackEligibleHTTPStatus` 及注释 |
+| 524/529 观测分类为 `server_5xx` | `http_error.go` `ClassifyHTTPStatus`；`http_error_test.go` 覆盖 529 |
+| 529 当前不在 retry/fallback 动作 allowlist | 上述两个函数；`fallback_router_test.go` `5xx_529` |
+| 观测层把全部 `server_5xx` 标为 retryable | `forwarder/actor.go` `providerRetryObservation` |
+| RunSSE `IsRetryable` 硬编码 true | `forwarder/service.go` `buildRunSSEStructuredErrorWithDetail` |
+| 现有 providerAction 仅 `start`/`resume` | `forwarder/actor.go` |
+| recorder 在 settings 变化时同步 Close | `internal/observability/controller.go` `Reconfigure` |
+| fingerprint 含 routing/model 字段 | `internal/backend/host.go` `observabilitySettings` |
+| bidi 真实解码失败才写 `decode_error`；stale 走独立 kind | `forwarder/service.go` `BidiAppend` |
+| P0 三层结果与安全重试门禁 | 本文件 §14.5 |
+| P1 fallback 保持同一 `model_call_id`，500 不切换 | 本文件 §14.7.6、§14.9.4；工作决策基线 §10.5 |
+
+**推断（`evidence_status=inferred`）**：真实 Cursor 对同一 RunSSE 多段 assistant 的兼容性需在启用 continuation 前用故障注入 + 真实流验收；未完成前默认 disabled 覆盖该风险。
+
+**未知（`evidence_status=unknown`，不阻塞本 Design，但阻塞“默认开启 continuation / 已验证 Cursor 多段兼容”的完成声明）**：真实 Cursor 客户端对 parent partial + child 新 `model_call_id` 的 UI 呈现；外部 524 源站耗时分布。
+
+### 14.17.2 HTTP 524 分类、allowlist 与 decision 一致性
+
+**观测分类**：524 继续使用既有 `server_5xx`（与 500/502/503/504/529 相同观测桶），不新增 HTTP 状态枚举。分析器兼容 `error_category=server_5xx` + `http_status=524`。
+
+**动作 allowlist（本设计新增的唯一 HTTP 状态）**：
+
+| 状态 | 同渠道 retry | fallback 切换 | 备注 |
+| --- | --- | --- | --- |
+| 524 | 仅零 raw byte、零模型事件、零工具进度、零 checkpoint、context 未取消 | 同左，且满足 §14.7/§14.9 其余 fallback 门禁 | 新增 |
+| 500 | 保持 P0：允许 | 保持禁止 | 不得扩大 |
+| 529 | 保持禁止 | 保持禁止 | 不得扩大 |
+| 429/502/503/504 | 保持现状 | 保持现状 | 不得缩小或改写成“全部 5xx” |
+
+实现落点：`retry.go` `isRetryableHTTPStatus` 与 `fallback_router.go` `isFallbackEligibleHTTPStatus` **精确加入 524**；禁止改成 `status >= 500`。`ClassifyHTTPStatus` 保持 `server_5xx`。
+
+**安全窗口**（继承 §14.5，524 不得放宽）：
+
+```text
+retryable_error
+AND raw_bytes_observed == 0
+AND model_events_emitted == 0
+AND downstream_published == false
+AND partial_tool_seen == false
+AND completed_tool_seen == false
+AND tool_dispatched == false
+AND checkpoint_committed == false
+AND context_not_canceled
+AND retry_budget_available
+```
+
+**decision 字段合同**：内部 `retryable`、`retry_reason`、`retry_suppression_reason`、fallback `suppression`、RunSSE `IsRetryable` 必须描述**实际会不会再发 HTTP**。524 在安全窗口且预算未耗尽：`retryable=true`，`retry_reason` 使用稳定值（建议 `http_524`，不得写成宽泛 `http_5xx` 以致与 500/529 不可区分）。524 被 post-output gate 抑制：`retryable=false`，`retry_reason` 不得仍为可重试原因。500 保持可同渠道重试的既有 reason；529 必须是不可重试。禁止再出现“观测 retryable=true 但 allowlist 不会重试”。
+
+回滚点：只还原两个 allowlist 中的 524，不影响 continuation 与观测字段扩展。
+
+### 14.17.3 automatic-continuation 状态机
+
+**身份**：continuation 是同一 `turn_id` / conversation 下的新 provider pass。必须生成新 `model_call_id`，递增独立 `http_attempt` 空间；记录 `continued_from_model_call_id`、`continuation_index`（从 1 起，初始 `maxPerTurn=1`）。P1 fallback chain **不得**用于 continuation：fallback 保持同一 `model_call_id`；continuation 禁止复用 HTTP retry wrapper 或把 child 帧伪装成原 attempt。
+
+**模块职责**：
+
+- `forwarder/actor.go` 新增独立 `providerActionContinue`；`driveProvider` 为 child 创建新 `model_call_id`。
+- `forwarder/types.go`、`service.go` 与持久化路径保存父子关联、spawn 幂等标记、parent partial final、独立 usage 事件。
+- 禁止把 continuation 接到 `providerActionStart`/`Resume`、Gateway Chat/Responses 或 subagent child。
+
+**执行顺序（不可交换）**：
+
+1. 把已产生的 assistant 文本/思考按既有幂等键持久化（继承 §14.5：最多落盘一次）。
+2. 父 `model_call_id` 写唯一 `model_call_final=partial`（或等价 protocol `truncated` + business `partial`），并记录该 pass 的 usage。
+3. 检查 continuation 安全门、每 turn 上限、总时限、开关与 spawn 幂等。
+4. 只有全部通过才创建 child pass；失败则 stop，不发第二份 HTTP。
+5. 仅当 **turn** 最终失败/取消且不会再续时，才发 RunSSE/Connect terminal。父 partial 不是 Cursor 整轮 terminal。
+
+**初始安全门（任一为真即禁止续写，parent fail-closed 为 partial）**：
+
+- 无已持久化文本且无已持久化思考；
+- `partial_tool_count > 0` 或 `partial_not_dispatched` 或 `completed_tool_seen` 或 `tool_dispatched`；
+- `potential_side_effect`；
+- pending external/user interaction；
+- `checkpoint_committed`；
+- client cancel / deadline / 父 context 已取消；
+- subagent child；
+- Gateway Chat / Responses 路径；
+- 开关关闭、本 turn 已续过、或检测到重叠 spawn。
+
+**prompt 与重叠**：
+
+- child 请求注入已持久化断点和尾部上下文，要求仅从断点继续；不得重放原 HTTP body。
+- 向下游发布前做最长前缀重叠剥离：若 child 可见文本以 parent 已发布/已持久化后缀为前缀，只发布剩余后缀。
+- **无共同前缀**：fail-closed 为 `partial`，不向下游发布 child 正文，记录 `continuation_overlap_mismatch`。禁止猜测对齐。
+- **无新增有效字节**、再次截断、预算/总时限耗尽：熔断为 `partial`，不再发起第二次 continuation（`maxPerTurn=1` 已禁止嵌套）。
+
+**配置（缺省关闭，无磁盘迁移）**：
+
+```yaml
+streamContinuation:
+  enabled: false          # 旧文件缺失视为 false
+  maxPerTurn: 1           # 固定上限 1，禁止嵌套
+  # 总时限与重叠窗口为实现细节，必须有上限且可回滚；不得在未确认前写成产品默认开启
+```
+
+**计费与审计**：parent/child 各自产生 usage 事件；禁止把 child token 合并进 parent 或重复计费。checkpoint 若在 child 期间提交，只属于 child；parent 已是 partial 终态后不得再改写 parent checkpoint。trace 必须能从 child `model_call_id` 反查 parent。
+
+**崩溃后不自动续**：进程重启后不得根据磁盘上的 partial parent 自动 spawn child；只有同一进程、同一 live stream actor、开关开启且安全门通过时才续。
+
+### 14.17.4 跨层错误传播：provider → 观测 → RunSSE/Connect
+
+事实源优先级：typed `HTTPStatusError.StatusCode` > 稳定 `error_category` > 文本摘要。文本摘要不得作为分类或 retry 依据。
+
+**禁止降级**：已经拿到 HTTP 状态码的错误，在 `provider_stream_finished`、`model_call_final`、RunSSE/Connect terminal、app log 中都必须携带该状态码。缺失 attempt 时可写 `http_attempt=not_recorded`，但 **不得**把 `http_status` 改成空后再把 `error_category` 设为 `transport`。
+
+**`IsRetryable` 对齐规则**：
+
+| 真实 decision | 内部 `retryable` | RunSSE `IsRetryable` |
+| --- | --- | --- |
+| 将按 allowlist 再发同渠道 HTTP 或 fallback | `"true"` | `true` |
+| 安全门/预算/取消禁止再试，或将走 continuation（不再重放原 attempt） | `"false"` | `false` |
+| 终态已发出，用户侧不应再自动重试同一请求 | `"false"` | `false` |
+
+continuation 不是原请求 retry：对 Cursor 而言该 turn 尚未 terminal 时，不要用 `IsRetryable=true` 诱导客户端重放同一 RunSSE。Turn 最终 partial/failed 时 `IsRetryable=false`，除非未来另有已批准的客户端重试合同。
+
+**Request ID**：terminal 可展示/关联 `request_id`、`model_call_id`、attempt；`ShowRequestId` 允许打开。detail/title 只使用稳定 safe message + typed category；Authorization、Cookie、API key、完整 query、请求体、未清洗 provider 正文不得进入 basic 日志、history 或用户终态（继承 §14.5）。
+
+**HTTP 200 header vs stream/body completion**：
+
+- `header_at`：响应头接收完成。此时可记录 HTTP status；2xx 只更新 `transport_outcome` 相关事实，不得把 `protocol_outcome` 设为 `completed`。
+- `first_byte_at` / `last_byte_at`：body 原始字节。
+- `body_end`：body 读取结束（含 EOF/reset），不等于 completion marker。
+- `protocol_outcome=completed` 仍只允许 provider 明确 completion marker（继承 §14.5）。
+
+### 14.17.5 流诊断字段与 canonical identity
+
+在 `http_error.go` / `retry.go` / `stream_idle.go`、OpenAI/Anthropic 流适配器和 forwarder 观测结构中增加**可选**字段；旧日志缺失时分析器显示 `unknown/not_recorded`，不得推断成功。
+
+| 字段 | 语义 |
+| --- | --- |
+| `header_at` | HTTP 响应头完成时间 |
+| `first_byte_at` | 首个 raw body byte |
+| `last_byte_at` | 最后 raw body byte |
+| `body_end` | body 读取结束时间 |
+| `first_event_at` | 首个模型事件 |
+| `last_effective_content_at` | 最后有效文本/思考/工具内容（stall watchdog 用此，而非 raw byte） |
+| `close_cause` | `eof` / `unexpected_eof` / `reset` / `tls` / `idle_timeout` / `context_canceled` / `deadline` / `stream_decode` / `http_status` |
+| `partial_boundary` | 截断停在哪一类内容之后，例如 `none` / `text` / `reasoning` / `partial_tool` / `completed_tool` / `checkpoint` |
+
+保留现有 `error_category` 以兼容分析器。stall 由有效内容 idle watchdog 判定；shell/tool stall 不得混入 provider stream stall。完成只由 completion marker 判定。
+
+**canonical identity**：每条 attempt 事件必须有稳定的 `provider`、`model`、`model_call_id`、`attempt`/`channel_attempt`。不得从错误字符串解析身份。parent/child 用 `continued_from_model_call_id` 关联。
+
+**`decode_error`**：仅真实解码失败。`BidiAppend` 在 `DecodeAgentClientMessage` 失败时使用 `decode_error`；stale append 继续用 `stale`，intent 错误用 `intent_error`。禁止把 basic 模式下无法展示的 body 标成 `decode_error`。
+
+**app log**：`internal/backend/host.go` `logObservabilityEvent` 及等价路径必须能按 `trace_id` / `request_id` / `model_call_id` 检索；不提升敏感 payload。`debug_recorder.go`、`internal/observability/contract.go`、`tools/log-analyzer/internal/sanitize/sanitize.go` 同步 allowlist，保证新字段可查询且不泄漏内容。
+
+### 14.17.6 session rotation、shutdown drain/cancel
+
+**session rotation**：
+
+- 只有观测**存储**设置变化（mode / retention / disk quota 等）才轮换 recorder。
+- 路由模式、模型 adapter fingerprint、provider idle timeout 等只写入事件 metadata，不触发 Close。
+- 轮换不得 cancel 在途 provider context；新事件写入新 recorder，旧流的后续事件允许跟随新 recorder 或带原 session id 的显式衔接，但 HTTP 请求继续。
+- recorder 切换必须非阻塞或有界关闭；慢 sink 不得阻塞 provider 流或配置读取。
+
+**shutdown**：
+
+1. 停止接收新请求；
+2. 最多 5 秒 drain 在途 provider；
+3. 超时后按 shutdown cause 取消剩余 provider 请求，记录 `reason`、`initiator`、active provider count、drain duration、cancel count、outcome；
+4. 再清理 Cursor 设置/服务。
+
+托盘退出与 `OnShutdown` 必须幂等去重。普通配置保存与 observability rotation **不**进入此取消路径。不实现新的 restart 命令；现有 start/stop/quit 的空档、健康检查和失败原因必须可追踪。落点：`internal/app/runner.go`、`internal/client/lifecycle.go`、`internal/backend/host.go`、updater 退出入口。
+
+### 14.17.7 预期噪声与严重性投影
+
+`severity` 与原始 `status` / `error_category` 解耦（继承 §14.4：后者继续存盘查询）。禁止仅因 `status=error` 就投影为 app-level ERROR。
+
+| 信号 | HTTP/运行语义 | app/analyzer 严重性 | 采样/聚合 |
+| --- | --- | --- | --- |
+| client TLS / unknown CA / handshake mismatch | 不改变握手失败事实 | 连接级 warning | 按 source/host/category 采样 |
+| upstream TLS、backend unavailable、timeout、真实 5xx | 保持失败 | ERROR，不采样 | 可按 path 查询 |
+| SCM 404、FSSync 404 | **保持原 HTTP 响应** | 预期噪声 warning | 按 capability/operation/status 聚合，不按 trace 刷 `request_error` |
+| `backend_forward_finished` 的 expected 4xx | 不改变响应 | warning | — |
+| checkpoint blob / FSSync skip | 非致命，turn 可成功 | `degraded` 结构化事件 | 不升 ERROR |
+| 未知通用 MITM 路径 | 不发明能力 | `implementation_state=unknown` | — |
+
+落点：`internal/observability/semantics.go`、`internal/backend/host.go`、`internal/mitm/observe.go` / `service.go` / `traffic_class.go`、`internal/backend/forwarder/checkpoint_blobs.go`、log-analyzer。
+
+### 14.17.8 失败、兼容、迁移与回滚
+
+- 所有新字段为可选扩展；无持久 schema 强制迁移。`streamContinuation` 缺失 = disabled。
+- 切片独立回滚：524 allowlist、continuation 开关、诊断字段、rotation 触发、严重性投影可分别还原。
+- 任一回滚都不得放松 post-output replay gate，不得把 500/529 改成与 524 相同动作，不得恢复“观测 retryable 与动作不一致”。
+- 启用顺序：先诊断与严重性 → 再 524 allowlist → 最后小范围打开 continuation。
+
+### 14.17.9 验证合同与实施落点
+
+| 链路 | 切片 | 必须证据 |
+| --- | --- | --- |
+| 524 零输出 retry/fallback 成功、预算耗尽、输出后/工具后抑制；500/529 不回归 | `http-524-allowlist` | `retry_test.go`、`fallback_router_test.go`、`fallback_http_test.go`、`http_error_test.go`、forwarder provider-stream 测试 |
+| typed HTTP 不降级；`IsRetryable` 与 decision 一致；Request ID 可关联不泄漏 | `error-propagation-terminal` | forwarder terminal / RunSSE 测试；basic 日志无凭据 |
+| continuation spawn 一次、父子关联、前缀去重、mismatch fail-closed、无进展、工具/checkpoint/cancel 拦截、两次独立计费、默认关闭 | `automatic-continuation` | actor/service/persistence 测试；Cursor 多段兼容未通过前不得默认 enabled |
+| header/首末字节/body_end/close_cause/partial_boundary；故障注入 | `stream-diagnostics` | httptest：首字节前超时、部分输出后 reset/TLS、长停顿、完成边界断开、missing completion marker |
+| rotation 不中断在途流；drain 成功与超时取消；双 shutdown 幂等 | `lifecycle-hardening` | host/observability/lifecycle/updater 测试 |
+| 预期 TLS/SCM/checkpoint 噪声不污染 ERR；真实失败仍 ERROR 且可查询 | `noise-governance` | semantics/mitm/checkpoint/analyzer 测试 |
+
+验证命令（按改动范围选择，完成声明须匹配实际运行）：`go test` / `go test -race` / `go vet` 覆盖 `internal/backend/agent/model`、`internal/backend/forwarder`、`internal/observability`、`internal/backend`、`internal/client`、`internal/mitm`、`internal/updater`、`tools/log-analyzer`；`git diff --check`。未经运行证据不得把工作包标为 `accepted`。
+
+### 14.17.10 备选方案、自由裁量与 Design Gate 记录
+
+**采用方案**：524 精确加入动作 allowlist；续写用新 `model_call_id`；rotation 不取消在途请求；退出 drain 5s 后取消。
+
+**否决**：
+
+- 把 524 当全部 5xx 开放：会改变 500/529 合同。
+- 原 `model_call_id` 透明重放已有输出：违反 post-output replay gate。
+- 默认开启 continuation：真实 Cursor 多段兼容尚未验证。
+- rotation 时取消在途 HTTP：把观测存储变化变成用户可见失败。
+- 退出时丢弃在途请求不 cancel：造成孤儿计费与不可观测终态。
+
+**实现者可自由裁量、不得改变外部契约的部分**：字段存放 helper 拆分、重叠窗口具体字节数、drain 等待的内部计时器实现、采样率数值（但必须按 source/host/category 采样且真实 ERROR 不采样）。
+
+**反向审计（未做独立评审）**：作者按文档模拟 — ① 零输出 524 → 同渠道重试成功，terminal 不出现；② 文本已出后 524 → 零 retry/fallback，若开关开且无工具则 child 新 `model_call_id` 续写，parent partial、usage 两次；③ 工具 partial 后断流 → fail-closed，不续、不重放；④ typed 524 在 final/terminal 仍为 524，`IsRetryable` 与是否还会发 HTTP 一致；⑤ 配置保存不 cancel 在途流，quit 超时后 cancel 并留下 reason。模拟中无需临场补充关键阈值或枚举。
+
+**Design Gate 记录**：
+
+- **锚点**：`DESIGN-INTERRUPT-RECOVERY-001` / 工作决策基线 §10.15
+- **评审者与时间**：2026-08-27；用户已批准当前计划。本轮未做独立外部评审，以上反向审计代替。
+- **适用项**：数据/接口/状态/失败恢复/并发/可观测/回滚已闭合；UI 为 `N/A`（无新控制面）。
+- **最高风险失败链路**：已有工具进度或 checkpoint 后的 524/reset 被误续写或误重放。
+- **迁移回滚链路**：无磁盘迁移；关开关 / 还原 allowlist 即可。
+- **阻塞缺口**：无实施阻塞缺口。真实 Cursor 多段 assistant 兼容与源站耗时不阻塞编码，但阻塞“默认开启 / 性能已修复”的完成声明。
+- **最终 verdict**：`Design Readiness=approved`。可进入 `task/todo.md` 工作包的实施切片；本轮不得改代码。
 
 后续任何实现、合并或重构都必须保护以下不变量：
 

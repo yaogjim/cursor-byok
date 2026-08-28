@@ -236,6 +236,11 @@ func (s *ProxyService) ShutdownForQuit() {
 	s.core.ShutdownForQuit()
 }
 
+// ShutdownForQuitFrom 以指定 initiator 执行进程退出清理。
+func (s *ProxyService) ShutdownForQuitFrom(initiator string) {
+	s.core.ShutdownForQuitFrom(initiator)
+}
+
 // CopyGatewayToken 仅通过显式复制接口返回 Gateway token。
 func (s *ProxyService) CopyGatewayToken() (string, error) {
 	return s.core.CopyGatewayToken()

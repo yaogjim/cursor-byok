@@ -23,6 +23,9 @@ type Settings struct {
 	MaxDiskMB     int
 	QueueSize     int
 	Metadata      SessionMetadata
+	// RuntimeFingerprint carries routing/model metadata for events only.
+	// It must not participate in recorder rotation.
+	RuntimeFingerprint string
 }
 
 type SessionMetadata struct {
@@ -102,6 +105,10 @@ type Event struct {
 	Fields               map[string]any `json:"fields,omitempty"`
 	PayloadRef           string         `json:"payload_ref,omitempty"`
 }
+
+// Optional stream diagnostic keys may appear in Event.Fields:
+// header_at, first_byte_at, last_byte_at, body_end_at, last_effective_content_at,
+// close_cause, partial_boundary, transport_outcome. Missing values are unknown/not_recorded.
 
 type Payload struct {
 	Name        string

@@ -195,6 +195,7 @@ func analyzeCurrent(ctx context.Context, store *workspace.Workspace, datasetID i
 		return err
 	}
 	targets := newTargetBuffer(datasetID)
+	noise := newExpectedNoiseBuffer(datasetID)
 	var after *workspace.EventCursor
 	var current *traceState
 	for {
@@ -218,6 +219,7 @@ func analyzeCurrent(ctx context.Context, store *workspace.Workspace, datasetID i
 			if err := current.addEvent(ctx, store, row); err != nil {
 				return err
 			}
+			noise.add(row.EventRecord)
 			if err := targets.add(ctx, store, row.EventRecord); err != nil {
 				return err
 			}
@@ -231,6 +233,9 @@ func analyzeCurrent(ctx context.Context, store *workspace.Workspace, datasetID i
 		}
 	}
 	if err := targets.flush(ctx, store); err != nil {
+		return err
+	}
+	if err := noise.flush(ctx, store); err != nil {
 		return err
 	}
 	if err := store.InsertTraceIntegrityFindings(ctx, datasetID); err != nil {
@@ -295,7 +300,7 @@ func (state *traceState) addEvent(ctx context.Context, store *workspace.Workspac
 			return err
 		}
 	}
-	state.hasError = state.hasError || event.Status == "error" || event.ErrorCategory != "" || isSemanticFailure(event.SemanticOutcome)
+	state.hasError = state.hasError || (!isExpectedNoise(event) && (event.Status == "error" || event.ErrorCategory != "" || isSemanticFailure(event.SemanticOutcome)))
 	state.addSemanticState(event)
 	if err := state.insertSemanticFindings(ctx, store, event); err != nil {
 		return err
@@ -327,7 +332,7 @@ func (state *traceState) addEvent(ctx context.Context, store *workspace.Workspac
 			return err
 		}
 	}
-	if event.ErrorCategory != "" || event.Status == "error" {
+	if shouldEmitRequestError(event) {
 		if err := store.InsertFinding(ctx, workspace.FindingRecord{DatasetID: state.datasetID, Severity: "error", SeverityRank: severityRank("error"), Code: "request_error", Message: firstNonEmpty(event.ErrorCategory, "请求以错误状态结束"), TraceKey: state.traceKey, FirstIngestOrder: event.IngestOrder}); err != nil {
 			return err
 		}
@@ -641,7 +646,9 @@ func (buffer *targetBuffer) add(ctx context.Context, store *workspace.Workspace,
 		aggregate.finished++
 		aggregate.durationTotalMS += event.DurationMS
 		if event.Status == "error" || event.ErrorCategory != "" {
-			aggregate.errors++
+			if !isExpectedNoise(event) {
+				aggregate.errors++
+			}
 		}
 	}
 	if len(buffer.values) >= stateFlushLimit {

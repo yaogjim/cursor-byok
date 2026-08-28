@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -28,6 +29,37 @@ const healthPath = "/healthz"
 
 const tabServerBaseURL = "https://tab.leokun.cn"
 
+const shutdownDrainTimeout = 5 * time.Second
+
+const (
+	ShutdownReasonAppQuit     = "app_quit"
+	ShutdownReasonServiceStop = "service_stop"
+
+	ShutdownInitiatorTray       = "tray"
+	ShutdownInitiatorOnShutdown = "on_shutdown"
+	ShutdownInitiatorStopProxy  = "stop_proxy"
+	ShutdownInitiatorStartFail  = "start_fail"
+
+	ShutdownOutcomeDrained        = "drained"
+	ShutdownOutcomeCanceled       = "canceled"
+	ShutdownOutcomeAlreadyStopped = "already_stopped"
+	ShutdownOutcomeError          = "error"
+)
+
+type ShutdownCause struct {
+	Reason    string
+	Initiator string
+}
+
+type ShutdownReport struct {
+	Reason              string
+	Initiator           string
+	ActiveProviderCount int
+	DrainDuration       time.Duration
+	CancelCount         int
+	Outcome             string
+}
+
 type Host struct {
 	store              *serverconfig.Store
 	listenAddr         string
@@ -44,6 +76,8 @@ type Host struct {
 	lastRunErr error
 
 	mux http.Handler
+
+	lastShutdown ShutdownReport
 }
 
 func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationProvider) (*Host, error) {
@@ -233,22 +267,176 @@ func (host *Host) Start() error {
 }
 
 func (host *Host) Stop(ctx context.Context) error {
+	return host.StopWithCause(ctx, ShutdownCause{
+		Reason:    ShutdownReasonServiceStop,
+		Initiator: ShutdownInitiatorStopProxy,
+	})
+}
+
+func (host *Host) StopWithCause(ctx context.Context, cause ShutdownCause) error {
 	if host == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(cause.Reason) == "" {
+		cause.Reason = ShutdownReasonServiceStop
+	}
+	if strings.TrimSpace(cause.Initiator) == "" {
+		cause.Initiator = ShutdownInitiatorStopProxy
+	}
+
+	drainCtx, cancelDrain := context.WithTimeout(ctx, shutdownDrainTimeout)
+	defer cancelDrain()
+	startedAt := time.Now()
+
 	host.runMu.Lock()
 	serverInstance := host.httpServer
 	module := host.agentModule
 	host.httpServer = nil
 	host.agentModule = nil
 	host.runMu.Unlock()
+
+	activeCount := 0
 	if module != nil {
-		defer module.Close()
+		activeCount = module.ActiveProviderCount()
 	}
-	if serverInstance == nil {
+
+	if serverInstance == nil && module == nil {
+		host.recordShutdown(cause, 0, time.Since(startedAt), 0, ShutdownOutcomeAlreadyStopped)
 		return nil
 	}
-	return serverInstance.Shutdown(ctx)
+
+	var shutdownErr error
+	if serverInstance != nil {
+		shutdownErr = serverInstance.Shutdown(drainCtx)
+	}
+	if module != nil {
+		module.WaitForProvidersIdle(drainCtx)
+	}
+
+	cancelCount := 0
+	if module != nil && module.ActiveProviderCount() > 0 {
+		cancelCount = module.CancelActiveProviders(shutdownCancelMessage(cause))
+	}
+	if module != nil {
+		module.Close()
+	}
+	if serverInstance != nil {
+		_ = serverInstance.Close()
+	}
+
+	drainDuration := time.Since(startedAt)
+	outcome := ShutdownOutcomeDrained
+	if cancelCount > 0 {
+		outcome = ShutdownOutcomeCanceled
+	}
+	if shutdownErr != nil && !errors.Is(shutdownErr, context.DeadlineExceeded) && !errors.Is(shutdownErr, context.Canceled) && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		outcome = ShutdownOutcomeError
+	}
+	host.recordShutdown(cause, activeCount, drainDuration, cancelCount, outcome)
+	if shutdownErr != nil && !errors.Is(shutdownErr, context.DeadlineExceeded) && !errors.Is(shutdownErr, context.Canceled) && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		return shutdownErr
+	}
+	return nil
+}
+
+func (host *Host) LastShutdown() ShutdownReport {
+	if host == nil {
+		return ShutdownReport{}
+	}
+	host.runMu.RLock()
+	defer host.runMu.RUnlock()
+	return host.lastShutdown
+}
+
+func (host *Host) ActiveProviderCount() int {
+	if host == nil {
+		return 0
+	}
+	host.runMu.RLock()
+	module := host.agentModule
+	host.runMu.RUnlock()
+	if module == nil {
+		return 0
+	}
+	return module.ActiveProviderCount()
+}
+
+func (host *Host) BeginActiveProvider(requestID string, onCancel func()) (finish func()) {
+	finish = func() {}
+	if host == nil {
+		return finish
+	}
+	host.runMu.RLock()
+	module := host.agentModule
+	host.runMu.RUnlock()
+	if module == nil || module.Service == nil {
+		return finish
+	}
+	return module.Service.BeginActiveProvider(requestID, onCancel)
+}
+
+func shutdownCancelMessage(cause ShutdownCause) string {
+	return fmt.Sprintf("shutdown reason=%s initiator=%s", strings.TrimSpace(cause.Reason), strings.TrimSpace(cause.Initiator))
+}
+
+func (host *Host) recordShutdown(cause ShutdownCause, activeCount int, drainDuration time.Duration, cancelCount int, outcome string) {
+	report := ShutdownReport{
+		Reason:              cause.Reason,
+		Initiator:           cause.Initiator,
+		ActiveProviderCount: activeCount,
+		DrainDuration:       drainDuration,
+		CancelCount:         cancelCount,
+		Outcome:             outcome,
+	}
+	host.runMu.Lock()
+	host.lastShutdown = report
+	host.runMu.Unlock()
+
+	drainMS := drainDuration.Milliseconds()
+	logger.Infof(
+		"backend shutdown reason=%s initiator=%s active_providers=%d drain_ms=%d cancel_count=%d outcome=%s",
+		cause.Reason,
+		cause.Initiator,
+		activeCount,
+		drainMS,
+		cancelCount,
+		outcome,
+	)
+	if host.observability == nil {
+		return
+	}
+	semantic := observability.OutcomeSucceeded
+	switch outcome {
+	case ShutdownOutcomeCanceled:
+		semantic = observability.OutcomeCanceled
+	case ShutdownOutcomeError:
+		semantic = observability.OutcomeFailed
+	case ShutdownOutcomeAlreadyStopped:
+		semantic = observability.OutcomeSucceeded
+	}
+	_ = host.observability.RecordEvent(context.Background(), observability.Event{
+		Layer:               "runtime",
+		Event:               "shutdown",
+		Capability:          "config",
+		Operation:           "lifecycle.shutdown",
+		Direction:           observability.DirectionProxyInternal,
+		Status:              outcome,
+		SemanticOutcome:     semantic,
+		ImplementationState: observability.ImplementationImplemented,
+		Severity:            observability.SeverityInfo,
+		DurationMS:          drainMS,
+		Fields: map[string]any{
+			"reason":                cause.Reason,
+			"initiator":             cause.Initiator,
+			"active_provider_count": activeCount,
+			"drain_duration_ms":     drainMS,
+			"cancel_count":          cancelCount,
+			"outcome":               outcome,
+		},
+	})
 }
 
 func (host *Host) HealthCheck(ctx context.Context) error {
@@ -308,10 +496,22 @@ func (host *Host) InProcessHealthCheck() error {
 }
 
 func observabilitySettings(cfg serverconfig.Config) observability.Settings {
-	fingerprintValues := []string{
+	storageFingerprint := observability.ConfigFingerprint(
 		cfg.Observability.Mode,
 		fmt.Sprint(cfg.Observability.RetentionDays),
 		fmt.Sprint(cfg.Observability.MaxDiskMB),
+	)
+	return observability.Settings{
+		Mode:               cfg.Observability.Mode,
+		RetentionDays:      cfg.Observability.RetentionDays,
+		MaxDiskMB:          cfg.Observability.MaxDiskMB,
+		Metadata:           observability.RuntimeMetadata(buildinfo.CurrentVersion(), storageFingerprint),
+		RuntimeFingerprint: observabilityRuntimeFingerprint(cfg),
+	}
+}
+
+func observabilityRuntimeFingerprint(cfg serverconfig.Config) string {
+	fingerprintValues := []string{
 		cfg.Routing.Mode,
 		fmt.Sprint(cfg.ProviderStreamIdleTimeout),
 		fmt.Sprint(cfg.HomeMetrics.IncludeCacheWriteInHitRate),
@@ -328,13 +528,7 @@ func observabilitySettings(cfg serverconfig.Config) observability.Settings {
 			fmt.Sprint(adapter.ThinkingBudgetTokens),
 		)
 	}
-	fingerprint := observability.ConfigFingerprint(fingerprintValues...)
-	return observability.Settings{
-		Mode:          cfg.Observability.Mode,
-		RetentionDays: cfg.Observability.RetentionDays,
-		MaxDiskMB:     cfg.Observability.MaxDiskMB,
-		Metadata:      observability.RuntimeMetadata(buildinfo.CurrentVersion(), fingerprint),
-	}
+	return observability.ConfigFingerprint(fingerprintValues...)
 }
 
 func logObservabilityEvent(event observability.Event) {
@@ -346,6 +540,22 @@ func logObservabilityEvent(event observability.Event) {
 		"execution_target", event.ExecutionTarget,
 		"status", event.Status,
 		"duration_ms", event.DurationMS,
+	}
+	if requestID := strings.TrimSpace(event.CursorRequestID); requestID != "" {
+		args = append(args, "request_id", requestID)
+	} else if requestID := strings.TrimSpace(event.HTTPRequestID); requestID != "" {
+		args = append(args, "request_id", requestID)
+	}
+	if modelCallID := strings.TrimSpace(event.ModelCallID); modelCallID != "" {
+		args = append(args, "model_call_id", modelCallID)
+	}
+	if category := strings.TrimSpace(event.ErrorCategory); category != "" {
+		args = append(args, "error_category", category)
+	}
+	if event.Fields != nil {
+		if status, ok := event.Fields["http_status"]; ok && status != nil && strings.TrimSpace(fmt.Sprint(status)) != "" {
+			args = append(args, "http_status", status)
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Severity)) {
 	case observability.SeverityError:

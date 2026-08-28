@@ -368,6 +368,7 @@ func TestIsFallbackEligibleError(t *testing.T) {
 		{"5xx_502", &HTTPStatusError{StatusCode: http.StatusBadGateway}, true},
 		{"5xx_503", &HTTPStatusError{StatusCode: http.StatusServiceUnavailable}, true},
 		{"5xx_504", &HTTPStatusError{StatusCode: http.StatusGatewayTimeout}, true},
+		{"5xx_524", &HTTPStatusError{StatusCode: HTTPStatusCloudflareTimeout}, true},
 		{"5xx_500", &HTTPStatusError{StatusCode: http.StatusInternalServerError}, false},
 		{"5xx_529", &HTTPStatusError{StatusCode: 529}, false},
 		{"429", &HTTPStatusError{StatusCode: http.StatusTooManyRequests}, true},

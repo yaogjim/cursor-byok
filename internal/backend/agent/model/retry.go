@@ -51,6 +51,7 @@ type providerRetry struct {
 	// fallbackSafety/fallbackBudget 仅由启用 fallback 的请求设置；普通路径为 nil。
 	fallbackSafety *FallbackSafetyInfo
 	fallbackBudget *FallbackRetryBudget
+	diagnostics    *StreamDiagnostics
 }
 
 type providerAttemptContextKey struct{}
@@ -139,6 +140,7 @@ func applyStreamRequestRetry(retry providerRetry, req StreamRequest) providerRet
 	}
 	retry.fallbackSafety = req.FallbackSafety
 	retry.fallbackBudget = req.FallbackBudget
+	retry.diagnostics = req.StreamDiagnostics
 	return retry
 }
 
@@ -253,6 +255,7 @@ func doProviderRequest(
 	for attempt := 1; attempt <= retry.maxAttempts; attempt++ {
 		if attempt > 1 {
 			if err := ctx.Err(); err != nil {
+				retry.diagnostics.RecordClose(err)
 				return nil, err
 			}
 		}
@@ -298,6 +301,9 @@ func doProviderRequest(
 		}
 		resp, err := client.Do(httpReq)
 		outcome := classifyAttempt(err, resp, attempt, retry.maxAttempts)
+		if resp != nil {
+			retry.diagnostics.RecordHeader(resp.StatusCode, attempt, retry.now())
+		}
 		var delay time.Duration
 		if outcome.retryable {
 			waitDelay, canWait := retry.retryWait(attempt, resp, waited)
@@ -339,9 +345,11 @@ func doProviderRequest(
 
 		if !outcome.retryable {
 			if err != nil {
+				retry.diagnostics.RecordClose(err)
 				closeResponseBody(resp)
 				return nil, err
 			}
+			recordNon2xxHTTPStatusClose(retry.diagnostics, resp)
 			setResponseRetryState(resp, providerRetryState{attempt: attempt, waited: waited})
 			return resp, nil
 		}
@@ -349,15 +357,18 @@ func doProviderRequest(
 		if !retry.reserveFallbackWait(delay) {
 			retry.markWaitBudgetBlocked()
 			if err != nil {
+				retry.diagnostics.RecordClose(err)
 				closeResponseBody(resp)
 				return nil, err
 			}
 			statusErr := buildHTTPStatusError(provider+" adapter", resp)
+			retry.diagnostics.RecordClose(statusErr)
 			closeResponseBody(resp)
 			return nil, statusErr
 		}
 		closeResponseBody(resp)
 		if sleepErr := retry.sleep(ctx, delay); sleepErr != nil {
+			retry.diagnostics.RecordClose(sleepErr)
 			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 				Kind:          "provider_response",
 				Provider:      provider,
@@ -413,13 +424,19 @@ func (body *retryingStreamBody) Read(p []byte) (int, error) {
 	for {
 		inner, err := body.activeBody()
 		if err != nil {
+			body.recordStreamTerminal(err)
 			return 0, err
 		}
 		n, err := inner.Read(p)
+		now := body.retryNow()
 		if n > 0 {
 			body.markRawBytes()
-			if err != nil && !errors.Is(err, io.EOF) {
-				body.recordDecision(retryDecisionNoRetryStreamRawBytes, newStreamTruncatedError(body.provider, err))
+			body.retry.diagnostics.RecordBytes(n, now)
+			if err != nil {
+				body.recordStreamTerminal(err)
+				if !errors.Is(err, io.EOF) {
+					body.recordDecision(retryDecisionNoRetryStreamRawBytes, newStreamTruncatedError(body.provider, err))
+				}
 			}
 			// Never retry after any raw bytes: Scanner could otherwise combine a
 			// partial SSE frame from this body with bytes from the next response.
@@ -429,6 +446,7 @@ func (body *retryingStreamBody) Read(p []byte) (int, error) {
 			return 0, nil
 		}
 		if body.hasRawBytes() {
+			body.recordStreamTerminal(err)
 			if errors.Is(err, io.EOF) {
 				return 0, io.EOF
 			}
@@ -437,16 +455,57 @@ func (body *retryingStreamBody) Read(p []byte) (int, error) {
 		}
 		if !isRetryableStreamReadError(err) {
 			if ctxErr := body.ctx.Err(); ctxErr != nil {
+				body.recordStreamTerminal(ctxErr)
 				body.recordDecision(retryDecisionNoRetryStreamContext, ctxErr)
 				return 0, ctxErr
 			}
+			body.recordStreamTerminal(err)
 			body.recordDecision(retryDecisionNoRetryStreamError, newStreamTruncatedError(body.provider, err))
 			return 0, err
 		}
 		if retryErr := body.retryAfterPreEventFailure(err); retryErr != nil {
+			body.recordStreamTerminal(retryErr)
 			return 0, retryErr
 		}
 	}
+}
+
+func (body *retryingStreamBody) retryNow() time.Time {
+	if body != nil && body.retry.now != nil {
+		return body.retry.now()
+	}
+	return time.Now()
+}
+
+func (body *retryingStreamBody) recordStreamTerminal(err error) {
+	if body == nil {
+		return
+	}
+	now := body.retryNow()
+	body.retry.diagnostics.RecordBodyEnd(now)
+	if err != nil {
+		body.retry.diagnostics.RecordClose(err)
+	}
+}
+
+func (body *retryingStreamBody) recordStreamHeader(resp *http.Response, attempt int) {
+	if body == nil || resp == nil {
+		return
+	}
+	body.retry.diagnostics.RecordHeader(resp.StatusCode, attempt, body.retryNow())
+}
+
+func recordNon2xxHTTPStatusClose(diagnostics *StreamDiagnostics, resp *http.Response) {
+	if diagnostics == nil || resp == nil {
+		return
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return
+	}
+	diagnostics.RecordClose(&HTTPStatusError{
+		StatusCode: resp.StatusCode,
+		Attempt:    responseRetryState(resp).attempt,
+	})
 }
 
 func isRetryableStreamReadError(err error) bool {
@@ -492,6 +551,7 @@ type RawBytesReporter interface {
 }
 
 func (body *retryingStreamBody) Close() error {
+	body.recordStreamTerminal(nil)
 	body.mu.Lock()
 	body.closed = true
 	current := body.body
@@ -594,6 +654,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 		}
 		if resp != nil {
 			setResponseRetryState(resp, providerRetryState{attempt: attempt, waited: waited})
+			body.recordStreamHeader(resp, attempt)
 		}
 		body.recordHTTPResponse(endpoint, targetHost, canaryMatched, startedAt, resp, err, outcome.decision)
 		if !outcome.retryable {
@@ -719,13 +780,37 @@ func isContextDoneError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-func isRetryableHTTPStatus(status int) bool {
+// HTTPStatusCloudflareTimeout 是 Cloudflare/超时网关返回的 HTTP 524。
+// 它属于观测分类 server_5xx，但动作 allowlist 与 500/529 分开，不得写成 status>=500。
+const HTTPStatusCloudflareTimeout = 524
+
+const (
+	httpRetryReason429         = "http_429"
+	httpRetryReason524         = "http_524"
+	httpRetryReason5xx         = "http_5xx"
+	httpRetryReasonNone        = "not_recorded"
+	httpRetrySuppressionNone   = "not_recorded"
+	httpRetrySuppressionStatus = "http_status"
+)
+
+// HTTPRetryObservation 返回 typed HTTP 状态在零输出门之前的同渠道 retry 决策。
+// 524 使用稳定 reason http_524；500/502/503/504 保持既有 http_5xx；529 与其他未列入 allowlist 的状态不可重试。
+func HTTPRetryObservation(status int) (retryable bool, reason, suppression string) {
 	switch status {
-	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true
+	case http.StatusTooManyRequests:
+		return true, httpRetryReason429, httpRetrySuppressionNone
+	case HTTPStatusCloudflareTimeout:
+		return true, httpRetryReason524, httpRetrySuppressionNone
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true, httpRetryReason5xx, httpRetrySuppressionNone
 	default:
-		return false
+		return false, httpRetryReasonNone, httpRetrySuppressionStatus
 	}
+}
+
+func isRetryableHTTPStatus(status int) bool {
+	retryable, _, _ := HTTPRetryObservation(status)
+	return retryable
 }
 
 func (retry providerRetry) retryWait(failedAttempt int, resp *http.Response, waited time.Duration) (time.Duration, bool) {

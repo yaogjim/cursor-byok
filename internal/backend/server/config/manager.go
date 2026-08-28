@@ -175,6 +175,31 @@ func (manager *Manager) ProviderStreamIdleTimeout(ctx context.Context) time.Dura
 	return time.Duration(seconds) * time.Second
 }
 
+func (manager *Manager) StreamContinuationSettings(ctx context.Context) (enabled bool, maxPerTurn int, deadline time.Duration, overlapChars int) {
+	cfg := StreamContinuationConfig{}
+	if manager != nil {
+		manager.reloadIfChanged(ctx)
+		cfg = manager.currentConfig().StreamContinuation
+	}
+	normalized := normalizeStreamContinuationConfig(cfg)
+	maxPerTurn = normalized.MaxPerTurn
+	if maxPerTurn <= 0 {
+		maxPerTurn = DefaultStreamContinuationMaxPerTurn
+	}
+	if maxPerTurn > MaxStreamContinuationMaxPerTurn {
+		maxPerTurn = MaxStreamContinuationMaxPerTurn
+	}
+	deadlineSeconds := normalized.TotalDeadlineSeconds
+	if deadlineSeconds <= 0 {
+		deadlineSeconds = DefaultStreamContinuationDeadlineSeconds
+	}
+	overlapChars = normalized.OverlapWindowChars
+	if overlapChars <= 0 {
+		overlapChars = DefaultStreamContinuationOverlapWindowChars
+	}
+	return normalized.Enabled, maxPerTurn, time.Duration(deadlineSeconds) * time.Second, overlapChars
+}
+
 func (manager *Manager) Observability(ctx context.Context) ObservabilityConfig {
 	if manager == nil {
 		return DefaultConfig().Observability

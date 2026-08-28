@@ -238,7 +238,7 @@ func (r *FallbackAwareRouter) streamWithFallback(
 			return ctx.Err()
 		}
 
-		// 3. HTTP 500 可同渠道重试但禁止切换；仅 transport/429/502/503/504/零字节截断可切。
+		// 3. HTTP 500 可同渠道重试但禁止切换；仅 transport/429/502/503/504/524/零字节截断可切。
 		if !isFallbackEligibleError(callErr) {
 			recordAttempt(reason, "", fallbackSuppressionReason(callErr), false)
 			return callErr
@@ -291,9 +291,9 @@ func (r *FallbackAwareRouter) streamWithFallback(
 
 // isFallbackEligibleError 判断该错误是否允许切换到下一渠道。
 //
-// 允许切换：transport、429、502/503/504、零字节 pre-event 截断 / stream idle、
+// 允许切换：transport、429、502/503/504、524、零字节 pre-event 截断 / stream idle、
 // 以及零输出窗口内的 typed capacity_unavailable。
-// 禁止切换：HTTP 500（仅同渠道 P0 重试）、context cancel/deadline、4xx 非429、
+// 禁止切换：HTTP 500（仅同渠道 P0 重试）、HTTP 529、context cancel/deadline、4xx 非429、
 // request_build、未知零 HTTP、RawBytesObserved=true 及其他。
 func isFallbackEligibleError(err error) bool {
 	if err == nil {
@@ -332,7 +332,7 @@ func isFallbackEligibleError(err error) bool {
 
 func isFallbackEligibleHTTPStatus(status int) bool {
 	switch status {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, HTTPStatusCloudflareTimeout:
 		return true
 	default:
 		return false

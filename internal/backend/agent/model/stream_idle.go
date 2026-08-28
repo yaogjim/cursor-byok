@@ -19,11 +19,12 @@ type providerStreamIdleWatchdog struct {
 	timeout time.Duration
 	timer   *time.Timer
 
-	mu       sync.Mutex
-	body     io.Closer
-	stopped  bool
-	timedOut bool
-	err      error
+	mu          sync.Mutex
+	body        io.Closer
+	stopped     bool
+	timedOut    bool
+	err         error
+	diagnostics *StreamDiagnostics
 }
 
 func newProviderStreamIdleWatchdog(parent context.Context, timeout time.Duration) (context.Context, *providerStreamIdleWatchdog) {
@@ -40,6 +41,15 @@ func newProviderStreamIdleWatchdog(parent context.Context, timeout time.Duration
 	}
 	watchdog.timer = time.AfterFunc(watchdog.timeout, watchdog.expire)
 	return ctx, watchdog
+}
+
+func (watchdog *providerStreamIdleWatchdog) AttachDiagnostics(diagnostics *StreamDiagnostics) {
+	if watchdog == nil {
+		return
+	}
+	watchdog.mu.Lock()
+	watchdog.diagnostics = diagnostics
+	watchdog.mu.Unlock()
 }
 
 func (watchdog *providerStreamIdleWatchdog) AttachBody(body io.Closer) {
@@ -60,11 +70,14 @@ func (watchdog *providerStreamIdleWatchdog) MarkEffectiveContent() {
 		return
 	}
 	watchdog.mu.Lock()
-	defer watchdog.mu.Unlock()
 	if watchdog.stopped || watchdog.timedOut || watchdog.timer == nil {
+		watchdog.mu.Unlock()
 		return
 	}
 	watchdog.timer.Reset(watchdog.timeout)
+	diagnostics := watchdog.diagnostics
+	watchdog.mu.Unlock()
+	diagnostics.MarkEffectiveContent()
 }
 
 func (watchdog *providerStreamIdleWatchdog) Stop() {
@@ -103,11 +116,21 @@ func (watchdog *providerStreamIdleWatchdog) expire() {
 		watchdog.mu.Unlock()
 		return
 	}
+	diagnostics := watchdog.diagnostics
+	if closeCauseRank(diagnostics.Snapshot().CloseCause) > 0 {
+		watchdog.stopped = true
+		if watchdog.timer != nil {
+			watchdog.timer.Stop()
+		}
+		watchdog.mu.Unlock()
+		return
+	}
 	watchdog.timedOut = true
 	body := watchdog.body
 	err := watchdog.err
 	watchdog.mu.Unlock()
 
+	diagnostics.RecordClose(err)
 	watchdog.cancel(err)
 	if body != nil {
 		_ = body.Close()
@@ -124,10 +147,25 @@ func normalizeProviderStreamIdleTimeoutDuration(timeout time.Duration) time.Dura
 	return timeout
 }
 
-func providerStreamIdleTimeoutError(timeout time.Duration) error {
-	seconds := int(timeout / time.Second)
-	if seconds > 0 && timeout == time.Duration(seconds)*time.Second {
-		return fmt.Errorf("provider stream idle timeout after %ds without effective content", seconds)
+type StreamIdleTimeoutError struct {
+	Timeout time.Duration
+}
+
+func (err *StreamIdleTimeoutError) Error() string {
+	if err == nil {
+		return "provider stream idle timeout without effective content"
 	}
-	return fmt.Errorf("provider stream idle timeout after %s without effective content", timeout)
+	seconds := int(err.Timeout / time.Second)
+	if seconds > 0 && err.Timeout == time.Duration(seconds)*time.Second {
+		return fmt.Sprintf("provider stream idle timeout after %ds without effective content", seconds)
+	}
+	return fmt.Sprintf("provider stream idle timeout after %s without effective content", err.Timeout)
+}
+
+func (err *StreamIdleTimeoutError) Category() string {
+	return ProviderErrorStreamIdleTimeout
+}
+
+func providerStreamIdleTimeoutError(timeout time.Duration) error {
+	return &StreamIdleTimeoutError{Timeout: timeout}
 }

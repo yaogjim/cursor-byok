@@ -9,6 +9,8 @@ const props = defineProps({
   enabledText: { type: String, default: "已开启" },
   disabledText: { type: String, default: "已关闭" },
   busyText: { type: String, default: "切换中..." },
+  standalone: { type: Boolean, default: false },
+  showState: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["change"]);
@@ -23,10 +25,17 @@ function handleToggle() {
 
 <template>
   <div
-    class="flex items-center justify-between gap-4"
-    :class="compact ? 'py-0' : 'py-1'"
+    class="flex items-center"
+    :class="[
+      standalone ? 'justify-center' : 'justify-between gap-4',
+      compact || standalone ? 'py-0' : 'py-1',
+    ]"
   >
-    <div class="flex min-w-0 flex-col" :class="compact ? 'gap-[2px]' : 'gap-1'">
+    <div
+      v-if="!standalone"
+      class="flex min-w-0 flex-col"
+      :class="compact ? 'gap-[2px]' : 'gap-1'"
+    >
       <div :class="compact ? 'text-[12px]' : 'text-sm'" class="font-medium text-[var(--color-text)]">
         {{ label }}
       </div>
@@ -38,6 +47,7 @@ function handleToggle() {
         {{ description }}
       </div>
       <div
+        v-if="showState"
         :class="[
           compact ? 'text-[11px] leading-[16px]' : 'text-xs',
           enabled ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-secondary)]',
@@ -50,6 +60,7 @@ function handleToggle() {
     <button
       type="button"
       role="switch"
+      :aria-label="label || undefined"
       :aria-checked="enabled"
       :disabled="disabled || busy"
       class="relative inline-flex h-[22px] w-[40px] shrink-0 cursor-pointer rounded-full outline-none transition-all duration-200 ease-out disabled:cursor-not-allowed disabled:opacity-55 focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/35"

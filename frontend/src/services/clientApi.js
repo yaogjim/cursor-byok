@@ -29,6 +29,7 @@ import { Call } from "@wailsio/runtime";
 const API_LOG_PREFIX = "[clientApi]";
 const PROXY_SERVICE_NAME = "cursor/internal/bridge.ProxyService";
 const METRICS_SERVICE_NAME = "cursor/internal/bridge.MetricsService";
+const WINDOW_SERVICE_NAME = "cursor/internal/bridge.WindowService";
 
 function logSuccess(name) {
   console.debug(`${API_LOG_PREFIX} ${name} completed`);
@@ -156,6 +157,12 @@ export function resetHomeMetricsSummary() {
   );
 }
 
+export function launchCursor() {
+  return withApiLogging("LaunchCursor", () =>
+    Call.ByName(`${WINDOW_SERVICE_NAME}.LaunchCursor`),
+  );
+}
+
 export function getAdRuntime() {
   return GetAdRuntime();
 }
@@ -230,6 +237,12 @@ export function openFooterAuthorHome() {
 
 export function openModelConfig() {
   return withApiLogging("OpenModelConfigWindow", () => OpenModelConfigWindow());
+}
+
+export function setAppearanceTheme(theme) {
+  return withApiLogging("SetAppearanceTheme", () =>
+    Call.ByName(`${WINDOW_SERVICE_NAME}.SetAppearanceTheme`, theme),
+  );
 }
 
 export function testModelAdapter(adapter) {

@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cursor 助手 — 设计稿 v5</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#FAFBFC; --surface:#FFF; --line:#E8ECEF; --line-soft:#F3F4F6;
+  --ink:#1A1D2E; --ink2:#4B5563; --ink3:#6B7280; --ink4:#9CA3AF;
+  --brand:#10B981; --brand-d:#059669; --brand-bg:#ECFDF5;
+  --danger:#EF4444; --danger-bg:#FEF2F2;
+  --warn:#B45309; --warn-bg:#FFFBEB;
+  --info:#1D4ED8; --info-bg:#EFF6FF;
+  --t1:11px; --t2:14px; --t3:18px; --t4:24px; --t5:32px;
+}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  background:var(--bg); color:var(--ink); font-size:var(--t2); line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.app{display:flex; flex-direction:column; height:100vh; overflow:hidden}
+
+/* ===== 顶部标签栏 ===== */
+.tabbar{
+  flex:0 0 auto; background:rgba(255,255,255,.85); border-bottom:1px solid var(--line);
+  backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  padding:0 28px; display:flex; align-items:center; gap:28px; height:60px;
+}
+.brand{display:flex; align-items:center; gap:10px; flex:0 0 auto}
+.brand-mark{
+  width:30px; height:30px; border-radius:9px; color:#fff; display:grid; place-items:center;
+  font-weight:700; font-size:var(--t2);
+  background:linear-gradient(135deg,#10B981 0%,#059669 100%);
+}
+.brand-name{font-size:var(--t3); font-weight:700; letter-spacing:-.015em; white-space:nowrap}
+.tabs{display:flex; align-items:center; gap:4px; height:100%}
+.tab{
+  height:100%; padding:0 16px; border:none; background:none; cursor:pointer;
+  font-family:inherit; font-size:var(--t2); font-weight:600; color:var(--ink3);
+  display:flex; align-items:center; gap:8px; position:relative; white-space:nowrap;
+}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--brand-d)}
+.tab.on::after{
+  content:''; position:absolute; left:12px; right:12px; bottom:0; height:2.5px;
+  background:var(--brand); border-radius:3px 3px 0 0;
+}
+.tab svg{width:17px; height:17px; flex:0 0 17px}
+.tab-tag{
+  font-size:var(--t1); font-weight:700; padding:2px 7px; border-radius:20px;
+  background:var(--line-soft); color:var(--ink3);
+}
+.tab.on .tab-tag{background:var(--brand-bg); color:var(--brand-d)}
+.tab-tag.live{background:var(--brand-bg); color:var(--brand-d)}
+.tab-dirty{width:6px; height:6px; border-radius:50%; background:var(--warn); flex:0 0 6px}
+.tabbar-r{margin-left:auto; display:flex; align-items:center; gap:10px; flex:0 0 auto}
+
+/* ===== 主体 ===== */
+.scroll{flex:1; overflow-y:auto}
+.wrap{max-width:1320px; margin:0 auto; padding:28px 28px 44px}
+.page{display:none}
+.page.on{display:block}
+
+/* ===== 接入页 master-detail ===== */
+.split{display:grid; grid-template-columns:280px 1fr; gap:24px; height:100%}
+.master{display:flex; flex-direction:column; gap:2px}
+.client-item{
+  background:var(--surface); border:1px solid var(--line); border-radius:12px;
+  padding:14px 16px; cursor:pointer; transition:all .16s; display:flex; align-items:center; gap:12px;
+}
+.client-item:hover{border-color:#D1D5DB; box-shadow:0 1px 3px rgba(26,29,46,.06)}
+.client-item.on{border-color:var(--brand); background:var(--brand-bg)}
+.client-icon{
+  width:36px; height:36px; border-radius:10px; display:grid; place-items:center;
+  background:var(--line-soft); flex:0 0 36px;
+}
+.client-icon svg{width:20px; height:20px}
+.client-info{flex:1; min-width:0}
+.client-name{font-size:var(--t2); font-weight:700; color:var(--ink); margin-bottom:2px}
+.client-meta{font-size:var(--t1); color:var(--ink3)}
+.detail{overflow-y:auto}
+
+/* ===== 状态栏 ===== */
+.statusbar{
+  flex:0 0 auto; height:38px; background:var(--surface); border-top:1px solid var(--line);
+  padding:0 28px; display:flex; align-items:center; gap:18px; font-size:var(--t1); color:var(--ink3);
+}
+.sb-item{display:flex; align-items:center; gap:6px}
+.sb-item svg{width:13px; height:13px; flex:0 0 13px}
+.sb-r{margin-left:auto; display:flex; align-items:center; gap:12px}
+.link{color:var(--brand-d); cursor:pointer; text-decoration:none; font-weight:600}
+.link:hover{text-decoration:underline}
+.sb-sel{
+  height:26px; border:1px solid var(--line); border-radius:7px; background:var(--surface);
+  color:var(--ink2); font-size:var(--t1); padding:0 7px; font-family:inherit; cursor:pointer;
+}
+.redact{
+  display:inline-block; height:11px; width:62px; border-radius:3px;
+  background:linear-gradient(90deg,#E5E7EB 0%,#EEF0F2 50%,#E5E7EB 100%);
+}
+
+/* ===== 按钮 ===== */
+.btn{
+  height:36px; padding:0 16px; border-radius:10px; font-size:var(--t2); font-weight:600;
+  font-family:inherit; cursor:pointer; border:1px solid var(--line); background:var(--surface);
+  color:var(--ink2); display:inline-flex; align-items:center; gap:7px; white-space:nowrap;
+  transition:all .16s;
+}
+.btn:hover:not(:disabled){background:#F9FAFB; border-color:#D1D5DB; color:var(--ink)}
+.btn svg{width:15px; height:15px; flex:0 0 15px}
+.btn-pri{background:var(--brand); border-color:var(--brand); color:#fff}
+.btn-pri:hover:not(:disabled){background:var(--brand-d); border-color:var(--brand-d); color:#fff}
+.btn-risk{color:var(--danger)}
+.btn-risk:hover:not(:disabled){background:var(--danger-bg); border-color:#FCA5A5; color:var(--danger)}
+.btn-sm{height:30px; padding:0 11px; font-size:var(--t1); border-radius:8px; gap:5px}
+.btn-sm svg{width:13px; height:13px; flex:0 0 13px}
+.btn-icon{width:36px; padding:0; justify-content:center}
+.btn-icon.btn-sm{width:30px}
+.btn:disabled{opacity:.42; cursor:not-allowed}
+.btn-ghost{border-color:transparent; background:none}
+.btn-ghost:hover:not(:disabled){background:var(--line-soft); border-color:transparent}
+
+/* ===== 卡片与区块 ===== */
+.card{
+  background:var(--surface); border:1px solid var(--line); border-radius:16px;
+  transition:box-shadow .2s, border-color .2s;
+}
+.card-pad{padding:24px}
+.card-h{display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:18px}
+.card-t{font-size:var(--t3); font-weight:700; letter-spacing:-.01em; margin-bottom:4px}
+.card-s{font-size:var(--t1); color:var(--ink3); line-height:1.55}
+.card-body{font-size:var(--t2); color:var(--ink2)}
+.card-foot{
+  display:flex; align-items:center; gap:12px; padding:14px 24px;
+  border-top:1px solid var(--line-soft); background:#FCFCFD;
+  border-radius:0 0 16px 16px;
+}
+.sec{margin-bottom:28px}
+.sec-h{display:flex; align-items:center; gap:14px; margin-bottom:16px}
+.sec-t{font-size:var(--t3); font-weight:700; letter-spacing:-.01em}
+.sec-r{margin-left:auto; display:flex; align-items:center; gap:10px}
+.hr{height:1px; background:var(--line-soft); margin:20px 0}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:20px}
+.grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:20px}
+.grid4{display:grid; grid-template-columns:repeat(4,1fr); gap:20px}
+.grid5{display:grid; grid-template-columns:repeat(5,1fr); gap:20px}
+.row{display:flex; align-items:center; gap:14px}
+.spread{margin-left:auto}
+
+/* ===== 状态标记 ===== */
+.pill{
+  display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 11px;
+  border-radius:20px; font-size:var(--t1); font-weight:700;
+  background:var(--line-soft); color:var(--ink3); white-space:nowrap;
+}
+.pill i{width:6px; height:6px; border-radius:50%; background:currentColor; flex:0 0 6px}
+.pill.ok{background:var(--brand-bg); color:var(--brand-d)}
+.pill.off{background:var(--line-soft); color:var(--ink3)}
+.pill.err{background:var(--danger-bg); color:var(--danger)}
+.pill.warn{background:var(--warn-bg); color:var(--warn)}
+.pill.info{background:var(--info-bg); color:var(--info)}
+.mono{font-variant-numeric:tabular-nums; font-feature-settings:"tnum"}
+.code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t1);
+  color:var(--ink2); background:var(--line-soft); padding:3px 8px; border-radius:6px;
+  white-space:nowrap;
+}
+.dirty-hint{font-size:var(--t1); color:var(--warn); font-weight:600; display:none}
+.saved-hint{font-size:var(--t1); color:var(--ink4)}
+.zone.dirty .dirty-hint{display:inline}
+.zone.dirty .saved-hint{display:none}
+.zone.dirty .btn-save{
+  background:var(--brand); border-color:var(--brand); color:#fff; opacity:1; cursor:pointer;
+}
+.badge-soon{
+  font-size:var(--t1); font-weight:700; padding:2px 8px; border-radius:20px;
+  background:var(--line-soft); color:var(--ink4); white-space:nowrap;
+}
+
+/* ===== 分段控件 ===== */
+.seg{display:flex; gap:3px; background:var(--line-soft); padding:4px; border-radius:11px}
+.seg button{
+  height:28px; padding:0 14px; border:none; background:none; border-radius:8px;
+  font-size:var(--t1); font-weight:700; color:var(--ink3); cursor:pointer;
+  font-family:inherit; transition:all .16s; display:inline-flex; align-items:center; gap:6px;
+}
+.seg button:hover{color:var(--ink)}
+.seg button.on{background:var(--surface); color:var(--brand-d); box-shadow:0 1px 3px rgba(26,29,46,.08)}
+.seg button svg{width:14px; height:14px}
+
+/* ===== 表单 ===== */
+.field{display:flex; flex-direction:column; gap:6px}
+.field-l{font-size:var(--t2); font-weight:600; color:var(--ink)}
+.field-h{font-size:var(--t1); color:var(--ink3)}
+.input{
+  height:40px; padding:0 14px; border:1px solid var(--line); border-radius:10px;
+  background:var(--surface); font-size:var(--t2); color:var(--ink); font-family:inherit;
+  transition:all .16s; width:100%;
+}
+.input:hover:not(:disabled){border-color:#D1D5DB}
+.input:focus{outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-bg)}
+.input::placeholder{color:var(--ink4)}
+.input:disabled{background:var(--line-soft); color:var(--ink4); cursor:not-allowed}
+.input.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:var(--t1)}
+.sel{
+  height:40px; padding:0 12px; border:1px solid var(--line); border-radius:10px;
+  background:var(--surface); font-size:var(--t2); color:var(--ink); font-family:inherit;
+  cursor:pointer; transition:all .16s;
+}
+.sel:hover:not(:disabled){border-color:#D1D5DB}
+.sel:focus{outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-bg)}
+.sel:disabled{background:var(--line-soft); color:var(--ink4); cursor:not-allowed}
+.search{position:relative; flex:1; max-width:320px}
+.search svg{
+  position:absolute; left:12px; top:50%; transform:translateY(-50%);
+  width:15px; height:15px; color:var(--ink4); pointer-events:none;
+}
+.search .input{padding-left:36px; height:36px}
+
+/* ===== 开关 ===== */
+.sw{
+  width:44px; height:24px; border-radius:20px; border:none; background:#D1D5DB;
+  position:relative; cursor:pointer; transition:background .2s; flex:0 0 44px;
+}
+.sw::before{
+  content:''; width:18px; height:18px; border-radius:50%; background:white;
+  position:absolute; left:3px; top:3px; transition:transform .2s;
+  box-shadow:0 1px 3px rgba(0,0,0,.14);
+}
+.sw.on{background:var(--brand)}
+.sw.on::before{transform:translateX(20px)}
+.sw:disabled{opacity:.42; cursor:not-allowed}
+
+/* ===== 设置行 ===== */
+.setting-row{
+  display:flex; align-items:center; justify-content:space-between; gap:20px;
+  padding:14px 0; border-bottom:1px solid var(--line-soft);
+}
+.setting-row:last-child{border-bottom:none}
+.setting-row.off .setting-t{color:var(--ink4)}
+.setting-row.off .setting-s{color:var(--ink4)}
+.setting-l{flex:1; min-width:0}
+.setting-t{font-size:var(--t2); font-weight:600; margin-bottom:3px; display:flex; align-items:center; gap:8px}
+.setting-s{font-size:var(--t1); color:var(--ink3); line-height:1.5}
+
+/* ===== 指标 ===== */
+.met{display:flex; flex-direction:column; gap:6px}
+.met-l{font-size:var(--t1); color:var(--ink3); font-weight:600}
+.met-v{
+  font-size:var(--t5); font-weight:800; color:var(--ink); letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; line-height:1.15;
+}
+.met-v.brand{color:var(--brand-d)}
+.met-sub{font-size:var(--t1); color:var(--ink4)}
+.circ{
+  width:112px; height:112px; border-radius:50%; display:grid; place-items:center;
+  position:relative;
+  background:conic-gradient(var(--brand) 0% var(--prog,0%), var(--line-soft) var(--prog,0%) 100%);
+}
+.circ::before{content:''; position:absolute; inset:11px; border-radius:50%; background:var(--surface)}
+.circ-v{
+  position:relative; z-index:1; font-size:var(--t4); font-weight:800; color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}
+
+/* ===== 图表 ===== */
+.chart-wrap{position:relative; height:240px}
+.chart-legend{display:flex; gap:16px; flex-wrap:wrap; margin-bottom:12px}
+.legend-item{display:flex; align-items:center; gap:6px; font-size:var(--t1); color:var(--ink3)}
+.legend-dot{width:10px; height:10px; border-radius:50%; flex:0 0 10px}
+.heatmap{display:flex; flex-direction:column; gap:3px}
+.heatmap-row{display:flex; gap:3px}
+.heatmap-cell{
+  width:12px; height:12px; border-radius:2px; background:var(--line-soft);
+  transition:all .16s; cursor:pointer;
+}
+.heatmap-cell:hover{transform:scale(1.2); box-shadow:0 1px 3px rgba(26,29,46,.2)}
+.heatmap-cell[data-level="1"]{background:#D1FAE5}
+.heatmap-cell[data-level="2"]{background:#6EE7B7}
+.heatmap-cell[data-level="3"]{background:#34D399}
+.heatmap-cell[data-level="4"]{background:#10B981}
+.heatmap-cell[data-level="5"]{background:#059669}
+
+/* ===== 模型表格/栅格 ===== */
+.model-row{
+  display:grid; grid-template-columns:2fr 1.1fr .9fr 1.8fr auto; gap:16px; align-items:center;
+  padding:15px 20px; border-bottom:1px solid var(--line-soft);
+}
+.model-row:last-child{border-bottom:none}
+.model-row:not(.model-head):hover{background:#FCFCFD}
+.model-head{font-size:var(--t1); font-weight:700; color:var(--ink3); border-bottom:2px solid var(--line)}
+.model-name{font-size:var(--t2); font-weight:700; color:var(--ink); margin-bottom:3px}
+.model-path{font-size:var(--t1); color:var(--ink3)}
+.model-provider{display:flex; align-items:center; gap:7px; font-size:var(--t1); color:var(--ink2)}
+.model-provider svg{width:16px; height:16px; flex:0 0 16px}
+.model-acts{display:flex; align-items:center; gap:6px}
+.dot-menu{
+  width:28px; height:28px; border:none; background:none; cursor:pointer; border-radius:7px;
+  color:var(--ink3); padding:0; display:grid; place-items:center; transition:all .16s;
+}
+.dot-menu svg{width:16px; height:16px}
+.dot-menu:hover{background:var(--line-soft); color:var(--ink)}
+.model-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px}
+.model-card{
+  background:var(--surface); border:1px solid var(--line); border-radius:14px;
+  padding:18px; transition:all .16s; cursor:pointer;
+}
+.model-card:hover{border-color:#D1D5DB; box-shadow:0 2px 6px rgba(26,29,46,.08)}
+.model-card-h{display:flex; align-items:flex-start; gap:12px; margin-bottom:14px}
+.model-card-icon{
+  width:40px; height:40px; border-radius:10px; background:var(--line-soft);
+  display:grid; place-items:center; flex:0 0 40px;
+}
+.model-card-icon svg{width:22px; height:22px}
+.model-card-info{flex:1; min-width:0}
+
+/* ===== 折叠 ===== */
+.collapse-t{
+  display:flex; align-items:center; gap:10px; cursor:pointer; padding:12px 0;
+  font-size:var(--t2); font-weight:700; color:var(--ink2); user-select:none;
+}
+.collapse-t svg{width:16px; height:16px; transition:transform .2s}
+.collapse-t:hover{color:var(--ink)}
+.collapse.open .collapse-t svg{transform:rotate(90deg)}
+.collapse-body{display:grid; grid-template-rows:0fr; transition:grid-template-rows .28s; padding-left:26px}
+.collapse-body > *{overflow:hidden}
+.collapse.open .collapse-body{grid-template-rows:1fr}
+
+/* ===== 空状态 ===== */
+.empty{
+  padding:52px 24px; text-align:center; color:var(--ink3);
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+}
+.empty svg{width:44px; height:44px; opacity:.4}
+.empty-t{font-size:var(--t3); font-weight:600; color:var(--ink2)}
+.empty-s{font-size:var(--t2); max-width:380px}
+
+/* ===== 提示条 ===== */
+.note{
+  display:flex; gap:10px; padding:12px 14px; border-radius:10px;
+  background:var(--info-bg); font-size:var(--t1); color:#1E40AF; line-height:1.55;
+}
+.note svg{width:15px; height:15px; flex:0 0 15px; margin-top:2px}
+.note.plain{background:var(--line-soft); color:var(--ink3)}
+.access-detail[hidden],.settings-panel[hidden]{display:none}
+.view-hidden{display:none!important}
+:focus-visible{outline:2px solid var(--brand-d); outline-offset:2px}
+@media (max-width:1080px){
+  .brand-name{display:none}
+  .tabbar{gap:12px;padding:0 18px}
+  .tab{padding:0 10px}
+  .wrap{padding:22px 18px 36px}
+  .split{grid-template-columns:220px 1fr;gap:16px}
+  .grid5,.grid4{grid-template-columns:repeat(2,1fr)}
+  .model-row{grid-template-columns:1.8fr 1fr .9fr auto}
+  .model-row>*:nth-child(4){display:none}
+}
+@media (max-width:760px){
+  .tabbar{height:auto;min-height:60px;flex-wrap:wrap;padding:10px 14px}
+  .tabs{order:3;width:100%;height:42px;overflow-x:auto}
+  .tab{height:42px}
+  .tabbar-r .saved-hint{display:none}
+  .split{display:flex;flex-direction:column}
+  .master{flex-direction:row;overflow-x:auto;padding-bottom:8px}
+  .client-item{min-width:220px}
+  .grid2,.grid3,.grid4,.grid5{grid-template-columns:1fr}
+  .statusbar{padding:0 14px}
+  .statusbar .sb-item:nth-child(3){display:none}
+  .row{flex-wrap:wrap}
+  .model-row{grid-template-columns:1fr auto;padding:14px}
+  .model-row>*:nth-child(2),.model-row>*:nth-child(3),.model-row>*:nth-child(4){display:none}
+  .model-head{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="tabbar">
+  <div class="brand">
+    <div class="brand-mark">C</div>
+    <div class="brand-name">Cursor 助手</div>
+  </div>
+  <nav class="tabs">
+    <button class="tab on" data-go="home">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 11l8-7 8 7M6 10v9a1 1 0 001 1h10a1 1 0 001-1v-9"/></svg>
+      总览
+    </button>
+    <button class="tab" data-go="access">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+      接入
+      <span class="tab-tag live">3 已接入</span>
+    </button>
+    <button class="tab" data-go="models">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/></svg>
+      模型
+      <span class="tab-tag">14</span>
+    </button>
+    <button class="tab" data-go="settings">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" d="M12 2v3M12 19v3M4.2 4.2l2.2 2.2M17.6 17.6l2.2 2.2M2 12h3M19 12h3M4.2 19.8l2.2-2.2M17.6 6.4l2.2-2.2"/></svg>
+      设置
+    </button>
+  </nav>
+  <div class="tabbar-r">
+    <span class="saved-hint">状态更新于 23:39</span>
+    <button class="btn btn-icon" title="刷新运行状态">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 11A8 8 0 006.3 5.7L4 8M4 4v4h4M4 13a8 8 0 0013.7 5.3L20 16M20 20v-4h-4"/></svg>
+    </button>
+  </div>
+</div>
+<div class="scroll">
+  <div class="wrap">
+    <div class="page on" id="p-home">
+      <div class="sec">
+        <div class="grid2">
+          <div class="card">
+            <div class="card-pad">
+              <div class="card-h">
+                <div>
+                  <div class="card-t">Cursor</div>
+                  <div class="card-s">本地代理与 Backend · 深度集成</div>
+                </div>
+                <span class="pill ok"><i></i>运行中</span>
+              </div>
+              <div class="row" style="gap:8px; flex-wrap:wrap">
+                <span class="code">代理 127.0.0.1:18080</span>
+                <span class="code">Backend 127.0.0.1:18090</span>
+              </div>
+            </div>
+            <div class="card-foot">
+              <button class="btn btn-risk btn-sm">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="7" y="6" width="3.5" height="12" rx="1"/><rect x="13.5" y="6" width="3.5" height="12" rx="1"/></svg>
+                停止服务
+              </button>
+              <button class="btn btn-sm">打开 Cursor</button>
+              <button class="btn btn-ghost btn-sm spread" data-go="access">配置 →</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-pad">
+              <div class="card-h">
+                <div>
+                  <div class="card-t">Gateway</div>
+                  <div class="card-s">本机 HTTP 入口 · 供外部 AI 客户端使用</div>
+                </div>
+                <span class="pill off"><i></i>未启用</span>
+              </div>
+              <div class="row" style="gap:8px; flex-wrap:wrap">
+                <span class="code">127.0.0.1:18091</span>
+                <span class="code">公开模型 0 个</span>
+              </div>
+            </div>
+            <div class="card-foot">
+              <button class="btn btn-sm" disabled title="需先在接入页把 Gateway 配置为启用并保存">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 5.5l11 6.5-11 6.5z"/></svg>
+                启动 Gateway
+              </button>
+              <span class="card-s">未配置启用</span>
+              <button class="btn btn-ghost btn-sm spread" data-go="access">去配置 →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec" style="margin-bottom:0">
+        <div class="sec-h">
+          <div>
+            <div class="sec-t">使用分析</div>
+            <div class="card-s">累计用量摘要与 Token 活动趋势</div>
+          </div>
+          <div class="sec-r">
+            <span class="saved-hint">自 2026-07-28 起累计</span>
+            <button class="btn btn-icon btn-sm" title="刷新使用分析" aria-label="刷新使用分析">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20 11A8 8 0 006.3 5.7L4 8M4 4v4h4M4 13a8 8 0 0013.7 5.3L20 16M20 20v-4h-4"/></svg>
+            </button>
+            <button class="btn btn-sm btn-risk">重置</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-pad" style="padding-bottom:20px">
+            <div class="row" style="gap:32px;align-items:center">
+              <div class="row" style="gap:18px;flex:0 0 auto">
+                <div class="circ" style="--prog:85.91%"><div class="circ-v">85.9<span style="font-size:var(--t2)">%</span></div></div>
+                <div><div class="met-l">缓存命中率</div><div class="met-sub" style="margin-top:6px">缓存读写节省 $94.44</div></div>
+              </div>
+              <div style="flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:24px">
+                <div class="met"><div class="met-l">对话轮次</div><div class="met-v">95</div><div class="met-sub">有效 74 · 异常 21</div></div>
+                <div class="met"><div class="met-l">LLM 调用</div><div class="met-v">1.9K</div><div class="met-sub">上游调用次数</div></div>
+                <div class="met"><div class="met-l">Token 消耗</div><div class="met-v">221M</div><div class="met-sub">Prompt 220M · 输出 1.1M</div></div>
+                <div class="met"><div class="met-l">价值估算</div><div class="met-v brand">$277.30</div><div class="met-sub">按官方价目折算</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--line);padding:20px 24px 18px">
+            <div class="card-h" style="align-items:center;margin-bottom:12px">
+              <div class="row" style="gap:10px">
+                <div class="card-t" id="act-title">Token 使用趋势</div>
+                <span class="pill info" id="act-scale">按小时</span>
+              </div>
+              <div class="row" style="gap:10px">
+                <div class="seg" id="act-range"><button>24 小时</button><button class="on">近 30 天</button><button>全部</button></div>
+                <div class="seg" id="act-view">
+                  <button class="on" data-view="trend" title="趋势曲线"><svg fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 17l5-6 4 3 5-8 4 4"/></svg>趋势</button>
+                  <button data-view="heat" title="活跃度热力图"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>活跃度</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="view-trend">
+              <div class="chart-legend">
+                <div class="legend-item"><span class="legend-dot" style="background:#3B82F6"></span>Input</div>
+                <div class="legend-item"><span class="legend-dot" style="background:#10B981"></span>Output</div>
+                <div class="legend-item"><span class="legend-dot" style="background:#F59E0B"></span>Cache 写入</div>
+                <div class="legend-item"><span class="legend-dot" style="background:#06B6D4"></span>Cache 读取</div>
+                <div class="legend-item"><span class="legend-dot" style="background:#8B5CF6"></span>缓存命中率</div>
+              </div>
+              <div class="chart-wrap"><svg viewBox="0 0 1000 240" width="100%" height="240" role="img" aria-labelledby="trend-title trend-desc" style="display:block">
+                <title id="trend-title">Token 使用趋势</title><desc id="trend-desc">Input、Output、Cache 写入、Cache 读取以及缓存命中率的变化。</desc>
+                <defs><linearGradient id="cacheArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#06B6D4" stop-opacity=".22"/><stop offset="100%" stop-color="#06B6D4" stop-opacity=".02"/></linearGradient></defs>
+                <g stroke="#E8ECEF" stroke-width="1"><line x1="56" y1="24" x2="972" y2="24"/><line x1="56" y1="66" x2="972" y2="66"/><line x1="56" y1="108" x2="972" y2="108"/><line x1="56" y1="150" x2="972" y2="150"/><line x1="56" y1="192" x2="972" y2="192"/><line x1="56" y1="24" x2="56" y2="192"/><line x1="208" y1="24" x2="208" y2="192"/><line x1="360" y1="24" x2="360" y2="192"/><line x1="512" y1="24" x2="512" y2="192"/><line x1="664" y1="24" x2="664" y2="192"/><line x1="816" y1="24" x2="816" y2="192"/><line x1="972" y1="24" x2="972" y2="192"/></g>
+                <g fill="#6B7280" font-size="10" font-family="system-ui,sans-serif"><text x="18" y="196">0</text><text x="8" y="154">20M</text><text x="8" y="112">40M</text><text x="8" y="70">60M</text><text x="8" y="28">80M</text><text x="48" y="216">07:00</text><text x="198" y="216">09:00</text><text x="350" y="216">11:00</text><text x="502" y="216">13:00</text><text x="654" y="216">15:00</text><text x="806" y="216">17:00</text><text x="944" y="216">19:00</text></g>
+                <path d="M56 190 L132 173 L208 64 L284 38 L360 82 L436 158 L512 190 L588 122 L664 95 L740 101 L816 146 L892 140 L972 174 L972 192 L56 192 Z" fill="url(#cacheArea)"/>
+                <polyline points="56,190 132,184 208,170 284,176 360,179 436,181 512,190 588,182 664,181 740,184 816,181 892,183 972,188" fill="none" stroke="#3B82F6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="56,192 132,191 208,190 284,190 360,190 436,190 512,192 588,190 664,189 740,190 816,189 892,190 972,191" fill="none" stroke="#10B981" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="56,191 132,190 208,189 284,189 360,190 436,190 512,191 588,189 664,188 740,188 816,189 892,189 972,190" fill="none" stroke="#F59E0B" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="56,190 132,173 208,64 284,38 360,82 436,158 512,190 588,122 664,95 740,101 816,146 892,140 972,174" fill="none" stroke="#06B6D4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                <polyline points="56,76 132,52 208,47 284,35 360,38 436,54 512,48 588,42 664,41 740,40 816,53 892,48 972,51" fill="none" stroke="#8B5CF6" stroke-width="3" stroke-dasharray="7 7" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg></div>
+            </div>
+            <div id="view-heat" style="display:none">
+              <div style="overflow-x:auto;padding-bottom:6px"><div class="heatmap" id="heatmap"></div><div class="row" style="margin-top:10px;font-size:var(--t1);color:var(--ink4)" id="heat-months"></div></div>
+              <div class="row" style="margin-top:14px;gap:8px;justify-content:flex-end;font-size:var(--t1);color:var(--ink4)">少<span class="heatmap-cell"></span><span class="heatmap-cell" data-level="1"></span><span class="heatmap-cell" data-level="2"></span><span class="heatmap-cell" data-level="3"></span><span class="heatmap-cell" data-level="4"></span><span class="heatmap-cell" data-level="5"></span>多</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="page" id="p-access">
+      <div class="sec-h">
+        <div>
+          <div class="sec-t">接入中心</div>
+          <div class="card-s">统一管理深度集成客户端与共享入口</div>
+        </div>
+      </div>
+
+      <div class="split">
+        <aside class="master" aria-label="接入方式">
+          <button class="client-item on" data-client="gateway">
+            <span class="client-icon" style="color:var(--info)">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M3 12h18M12 3c2.4 3 2.4 15 0 18M12 3c-2.4 3-2.4 15 0 18"/></svg>
+            </span>
+            <span class="client-info">
+              <span class="client-name">共享入口</span>
+              <span class="client-meta">Gateway · 未启用</span>
+            </span>
+            <span class="pill off"><i></i></span>
+          </button>
+
+          <button class="client-item" data-client="cursor">
+            <span class="client-icon" style="color:var(--brand-d)">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 3.5l13.5 8.2-6.3 1.4-2.9 6.4z"/></svg>
+            </span>
+            <span class="client-info">
+              <span class="client-name">Cursor</span>
+              <span class="client-meta">深度集成 · 运行中</span>
+            </span>
+            <span class="pill ok"><i></i></span>
+          </button>
+
+          <button class="client-item" data-client="codex">
+            <span class="client-icon">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"/></svg>
+            </span>
+            <span class="client-info">
+              <span class="client-name">Codex</span>
+              <span class="client-meta">深度集成 · 2 个授权</span>
+            </span>
+            <span class="pill ok">2</span>
+          </button>
+
+          <button class="client-item" data-client="claude">
+            <span class="client-icon" style="color:#D97757">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M7 4h10l4 8-4 8H7l-4-8zM9 9l6 6M15 9l-6 6"/></svg>
+            </span>
+            <span class="client-info">
+              <span class="client-name">Claude Code</span>
+              <span class="client-meta">深度集成 · 2 个授权</span>
+            </span>
+            <span class="pill ok">2</span>
+          </button>
+
+          <div class="note plain" style="margin-top:12px">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path stroke-linecap="round" d="M12 16v-4M12 8.5v.5"/></svg>
+            <span>新增客户端只需加入此清单，不扩张顶级导航。</span>
+          </div>
+        </aside>
+
+        <section class="detail">
+          <div class="access-detail" id="client-gateway">
+            <div class="card zone" id="zone-gateway">
+              <div class="card-pad">
+                <div class="card-h">
+                  <div>
+                    <div class="card-t">共享入口</div>
+                    <div class="card-s">为外部 AI 客户端提供 OpenAI 兼容的本机 HTTP 接口</div>
+                  </div>
+                  <div class="row" style="gap:10px">
+                    <span class="pill off"><i></i>未运行</span>
+                    <button class="sw" data-dirty aria-label="配置为启用 Gateway"></button>
+                  </div>
+                </div>
+
+                <div class="grid2" style="margin-bottom:18px">
+                  <label class="field">
+                    <span class="field-l">监听地址</span>
+                    <input class="input mono" value="127.0.0.1:18091" data-dirty>
+                    <span class="field-h">默认仅允许本机访问</span>
+                  </label>
+                  <div class="field">
+                    <span class="field-l">运行控制</span>
+                    <div class="row" style="height:40px">
+                      <button class="btn" disabled title="需先启用并保存配置">启动 Gateway</button>
+                      <span class="card-s">配置意图：未启用</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="hr"></div>
+                <div class="setting-row">
+                  <div class="setting-l">
+                    <div class="setting-t">Bearer Token</div>
+                    <div class="setting-s">已生成，仅可通过复制或重新生成读取</div>
+                  </div>
+                  <div class="row" style="gap:8px">
+                    <button class="btn btn-sm">
+                      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                      复制 Token
+                    </button>
+                    <button class="btn btn-sm btn-risk">重新生成</button>
+                  </div>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-l">
+                    <div class="setting-t">公开模型别名</div>
+                    <div class="setting-s">0 个映射；只经显式映射解析，不回落到内部 modelID</div>
+                  </div>
+                  <button class="btn btn-sm">
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+                    添加映射
+                  </button>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-l">
+                    <div class="setting-t">客户端接入</div>
+                    <div class="setting-s">Base URL <span class="code">http://127.0.0.1:18091/v1</span></div>
+                  </div>
+                  <button class="btn btn-sm">复制 Base URL</button>
+                </div>
+
+                <div class="collapse" style="margin-top:8px">
+                  <button class="collapse-t btn-ghost" data-collapse style="border:none;background:none;width:100%;text-align:left">
+                    <svg fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
+                    作用范围与安全说明
+                  </button>
+                  <div class="collapse-body"><div>
+                    <div class="note plain" style="margin-bottom:12px">只影响 Gateway 的 HTTP 接口、Token 与公开模型映射；不改变 Cursor 18080/18090 链路。Token 明文不写入页面常驻状态、配置投影或日志。</div>
+                  </div></div>
+                </div>
+              </div>
+              <div class="card-foot">
+                <span class="dirty-hint">有未保存修改</span>
+                <span class="saved-hint">已保存</span>
+                <button class="btn btn-sm btn-ghost spread" data-reload>重新加载</button>
+                <button class="btn btn-save" disabled>保存 Gateway 配置</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="access-detail" id="client-cursor" hidden>
+            <div class="card zone" id="zone-cursor">
+              <div class="card-pad">
+                <div class="card-h">
+                  <div>
+                    <div class="card-t">Cursor 深度集成</div>
+                    <div class="card-s">本地代理、Backend 与控制面账号</div>
+                  </div>
+                  <span class="pill ok"><i></i>服务运行中</span>
+                </div>
+                <div class="grid2">
+                  <div class="field">
+                    <span class="field-l">本地服务</span>
+                    <div class="row" style="height:40px;gap:8px"><span class="code">127.0.0.1:18080</span><span class="code">127.0.0.1:18090</span></div>
+                  </div>
+                  <label class="field">
+                    <span class="field-l">路由模式</span>
+                    <select class="sel" data-dirty><option>本地服务模式</option><option>原始上游模式</option></select>
+                  </label>
+                </div>
+                <div class="hr"></div>
+                <div class="setting-row">
+                  <div class="setting-l"><div class="setting-t">Cursor 设置</div><div class="setting-s">本地代理设置已应用</div></div>
+                  <span class="pill ok">已应用</span>
+                </div>
+                <div class="setting-row">
+                  <div class="setting-l"><div class="setting-t">授权账号</div><div class="setting-s">1 个账号；可添加多个订阅授权，后台调用策略不在此配置</div></div>
+                  <button class="btn btn-sm">添加授权</button>
+                </div>
+                <div class="setting-row">
+                  <div class="row" style="gap:10px;min-width:0">
+                    <span class="client-icon" style="width:32px;height:32px;flex-basis:32px;color:var(--brand-d)"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path stroke-linecap="round" d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></svg></span>
+                    <div><div class="setting-t">@aike0210</div><div class="setting-s">Cursor 控制面账号 · 用于插件、Skills 和 MCP</div></div>
+                  </div>
+                  <div class="row" style="gap:8px"><span class="pill off">待授权</span><button class="btn btn-sm">登录 Cursor</button><button class="dot-menu" aria-label="更多账号操作"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+                </div>
+              </div>
+              <div class="card-foot">
+                <button class="btn btn-sm btn-risk">停止服务</button>
+                <button class="btn btn-sm">重启服务</button>
+                <span class="dirty-hint spread">有未保存修改</span>
+                <span class="saved-hint spread">已保存</span>
+                <button class="btn btn-save" disabled>保存路由设置</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="access-detail" id="client-codex" hidden>
+            <div class="card zone" id="zone-codex">
+              <div class="card-pad">
+                <div class="card-h">
+                  <div><div class="card-t">Codex 接入</div><div class="card-s">管理本机配置与多个订阅账号授权；账号调用策略由后台负责</div></div>
+                  <button class="btn btn-pri btn-sm"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>添加授权</button>
+                </div>
+                <div class="grid2" style="margin-bottom:16px">
+                  <label class="field"><span class="field-l">接入模式</span><select class="sel" data-dirty><option>深度集成</option><option>共享入口</option></select><span class="field-h">切换接入方式不会删除已有授权</span></label>
+                  <div class="field"><span class="field-l">本机配置</span><div class="row" style="height:40px"><span class="pill ok">已同步</span><button class="btn btn-sm">重新同步</button></div></div>
+                </div>
+                <div class="hr"></div>
+                <div class="row" style="margin-bottom:10px"><div class="setting-t">订阅授权</div><span class="pill info">2 个账号</span><span class="setting-s">仅管理账号身份与授权状态</span></div>
+                <div class="setting-row">
+                  <div class="row" style="gap:10px;min-width:0"><span class="client-icon" style="width:32px;height:32px;flex-basis:32px"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path stroke-linecap="round" d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></svg></span><div><div class="setting-t">developer@example.com</div><div class="setting-s">Codex Pro · 授权于 2026-08-18</div></div></div>
+                  <div class="row" style="gap:8px"><span class="pill ok"><i></i>有效</span><button class="btn btn-sm">重新授权</button><button class="dot-menu" aria-label="更多账号操作"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+                </div>
+                <div class="setting-row">
+                  <div class="row" style="gap:10px;min-width:0"><span class="client-icon" style="width:32px;height:32px;flex-basis:32px"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path stroke-linecap="round" d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></svg></span><div><div class="setting-t">team@example.org</div><div class="setting-s">Codex Team · 授权于 2026-08-12</div></div></div>
+                  <div class="row" style="gap:8px"><span class="pill warn"><i></i>需续期</span><button class="btn btn-sm">续期授权</button><button class="dot-menu" aria-label="更多账号操作"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+                </div>
+              </div>
+              <div class="card-foot"><span class="dirty-hint">有未保存修改</span><span class="saved-hint">已保存</span><button class="btn btn-sm spread">测试接入</button><button class="btn btn-save" disabled>保存 Codex 配置</button></div>
+            </div>
+          </div>
+
+          <div class="access-detail" id="client-claude" hidden>
+            <div class="card zone" id="zone-claude">
+              <div class="card-pad">
+                <div class="card-h">
+                  <div><div class="card-t">Claude Code 接入</div><div class="card-s">管理本机配置与多个订阅账号授权；账号调用策略由后台负责</div></div>
+                  <button class="btn btn-pri btn-sm"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>添加授权</button>
+                </div>
+                <div class="grid2" style="margin-bottom:16px">
+                  <label class="field"><span class="field-l">接入模式</span><select class="sel" data-dirty><option>深度集成</option><option>共享入口</option></select><span class="field-h">切换接入方式不会删除已有授权</span></label>
+                  <div class="field"><span class="field-l">本机配置</span><div class="row" style="height:40px"><span class="pill ok">已同步</span><button class="btn btn-sm">重新同步</button></div></div>
+                </div>
+                <div class="hr"></div>
+                <div class="row" style="margin-bottom:10px"><div class="setting-t">订阅授权</div><span class="pill info">2 个账号</span><span class="setting-s">支持账号登录或授权流程接入</span></div>
+                <div class="setting-row">
+                  <div class="row" style="gap:10px;min-width:0"><span class="client-icon" style="width:32px;height:32px;flex-basis:32px;color:#D97757"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path stroke-linecap="round" d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></svg></span><div><div class="setting-t">personal@example.com</div><div class="setting-s">Claude Max · 授权于 2026-08-20</div></div></div>
+                  <div class="row" style="gap:8px"><span class="pill ok"><i></i>有效</span><button class="btn btn-sm">重新授权</button><button class="dot-menu" aria-label="更多账号操作"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+                </div>
+                <div class="setting-row">
+                  <div class="row" style="gap:10px;min-width:0"><span class="client-icon" style="width:32px;height:32px;flex-basis:32px;color:#D97757"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path stroke-linecap="round" d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></svg></span><div><div class="setting-t">work@example.org</div><div class="setting-s">Claude Team · 授权于 2026-08-15</div></div></div>
+                  <div class="row" style="gap:8px"><span class="pill ok"><i></i>有效</span><button class="btn btn-sm">重新授权</button><button class="dot-menu" aria-label="更多账号操作"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+                </div>
+              </div>
+              <div class="card-foot"><span class="dirty-hint">有未保存修改</span><span class="saved-hint">已保存</span><button class="btn btn-sm spread">测试接入</button><button class="btn btn-save" disabled>保存 Claude Code 配置</button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <div class="page" id="p-models">
+      <div class="sec-h">
+        <div>
+          <div class="sec-t">模型管理</div>
+          <div class="card-s">管理上游适配器、认证、端点与模型测试</div>
+        </div>
+      </div>
+
+      <div class="card zone" id="zone-models">
+        <div class="card-pad" style="padding-bottom:16px">
+          <div class="row" style="gap:10px; flex-wrap:wrap">
+            <div class="search">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path stroke-linecap="round" d="M20 20l-4.2-4.2"/></svg>
+              <input class="input" id="model-search" type="search" placeholder="搜索别名、上游 ID 或端点" aria-label="搜索模型">
+            </div>
+            <div class="row spread" style="gap:8px">
+              <button class="btn btn-sm">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v12M8 11l4 4 4-4M4 20h16"/></svg>
+                导入
+              </button>
+              <button class="btn btn-sm">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4M8 8l4-4 4 4M4 20h16"/></svg>
+                导出
+              </button>
+              <button class="btn btn-sm">测试全部</button>
+              <button class="btn btn-pri btn-sm">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+                新增模型
+              </button>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:14px;gap:10px">
+            <div class="seg" id="provider-filter" style="overflow-x:auto; max-width:calc(100% - 92px)">
+              <button class="on" data-provider="all">全部 <span style="opacity:.55">14</span></button>
+              <button data-provider="openai">OpenAI <span style="opacity:.55">7</span></button>
+              <button data-provider="anthropic">Anthropic <span style="opacity:.55">3</span></button>
+              <button data-provider="google">Google</button>
+              <button data-provider="deepseek">DeepSeek</button>
+              <button data-provider="xai">xAI</button>
+              <button data-provider="alibaba">通义千问</button>
+              <button data-provider="moonshot">Moonshot</button>
+              <button data-provider="custom">兼容接口</button>
+            </div>
+            <div class="seg spread" id="model-layout">
+              <button class="on" data-layout="list" title="列表视图" aria-label="列表视图">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
+              </button>
+              <button data-layout="grid" title="栅格视图" aria-label="栅格视图">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="model-list-view">
+          <div class="model-row model-head">
+            <div>别名 / 上游 ID</div><div>提供商</div><div>测试状态</div><div>端点</div><div>操作</div>
+          </div>
+          <div class="model-row model-entry" data-provider="xai custom" data-search="grok grok-4.6 /v1/responses xai">
+            <div><div class="model-name">grok</div><div class="model-path mono">grok-4.6</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#111827"></span>xAI · 兼容接口</div>
+            <div><span class="pill off">未测试</span></div><div><span class="code">/v1/responses</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="openai" data-search="gpt-5.6-sol openai /v1/responses">
+            <div><div class="model-name">gpt-5.6-sol</div><div class="model-path mono">gpt-5.6-sol</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#10A37F"></span>OpenAI</div>
+            <div><span class="pill ok"><i></i>通过 · 420ms</span></div><div><span class="code">/v1/responses</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="anthropic" data-search="fable-5 claude-fable-5 anthropic /v1/messages">
+            <div><div class="model-name">Fable-5</div><div class="model-path mono">claude-fable-5</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#D97757"></span>Anthropic</div>
+            <div><span class="pill ok"><i></i>通过 · 380ms</span></div><div><span class="code">/v1/messages</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="google" data-search="gemini-2.5-pro google /v1beta">
+            <div><div class="model-name">Gemini Pro</div><div class="model-path mono">gemini-2.5-pro</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#4285F4"></span>Google</div>
+            <div><span class="pill warn"><i></i>配额不足</span></div><div><span class="code">/v1beta</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="deepseek custom" data-search="deepseek-v4-pro deepseek /v1/chat/completions">
+            <div><div class="model-name">deepseek-v4-pro</div><div class="model-path mono">deepseek-v4-pro</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#4D6BFE"></span>DeepSeek</div>
+            <div><span class="pill err"><i></i>超时</span></div><div><span class="code">/v1/chat/completions</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="alibaba" data-search="qwen-max 通义千问 alibaba dashscope">
+            <div><div class="model-name">Qwen Max</div><div class="model-path mono">qwen-max</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#6C5CE7"></span>通义千问</div>
+            <div><span class="pill off">未测试</span></div><div><span class="code">dashscope.aliyuncs.com</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+          <div class="model-row model-entry" data-provider="moonshot" data-search="kimi-k2 moonshot /v1/chat/completions">
+            <div><div class="model-name">Kimi K2</div><div class="model-path mono">kimi-k2</div></div>
+            <div class="model-provider"><span class="legend-dot" style="background:#111827"></span>Moonshot</div>
+            <div><span class="pill ok"><i></i>通过 · 510ms</span></div><div><span class="code">/v1/chat/completions</span></div>
+            <div class="model-acts"><button class="btn btn-sm">测试</button><button class="btn btn-sm">编辑</button><button class="dot-menu" title="复制或删除"><svg fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="6" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="18" r="1.6"/></svg></button></div>
+          </div>
+        </div>
+
+        <div id="model-grid-view" class="model-grid" style="display:none;padding:18px">
+          <article class="model-card model-entry" data-provider="xai custom" data-search="grok grok-4.6 xai"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#111827;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">grok</div><div class="model-path mono">grok-4.6</div></div><span class="pill off">未测试</span></div><div class="setting-s">xAI · OpenAI 兼容接口</div><div class="row" style="margin-top:14px"><span class="code">/v1/responses</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="openai" data-search="gpt-5.6-sol openai"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#10A37F;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">gpt-5.6-sol</div><div class="model-path mono">gpt-5.6-sol</div></div><span class="pill ok"><i></i>通过</span></div><div class="setting-s">OpenAI · 420ms</div><div class="row" style="margin-top:14px"><span class="code">/v1/responses</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="anthropic" data-search="fable-5 claude anthropic"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#D97757;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">Fable-5</div><div class="model-path mono">claude-fable-5</div></div><span class="pill ok"><i></i>通过</span></div><div class="setting-s">Anthropic · 380ms</div><div class="row" style="margin-top:14px"><span class="code">/v1/messages</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="google" data-search="gemini google"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#4285F4;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">Gemini Pro</div><div class="model-path mono">gemini-2.5-pro</div></div><span class="pill warn"><i></i>配额不足</span></div><div class="setting-s">Google</div><div class="row" style="margin-top:14px"><span class="code">/v1beta</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="deepseek custom" data-search="deepseek v4 pro"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#4D6BFE;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">deepseek-v4-pro</div><div class="model-path mono">deepseek-v4-pro</div></div><span class="pill err"><i></i>超时</span></div><div class="setting-s">DeepSeek · 兼容接口</div><div class="row" style="margin-top:14px"><span class="code">/v1/chat/completions</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="alibaba" data-search="qwen max 通义千问"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#6C5CE7;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">Qwen Max</div><div class="model-path mono">qwen-max</div></div><span class="pill off">未测试</span></div><div class="setting-s">通义千问</div><div class="row" style="margin-top:14px"><span class="code">dashscope.aliyuncs.com</span><button class="btn btn-sm spread">编辑</button></div></article>
+          <article class="model-card model-entry" data-provider="moonshot" data-search="kimi k2 moonshot"><div class="model-card-h"><div class="model-card-icon"><span class="legend-dot" style="background:#111827;width:18px;height:18px"></span></div><div class="model-card-info"><div class="model-name">Kimi K2</div><div class="model-path mono">kimi-k2</div></div><span class="pill ok"><i></i>通过</span></div><div class="setting-s">Moonshot · 510ms</div><div class="row" style="margin-top:14px"><span class="code">/v1/chat/completions</span><button class="btn btn-sm spread">编辑</button></div></article>
+        </div>
+
+        <div class="card-foot">
+          <span class="dirty-hint">有未保存修改</span><span class="saved-hint">已保存 · 共 14 个模型</span>
+          <button class="btn btn-sm btn-ghost spread" data-reload>重新加载</button><button class="btn btn-save" disabled>保存模型配置</button>
+        </div>
+      </div>
+    </div>
+    <div class="page" id="p-settings">
+      <div class="sec-h">
+        <div>
+          <div class="sec-t">系统设置</div>
+          <div class="card-s">按配置作用域分为基本设置、会话与日志、网络与请求、数据与恢复</div>
+        </div>
+        <div class="sec-r">
+          <div class="seg" id="settings-sections">
+            <button class="on" data-setting="basic">基本设置</button>
+            <button data-setting="logs">会话与日志</button>
+            <button data-setting="network">网络与请求</button>
+            <button data-setting="recovery">数据与恢复</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card zone sec settings-panel" data-setting-panel="basic" id="zone-basic">
+        <div class="card-pad">
+          <div class="card-h"><div><div class="card-t">基本设置</div><div class="card-s">界面偏好、启动窗口、广告与更新</div></div></div>
+          <div class="grid2" style="margin-bottom:18px">
+            <label class="field"><span class="field-l">界面语言</span><select class="sel" data-dirty><option>简体中文</option><option>English</option></select><span class="field-h">切换后立即应用并保存在本机</span></label>
+            <label class="field"><span class="field-l">界面主题</span><select class="sel" data-dirty><option>浅色</option><option>深色</option><option>跟随系统</option></select><span class="field-h">保存后同步应用到所有客户端窗口</span></label>
+          </div>
+          <div class="hr"></div>
+          <div class="grid2" style="column-gap:32px">
+            <div>
+              <div class="setting-t" style="margin-bottom:4px">启动与窗口</div>
+              <div class="setting-row off"><div class="setting-l"><div class="setting-t">开机自启动 <span class="badge-soon">计划中</span></div><div class="setting-s">登录系统后自动启动 Cursor 助手服务</div></div><button class="sw" disabled aria-label="开机自启动，计划中"></button></div>
+              <div class="setting-row off"><div class="setting-l"><div class="setting-t">最小化到系统托盘 <span class="badge-soon">计划中</span></div><div class="setting-s">关闭窗口时保持服务在后台运行</div></div><button class="sw" disabled aria-label="最小化到系统托盘，计划中"></button></div>
+            </div>
+            <div>
+              <div class="setting-t" style="margin-bottom:4px">内容与更新</div>
+              <div class="setting-row"><div class="setting-l"><div class="setting-t">广告内容</div><div class="setting-s">关闭后不拉取广告，也不显示广告位与弹窗</div></div><button class="sw" data-dirty aria-label="广告内容"></button></div>
+              <div class="setting-row"><div class="setting-l"><div class="setting-t">启动时检查客户端更新</div><div class="setting-s">仅检查版本；下载和安装仍需分别确认</div></div><button class="sw" data-dirty aria-label="启动时检查客户端更新"></button></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-foot"><span class="dirty-hint">有未保存修改</span><span class="saved-hint">已保存</span><button class="btn btn-sm btn-ghost spread" data-reload>重新加载</button><button class="btn btn-save" disabled>保存基本设置</button></div>
+      </div>
+
+      <div class="card zone sec settings-panel" data-setting-panel="logs" id="zone-logs" hidden>
+        <div class="card-pad">
+          <div class="card-h"><div><div class="card-t">会话与日志</div><div class="card-s">采集级别、容量控制与日志维护</div></div><span class="pill ok"><i></i>采集中</span></div>
+          <div class="grid3" style="margin-bottom:16px">
+            <label class="field"><span class="field-l">日志采集</span><select class="sel" data-dirty><option>关闭</option><option>基础</option><option selected>完整调试</option></select><span class="field-h">warning/error 始终保存</span></label>
+            <label class="field"><span class="field-l">保留天数</span><input class="input mono" type="number" value="30" min="1" max="90" data-dirty><span class="field-h">范围 1–90 天</span></label>
+            <label class="field"><span class="field-l">最大空间</span><input class="input mono" type="number" value="1060" min="64" max="10240" data-dirty><span class="field-h">范围 64–10240 MB</span></label>
+          </div>
+          <div class="note plain"><svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M4 7h16M6 7l1 13h10l1-13M9 7V4h6v3"/></svg><span><span class="code">~/.cursor-local-assistant-v2/logs</span>　达到天数或容量上限时按策略清理旧日志。</span></div>
+          <div class="setting-row" style="margin-top:8px"><div class="setting-l"><div class="setting-t">日志维护</div><div class="setting-s">刷新采集状态、打开目录或按当前策略清理</div></div><div class="row" style="gap:6px"><button class="btn btn-sm">刷新状态</button><button class="btn btn-sm">打开目录</button><button class="btn btn-sm btn-risk">清理日志</button></div></div>
+          <div class="setting-row off"><div class="setting-l"><div class="setting-t">立即清空全部日志 <span class="badge-soon">计划中</span></div><div class="setting-s">不受保留策略影响，立即删除所有日志文件</div></div><button class="btn btn-sm btn-risk" disabled>清空全部</button></div>
+        </div>
+        <div class="card-foot"><span class="dirty-hint">有未保存修改</span><span class="saved-hint">已保存</span><button class="btn btn-sm btn-ghost spread" data-reload>重新加载</button><button class="btn btn-save" disabled>保存日志设置</button></div>
+      </div>
+
+      <div class="card sec settings-panel" data-setting-panel="network" hidden>
+        <div class="card-pad">
+          <div class="card-h">
+            <div><div class="card-t">网络与请求</div><div class="card-s">上游请求链路配置</div></div>
+            <span class="badge-soon">计划中</span>
+          </div>
+          <div class="grid3">
+            <div class="setting-row off" style="padding:0"><div class="setting-l"><div class="setting-t">HTTP 代理</div><div class="setting-s">配置 HTTP/HTTPS/SOCKS5 代理</div></div><button class="btn btn-sm" disabled>配置</button></div>
+            <div class="setting-row off" style="padding:0"><div class="setting-l"><div class="setting-t">请求超时（秒）</div><div class="setting-s">上游请求的全局超时时间</div></div><input class="input mono" type="number" value="30" disabled style="max-width:80px"></div>
+            <div class="setting-row off" style="padding:0"><div class="setting-l"><div class="setting-t">跳过 SSL 验证</div><div class="setting-s">仅用于开发或自签名证书</div></div><button class="sw" disabled aria-label="跳过 SSL 验证，计划中"></button></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card sec settings-panel" data-setting-panel="recovery" hidden>
+        <div class="card-pad">
+          <div class="card-h"><div><div class="card-t">数据与恢复</div><div class="card-s">低频维护与恢复操作</div></div></div>
+          <div class="setting-row off"><div class="setting-l"><div class="setting-t">重置所有设置 <span class="badge-soon">计划中</span></div><div class="setting-s">恢复基本设置、日志与网络配置的默认值，不影响模型和接入账号授权</div></div><button class="btn btn-sm btn-risk" disabled>重置设置</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="statusbar">
+  <div class="sb-item">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M5 12.5a10 10 0 0114 0M8 16a6 6 0 018 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/></svg>
+    已识别系统代理
+  </div>
+  <div class="sb-item">
+    <span class="mono">v0.0.50.0</span>
+    <a class="link">检查更新</a>
+  </div>
+  <div class="sb-item"><span class="redact"></span><span class="redact"></span></div>
+  <div class="sb-r">
+    <select class="sb-sel">
+      <option>简体中文</option><option>English</option>
+    </select>
+  </div>
+</div>
+</div>
+<script>
+const pages={home:document.getElementById('p-home'),access:document.getElementById('p-access'),models:document.getElementById('p-models'),settings:document.getElementById('p-settings')};
+function goPage(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.go===name));
+  pages[name]?.classList.add('on');
+  document.querySelector('.scroll').scrollTop=0;
+}
+document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',()=>goPage(el.dataset.go)));
+
+document.querySelectorAll('.client-item').forEach(item=>item.addEventListener('click',()=>{
+  document.querySelectorAll('.client-item').forEach(x=>x.classList.remove('on'));
+  document.querySelectorAll('.access-detail').forEach(x=>x.hidden=true);
+  item.classList.add('on');
+  const panel=document.getElementById('client-'+item.dataset.client);
+  if(panel) panel.hidden=false;
+}));
+
+document.querySelectorAll('[data-collapse]').forEach(trigger=>trigger.addEventListener('click',()=>trigger.closest('.collapse').classList.toggle('open')));
+
+document.querySelectorAll('.seg').forEach(seg=>seg.querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{
+  seg.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+  btn.classList.add('on');
+})));
+
+document.querySelectorAll('#settings-sections [data-setting]').forEach(btn=>btn.addEventListener('click',()=>{
+  document.querySelectorAll('.settings-panel').forEach(panel=>panel.hidden=panel.dataset.settingPanel!==btn.dataset.setting);
+  document.querySelector('.scroll').scrollTop=0;
+}));
+
+function markDirty(el){
+  const zone=el.closest('.zone');
+  if(!zone)return;
+  zone.classList.add('dirty');
+  const save=zone.querySelector('.btn-save');
+  if(save)save.disabled=false;
+  syncDirtyTabs();
+}
+document.querySelectorAll('[data-dirty]').forEach(el=>{
+  if(el.classList.contains('sw'))el.addEventListener('click',()=>{el.classList.toggle('on');markDirty(el)});
+  else{el.addEventListener('input',()=>markDirty(el));el.addEventListener('change',()=>markDirty(el));}
+});
+document.querySelectorAll('.btn-save').forEach(btn=>btn.addEventListener('click',()=>{
+  const zone=btn.closest('.zone');zone?.classList.remove('dirty');btn.disabled=true;syncDirtyTabs();
+}));
+document.querySelectorAll('[data-reload]').forEach(btn=>btn.addEventListener('click',()=>{
+  const zone=btn.closest('.zone');zone?.classList.remove('dirty');const save=zone?.querySelector('.btn-save');if(save)save.disabled=true;syncDirtyTabs();
+}));
+function syncDirtyTabs(){
+  Object.entries(pages).forEach(([name,page])=>{
+    const tab=document.querySelector('.tab[data-go="'+name+'"]');if(!tab)return;
+    let dot=tab.querySelector('.tab-dirty');const dirty=page.querySelector('.zone.dirty');
+    if(dirty&&!dot){dot=document.createElement('span');dot.className='tab-dirty';tab.appendChild(dot)}
+    if(!dirty&&dot)dot.remove();
+  });
+}
+
+const actTitle=document.getElementById('act-title');
+const trend=document.getElementById('view-trend');
+const heat=document.getElementById('view-heat');
+document.querySelectorAll('#act-view [data-view]').forEach(btn=>btn.addEventListener('click',()=>{
+  const isHeat=btn.dataset.view==='heat';trend.style.display=isHeat?'none':'block';heat.style.display=isHeat?'block':'none';
+  actTitle.textContent=isHeat?'Token 活跃度':'Token 使用趋势';
+  document.getElementById('act-scale').textContent=isHeat?'按日':'按小时';
+}));
+const heatmap=document.getElementById('heatmap');
+for(let day=0;day<7;day++){
+  const row=document.createElement('div');row.className='heatmap-row';
+  for(let week=0;week<52;week++){
+    const cell=document.createElement('span');cell.className='heatmap-cell';
+    const wave=Math.sin((week-9)/5)+Math.sin((week-31)/4)*.8;
+    const active=Math.max(0,Math.min(5,Math.round(wave+2.1+(week>38?1:0)-(week<5?1:0))));
+    if((week*7+day)%11===0||active<1)cell.dataset.level='0';else cell.dataset.level=String(active);
+    cell.title='第 '+(week+1)+' 周 · '+['一','二','三','四','五','六','日'][day]+' · 活跃等级 '+cell.dataset.level;
+    row.appendChild(cell);
+  }
+  heatmap.appendChild(row);
+}
+const months=['Sep','Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'];
+document.getElementById('heat-months').innerHTML=months.map(m=>'<span style="flex:1">'+m+'</span>').join('');
+
+let provider='all';
+const search=document.getElementById('model-search');
+function filterModels(){
+  const q=(search?.value||'').trim().toLowerCase();
+  document.querySelectorAll('.model-entry').forEach(entry=>{
+    const providers=(entry.dataset.provider||'').split(' ');
+    const providerOk=provider==='all'||providers.includes(provider);
+    const searchOk=!q||(entry.dataset.search||'').toLowerCase().includes(q);
+    entry.classList.toggle('view-hidden',!(providerOk&&searchOk));
+  });
+}
+document.querySelectorAll('#provider-filter [data-provider]').forEach(btn=>btn.addEventListener('click',()=>{provider=btn.dataset.provider;filterModels()}));
+search?.addEventListener('input',filterModels);
+document.querySelectorAll('#model-layout [data-layout]').forEach(btn=>btn.addEventListener('click',()=>{
+  const grid=btn.dataset.layout==='grid';
+  document.getElementById('model-list-view').style.display=grid?'none':'block';
+  document.getElementById('model-grid-view').style.display=grid?'grid':'none';
+  filterModels();
+}));
+</script>
+</body>
+</html>

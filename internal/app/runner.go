@@ -154,7 +154,7 @@ func Run(resources EmbeddedResources) error {
 			if updateManager != nil {
 				updateManager.Shutdown()
 			}
-			proxyService.ShutdownForQuit()
+			runOnShutdown(proxyService)
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "com.cursor-assistant.single-instance",
@@ -230,7 +230,7 @@ func Run(resources EmbeddedResources) error {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    appWindowBackgroundColour(startupConfig.Appearance.Theme),
+		BackgroundColour:    bridge.WindowBackgroundColour(startupConfig.Appearance.Theme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -292,8 +292,7 @@ func Run(resources EmbeddedResources) error {
 	})
 	menu.AddSeparator()
 	quitItem := menu.Add("退出").OnClick(func(ctx *application.Context) {
-		proxyService.ShutdownForQuit()
-		app.Quit()
+		runTrayQuit(proxyService, app.Quit)
 	})
 
 	var currentLocale = "zh-CN"
@@ -437,11 +436,23 @@ func Run(resources EmbeddedResources) error {
 	return app.Run()
 }
 
-func appWindowBackgroundColour(theme string) application.RGBA {
-	if theme == "dark" {
-		return application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255}
+type quitShutdown interface {
+	ShutdownForQuitFrom(initiator string)
+}
+
+func runTrayQuit(proxy quitShutdown, quit func()) {
+	if proxy != nil {
+		proxy.ShutdownForQuitFrom("tray")
 	}
-	return application.RGBA{Red: 246, Green: 248, Blue: 251, Alpha: 255}
+	if quit != nil {
+		quit()
+	}
+}
+
+func runOnShutdown(proxy quitShutdown) {
+	if proxy != nil {
+		proxy.ShutdownForQuitFrom("on_shutdown")
+	}
 }
 
 func windowsAdditionalBrowserArgs() []string {

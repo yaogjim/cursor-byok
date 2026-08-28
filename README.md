@@ -1,6 +1,6 @@
 # Cursor BYOK noad
 
-> 让 Cursor 使用你自己的模型 API 的本地 BYOK 客户端。`noad` 分支默认浅色、默认关闭广告、默认不启动检查更新，更新按“检查 / 下载 / 安装”分阶段确认，发布与更新资源固定使用 `yaogjim/cursor-byok`。当前发布版本为 [v0.0.49.6](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6)。
+> 让 Cursor 使用你自己的模型 API 的本地 BYOK 客户端。`noad` 分支默认浅色、默认关闭广告、默认不启动检查更新，更新按“检查 / 下载 / 安装”分阶段确认，发布与更新资源固定使用 `yaogjim/cursor-byok`。当前发布版本为 [v0.0.50.1](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.50.1)。
 
 [下载最新版](https://github.com/yaogjim/cursor-byok/releases/latest) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues)
 
@@ -19,7 +19,15 @@
 
 ## 当前版本
 
-当前稳定发布为 **v0.0.49.6**（2026-08-25）。完整说明见 [GitHub Release](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6) 与仓库 [`release-notes.md`](./release-notes.md)。
+当前稳定发布为 **v0.0.50.1**（2026-08-26）。完整说明见 [GitHub Release](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.50.1) 与仓库 [`release-notes.md`](./release-notes.md)。
+
+### v0.0.50.1
+
+- 完成 v5 四页控制面：总览、接入、模型、设置；接入页采用 master-detail 并保留 Cursor/Gateway 独立配置作用域。
+- 总览页使用持久化小时桶提供 `24h` 数据，模型页支持真实计数、筛选、列表/栅格和完整配置导入导出。
+- 设置页支持浅色、深色、跟随系统主题及会话日志管理；系统主题会随操作系统外观变化。
+- 修复发布前复审发现的接入离开脏状态检查、Windows Cursor 启动进程隔离和模型导入导出文案问题。
+- Codex/Claude Code 真实授权和 Wails 视觉验收仍是独立证据缺口。
 
 ### v0.0.49.6
 

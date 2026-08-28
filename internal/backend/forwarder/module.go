@@ -2,6 +2,7 @@
 package forwarder
 
 import (
+	"context"
 	"net/http"
 
 	"connectrpc.com/connect"
@@ -23,6 +24,27 @@ func (module *Module) Close() {
 		return
 	}
 	module.Service.Close()
+}
+
+func (module *Module) ActiveProviderCount() int {
+	if module == nil || module.Service == nil {
+		return 0
+	}
+	return module.Service.ActiveProviderCount()
+}
+
+func (module *Module) WaitForProvidersIdle(ctx context.Context) {
+	if module == nil || module.Service == nil {
+		return
+	}
+	module.Service.WaitForProvidersIdle(ctx)
+}
+
+func (module *Module) CancelActiveProviders(message string) int {
+	if module == nil || module.Service == nil {
+		return 0
+	}
+	return module.Service.CancelActiveProviders(message)
 }
 
 // NewModule 创建 forwarder 模块，并导出本地 Bidi / RunSSE 处理器。

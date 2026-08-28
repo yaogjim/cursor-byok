@@ -12,6 +12,7 @@ import {
   configSectionStatusText,
   copyGatewayToken,
   persistScopedUserConfig,
+  reloadUserConfig,
   rotateGatewayToken,
   startGateway,
   stopGateway,
@@ -19,10 +20,11 @@ import {
 } from "@/state/appState";
 import { DEFAULT_GATEWAY_LISTEN_ADDR, gatewayPublicModelInvalid } from "@/state/configProjection";
 import copyTextToClipboard from "copy-text-to-clipboard";
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 const message = useMessage();
 const gatewayDirty = computed(() => configSectionDirty.gateway);
+const scopeOpen = ref(false);
 
 const adapterOptions = computed(() =>
   (appState.modelAdapters || []).map((adapter) => ({
@@ -36,6 +38,26 @@ const gatewayDisplayAddr = computed(() =>
 );
 
 const gatewayBaseURL = computed(() => `http://${gatewayDisplayAddr.value}/v1`);
+const publicModelCount = computed(() =>
+  Array.isArray(appState.gatewayPublicModels) ? appState.gatewayPublicModels.length : 0,
+);
+const gatewayIntentText = computed(() =>
+  appState.gatewayEnabled ? "配置意图：已启用" : "配置意图：未启用",
+);
+const gatewayStatusText = computed(() => {
+  if (appState.gatewayRunning) {
+    return "运行中";
+  }
+  if (appState.gatewayLastError) {
+    return "异常";
+  }
+  return "未运行";
+});
+const tokenHint = computed(() =>
+  appState.gatewayTokenConfigured
+    ? "已生成，仅可通过复制或重新生成读取"
+    : "保存启用配置时由后端生成",
+);
 
 function showActionError(title, error) {
   const detail = String(error || "服务错误").trim() || "服务错误";
@@ -48,6 +70,19 @@ function copyTokenValue(token) {
     return false;
   }
   return Boolean(copyTextToClipboard(text));
+}
+
+async function handleCopyBaseURL() {
+  const text = String(gatewayBaseURL.value || "").trim();
+  if (!text) {
+    showActionError("复制失败", "Base URL 不可用");
+    return;
+  }
+  if (!copyTokenValue(text)) {
+    showActionError("复制失败", "复制被 WebView 拒绝");
+    return;
+  }
+  message("Base URL 已复制");
 }
 
 async function persistGateway() {
@@ -143,143 +178,186 @@ async function handleSaveGateway() {
     message("Gateway 配置已保存");
   }
 }
+
+async function handleReloadGateway() {
+  try {
+    await reloadUserConfig();
+  } catch (error) {
+    showActionError("重新加载失败", toUserError(error));
+  }
+}
 </script>
 
 <template>
-  <Card>
-    <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-start justify-between gap-4">
+  <Card :padded="false" class="compact-card h-full">
+    <div class="compact-card-body">
+      <div class="card-h">
         <div>
-          <h2 class="text-base font-medium text-[var(--color-text)]">配置状态</h2>
-          <div class="text-sm text-[var(--color-text-secondary)]">
-            保存后允许 Gateway 启动；不等于当前进程已经运行
-          </div>
+          <h2 class="card-title">共享入口</h2>
+          <div class="card-sub">为外部 AI 客户端提供 OpenAI 兼容的本机 HTTP 接口</div>
         </div>
-        <Switch
-          label="配置为启用 Gateway"
-          description="这是配置意图，需要保存后才会生效"
-          enabled-text="已配置"
-          disabled-text="未配置"
-          :enabled="appState.gatewayEnabled"
-          :disabled="appState.configSaving"
-          @change="appState.gatewayEnabled = $event"
-        />
-      </div>
-
-      <div class="rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm">
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="row-inline">
           <span
-            class="h-2.5 w-2.5 rounded-full"
-            :class="appState.gatewayRunning ? 'bg-emerald-500' : 'bg-[var(--color-text-muted)]'"
-          />
-          <span class="font-medium">{{ appState.gatewayRunning ? "运行中" : "未运行" }}</span>
-          <span class="text-[var(--color-text-secondary)]">
-            {{ gatewayDisplayAddr }}
-          </span>
-        </div>
-        <div class="mt-3 flex flex-wrap items-center gap-2">
-          <Button
-            v-if="!appState.gatewayRunning"
-            :disabled="appState.gatewayBusy || appState.configSaving || !appState.gatewayEnabled || gatewayDirty"
-            @click="handleGatewayStart"
-          >启动 Gateway</Button>
-          <Button
-            v-else
-            :disabled="appState.gatewayBusy"
-            @click="handleGatewayStop"
-          >停止 Gateway</Button>
-          <span
-            v-if="gatewayDirty && !appState.gatewayRunning"
-            class="text-xs text-amber-700 dark:text-amber-300"
+            class="status-pill"
+            :class="appState.gatewayRunning ? 'is-ok' : (appState.gatewayLastError ? 'is-err' : 'is-off')"
           >
-            请先保存本页
+            <i aria-hidden="true" />
+            {{ gatewayStatusText }}
           </span>
-        </div>
-        <div v-if="appState.gatewayLastError" class="mt-2 text-xs text-amber-700 dark:text-amber-300">
-          Gateway 错误：{{ appState.gatewayLastError }}
+          <Switch
+            standalone
+            label="配置为启用 Gateway"
+            :enabled="appState.gatewayEnabled"
+            :disabled="appState.configSaving"
+            @change="appState.gatewayEnabled = $event"
+          />
         </div>
       </div>
 
-      <div class="flex flex-col gap-3">
-        <div class="text-sm font-medium">接入安全</div>
-        <label class="flex flex-col gap-2 text-sm">
-          <span class="font-medium text-[var(--color-text)]">监听地址</span>
+      <div class="grid2">
+        <label class="field">
+          <span class="field-l">监听地址</span>
           <Input
             v-model="appState.gatewayListenAddr"
             :disabled="appState.configSaving"
             :placeholder="DEFAULT_GATEWAY_LISTEN_ADDR"
           />
+          <span class="field-h">默认仅允许本机访问</span>
         </label>
-        <div class="flex flex-wrap items-center gap-2">
-          <Button :disabled="appState.configSaving" @click="handleCopyToken">复制 token</Button>
-          <Button :disabled="appState.configSaving" @click="handleRotateToken">轮换 token</Button>
-          <span class="text-xs text-[var(--color-text-muted)]">
-            {{ appState.gatewayTokenConfigured ? "已生成，仅可通过复制/轮换读取" : "保存启用配置时由后端生成" }}
+        <div class="field">
+          <span class="field-l">运行控制</span>
+          <div class="row-inline min-h-10">
+            <Button
+              v-if="!appState.gatewayRunning"
+              class="btn-sm"
+              :disabled="appState.gatewayBusy || appState.configSaving || !appState.gatewayEnabled || gatewayDirty"
+              :title="!appState.gatewayEnabled || gatewayDirty ? '需先启用并保存配置' : ''"
+              @click="handleGatewayStart"
+            >
+              启动 Gateway
+            </Button>
+            <Button
+              v-else
+              class="btn-sm btn-risk"
+              :disabled="appState.gatewayBusy"
+              @click="handleGatewayStop"
+            >
+              停止 Gateway
+            </Button>
+            <span class="card-sub !mt-0">{{ gatewayIntentText }}</span>
+          </div>
+          <span
+            v-if="gatewayDirty && !appState.gatewayRunning"
+            class="field-h text-[var(--color-warning-text)]"
+          >
+            请先保存本页
+          </span>
+          <span v-else-if="appState.gatewayLastError" class="field-h text-[var(--color-error-text)]">
+            {{ appState.gatewayLastError }}
           </span>
         </div>
       </div>
 
-      <div class="flex flex-col gap-3">
-        <div class="flex items-center justify-between gap-3">
-          <div>
-            <div class="text-sm font-medium">公开模型别名</div>
-            <div class="text-xs text-[var(--color-text-muted)]">
-              只经显式映射解析，不会回落到 provider modelID 或内部 hash。目标适配器变化后需重选。
-            </div>
-          </div>
-          <Button :disabled="appState.configSaving" @click="addPublicModel">添加映射</Button>
+      <div class="hr" />
+
+      <div class="setting-row">
+        <div class="setting-l">
+          <div class="setting-t">Bearer Token</div>
+          <div class="setting-s">{{ tokenHint }}</div>
         </div>
-        <div
-          v-for="(item, index) in appState.gatewayPublicModels"
-          :key="index"
-          class="grid gap-2 sm:grid-cols-[1fr_1fr_auto]"
-        >
+        <div class="row-inline">
+          <Button class="btn-sm" :disabled="appState.configSaving" @click="handleCopyToken">
+            <span class="icon-[mdi--content-copy] text-[13px]" aria-hidden="true" />
+            复制 Token
+          </Button>
+          <Button class="btn-sm btn-risk" :disabled="appState.configSaving" @click="handleRotateToken">
+            重新生成
+          </Button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-l">
+          <div class="setting-t">公开模型别名</div>
+          <div class="setting-s">
+            {{ publicModelCount }} 个映射；只经显式映射解析，不回落到内部 modelID
+          </div>
+        </div>
+        <Button class="btn-sm" :disabled="appState.configSaving" @click="addPublicModel">
+          <span class="icon-[mdi--plus] text-[14px]" aria-hidden="true" />
+          添加映射
+        </Button>
+      </div>
+      <div
+        v-for="(item, index) in appState.gatewayPublicModels"
+        :key="index"
+        class="setting-row"
+      >
+        <div class="grid w-full min-w-0 grid-cols-[1fr_1fr_auto] gap-2">
           <Input v-model="item.id" :disabled="appState.configSaving" placeholder="公开别名，如 grok" />
           <Select
             v-model="item.targetAdapterID"
             :options="adapterOptions"
             placeholder="选择目标适配器"
           />
-          <Button :disabled="appState.configSaving" @click="removePublicModel(index)">删除</Button>
+          <Button class="btn-sm" :disabled="appState.configSaving" @click="removePublicModel(index)">
+            删除
+          </Button>
           <div
             v-if="gatewayPublicModelInvalid(item, appState.modelAdapters)"
-            class="sm:col-span-3 text-xs text-amber-700 dark:text-amber-300"
+            class="col-span-3 text-xs text-[var(--color-warning-text)]"
           >
             映射已失效，请重新选择目标适配器
           </div>
         </div>
       </div>
 
-      <div class="rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3 text-xs leading-relaxed text-[var(--color-text-secondary)]">
-        <div class="font-medium text-[var(--color-text)]">作用范围</div>
-        <div class="mt-1">
-          只影响 Gateway 的本机 HTTP 接口、Bearer token 和公开模型映射；不改变 Cursor 18080/18090、Cursor 会话或工具桥。
+      <div class="setting-row">
+        <div class="setting-l">
+          <div class="setting-t">客户端接入</div>
+          <div class="setting-s">
+            Base URL <span class="mono-chip">{{ gatewayBaseURL }}</span>
+          </div>
         </div>
-        <div class="mt-2 font-medium text-[var(--color-text)]">保存范围</div>
-        <div class="mt-1">
-          本页保存只包含 Gateway 启用状态、监听地址和公开模型映射；token 由后端保留或生成。
-        </div>
+        <Button class="btn-sm" @click="handleCopyBaseURL">复制 Base URL</Button>
       </div>
 
-      <div class="rounded-[7px] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm">
-        <div class="font-medium">客户端接入信息</div>
-        <div class="mt-2 text-[var(--color-text-secondary)]">
-          Base URL：{{ gatewayBaseURL }}
-        </div>
-        <div class="mt-1 text-xs text-[var(--color-text-muted)]">
-          支持 Chat Completions、流式 SSE、公开模型别名。Token 明文不写入页面常驻状态、配置投影或日志。
-        </div>
-      </div>
-
-      <div class="flex justify-end gap-2">
-        <span
-          class="self-center text-xs"
-          :class="gatewayDirty ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--color-text-muted)]'"
+      <div class="ui-collapse" :class="{ 'is-open': scopeOpen }">
+        <button
+          type="button"
+          class="ui-collapse-toggle"
+          :aria-expanded="scopeOpen"
+          @click="scopeOpen = !scopeOpen"
         >
-          {{ configSectionStatusText("gateway") }}
-        </span>
-        <Button variant="primary" :disabled="appState.configSaving" @click="handleSaveGateway">
-          {{ appState.configSaving ? "保存中..." : "保存本页" }}
+          <span class="icon icon-[mdi--chevron-right]" aria-hidden="true" />
+          作用范围与安全说明
+        </button>
+        <div v-show="scopeOpen" class="ui-collapse-body">
+          <div class="note plain">
+            只影响 Gateway 的 HTTP 接口、Token 与公开模型映射；不改变 Cursor 18080/18090 链路。Token 明文不写入页面常驻状态、配置投影或日志。本页保存只包含启用状态、监听地址和公开模型映射。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="config-action-bar">
+      <span
+        class="config-action-status"
+        :class="gatewayDirty ? 'is-dirty' : ''"
+      >
+        {{ configSectionStatusText("gateway") }}
+      </span>
+      <div class="config-action-buttons spread">
+        <Button
+          variant="text"
+          class="btn-sm"
+          :disabled="appState.configSaving"
+          @click="handleReloadGateway"
+        >
+          重新加载
+        </Button>
+        <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !gatewayDirty" @click="handleSaveGateway">
+          {{ appState.configSaving ? "保存中..." : "保存 Gateway 配置" }}
         </Button>
       </div>
     </div>

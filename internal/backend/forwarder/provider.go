@@ -61,6 +61,7 @@ func (gateway *DefaultProviderGateway) StartStream(ctx context.Context, req Prov
 		Observer:            req.Observer,
 		ArtifactPaths:       req.ArtifactPaths,
 		RequestBodyOverride: req.RequestBodyOverride,
+		StreamDiagnostics:   req.StreamDiagnostics,
 	}, sink)
 	if err != nil {
 		return providerTerminalError{cause: err}

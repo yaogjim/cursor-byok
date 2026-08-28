@@ -248,24 +248,26 @@ func subagentModelOverrideSummaries(overrides map[string]runtimecore.SubagentMod
 }
 
 type Service struct {
-	store              *ConversationFileStore
-	contentBlobs       *ContentBlobStore
-	usageStore         *UsageFileStore
-	codebaseIndexStore *CodebaseIndexStore
-	docsIndexStore     *DocsIndexStore
-	rules              *UserRuleStore
-	projector          *HistoryProjector
-	compiler           PromptCompiler
-	provider           ProviderGateway
-	resolver           modeladapter.ChannelResolver
-	modelMemory        agentModelMemory
-	broker             *StreamBroker
-	recorder           *artifactRecorder
-	debug              *debugRecorder
-	execBridge         execbridge.ExecBridge
-	interactionBridge  interactionbridge.InteractionBridge
-	appendSeq          *appendSequenceTracker
-	subagentRuns       *SubagentRunStore
+	store                    *ConversationFileStore
+	contentBlobs             *ContentBlobStore
+	usageStore               *UsageFileStore
+	codebaseIndexStore       *CodebaseIndexStore
+	docsIndexStore           *DocsIndexStore
+	rules                    *UserRuleStore
+	projector                *HistoryProjector
+	compiler                 PromptCompiler
+	provider                 ProviderGateway
+	resolver                 modeladapter.ChannelResolver
+	modelMemory              agentModelMemory
+	broker                   *StreamBroker
+	recorder                 *artifactRecorder
+	debug                    *debugRecorder
+	execBridge               execbridge.ExecBridge
+	interactionBridge        interactionbridge.InteractionBridge
+	appendSeq                *appendSequenceTracker
+	subagentRuns             *SubagentRunStore
+	streamContinuationSource streamContinuationSettingsSource
+	testStreamContinuation   *StreamContinuationSettings
 }
 
 type agentModelMemory interface {
@@ -309,6 +311,9 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captu
 		appendSeq:          newAppendSequenceTracker(),
 		subagentRuns:       NewSubagentRunStore(historyRoot),
 	}
+	if candidate, ok := resolver.(streamContinuationSettingsSource); ok {
+		service.streamContinuationSource = candidate
+	}
 	service.startHistoryMaintenance()
 	service.startSubagentRecovery()
 	return service
@@ -319,6 +324,52 @@ func (service *Service) Close() {
 		return
 	}
 	service.debug.Close()
+}
+
+func (service *Service) ActiveProviderCount() int {
+	if service == nil || service.broker == nil {
+		return 0
+	}
+	return service.broker.ActiveProviderCount()
+}
+
+func (service *Service) WaitForProvidersIdle(ctx context.Context) {
+	if service == nil || service.broker == nil {
+		return
+	}
+	service.broker.WaitForIdle(ctx)
+}
+
+func (service *Service) CancelActiveProviders(message string) int {
+	if service == nil || service.broker == nil {
+		return 0
+	}
+	return service.broker.CancelActiveProviders(message)
+}
+
+func (service *Service) BeginActiveProvider(requestID string, onCancel func()) (finish func()) {
+	finish = func() {}
+	if service == nil || service.broker == nil {
+		return finish
+	}
+	stream, err := service.broker.OpenStream(strings.TrimSpace(requestID), "", 0, "", "", agentv1.AgentMode_AGENT_MODE_AGENT, "")
+	if err != nil || stream == nil {
+		return finish
+	}
+	stream.mu.Lock()
+	stream.ProviderActive = true
+	stream.ProviderCancel = func() {
+		if onCancel != nil {
+			onCancel()
+		}
+	}
+	stream.mu.Unlock()
+	return func() {
+		stream.mu.Lock()
+		stream.ProviderActive = false
+		stream.ProviderCancel = nil
+		stream.mu.Unlock()
+	}
 }
 
 // newServiceWithDependencies 主要用于测试场景，允许注入替身依赖。
@@ -498,6 +549,11 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 						"cursor":                 cursor,
 						"terminal_error_code":    strings.TrimSpace(event.TerminalErrorCode),
 						"terminal_error_message": strings.TrimSpace(event.TerminalErrorMessage),
+						"http_status":            firstNonEmpty(strings.TrimSpace(event.TerminalHTTPStatus), "not_recorded"),
+						"error_category":         firstNonEmpty(strings.TrimSpace(event.TerminalErrorCategory), "not_recorded"),
+						"model_call_id":          strings.TrimSpace(event.TerminalModelCallID),
+						"request_id":             firstNonEmpty(strings.TrimSpace(event.TerminalRequestID), strings.TrimSpace(requestID)),
+						"is_retryable":           terminalEventRetryable(event),
 					})
 					return buildTerminalStreamError(event)
 				}
@@ -518,6 +574,11 @@ func (service *Service) RunSSE(ctx context.Context, req *connect.Request[aiserve
 							"cursor":                 cursor,
 							"terminal_error_code":    strings.TrimSpace(event.TerminalErrorCode),
 							"terminal_error_message": strings.TrimSpace(event.TerminalErrorMessage),
+							"http_status":            firstNonEmpty(strings.TrimSpace(event.TerminalHTTPStatus), "not_recorded"),
+							"error_category":         firstNonEmpty(strings.TrimSpace(event.TerminalErrorCategory), "not_recorded"),
+							"model_call_id":          strings.TrimSpace(event.TerminalModelCallID),
+							"request_id":             firstNonEmpty(strings.TrimSpace(event.TerminalRequestID), strings.TrimSpace(requestID)),
+							"is_retryable":           terminalEventRetryable(event),
 						})
 						return buildTerminalStreamError(event)
 					}
@@ -897,6 +958,7 @@ func (service *Service) handleCancelIntent(intent InboundIntent) error {
 	stream.ProviderStreamStats.ProtocolFinalStatus = "canceled"
 	stream.ProviderStreamStats.ModelCallFinalStatus = "not_finalized"
 	stream.ProviderStreamStats.Attribution = "client"
+	applyProviderStreamDiagnostics(&stream.ProviderStreamStats, stream.ProviderStreamDiagnostics, context.Canceled, len(stream.ConfirmedCheckpointBlobs) > 0)
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 	service.recordProviderTerminal(stream)
@@ -1465,6 +1527,21 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	currentPass := stream.ProviderPassCount
 	stream.Status = StreamStatusStreaming
 	stream.PendingProviderAction = providerActionNone
+	if stream.TurnProviderStartedAt.IsZero() {
+		stream.TurnProviderStartedAt = time.Now().UTC()
+	}
+	isContinuation := stream.ContinuationIndex > 0
+	continuedFrom := strings.TrimSpace(stream.ContinuedFromModelCallID)
+	continuationIndex := stream.ContinuationIndex
+	continuationDeadline := stream.ContinuationDeadline
+	if isContinuation {
+		stream.ContinuationRemainderText = ""
+		stream.ContinuationRemainderReasoning = ""
+		stream.ContinuationOverlapResolved = false
+		stream.ContinuationOverlapMismatch = false
+		stream.ContinuationNewVisibleBytes = 0
+		stream.ContinuationAbortReason = ""
+	}
 	stream.CurrentModelCallID = uuid.NewString()
 	stream.CurrentProviderToken++
 	currentToken := stream.CurrentProviderToken
@@ -1481,21 +1558,28 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ProviderStreamStats = ProviderStreamStats{
-		Provider:               "unknown",
-		Model:                  firstNonEmpty(strings.TrimSpace(stream.ModelName), strings.TrimSpace(stream.ModelID), "unknown"),
-		Attempt:                currentPass,
-		HTTPAttempt:            0,
-		HTTPStatus:             "not_recorded",
-		Attribution:            "unknown",
-		Retryable:              "unknown",
-		RetryReason:            "not_recorded",
-		RetrySuppressionReason: "not_recorded",
-		ToolDispatchState:      "not_dispatched",
-		PotentialSideEffect:    "none",
-		ProtocolFinalStatus:    "streaming",
-		ModelCallFinalStatus:   "not_finalized",
-		StartedAt:              time.Now().UTC(),
+		Provider:                 "unknown",
+		Model:                    firstNonEmpty(strings.TrimSpace(stream.ModelName), strings.TrimSpace(stream.ModelID), "unknown"),
+		Attempt:                  currentPass,
+		HTTPAttempt:              0,
+		HTTPStatus:               "not_recorded",
+		Attribution:              "unknown",
+		Retryable:                "unknown",
+		RetryReason:              "not_recorded",
+		RetrySuppressionReason:   "not_recorded",
+		ToolDispatchState:        "not_dispatched",
+		PotentialSideEffect:      "none",
+		ProtocolFinalStatus:      "streaming",
+		ModelCallFinalStatus:     "not_finalized",
+		CloseCause:               modeladapter.StreamCloseCauseNotRecorded,
+		PartialBoundary:          modeladapter.PartialBoundaryNone,
+		TransportOutcome:         modeladapter.TransportOutcomeStarted,
+		StartedAt:                time.Now().UTC(),
+		ContinuedFromModelCallID: continuedFrom,
+		ContinuationIndex:        continuationIndex,
 	}
+	stream.ProviderStreamDiagnostics = &modeladapter.StreamDiagnostics{}
+	diagnostics := stream.ProviderStreamDiagnostics
 	stream.ProviderTerminalRecorded = false
 	stream.ToolInvocationCount = 0
 	modelCallID := stream.CurrentModelCallID
@@ -1532,33 +1616,38 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 		return service.failStream(stream, "unknown", err)
 	}
 	compiled = guardCompiledConversationForProvider(compiled)
-	if compacted, compactErr := service.maybeCompactBeforeProvider(stream, conversation, compiled); compactErr != nil {
-		service.setTurnPhase(stream, TurnPhaseFailed)
-		return service.failStream(stream, "unknown", compactErr)
-	} else if compacted {
-		stream.mu.Lock()
-		stream.ProviderActive = false
-		stream.ProviderCancel = nil
-		stream.UpdatedAt = time.Now().UTC()
-		hasPendingCompaction := stream.PendingCompaction != nil
-		status := stream.Status
-		stream.mu.Unlock()
-		switch {
-		case isTerminalStreamStatus(status):
-			switch status {
-			case StreamStatusCompleted:
-				service.setTurnPhase(stream, TurnPhaseCompleted)
-			case StreamStatusCanceled:
-				service.setTurnPhase(stream, TurnPhaseCanceled)
+	if isContinuation {
+		compiled.Tools = nil
+	}
+	if !isContinuation {
+		if compacted, compactErr := service.maybeCompactBeforeProvider(stream, conversation, compiled); compactErr != nil {
+			service.setTurnPhase(stream, TurnPhaseFailed)
+			return service.failStream(stream, "unknown", compactErr)
+		} else if compacted {
+			stream.mu.Lock()
+			stream.ProviderActive = false
+			stream.ProviderCancel = nil
+			stream.UpdatedAt = time.Now().UTC()
+			hasPendingCompaction := stream.PendingCompaction != nil
+			status := stream.Status
+			stream.mu.Unlock()
+			switch {
+			case isTerminalStreamStatus(status):
+				switch status {
+				case StreamStatusCompleted:
+					service.setTurnPhase(stream, TurnPhaseCompleted)
+				case StreamStatusCanceled:
+					service.setTurnPhase(stream, TurnPhaseCanceled)
+				default:
+					service.setTurnPhase(stream, TurnPhaseFailed)
+				}
+			case hasPendingCompaction:
+				service.setTurnPhase(stream, TurnPhaseCompacting)
 			default:
-				service.setTurnPhase(stream, TurnPhaseFailed)
+				service.setTurnPhase(stream, TurnPhaseIdle)
 			}
-		case hasPendingCompaction:
-			service.setTurnPhase(stream, TurnPhaseCompacting)
-		default:
-			service.setTurnPhase(stream, TurnPhaseIdle)
+			return nil
 		}
-		return nil
 	}
 	if err := service.syncSummarySnapshot(stream, conversation, requestID, modelCallID); err != nil {
 		service.setTurnPhase(stream, TurnPhaseFailed)
@@ -1566,7 +1655,7 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	}
 	maxTokens, requestKnobs := service.resolveProviderOutputBudget(modelID, conversation, compiled)
 	service.maybeSaveLastAgentModelHash(conversation, modelID, mode, currentPass)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := continuationProviderContext(continuationDeadline)
 	stream.mu.Lock()
 	stream.ProviderActive = true
 	stream.ProviderCancel = cancel
@@ -1590,28 +1679,37 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 		CompileSummary:     compiled.CompileSummary,
 		Observer:           service.recorder,
 		ArtifactPaths:      &modeladapter.LLMArtifactPaths{},
+		StreamDiagnostics:  diagnostics,
 	}
 	providerRequest.ThinkingEffort = thinkingEffort
-	service.debug.LogProvider(context.Background(), requestID, conversationID, "provider_request_prepared", map[string]any{
-		"model_call_id":          strings.TrimSpace(modelCallID),
-		"provider_pass":          currentPass,
-		"model_id":               strings.TrimSpace(modelID),
-		"model_name":             strings.TrimSpace(modelName),
-		"mode":                   compiled.Mode.String(),
-		"thinking_effort":        strings.TrimSpace(thinkingEffort),
-		"max_tokens":             maxTokens,
-		"request_knobs":          requestKnobs,
-		"message_count":          len(compiled.Messages),
-		"tool_count":             len(compiled.Tools),
-		"compile_summary_length": len(compiled.CompileSummary),
-		"turn_seq":               turnSeq,
-	})
-	ctx = service.debug.contextWithRequestCorrelation(ctx, requestID, conversationID, modelCallID)
+	if service.debug != nil {
+		prepared := map[string]any{
+			"model_call_id":          strings.TrimSpace(modelCallID),
+			"provider_pass":          currentPass,
+			"model_id":               strings.TrimSpace(modelID),
+			"model_name":             strings.TrimSpace(modelName),
+			"mode":                   compiled.Mode.String(),
+			"thinking_effort":        strings.TrimSpace(thinkingEffort),
+			"max_tokens":             maxTokens,
+			"request_knobs":          requestKnobs,
+			"message_count":          len(compiled.Messages),
+			"tool_count":             len(compiled.Tools),
+			"compile_summary_length": len(compiled.CompileSummary),
+			"turn_seq":               turnSeq,
+		}
+		if continuedFrom != "" {
+			prepared["continued_from_model_call_id"] = continuedFrom
+			prepared["continuation_index"] = continuationIndex
+		}
+		service.debug.LogProvider(context.Background(), requestID, conversationID, "provider_request_prepared", prepared)
+		ctx = service.debug.contextWithRequestCorrelation(ctx, requestID, conversationID, modelCallID)
+	}
 	providerCorrelation := observability.Correlation{
-		ConversationID: conversationID,
-		ModelCallID:    modelCallID,
-		TurnSequence:   uint64(turnSeq),
-		ProviderPass:   currentPass,
+		ConversationID:    conversationID,
+		ModelCallID:       modelCallID,
+		ParentModelCallID: continuedFrom,
+		TurnSequence:      uint64(turnSeq),
+		ProviderPass:      currentPass,
 	}
 	if conversation != nil {
 		providerCorrelation.RootConversationID = strings.TrimSpace(conversation.RootConversationID)
@@ -2448,11 +2546,20 @@ func (service *Service) finishSuccessfulTurnAfterCheckpoint(stream *ActiveStream
 	return nil
 }
 
-func (service *Service) finishFailedTurnAfterCheckpoint(stream *ActiveStream, terminalCode string, terminalMessage string) error {
+func (service *Service) finishFailedTurnAfterCheckpoint(stream *ActiveStream, terminal checkpointTerminalAction) error {
 	if stream == nil {
 		return nil
 	}
-	err := service.broker.Fail(stream.RequestID, terminalCode, terminalMessage)
+	err := service.broker.FailEvent(stream.RequestID, StreamEvent{
+		End:                   true,
+		TerminalErrorCode:     terminal.ErrorCode,
+		TerminalErrorMessage:  terminal.ErrorMessage,
+		TerminalRetryable:     terminal.Retryable,
+		TerminalHTTPStatus:    terminal.HTTPStatus,
+		TerminalErrorCategory: terminal.ErrorCategory,
+		TerminalModelCallID:   terminal.ModelCallID,
+		TerminalRequestID:     firstNonEmpty(strings.TrimSpace(terminal.RequestID), strings.TrimSpace(stream.RequestID)),
+	})
 	service.setTurnPhase(stream, TurnPhaseFailed)
 	return err
 }
@@ -2607,8 +2714,15 @@ func (service *Service) failStream(stream *ActiveStream, terminalCode string, ca
 	resolvedTerminalCode := resolveTerminalCode(terminalCode, cause)
 	metadataType := "failed"
 	var providerErr providerTerminalError
-	if errors.As(cause, &providerErr) || resolvedTerminalCode == "provider_error" {
+	if errors.As(cause, &providerErr) || resolvedTerminalCode == "provider_error" || providerHTTPStatusFromError(cause) != "" {
 		metadataType = "provider_error"
+		errorText = safeProviderTerminalMessage(cause)
+		if resolvedTerminalCode == "unknown" {
+			resolvedTerminalCode = "provider_error"
+		}
+		stream.mu.Lock()
+		applyProviderTerminalErrorStats(&stream.ProviderStreamStats, cause)
+		stream.mu.Unlock()
 	}
 	_, _ = service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
 		newMetadataEntry(stream.TurnSeq, stream.RequestID, metadataType, map[string]any{
@@ -2668,12 +2782,37 @@ func (service *Service) failActiveStream(stream *ActiveStream, conversationID st
 			err,
 		)
 	}
-	terminal := failedCheckpointTerminalAction(terminalCode, terminalMessage)
+	terminal := providerFailedCheckpointTerminal(stream, terminalCode, terminalMessage, requestID, modelCallID)
 	if err := service.publishCheckpointWithTerminalAction(requestID, terminal); err != nil {
 		log.Printf("forwarder checkpoint queue before failed terminal skipped request_id=%s err=%v", strings.TrimSpace(requestID), err)
-		return service.finishFailedTurnAfterCheckpoint(stream, terminalCode, terminalMessage)
+		return service.finishFailedTurnAfterCheckpoint(stream, terminal)
 	}
 	return nil
+}
+
+func providerFailedCheckpointTerminal(stream *ActiveStream, terminalCode string, terminalMessage string, requestID string, modelCallID string) checkpointTerminalAction {
+	meta := checkpointTerminalAction{
+		RequestID:   strings.TrimSpace(requestID),
+		ModelCallID: strings.TrimSpace(modelCallID),
+	}
+	if stream != nil {
+		stream.mu.Lock()
+		stats := stream.ProviderStreamStats
+		stream.mu.Unlock()
+		if strings.TrimSpace(meta.RequestID) == "" {
+			meta.RequestID = strings.TrimSpace(stream.RequestID)
+		}
+		if strings.TrimSpace(meta.ModelCallID) == "" {
+			meta.ModelCallID = strings.TrimSpace(stream.CurrentModelCallID)
+		}
+		meta.HTTPStatus = strings.TrimSpace(stats.HTTPStatus)
+		meta.ErrorCategory = strings.TrimSpace(stats.ErrorCategory)
+		if strings.EqualFold(strings.TrimSpace(terminalCode), "provider_error") {
+			retryable := false
+			meta.Retryable = &retryable
+		}
+	}
+	return failedCheckpointTerminalActionWithMeta(terminalCode, terminalMessage, meta)
 }
 
 // buildRunEntries 构造一次 run intent 需要写入 history 的首批 entry。
@@ -3929,31 +4068,64 @@ func buildTerminalStreamError(event StreamEvent) error {
 	case compactionOverflowTerminalCode:
 		return buildRunSSECustomError(connect.CodeInvalidArgument, "Context Too Large After Compaction", errors.New(strings.TrimSpace(event.TerminalErrorMessage)))
 	case "provider_error":
-		return buildRunSSEProviderError(errors.New(strings.TrimSpace(event.TerminalErrorMessage)))
+		return buildRunSSEProviderError(event)
 	default:
 		return connect.NewError(connect.CodeUnknown, errors.New(strings.TrimSpace(event.TerminalErrorMessage)))
 	}
 }
 
+func terminalEventRetryable(event StreamEvent) bool {
+	if event.TerminalRetryable != nil {
+		return *event.TerminalRetryable
+	}
+	if strings.EqualFold(strings.TrimSpace(event.TerminalErrorCode), "provider_error") {
+		return false
+	}
+	return true
+}
+
+func runSSEAdditionalInfo(event StreamEvent) map[string]string {
+	info := make(map[string]string, 4)
+	if status := strings.TrimSpace(event.TerminalHTTPStatus); status != "" && status != "not_recorded" {
+		info["http_status"] = status
+	}
+	if category := strings.TrimSpace(event.TerminalErrorCategory); category != "" && category != "not_recorded" {
+		info["error_category"] = category
+	}
+	if modelCallID := strings.TrimSpace(event.TerminalModelCallID); modelCallID != "" {
+		info["model_call_id"] = modelCallID
+	}
+	if requestID := strings.TrimSpace(event.TerminalRequestID); requestID != "" {
+		info["request_id"] = requestID
+	}
+	if len(info) == 0 {
+		return nil
+	}
+	return info
+}
+
 // buildRunSSEProviderError 构造 provider 专用的 RunSSE 错误包。
-func buildRunSSEProviderError(cause error) error {
+func buildRunSSEProviderError(event StreamEvent) error {
+	cause := errors.New(firstNonEmpty(strings.TrimSpace(event.TerminalErrorMessage), "provider_error"))
 	return buildRunSSEStructuredErrorWithDetail(
 		connect.CodeUnavailable,
 		"Server Error",
-		"",
+		strings.TrimSpace(event.TerminalErrorMessage),
 		cause,
 		aiserverv1.ErrorDetails_ERROR_PROVIDER_ERROR,
 		false,
+		terminalEventRetryable(event),
+		runSSEAdditionalInfo(event),
 	)
 }
 
 // buildRunSSECustomError 构造带有 CustomErrorDetails 的 RunSSE 结构化错误。
 func buildRunSSECustomError(code connect.Code, title string, cause error) error {
-	return buildRunSSEStructuredErrorWithDetail(code, title, "", cause, aiserverv1.ErrorDetails_ERROR_CUSTOM_MESSAGE, false)
+	return buildRunSSEStructuredErrorWithDetail(code, title, "", cause, aiserverv1.ErrorDetails_ERROR_CUSTOM_MESSAGE, false, true, nil)
 }
 
 // buildRunSSEStructuredError 统一构造带有 ErrorDetails 的 Connect endstream 错误。
-func buildRunSSEStructuredErrorWithDetail(code connect.Code, title string, detailText string, cause error, errorKind aiserverv1.ErrorDetails_Error, expected bool) error {
+func buildRunSSEStructuredErrorWithDetail(code connect.Code, title string, detailText string, cause error, errorKind aiserverv1.ErrorDetails_Error, expected bool, retryable bool, additionalInfo map[string]string) error {
 	if cause == nil {
 		cause = fmt.Errorf("unknown RunSSE error")
 	}
@@ -3961,7 +4133,7 @@ func buildRunSSEStructuredErrorWithDetail(code connect.Code, title string, detai
 	if trimmedDetail == "" {
 		trimmedDetail = cause.Error()
 	}
-	isRetryable := true
+	isRetryable := retryable
 	allowUnsafeCommandLinks := true
 	showRequestID := true
 	shouldShowImmediateError := false
@@ -3975,6 +4147,7 @@ func buildRunSSEStructuredErrorWithDetail(code connect.Code, title string, detai
 			AllowCommandLinksPotentiallyUnsafePleaseOnlyUseForHandwrittenTrustedMarkdown: &allowUnsafeCommandLinks,
 			ShowRequestId:            &showRequestID,
 			ShouldShowImmediateError: &shouldShowImmediateError,
+			AdditionalInfo:           additionalInfo,
 		},
 		IsExpected: &isExpected,
 	}

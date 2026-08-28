@@ -546,13 +546,95 @@ func TestControllerReconfigureClosesPreviousSession(t *testing.T) {
 	if second.Mode != ModeFull || second.SessionID == first.SessionID {
 		t.Fatalf("unexpected reconfigured status: first=%+v second=%+v", first, second)
 	}
-	manifest, err := readManifest(filepath.Join(first.SessionPath, manifestFilename))
+	deadline := time.Now().Add(2 * time.Second)
+	var manifest Manifest
+	for {
+		manifest, err = readManifest(filepath.Join(first.SessionPath, manifestFilename))
+		if err == nil && manifest.Status == "closed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("previous session status = %q, want closed (err=%v)", manifest.Status, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestControllerReconfigureIgnoresRuntimeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	controller, err := NewController(root, Settings{
+		Mode:               ModeBasic,
+		RetentionDays:      7,
+		MaxDiskMB:          64,
+		RuntimeFingerprint: "routing-a",
+		Metadata:           SessionMetadata{ConfigFingerprint: "storage-a"},
+	})
 	if err != nil {
-		t.Fatalf("read first manifest: %v", err)
+		t.Fatalf("NewController() error = %v", err)
 	}
-	if manifest.Status != "closed" {
-		t.Fatalf("previous session status = %q, want closed", manifest.Status)
+	first := controller.Status()
+	if err := controller.Reconfigure(Settings{
+		Mode:               ModeBasic,
+		RetentionDays:      7,
+		MaxDiskMB:          64,
+		RuntimeFingerprint: "routing-b",
+		Metadata:           SessionMetadata{ConfigFingerprint: "storage-a"},
+	}); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
 	}
+	second := controller.Status()
+	if second.SessionID != first.SessionID {
+		t.Fatalf("runtime fingerprint change rotated session: first=%+v second=%+v", first, second)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestControllerReconfigureDoesNotBlockOnSlowRecorderClose(t *testing.T) {
+	entered := make(chan struct{})
+	block := make(chan struct{})
+	controller, err := NewControllerWithHumanSink(
+		t.TempDir(),
+		Settings{Mode: ModeBasic, RetentionDays: 7, MaxDiskMB: 64},
+		func(Event) {
+			select {
+			case <-entered:
+			default:
+				close(entered)
+			}
+			<-block
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewControllerWithHumanSink() error = %v", err)
+	}
+	if !controller.RecordEvent(context.Background(), Event{Layer: "backend", Event: "request_finished"}) {
+		t.Fatal("event was not accepted")
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("human sink was not entered")
+	}
+	started := time.Now()
+	if err := controller.Reconfigure(Settings{Mode: ModeFull, RetentionDays: 7, MaxDiskMB: 64}); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("Reconfigure blocked for %s", elapsed)
+	}
+	if !controller.RecordEvent(context.Background(), Event{Layer: "backend", Event: "request_finished"}) {
+		t.Fatal("new recorder did not accept event")
+	}
+	status := controller.Status()
+	if status.Mode != ModeFull {
+		t.Fatalf("status mode = %q, want full", status.Mode)
+	}
+	close(block)
 	if err := controller.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}

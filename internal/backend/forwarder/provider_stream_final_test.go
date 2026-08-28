@@ -3,6 +3,9 @@ package forwarder
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,6 +222,408 @@ func TestProviderTerminalRecordsTypedHTTPStatusAndRetryDecision(t *testing.T) {
 	}
 	if payload["http_status"] != "429" || payload["http_attempt"] != 3 || payload["retryable"] != "true" || payload["retry_reason"] != "http_429" {
 		t.Fatalf("provider final payload = %#v", payload)
+	}
+}
+
+func TestProviderTerminalTyped524KeepsStatusAndRetryDecision(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err: providerTerminalError{cause: &modeladapter.HTTPStatusError{
+			Provider:    "openai adapter",
+			StatusCode:  modeladapter.HTTPStatusCloudflareTimeout,
+			Attempt:     3,
+			MaxAttempts: 3,
+			Body:        "sk-secret should not leak",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.HTTPStatus != "524" || stats.ErrorCategory != modeladapter.ProviderErrorServer5xx || stats.Retryable != "true" || stats.RetryReason != "http_524" || stats.RetrySuppressionReason != "not_recorded" {
+		t.Fatalf("typed 524 terminal stats = %#v", stats)
+	}
+	providerFinal := capturedEventByName(t, capture, "provider_stream_finished")
+	payload, ok := providerFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", providerFinal.Payload.Data)
+	}
+	if payload["http_status"] != "524" || payload["retryable"] != "true" || payload["retry_reason"] != "http_524" || payload["error_category"] != modeladapter.ProviderErrorServer5xx {
+		t.Fatalf("provider final payload = %#v", payload)
+	}
+	if summary, _ := payload["error_summary"].(string); strings.Contains(summary, "sk-secret") {
+		t.Fatalf("error summary leaked body: %#v", payload)
+	}
+}
+
+func TestProviderTerminal524AfterOutputIsSuppressed(t *testing.T) {
+	service, stream, _ := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "partial", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("applyProviderModelEvent() error = %v", err)
+	}
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err: providerTerminalError{cause: &modeladapter.HTTPStatusError{
+			Provider:   "openai adapter",
+			StatusCode: modeladapter.HTTPStatusCloudflareTimeout,
+			Attempt:    1,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.HTTPStatus != "524" || stats.ErrorCategory != modeladapter.ProviderErrorServer5xx {
+		t.Fatalf("typed 524 after output lost status: %#v", stats)
+	}
+	if stats.Retryable != "false" || stats.RetryReason == "http_524" || stats.RetrySuppressionReason != "output_or_tool_progress" {
+		t.Fatalf("524 after output should be suppressed, stats = %#v", stats)
+	}
+}
+
+func TestProviderTerminal529IsNotRetryable(t *testing.T) {
+	stats := ProviderStreamStats{Attempt: 1, HTTPStatus: "not_recorded"}
+	retryable, reason, suppression := providerRetryObservation(&modeladapter.HTTPStatusError{StatusCode: 529}, stats)
+	if retryable != "false" || reason == "http_5xx" || reason == "http_524" || suppression != "http_status" {
+		t.Fatalf("529 observation = %q %q %q", retryable, reason, suppression)
+	}
+	retryable, reason, suppression = providerRetryObservation(&modeladapter.HTTPStatusError{StatusCode: 500}, stats)
+	if retryable != "true" || reason != "http_5xx" {
+		t.Fatalf("500 observation = %q %q %q", retryable, reason, suppression)
+	}
+}
+
+func TestProviderTerminalTransportKeepsNotRecordedStatus(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err:   providerTerminalError{cause: errors.New("connection reset")},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.HTTPStatus != "not_recorded" || stats.ErrorCategory != modeladapter.ProviderErrorTransport || stats.Retryable != "true" || stats.RetryReason != "transport" {
+		t.Fatalf("transport terminal stats = %#v", stats)
+	}
+	providerFinal := capturedEventByName(t, capture, "provider_stream_finished")
+	payload, ok := providerFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", providerFinal.Payload.Data)
+	}
+	if payload["http_status"] != "not_recorded" || payload["error_category"] != modeladapter.ProviderErrorTransport {
+		t.Fatalf("transport final payload = %#v", payload)
+	}
+}
+
+func TestProviderHTTP200ThenTruncationDoesNotInventHTTPStatus(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "partial", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("applyProviderModelEvent() error = %v", err)
+	}
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.ProtocolFinalStatus != "truncated" || stats.HTTPStatus != "not_recorded" || stats.Retryable != "false" {
+		t.Fatalf("HTTP 200 then truncated stats = %#v", stats)
+	}
+	if stats.RetrySuppressionReason != "output_or_tool_progress" && stats.RetrySuppressionReason != "missing_completion_marker" && stats.RetrySuppressionReason != "stream_raw_bytes" {
+		t.Fatalf("unexpected suppression %q in %#v", stats.RetrySuppressionReason, stats)
+	}
+	providerFinal := capturedEventByName(t, capture, "provider_stream_finished")
+	payload, ok := providerFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", providerFinal.Payload.Data)
+	}
+	if payload["http_status"] != "not_recorded" || payload["status"] == "completed" {
+		t.Fatalf("200 header must not mark protocol completed: %#v", payload)
+	}
+}
+
+func TestProviderHTTP200HeadersAreNotProtocolCompletion(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	headerAt := time.Now().UTC().Add(-time.Second)
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHeader(http.StatusOK, 1, headerAt)
+	diag.RecordClose(io.EOF)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamDiagnostics = diag
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded", TransportOutcome: "started"}
+	stream.mu.Unlock()
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "partial", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("applyProviderModelEvent() error = %v", err)
+	}
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.ProtocolFinalStatus != "truncated" || stats.HTTPStatus != "200" {
+		t.Fatalf("200 headers must not complete protocol: %#v", stats)
+	}
+	if stats.TransportOutcome != modeladapter.TransportOutcomeSucceeded {
+		t.Fatalf("transport_outcome = %q, want succeeded", stats.TransportOutcome)
+	}
+	if stats.CloseCause != modeladapter.StreamCloseCauseEOF {
+		t.Fatalf("close_cause = %q, want eof", stats.CloseCause)
+	}
+	if stats.PartialBoundary != modeladapter.PartialBoundaryText {
+		t.Fatalf("partial_boundary = %q, want text", stats.PartialBoundary)
+	}
+	if stats.LastEffectiveContentAt.IsZero() || stats.HeaderAt.IsZero() {
+		t.Fatalf("timeline missing: %#v", stats)
+	}
+	providerFinal := capturedEventByName(t, capture, "provider_stream_finished")
+	payload, ok := providerFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", providerFinal.Payload.Data)
+	}
+	if payload["http_status"] != "200" || payload["status"] == "completed" || payload["transport_outcome"] != "succeeded" {
+		t.Fatalf("header 200 projected as stream complete: %#v", payload)
+	}
+}
+
+func TestProviderStreamDiagnosticsRawBytesVersusEffectiveContent(t *testing.T) {
+	stats := ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming"}
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHeader(http.StatusOK, 1, time.Now())
+	diag.RecordBytes(8, time.Now())
+	applyProviderStreamDiagnostics(&stats, diag, &modeladapter.StreamTruncatedError{}, false)
+	if stats.FirstByteAt.IsZero() || !stats.LastEffectiveContentAt.IsZero() {
+		t.Fatalf("raw bytes must not invent effective content: %#v", stats)
+	}
+	if stats.PartialBoundary != modeladapter.PartialBoundaryNone {
+		t.Fatalf("raw-only partial_boundary = %q", stats.PartialBoundary)
+	}
+	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "hi", OccurredAt: time.Now()})
+	if stats.LastEffectiveContentAt.IsZero() || stats.PartialBoundary != modeladapter.PartialBoundaryText {
+		t.Fatalf("text delta did not record effective content: %#v", stats)
+	}
+}
+
+func TestProviderStreamDiagnosticsIdleTimeoutAndMissingMarker(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHeader(http.StatusOK, 1, time.Now())
+	diag.RecordBytes(3, time.Now())
+	diag.RecordClose(&modeladapter.StreamIdleTimeoutError{Timeout: time.Second})
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamDiagnostics = diag
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true, Err: providerTerminalError{cause: &modeladapter.StreamIdleTimeoutError{Timeout: time.Second}}}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.CloseCause != modeladapter.StreamCloseCauseIdleTimeout {
+		t.Fatalf("idle close_cause = %q", stats.CloseCause)
+	}
+	if stats.ProtocolFinalStatus != "timeout" || stats.HTTPStatus != "200" {
+		t.Fatalf("idle timeout stats = %#v", stats)
+	}
+	if stats.CompletionMarker {
+		t.Fatal("idle timeout invented completion marker")
+	}
+	payload, ok := capturedEventByName(t, capture, "provider_stream_finished").Payload.Data.(map[string]any)
+	if !ok || payload["close_cause"] != "idle_timeout" || payload["status"] == "completed" {
+		t.Fatalf("idle timeout payload = %#v", payload)
+	}
+}
+
+func TestProviderStreamDiagnosticsCompletionMarkerClearsPartialBoundary(t *testing.T) {
+	service, stream, _ := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "done", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("text delta: %v", err)
+	}
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTurnFinished, OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("turn finished: %v", err)
+	}
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if !stats.CompletionMarker || stats.ProtocolFinalStatus != "completed" {
+		t.Fatalf("completed stats = %#v", stats)
+	}
+	if stats.PartialBoundary != modeladapter.PartialBoundaryNone {
+		t.Fatalf("completed partial_boundary = %q, want none", stats.PartialBoundary)
+	}
+}
+
+func TestProviderStreamDiagnosticsPartialToolBoundary(t *testing.T) {
+	stats := ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "truncated"}
+	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindPartialToolCall, OccurredAt: time.Now()})
+	finalizeProviderPartialBoundary(&stats, false)
+	if stats.PartialBoundary != modeladapter.PartialBoundaryPartialTool {
+		t.Fatalf("partial tool boundary = %q", stats.PartialBoundary)
+	}
+	finalizeProviderPartialBoundary(&stats, true)
+	if stats.PartialBoundary != modeladapter.PartialBoundaryCheckpoint {
+		t.Fatalf("checkpoint boundary = %q", stats.PartialBoundary)
+	}
+}
+
+func TestProviderStreamDiagnosticsPostOutputTransportCloseKeepsReplayGate(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	headerAt := time.Now().UTC().Add(-2 * time.Second)
+	firstByteAt := headerAt.Add(20 * time.Millisecond)
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHeader(http.StatusOK, 1, headerAt)
+	diag.RecordBytes(7, firstByteAt)
+	diag.RecordClose(io.ErrUnexpectedEOF)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamDiagnostics = diag
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "partial", OccurredAt: time.Now()}); err != nil {
+		t.Fatalf("applyProviderModelEvent() error = %v", err)
+	}
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err: providerTerminalError{cause: &modeladapter.StreamTruncatedError{
+			Provider:         "openai",
+			Err:              io.ErrUnexpectedEOF,
+			RawBytesObserved: true,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.VisibleTextBytes != len("partial") || stats.ModelEventCount != 1 || stats.ChunkCount != 1 {
+		t.Fatalf("existing stream stats regressed: %#v", stats)
+	}
+	if stats.CompletionMarker || stats.ProtocolFinalStatus == "completed" {
+		t.Fatalf("transport close after output completed the protocol: %#v", stats)
+	}
+	if stats.Retryable != "false" || stats.RetrySuppressionReason != "output_or_tool_progress" {
+		t.Fatalf("post-output replay gate lost: %#v", stats)
+	}
+	if stats.CloseCause != modeladapter.StreamCloseCauseUnexpectedEOF {
+		t.Fatalf("close_cause = %q, want unexpected_eof", stats.CloseCause)
+	}
+	if stats.PartialBoundary != modeladapter.PartialBoundaryText {
+		t.Fatalf("partial_boundary = %q, want text", stats.PartialBoundary)
+	}
+	if stats.HeaderAt.IsZero() || stats.FirstByteAt.IsZero() || stats.BodyEndAt.IsZero() || stats.LastEffectiveContentAt.IsZero() {
+		t.Fatalf("timeline missing after post-output close: %#v", stats)
+	}
+	if stats.HTTPStatus != "200" {
+		t.Fatalf("header 200 lost after body close: %#v", stats)
+	}
+	payload, ok := capturedEventByName(t, capture, "provider_stream_finished").Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", capturedEventByName(t, capture, "provider_stream_finished").Payload.Data)
+	}
+	if payload["completion_marker"] != false || payload["status"] == "completed" || payload["visible_text_bytes"] != stats.VisibleTextBytes {
+		t.Fatalf("existing finished fields regressed: %#v", payload)
+	}
+	if payload["close_cause"] != "unexpected_eof" || payload["retryable"] != "false" || payload["retry_suppression_reason"] != "output_or_tool_progress" {
+		t.Fatalf("post-output diagnostics payload = %#v", payload)
+	}
+}
+
+func TestSafeProviderTerminalMessageKeepsTypedStatusAndRedactsBody(t *testing.T) {
+	got := safeProviderTerminalMessage(providerTerminalError{cause: &modeladapter.HTTPStatusError{
+		Provider:   "openai adapter",
+		StatusCode: modeladapter.HTTPStatusCloudflareTimeout,
+		Body:       "sk-secret and user prompt",
+	}})
+	if got != "server_5xx status=524" {
+		t.Fatalf("safe 524 message = %q", got)
+	}
+	if strings.Contains(got, "sk-secret") || strings.Contains(got, "user prompt") {
+		t.Fatalf("safe message leaked body: %q", got)
+	}
+	got = safeProviderTerminalMessage(errors.New("connection refused"))
+	if got != "transport status=not_recorded" {
+		t.Fatalf("safe transport message = %q", got)
 	}
 }
 

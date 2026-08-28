@@ -759,3 +759,33 @@ func TestMaxConcurrentRequestsYAMLJSONRoundtrip(t *testing.T) {
 		t.Fatalf("zero/missing maxConcurrentRequests should be omitted from yaml:\n%s", zeroPayload)
 	}
 }
+
+func TestNormalizeStreamContinuationMissingIsDisabled(t *testing.T) {
+	normalized, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.StreamContinuation.Enabled {
+		t.Fatal("missing streamContinuation must stay disabled")
+	}
+	if normalized.StreamContinuation != (StreamContinuationConfig{}) {
+		t.Fatalf("missing streamContinuation = %+v, want zero value so yaml omitempty skips disk writes", normalized.StreamContinuation)
+	}
+
+	enabled, err := NormalizeConfig(Config{StreamContinuation: StreamContinuationConfig{Enabled: true, MaxPerTurn: 9}})
+	if err != nil {
+		t.Fatalf("NormalizeConfig(enabled) error = %v", err)
+	}
+	if !enabled.StreamContinuation.Enabled {
+		t.Fatal("explicit enabled was dropped")
+	}
+	if enabled.StreamContinuation.MaxPerTurn != DefaultStreamContinuationMaxPerTurn {
+		t.Fatalf("maxPerTurn = %d, want capped %d", enabled.StreamContinuation.MaxPerTurn, DefaultStreamContinuationMaxPerTurn)
+	}
+	if enabled.StreamContinuation.TotalDeadlineSeconds != DefaultStreamContinuationDeadlineSeconds {
+		t.Fatalf("deadline = %d, want %d", enabled.StreamContinuation.TotalDeadlineSeconds, DefaultStreamContinuationDeadlineSeconds)
+	}
+	if enabled.StreamContinuation.OverlapWindowChars != DefaultStreamContinuationOverlapWindowChars {
+		t.Fatalf("overlap = %d, want %d", enabled.StreamContinuation.OverlapWindowChars, DefaultStreamContinuationOverlapWindowChars)
+	}
+}

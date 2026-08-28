@@ -7,10 +7,10 @@ import Select from "@/components/ui/Select.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
 import { useMessage } from "@/composables/useMessage";
 import {
-  ANTHROPIC_THINKING_EFFORT_DEFAULT,
   appState,
   buildModelAdapterTestRequestHash,
   createEmptyModelAdapter,
+  applyModelAdapterTypeChange,
   CUSTOM_HEADERS_DEFAULT_JSON,
   EXTRA_PARAMS_DEFAULT_JSON,
   fetchAvailableModelIDs,
@@ -152,12 +152,6 @@ function ensureAnthropicExtraParamsJSON() {
   }
 }
 
-function ensureAnthropicThinkingEffort() {
-  if (!String(draft.anthropicThinkingEffort || "").trim()) {
-    draft.anthropicThinkingEffort = ANTHROPIC_THINKING_EFFORT_DEFAULT;
-  }
-}
-
 const fieldTips = {
   displayName: "仅用于界面展示，便于你区分不同模型。",
   modelID: "可以直接输入模型标识，或从服务端返回的列表中选择。",
@@ -179,12 +173,17 @@ const fieldTips = {
   tooltipData: "模型列表 hover 时显示的备注说明。",
 };
 
+function currentModelIDOptions() {
+  const currentModelID = String(draft.modelID || "").trim();
+  return currentModelID ? [currentModelID] : [];
+}
+
 async function refreshModelList() {
   const baseURL = String(draft.baseURL || "").trim();
   const apiKey = String(draft.apiKey || "").trim();
   if (!baseURL || !apiKey || !draft.type) {
     modelListRequestSeq.value += 1;
-    availableModelIDs.value = [];
+    availableModelIDs.value = currentModelIDOptions();
     modelListLoading.value = false;
     return [];
   }
@@ -192,7 +191,8 @@ async function refreshModelList() {
   const requestSeq = modelListRequestSeq.value + 1;
   modelListRequestSeq.value = requestSeq;
   modelListLoading.value = true;
-  availableModelIDs.value = [];
+  const currentModelID = String(draft.modelID || "").trim();
+  availableModelIDs.value = currentModelIDOptions();
   try {
     const models = await fetchAvailableModelIDs({
       type: draft.type,
@@ -204,11 +204,21 @@ async function refreshModelList() {
     if (requestSeq !== modelListRequestSeq.value) {
       return availableModelIDs.value;
     }
-    availableModelIDs.value = models;
+    const merged = [];
+    const seen = new Set();
+    for (const modelID of [currentModelID, ...models]) {
+      const id = String(modelID || "").trim();
+      if (!id || seen.has(id)) {
+        continue;
+      }
+      seen.add(id);
+      merged.push(id);
+    }
+    availableModelIDs.value = merged;
     return models;
   } catch (_error) {
     if (requestSeq === modelListRequestSeq.value) {
-      availableModelIDs.value = [];
+      availableModelIDs.value = currentModelIDOptions();
     }
     return availableModelIDs.value;
   } finally {
@@ -267,16 +277,13 @@ function handleCancel() {
 }
 
 function handleModelTypeChange(type) {
-  draft.type = type;
+  if (draft.type === type) {
+    return;
+  }
+  applyModelAdapterTypeChange(draft, type);
   modelListRequestSeq.value += 1;
   modelListLoading.value = false;
-  availableModelIDs.value = [];
-  draft.modelID = "";
-  if (type === "openai" && !draft.openAIEndpoint) {
-    draft.openAIEndpoint = OPENAI_ENDPOINT_CHAT_COMPLETIONS;
-  } else if (type === "anthropic") {
-    ensureAnthropicThinkingEffort();
-  }
+  availableModelIDs.value = currentModelIDOptions();
 }
 
 async function handleTest() {
@@ -367,7 +374,7 @@ watch(
     if (!baseURL || !apiKey) {
       modelListRequestSeq.value += 1;
       modelListLoading.value = false;
-      availableModelIDs.value = [];
+      availableModelIDs.value = currentModelIDOptions();
       return;
     }
     modelListDebounceTimer = window.setTimeout(() => {

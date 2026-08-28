@@ -3,7 +3,10 @@ package observability
 import (
 	"context"
 	"sync"
+	"time"
 )
+
+const recorderCloseTimeout = 2 * time.Second
 
 type Controller struct {
 	root      string
@@ -13,6 +16,7 @@ type Controller struct {
 	humanSink HumanSink
 	recorder  *Recorder
 	closed    bool
+	closing   sync.WaitGroup
 }
 
 func NewController(root string, settings Settings) (*Controller, error) {
@@ -45,7 +49,20 @@ func (controller *Controller) Record(ctx context.Context, capture Capture) bool 
 	}
 	controller.mu.RLock()
 	recorder := controller.recorder
+	runtimeFingerprint := controller.settings.RuntimeFingerprint
 	controller.mu.RUnlock()
+	if runtimeFingerprint != "" {
+		if capture.Event.Fields == nil {
+			capture.Event.Fields = map[string]any{"runtime_fingerprint": runtimeFingerprint}
+		} else if _, exists := capture.Event.Fields["runtime_fingerprint"]; !exists {
+			fields := make(map[string]any, len(capture.Event.Fields)+1)
+			for key, value := range capture.Event.Fields {
+				fields[key] = value
+			}
+			fields["runtime_fingerprint"] = runtimeFingerprint
+			capture.Event.Fields = fields
+		}
+	}
 	return recorder.Record(ctx, capture)
 }
 
@@ -67,9 +84,12 @@ func (controller *Controller) Reconfigure(settings Settings) error {
 	controller.mu.RUnlock()
 	normalized := normalizeSettings(settings)
 	controller.mu.RLock()
-	unchanged := controller.settings == normalized
+	storageUnchanged := storageSettingsEqual(controller.settings, normalized)
 	controller.mu.RUnlock()
-	if unchanged {
+	if storageUnchanged {
+		controller.mu.Lock()
+		controller.settings = normalized
+		controller.mu.Unlock()
 		return nil
 	}
 	var next *Recorder
@@ -85,7 +105,8 @@ func (controller *Controller) Reconfigure(settings Settings) error {
 	controller.recorder = next
 	controller.settings = normalized
 	controller.mu.Unlock()
-	return previous.Close()
+	controller.closeRecorderAsync(previous)
+	return nil
 }
 
 func (controller *Controller) Status() Status {
@@ -114,5 +135,57 @@ func (controller *Controller) Close() error {
 	controller.recorder = nil
 	controller.closed = true
 	controller.mu.Unlock()
-	return recorder.Close()
+	err := closeRecorderBounded(recorder, recorderCloseTimeout)
+	controller.waitAsyncCloses(recorderCloseTimeout)
+	return err
+}
+
+func storageSettingsEqual(left Settings, right Settings) bool {
+	return left.Mode == right.Mode &&
+		left.RetentionDays == right.RetentionDays &&
+		left.MaxDiskMB == right.MaxDiskMB &&
+		left.QueueSize == right.QueueSize
+}
+
+func (controller *Controller) closeRecorderAsync(recorder *Recorder) {
+	if recorder == nil {
+		return
+	}
+	controller.closing.Add(1)
+	go func() {
+		defer controller.closing.Done()
+		_ = closeRecorderBounded(recorder, recorderCloseTimeout)
+	}()
+}
+
+func (controller *Controller) waitAsyncCloses(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		controller.closing.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
+}
+
+func closeRecorderBounded(recorder *Recorder, timeout time.Duration) error {
+	if recorder == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- recorder.Close()
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return nil
+	}
 }

@@ -72,6 +72,45 @@ func TestForbiddenKeyCoversAliases(t *testing.T) {
 	}
 }
 
+func TestAllowlistedFieldsKeepsStreamDiagnostics(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"header_at":                 "2026-08-27T00:00:00Z",
+		"first_byte_at":             "2026-08-27T00:00:01Z",
+		"last_byte_at":              "2026-08-27T00:00:02Z",
+		"body_end_at":               "2026-08-27T00:00:03Z",
+		"last_effective_content_at": "2026-08-27T00:00:02Z",
+		"close_cause":               "unexpected_eof",
+		"partial_boundary":          "text",
+		"transport_outcome":         "succeeded",
+		"completion_marker":         false,
+		"http_status":               200,
+		"artifact_model_call_id":    "call-1_fb0",
+		"fallback_channel_index":    0,
+		"payload_bytes":             16,
+		"authorization":             "Bearer sk-secret",
+		"headers":                   map[string]string{"Authorization": "Bearer sk-secret"},
+		"body":                      `{"prompt":"secret"}`,
+	})
+	if fields["authorization"] != nil || fields["headers"] != nil || fields["body"] != nil {
+		t.Fatalf("secret fields leaked: %#v", fields)
+	}
+	if fields["header_at"] != "2026-08-27T00:00:00Z" || fields["body_end_at"] != "2026-08-27T00:00:03Z" {
+		t.Fatalf("timeline dropped: %#v", fields)
+	}
+	if fields["close_cause"] != "unexpected_eof" || fields["partial_boundary"] != "text" {
+		t.Fatalf("close/partial dropped: %#v", fields)
+	}
+	if fields["artifact_model_call_id"] != "call-1_fb0" || fields["payload_bytes"] != 16 {
+		t.Fatalf("identity/payload facts dropped: %#v", fields)
+	}
+	if ForbiddenKey("header_at") || ForbiddenKey("body_end_at") {
+		t.Fatal("allowlisted stream diagnostic keys must not be treated as secret headers/bodies")
+	}
+	if !ForbiddenKey("header") || !ForbiddenKey("headers") || !ForbiddenKey("body") {
+		t.Fatal("raw header/body keys must remain forbidden")
+	}
+}
+
 func TestAllowlistedFieldsKeepsProviderFallbackBudgetFacts(t *testing.T) {
 	fields := AllowlistedFields(map[string]any{
 		"chain_max_attempts":              5,

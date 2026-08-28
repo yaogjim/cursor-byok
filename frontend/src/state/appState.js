@@ -15,7 +15,13 @@ import {
   validateUpstreamCapacityAdapters,
   normalizeGatewayConfig,
   gatewayPublicModelInvalid,
+  normalizeTheme,
+  resolveEffectiveTheme,
 } from "@/state/configProjection";
+import {
+  ACCESS_PATH,
+  accessClientConfigScope,
+} from "@/router/access";
 import {
   checkForUpdates,
   downloadAvailableUpdate,
@@ -40,6 +46,7 @@ import {
   saveCursorConfig,
   saveSystemSettings,
   saveHomeMetrics,
+  setAppearanceTheme,
   startProxyService,
   stopProxyService,
   startGatewayService,
@@ -53,6 +60,16 @@ import {
   normalizeReasoningEffort,
   SUPPORTED_REASONING_EFFORTS,
 } from "@/state/modelAdapterReasoning";
+import {
+  createEmptyHomeMetrics,
+  createEmptyHomeMetricsReport,
+  DEFAULT_HOME_METRICS_RANGE,
+  normalizeHomeMetrics,
+  normalizeHomeMetricsReport,
+} from "@/state/homeMetrics";
+import { applyModelAdapterTypeChange } from "@/state/modelAdapterTypeChange";
+
+export { applyModelAdapterTypeChange };
 
 const APP_STATE_STORAGE_KEY = "cursor-client:runtime-state:v2";
 const GENERIC_SERVICE_ERROR = "服务错误";
@@ -71,7 +88,6 @@ export const CUSTOM_HEADERS_DEFAULT_JSON = `{
 }`;
 const SUPPORTED_OPENAI_ENDPOINTS = new Set([OPENAI_ENDPOINT_RESPONSES, OPENAI_ENDPOINT_CHAT_COMPLETIONS, OPENAI_ENDPOINT_CUSTOM]);
 const SUPPORTED_ROUTE_MODES = new Set(["local", "upstream"]);
-const SUPPORTED_THEMES = new Set(["light", "dark"]);
 const PROXY_STATE_EVENT = "proxy:state";
 const USER_CONFIG_CHANGED_EVENT = "user-config:changed";
 const UPDATE_STATE_EVENT = "update:state";
@@ -90,6 +106,7 @@ export const ROUTE_MODE_OPTIONS = [
 export const THEME_OPTIONS = [
   { label: "浅色", value: "light" },
   { label: "深色", value: "dark" },
+  { label: "跟随系统", value: "system" },
 ];
 
 function asString(value) {
@@ -164,11 +181,6 @@ function formatReleaseDate(value) {
     return text;
   }
   return parsed.format("YYYY-MM-DD HH:mm");
-}
-
-function normalizeTheme(value, fallback = "light") {
-  const text = asString(value).toLowerCase();
-  return SUPPORTED_THEMES.has(text) ? text : fallback;
 }
 
 function normalizeRouteMode(value, fallback = "local") {
@@ -575,20 +587,6 @@ function delay(ms) {
   });
 }
 
-function createEmptyHomeMetrics() {
-  return {
-    providerCallsTotal: 0,
-    turnsTotal: 0,
-    validTurnsTotal: 0,
-    invalidTurnsTotal: 0,
-    requestTokensTotal: 0,
-    promptTokensTotal: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    cacheHitRate: null,
-  };
-}
-
 function loadCachedState() {
   if (!canUseLocalStorage()) {
     return {};
@@ -641,49 +639,6 @@ function normalizeConfig(source) {
   };
 }
 
-function asNullableRate(value) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return null;
-}
-
-function normalizeHomeMetrics(source) {
-  const raw = source && typeof source === "object" ? source : {};
-  return {
-    providerCallsTotal: asPositiveInteger(raw.providerCallsTotal),
-    turnsTotal: asPositiveInteger(raw.turnsTotal),
-    validTurnsTotal: asPositiveInteger(raw.validTurnsTotal),
-    invalidTurnsTotal: asPositiveInteger(raw.invalidTurnsTotal),
-    requestTokensTotal: asPositiveInteger(raw.requestTokensTotal),
-    promptTokensTotal: asPositiveInteger(raw.promptTokensTotal),
-    cacheReadTokens: asPositiveInteger(raw.cacheReadTokens),
-    cacheWriteTokens: asPositiveInteger(raw.cacheWriteTokens),
-    cacheHitRate: asNullableRate(raw.cacheHitRate),
-  };
-}
-
-function normalizeHomeMetricsReport(raw) {
-  const data = raw && typeof raw === "object" ? raw : {};
-  const daily = Array.isArray(data.daily) ? data.daily.map((item) => ({
-    date: asString(item?.date),
-    providerCalls: asPositiveInteger(item?.providerCalls),
-    turnsTotal: asPositiveInteger(item?.turnsTotal),
-    validTurnsTotal: asPositiveInteger(item?.validTurnsTotal),
-    invalidTurnsTotal: asPositiveInteger(item?.invalidTurnsTotal),
-    requestTokens: asPositiveInteger(item?.requestTokens),
-    promptTokens: asPositiveInteger(item?.promptTokens),
-    cacheReadTokens: asPositiveInteger(item?.cacheReadTokens),
-    cacheWriteTokens: asPositiveInteger(item?.cacheWriteTokens),
-  })).filter((item) => item.date) : [];
-  return {
-    range: asString(data.range) || "all",
-    timezone: asString(data.timezone) || "UTC",
-    summary: normalizeHomeMetrics(data.summary),
-    daily,
-  };
-}
-
 function applyHomeMetrics(raw) {
   appState.homeMetrics = normalizeHomeMetrics(raw);
   appState.homeMetricsError = "";
@@ -695,7 +650,7 @@ function serializeConfigPayload(normalized) {
     providerStreamIdleTimeout: normalized.providerStreamIdleTimeout,
     backendListenAddr: normalized.backendListenAddr,
     proxyListenAddr: normalized.proxyListenAddr,
-    modelAdapters: normalized.modelAdapters.map(({ id, ...adapter }) => adapter),
+    modelAdapters: normalized.modelAdapters.map((adapter) => ({ ...adapter })),
     routing: normalized.routing,
     homeMetrics: normalized.homeMetrics,
     appearance: normalized.appearance,
@@ -880,13 +835,27 @@ export function configSectionStatusText(scope) {
   return "已保存";
 }
 
-export function routePathToConfigScope(path) {
-  return ROUTE_PATH_TO_CONFIG_SCOPE[asString(path)] || "";
+export function routePathToConfigScope(path, query) {
+  const normalized = asString(path);
+  if (normalized === ACCESS_PATH) {
+    return accessClientConfigScope(query?.client);
+  }
+  return ROUTE_PATH_TO_CONFIG_SCOPE[normalized] || "";
 }
 
-export function isRouteConfigDirty(path) {
-  const scope = routePathToConfigScope(path);
+export function isRouteConfigDirty(pathOrRoute, query) {
+  const path = pathOrRoute && typeof pathOrRoute === "object"
+    ? pathOrRoute.path
+    : pathOrRoute;
+  const routeQuery = pathOrRoute && typeof pathOrRoute === "object"
+    ? pathOrRoute.query
+    : query;
+  const scope = routePathToConfigScope(path, routeQuery);
   return Boolean(scope && isConfigSectionDirty(scope));
+}
+
+export function isAccessTabDirty() {
+  return isConfigSectionDirty("cursor") || isConfigSectionDirty("gateway");
 }
 
 export function discardConfigSectionDraft(scope) {
@@ -1258,6 +1227,7 @@ export const appState = reactive({
   routingMode: cachedConfig.routing.mode,
   includeCacheWriteInHitRate: cachedConfig.homeMetrics.includeCacheWriteInHitRate,
   appearanceTheme: cachedConfig.appearance.theme,
+  effectiveAppearanceTheme: resolveEffectiveTheme(cachedConfig.appearance.theme, false),
   advertisingEnabled: cachedConfig.advertising.enabled,
   updateCheckOnStartup: cachedConfig.updates.checkOnStartup,
 
@@ -1310,8 +1280,8 @@ export const appState = reactive({
   homeMetricsLoading: false,
   homeMetricsResetting: false,
   homeMetricsError: "",
-  homeMetricsRange: "7d",
-  homeMetricsReport: { range: "7d", timezone: "UTC", summary: createEmptyHomeMetrics(), daily: [] },
+  homeMetricsRange: DEFAULT_HOME_METRICS_RANGE,
+  homeMetricsReport: createEmptyHomeMetricsReport(DEFAULT_HOME_METRICS_RANGE),
   homeMetricsReportLoading: false,
   homeMetricsReportError: "",
 
@@ -1337,18 +1307,69 @@ export const configSectionDirty = reactive({
   gateway: computed(() => isConfigSectionDirty("gateway")),
   models: computed(() => isConfigSectionDirty("models")),
   settings: computed(() => isConfigSectionDirty("settings")),
+  access: computed(() => isAccessTabDirty()),
 });
 
 export function applyAppearanceTheme(value) {
-  if (typeof document === "undefined") {
+  const effective = resolveEffectiveTheme(value, readSystemPrefersDark());
+  if (appState.effectiveAppearanceTheme !== effective) {
+    appState.effectiveAppearanceTheme = effective;
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.dataset.theme = effective;
+  }
+  syncNativeWindowBackground(effective);
+}
+
+function readSystemPrefersDark() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return Boolean(window.matchMedia("(prefers-color-scheme: dark)").matches);
+  } catch (_error) {
+    return false;
+  }
+}
+
+let lastSyncedNativeTheme = "";
+
+function syncNativeWindowBackground(effective) {
+  if (effective === lastSyncedNativeTheme) {
     return;
   }
-  document.documentElement.dataset.theme = normalizeTheme(value);
+  lastSyncedNativeTheme = effective;
+  setAppearanceTheme(effective).catch(() => {});
+}
+
+function bindSystemThemeMedia() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return;
+  }
+  let media;
+  try {
+    media = window.matchMedia("(prefers-color-scheme: dark)");
+  } catch (_error) {
+    return;
+  }
+  const onChange = () => {
+    if (normalizeTheme(appState.appearanceTheme) === "system") {
+      applyAppearanceTheme(appState.appearanceTheme);
+    }
+  };
+  if (typeof media.addEventListener === "function") {
+    media.addEventListener("change", onChange);
+    return;
+  }
+  if (typeof media.addListener === "function") {
+    media.addListener(onChange);
+  }
 }
 
 watchSyncEffect(() => {
   applyAppearanceTheme(appState.appearanceTheme);
 });
+bindSystemThemeMedia();
 
 watchSyncEffect(() => {
   if (!canUseLocalStorage()) {
@@ -1751,7 +1772,7 @@ export async function fetchAvailableModelIDs(payload) {
     .filter(Boolean);
 }
 
-export async function deleteModelAdapterAt(index) {
+export function deleteModelAdapterAt(index) {
   const nextAdapters = normalizeModelAdapters(appState.modelAdapters);
 
   if (index < 0 || index >= nextAdapters.length) {
@@ -1762,15 +1783,8 @@ export async function deleteModelAdapterAt(index) {
   }
 
   nextAdapters.splice(index, 1);
-
-  const currentConfig = await loadPersistedUserConfig();
-  return persistConfigPayload(
-    {
-      ...currentConfig,
-      modelAdapters: nextAdapters,
-    },
-    { modelAdaptersOnly: true },
-  );
+  appState.modelAdapters = normalizeModelAdapters(nextAdapters);
+  return { ok: true, error: "" };
 }
 
 export async function saveModelAdapterOrder(adapterIDs) {
@@ -1832,7 +1846,7 @@ function buildNextDisplayName(existingAdapters, sourceName) {
   return `${base}-${next}`;
 }
 
-export async function duplicateModelAdapterAt(index) {
+export function duplicateModelAdapterAt(index) {
   const nextAdapters = normalizeModelAdapters(appState.modelAdapters);
 
   if (index < 0 || index >= nextAdapters.length) {
@@ -1850,15 +1864,8 @@ export async function duplicateModelAdapterAt(index) {
   };
 
   nextAdapters.splice(index + 1, 0, duplicate);
-
-  const currentConfig = await loadPersistedUserConfig();
-  return persistConfigPayload(
-    {
-      ...currentConfig,
-      modelAdapters: nextAdapters,
-    },
-    { modelAdaptersOnly: true },
-  );
+  appState.modelAdapters = normalizeModelAdapters(nextAdapters);
+  return { ok: true, error: "" };
 }
 
 function normalizeLogCaptureStatus(source) {
@@ -1949,12 +1956,9 @@ export async function syncHomeMetricsReport(range = appState.homeMetricsRange) {
     return { ok: true, error: "", report };
   } catch (error) {
     appState.homeMetricsReportError = toUserError(error);
-    appState.homeMetricsReport = {
-      range: asString(range) || appState.homeMetricsRange || "all",
-      timezone: "UTC",
-      summary: createEmptyHomeMetrics(),
-      daily: [],
-    };
+    appState.homeMetricsReport = createEmptyHomeMetricsReport(
+      asString(range) || appState.homeMetricsRange || "all",
+    );
     return { ok: false, error: appState.homeMetricsReportError, report: appState.homeMetricsReport };
   } finally {
     appState.homeMetricsReportLoading = false;

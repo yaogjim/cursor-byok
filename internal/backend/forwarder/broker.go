@@ -2,6 +2,7 @@
 package forwarder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -114,6 +115,7 @@ func (broker *StreamBroker) OpenStream(requestID string, conversationID string, 
 		PendingCheckpointBlobWrites: make(map[uint32]string),
 		ConfirmedCheckpointBlobs:    make(map[string]struct{}),
 		FinalizedModelCallIDs:       make(map[string]struct{}),
+		StreamSource:                streamSourceRunSSE,
 		CreatedAt:                   now,
 		UpdatedAt:                   now,
 	}
@@ -390,6 +392,15 @@ func (broker *StreamBroker) Complete(requestID string, terminalCode string, term
 
 // Fail 把活动流标记为失败，并发布一个失败 endstream 事件。
 func (broker *StreamBroker) Fail(requestID string, terminalCode string, terminalMessage string) error {
+	return broker.FailEvent(requestID, StreamEvent{
+		End:                  true,
+		TerminalErrorCode:    strings.TrimSpace(terminalCode),
+		TerminalErrorMessage: strings.TrimSpace(terminalMessage),
+	})
+}
+
+// FailEvent 发布带 typed terminal 元数据的失败 endstream，不改公共 proto。
+func (broker *StreamBroker) FailEvent(requestID string, event StreamEvent) error {
 	stream, ok := broker.Get(requestID)
 	if !ok || stream == nil {
 		return fmt.Errorf("request is not active: %s", strings.TrimSpace(requestID))
@@ -400,11 +411,14 @@ func (broker *StreamBroker) Fail(requestID string, terminalCode string, terminal
 	subscriberCount := len(stream.Subscribers)
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
-	if err := broker.Publish(requestID, StreamEvent{
-		End:                  true,
-		TerminalErrorCode:    strings.TrimSpace(terminalCode),
-		TerminalErrorMessage: strings.TrimSpace(terminalMessage),
-	}); err != nil {
+	event.End = true
+	event.TerminalErrorCode = strings.TrimSpace(event.TerminalErrorCode)
+	event.TerminalErrorMessage = strings.TrimSpace(event.TerminalErrorMessage)
+	event.TerminalHTTPStatus = strings.TrimSpace(event.TerminalHTTPStatus)
+	event.TerminalErrorCategory = strings.TrimSpace(event.TerminalErrorCategory)
+	event.TerminalModelCallID = strings.TrimSpace(event.TerminalModelCallID)
+	event.TerminalRequestID = strings.TrimSpace(event.TerminalRequestID)
+	if err := broker.Publish(requestID, event); err != nil {
 		return err
 	}
 	if subscriberCount == 0 {
@@ -441,6 +455,70 @@ func (broker *StreamBroker) Cancel(requestID string, terminalMessage string) err
 		broker.scheduleTerminalCleanup(requestID)
 	}
 	return nil
+}
+
+// ActiveProviderCount 返回仍持有在途 provider 取消句柄的活动流数量。
+func (broker *StreamBroker) ActiveProviderCount() int {
+	return len(broker.activeProviderRequestIDs())
+}
+
+// WaitForIdle 等到没有在途 provider，或 ctx 结束。
+func (broker *StreamBroker) WaitForIdle(ctx context.Context) {
+	if broker == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if broker.ActiveProviderCount() == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// CancelActiveProviders 按 shutdown cause 取消剩余在途 provider，返回实际触发取消的数量。
+func (broker *StreamBroker) CancelActiveProviders(message string) int {
+	ids := broker.activeProviderRequestIDs()
+	if len(ids) == 0 {
+		return 0
+	}
+	canceled := 0
+	for _, requestID := range ids {
+		if err := broker.Cancel(requestID, message); err == nil {
+			canceled++
+		}
+	}
+	return canceled
+}
+
+func (broker *StreamBroker) activeProviderRequestIDs() []string {
+	if broker == nil {
+		return nil
+	}
+	broker.mu.RLock()
+	defer broker.mu.RUnlock()
+	ids := make([]string, 0, len(broker.streams))
+	for requestID, stream := range broker.streams {
+		if stream == nil {
+			continue
+		}
+		stream.mu.Lock()
+		active := stream.ProviderActive || stream.ProviderCancel != nil
+		terminal := isTerminalStreamStatus(stream.Status)
+		stream.mu.Unlock()
+		if active && !terminal {
+			ids = append(ids, requestID)
+		}
+	}
+	return ids
 }
 
 // firstNonEmpty 返回第一个非空白字符串。

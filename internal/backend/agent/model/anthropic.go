@@ -305,6 +305,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 
 	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
 	defer streamIdle.Stop()
+	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, requestURL, bytes.NewReader(payload))

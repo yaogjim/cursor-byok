@@ -258,6 +258,10 @@ func ClassifyProviderError(err error) string {
 }
 
 func isProviderStreamIdleTimeout(err error) bool {
+	var idle *StreamIdleTimeoutError
+	if errors.As(err, &idle) {
+		return true
+	}
 	if err == nil {
 		return false
 	}

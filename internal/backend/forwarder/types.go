@@ -130,10 +130,15 @@ const (
 )
 
 type StreamEvent struct {
-	Message              *agentv1.AgentServerMessage
-	End                  bool
-	TerminalErrorCode    string
-	TerminalErrorMessage string
+	Message               *agentv1.AgentServerMessage
+	End                   bool
+	TerminalErrorCode     string
+	TerminalErrorMessage  string
+	TerminalRetryable     *bool
+	TerminalHTTPStatus    string
+	TerminalErrorCategory string
+	TerminalModelCallID   string
+	TerminalRequestID     string
 }
 
 type StreamSubscriber struct {
@@ -185,9 +190,25 @@ type ActiveStream struct {
 	ProviderFinishReason                        string
 	ProviderUsage                               turnUsageSnapshot
 	ProviderStreamStats                         ProviderStreamStats
+	ProviderStreamDiagnostics                   *modeladapter.StreamDiagnostics
 	ProviderTerminalRecorded                    bool
 	FinalizedModelCallIDs                       map[string]struct{}
 	ProviderTerminalToolInvocation              bool
+	StreamSource                                string
+	TurnProviderStartedAt                       time.Time
+	ContinuationIndex                           int
+	ContinuedFromModelCallID                    string
+	ContinuationSpawned                         bool
+	ContinuationParentText                      string
+	ContinuationParentReasoning                 string
+	ContinuationOverlapWindow                   int
+	ContinuationOverlapResolved                 bool
+	ContinuationOverlapMismatch                 bool
+	ContinuationRemainderText                   string
+	ContinuationRemainderReasoning              string
+	ContinuationNewVisibleBytes                 int
+	ContinuationDeadline                        time.Time
+	ContinuationAbortReason                     string
 	PendingCompaction                           *PendingCompaction
 	PendingCheckpointBlobWrites                 map[uint32]string
 	ConfirmedCheckpointBlobs                    map[string]struct{}
@@ -264,6 +285,11 @@ type checkpointTerminalAction struct {
 	ErrorCode                 string
 	ErrorMessage              string
 	AcknowledgeSubagentRunIDs []string
+	Retryable                 *bool
+	HTTPStatus                string
+	ErrorCategory             string
+	ModelCallID               string
+	RequestID                 string
 }
 
 type pendingCheckpointPublish struct {
@@ -296,34 +322,44 @@ type PendingCompaction struct {
 }
 
 type ProviderStreamStats struct {
-	Provider               string
-	Model                  string
-	Attempt                int
-	HTTPAttempt            int
-	HTTPStatus             string
-	Attribution            string
-	CompletionMarker       bool
-	ModelEventCount        int
-	ChunkCount             int
-	VisibleTextBytes       int
-	ReasoningBytes         int
-	PartialToolCount       int
-	CompletedToolCount     int
-	DispatchedToolCount    int
-	ToolDispatchState      string
-	DownstreamPublished    bool
-	PotentialSideEffect    string
-	FirstEventAt           time.Time
-	StartedAt              time.Time
-	FinishedAt             time.Time
-	StreamDuration         time.Duration
-	Retryable              string
-	RetryReason            string
-	RetrySuppressionReason string
-	ProtocolFinalStatus    string
-	ModelCallFinalStatus   string
-	FailureStage           string
-	ErrorCategory          string
+	Provider                 string
+	Model                    string
+	Attempt                  int
+	HTTPAttempt              int
+	HTTPStatus               string
+	Attribution              string
+	CompletionMarker         bool
+	ModelEventCount          int
+	ChunkCount               int
+	VisibleTextBytes         int
+	ReasoningBytes           int
+	PartialToolCount         int
+	CompletedToolCount       int
+	DispatchedToolCount      int
+	ToolDispatchState        string
+	DownstreamPublished      bool
+	PotentialSideEffect      string
+	FirstEventAt             time.Time
+	HeaderAt                 time.Time
+	FirstByteAt              time.Time
+	LastByteAt               time.Time
+	BodyEndAt                time.Time
+	LastEffectiveContentAt   time.Time
+	CloseCause               string
+	PartialBoundary          string
+	TransportOutcome         string
+	StartedAt                time.Time
+	FinishedAt               time.Time
+	StreamDuration           time.Duration
+	Retryable                string
+	RetryReason              string
+	RetrySuppressionReason   string
+	ProtocolFinalStatus      string
+	ModelCallFinalStatus     string
+	FailureStage             string
+	ErrorCategory            string
+	ContinuedFromModelCallID string
+	ContinuationIndex        int
 }
 
 type ProviderRequest struct {
@@ -343,6 +379,7 @@ type ProviderRequest struct {
 	Observer            modeladapter.LLMArtifactObserver
 	ArtifactPaths       *modeladapter.LLMArtifactPaths
 	RequestBodyOverride map[string]any
+	StreamDiagnostics   *modeladapter.StreamDiagnostics
 }
 
 type ProviderGateway interface {

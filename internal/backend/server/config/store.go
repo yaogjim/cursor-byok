@@ -133,7 +133,7 @@ func (store *Store) SaveUserConfig(_ context.Context, cfg Config) (Config, error
 	}
 	merged := OverlayGatewayToken(cfg, disk.Gateway.Token)
 	merged.LastAgentModelHash = disk.LastAgentModelHash
-	normalized, err := NormalizeConfig(merged)
+	normalized, err := normalizeConfig(merged, disk.ModelAdapters)
 	if err != nil {
 		return Config{}, err
 	}
@@ -190,7 +190,7 @@ func (store *Store) SaveModelAdapters(_ context.Context, adapters []ModelAdapter
 	}
 	merged := disk
 	merged.ModelAdapters = adapters
-	normalized, err := NormalizeConfig(merged)
+	normalized, err := normalizeConfig(merged, disk.ModelAdapters)
 	if err != nil {
 		return Config{}, err
 	}

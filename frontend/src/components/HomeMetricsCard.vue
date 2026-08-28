@@ -246,60 +246,63 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
 
 <template>
   <div>
-    <div class="flex flex-col gap-4">
-      <div class="flex items-center justify-between gap-4 h-[42px]">
-        <div v-if="!hasHomeAd" class="flex flex-col gap-1 w-[200px] shrink-0">
-          <h2 class="text-[14px] font-medium text-[var(--color-text-secondary)]">会话统计</h2>
+    <div class="flex flex-col gap-3">
+      <div class="page-title-row">
+        <div class="page-title-block">
+          <h2 class="page-title">使用分析</h2>
         </div>
-        <div v-else class="grid min-w-0  grid-cols-3 gap-2 shrink-0">
+        <div
+          class="flex min-w-0 flex-wrap items-center justify-end gap-2"
+        >
           <div
-            v-for="ad in normalizedHomeAds"
-            :key="ad.id"
-            style="font-family: var(--font-num)"
-            class="center-row h-[42px] min-w-0 cursor-pointer gap-[8px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] px-[8px] pr-[10px] text-left transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
-            role="button"
-            tabindex="0"
-            :title="ad.subtitle ? `${ad.title}\n${ad.subtitle}` : ad.title"
-            @click="emit('open-ad', ad.id)"
-            @keydown.enter.prevent="emit('open-ad', ad.id)"
-            @keydown.space.prevent="emit('open-ad', ad.id)"
+            v-if="hasHomeAd"
+            class="grid min-w-0 grid-cols-3 gap-2"
           >
             <div
-              class="center-row h-[20px] w-[20px] shrink-0 justify-center text-[20px] text-amber-400"
+              v-for="ad in normalizedHomeAds"
+              :key="ad.id"
+              style="font-family: var(--font-num)"
+              class="center-row h-[42px] min-w-0 cursor-pointer gap-[8px] rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)] px-[8px] pr-[10px] text-left transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50"
+              role="button"
+              tabindex="0"
+              :title="ad.subtitle ? `${ad.title}\n${ad.subtitle}` : ad.title"
+              @click="emit('open-ad', ad.id)"
+              @keydown.enter.prevent="emit('open-ad', ad.id)"
+              @keydown.space.prevent="emit('open-ad', ad.id)"
             >
-              <span class="icon-[cil--badge]"></span>
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="truncate text-[13px] font-medium leading-[16px] text-[var(--color-text)]">
-                {{ ad.title }}
-              </div>
               <div
-                v-if="ad.subtitle"
-                class="mt-[2px] center-row min-w-0 gap-[2px] text-[11px] leading-[12px] text-[var(--color-text-secondary)]"
+                class="center-row h-[20px] w-[20px] shrink-0 justify-center text-[20px] text-amber-400"
               >
-                <span class="truncate">{{ ad.subtitle }}</span>
+                <span class="icon-[cil--badge]"></span>
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-[13px] font-semibold leading-[16px] text-[var(--color-text)]">
+                  {{ ad.title }}
+                </div>
+                <div
+                  v-if="ad.subtitle"
+                  class="mt-[2px] center-row min-w-0 gap-[2px] text-[11px] leading-[12px] text-[var(--color-text-secondary)]"
+                >
+                  <span class="truncate">{{ ad.subtitle }}</span>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-        <div
-          class="flex-1 center-row justify-end shrink-0 gap-2 text-xs text-[var(--color-text-muted)] pr-4 w-[200px]"
-        >
           <button
             type="button"
-            class="center-row justify-center h-[24px] w-[24px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
+            class="center-row h-8 w-8 justify-center rounded-[9px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="loading || resetting"
             :title="loading ? '刷新中' : '刷新统计'"
             @click="emit('refresh')"
           >
             <span
-              class="icon-[mdi--refresh] text-[14px]"
+              class="icon-[mdi--refresh] text-[16px]"
               :class="{ '!animate-spin': loading }"
             ></span>
           </button>
           <button
             type="button"
-            class="center-row justify-center h-[24px] px-[8px] rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] text-[12px] text-[var(--color-text-secondary)] transition-colors duration-150 hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-60"
+            class="btn-risk center-row h-8 justify-center rounded-[9px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[12px] font-semibold text-[var(--color-text-secondary)] transition-colors duration-150 hover:text-[var(--color-error-text)] disabled:cursor-not-allowed disabled:opacity-60"
             :disabled="loading || resetting"
             :title="resetting ? '重置中' : '重置统计'"
             @click="emit('reset')"
@@ -309,11 +312,12 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
         </div>
       </div>
 
-      <div
-        class="mt-[-4px] grid grid-cols-2 min-[1100px]:grid-cols-5 gap-px overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-border)]"
-      >
-        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+      <div class="ui-card ui-card--flush">
+        <div
+          class="ui-card-body grid grid-cols-2 gap-4 min-[900px]:grid-cols-5"
+        >
+        <div class="flex min-h-0 min-w-0 flex-col justify-between gap-1">
+          <div class="center-row justify-start gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
             <span>缓存命中率</span>
             <Tooltip>
               <div class="w-[280px] space-y-3">
@@ -340,20 +344,20 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           <CacheHitRateChart :rate="selectedCacheHitRate" />
         </div>
 
-        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+        <div class="flex min-h-0 min-w-0 flex-col justify-between gap-1">
+          <div class="center-row justify-start gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
             <span>对话轮次</span>
             <Tooltip :content="turnsTooltipContent" />
           </div>
           <div>
             <div
-              class="text-[30px] leading-none text-[var(--color-text)]"
+              class="metric-value"
               style="font-family: var(--font-num)"
               :title="formatInteger(metrics.turnsTotal)"
             >
               {{ formatCompactInteger(metrics.turnsTotal) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            <div class="mt-1 text-[11px] leading-4 text-[var(--color-text-faint)]">
               有效
               <span :title="formatInteger(metrics.validTurnsTotal)">
                 {{ formatCompactInteger(metrics.validTurnsTotal) }}
@@ -366,39 +370,39 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           </div>
         </div>
 
-        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+        <div class="flex min-h-0 min-w-0 flex-col justify-between gap-1">
+          <div class="center-row justify-start gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
             <span>LLM 调用</span>
             <Tooltip :content="providerCallsTooltipContent" />
           </div>
           <div>
             <div
-              class="truncate text-[30px] leading-none text-[var(--color-text)]"
+              class="metric-value truncate"
               style="font-family: var(--font-num)"
               :title="formatInteger(metrics.providerCallsTotal)"
             >
               {{ formatCompactInteger(metrics.providerCallsTotal) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            <div class="mt-1 text-[11px] leading-4 text-[var(--color-text-faint)]">
               上游调用次数
             </div>
           </div>
         </div>
 
-        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+        <div class="flex min-h-0 min-w-0 flex-col justify-between gap-1">
+          <div class="center-row justify-start gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
             <span>Token 消耗</span>
             <Tooltip :content="tokensTooltipContent" />
           </div>
           <div>
             <div
-              class="truncate text-[30px] leading-none text-[var(--color-text)]"
+              class="metric-value truncate"
               style="font-family: var(--font-num)"
               :title="formatInteger(metrics.requestTokensTotal)"
             >
               {{ formatCompactInteger(metrics.requestTokensTotal) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            <div class="mt-1 text-[11px] leading-4 text-[var(--color-text-faint)]">
               Prompt
               <span :title="formatInteger(metrics.promptTokensTotal)">
                 {{ formatCompactInteger(metrics.promptTokensTotal) }}
@@ -407,20 +411,20 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
           </div>
         </div>
 
-        <div class="min-h-[120px] min-w-0 bg-[var(--color-surface)] px-4 py-4 flex flex-col justify-between">
-          <div class="center-row justify-start gap-1 text-xs text-[var(--color-text-muted)]">
+        <div class="flex min-h-0 min-w-0 flex-col justify-between gap-1">
+          <div class="center-row justify-start gap-1 text-[11px] font-semibold text-[var(--color-text-muted)]">
             <span>价值估算</span>
             <Tooltip :content="costTooltipContent" />
           </div>
           <div>
             <div
-              class="truncate text-[30px] leading-none text-[var(--color-text)]"
+              class="metric-value is-brand truncate"
               style="font-family: var(--font-num)"
               :title="formatUSD(estimatedTokenCost.total)"
             >
               {{ formatUSD(estimatedTokenCost.total) }}
             </div>
-            <div class="mt-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            <div class="mt-1 text-[11px] leading-4 text-[var(--color-text-faint)]">
               缓存读写
               <span :title="formatUSD(estimatedTokenCost.cacheRead + estimatedTokenCost.cacheWrite)">
                 {{ formatUSD(estimatedTokenCost.cacheRead + estimatedTokenCost.cacheWrite) }}
@@ -431,9 +435,20 @@ const hasHomeAd = computed(() => normalizedHomeAds.value.length > 0);
       </div>
       <div
         v-if="error"
-        class="rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs text-[var(--color-error-text)]"
+        class="px-[var(--card-pad)] pb-3"
       >
-        {{ error }}
+        <div
+          class="rounded-[10px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs text-[var(--color-error-text)]"
+        >
+          {{ error }}
+        </div>
+      </div>
+      <div
+        v-if="$slots.analytics"
+        class="border-t border-[var(--color-border)] px-[var(--card-pad)] py-4"
+      >
+        <slot name="analytics" />
+      </div>
       </div>
     </div>
   </div>

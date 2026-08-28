@@ -515,5 +515,6 @@ func normalizeSettings(settings Settings) Settings {
 	settings.Metadata.BuildID = strings.TrimSpace(settings.Metadata.BuildID)
 	settings.Metadata.Platform = strings.TrimSpace(settings.Metadata.Platform)
 	settings.Metadata.ConfigFingerprint = strings.TrimSpace(settings.Metadata.ConfigFingerprint)
+	settings.RuntimeFingerprint = strings.TrimSpace(settings.RuntimeFingerprint)
 	return settings
 }

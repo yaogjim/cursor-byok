@@ -55,7 +55,7 @@ function toggleVisibility() {
       :type="inputType"
       :placeholder="placeholder"
       :disabled="disabled"
-      class="h-9 w-full rounded-[6px] border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-60"
+      class="h-10 w-full rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 text-sm text-[var(--color-text)] outline-none transition-colors placeholder:text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)] focus:border-[var(--color-primary)] focus:shadow-[0_0_0_3px_var(--color-success-bg)] disabled:cursor-not-allowed disabled:bg-[var(--color-surface-muted)] disabled:opacity-60"
       :class="canToggleVisibility ? 'pr-10' : ''"
       @input="handleInput"
     />

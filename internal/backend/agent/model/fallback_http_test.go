@@ -305,6 +305,9 @@ func TestFallbackHTTPCoverageTransportAnd503(t *testing.T) {
 		{name: "504", startFail: func(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			return startOpenAIScript(t, []httpScriptStep{{status: http.StatusGatewayTimeout}})
 		}},
+		{name: "524", startFail: func(t *testing.T) (*httptest.Server, *atomic.Int32) {
+			return startOpenAIScript(t, []httpScriptStep{{status: HTTPStatusCloudflareTimeout}})
+		}},
 		{name: "transport", startFail: startOpenAITransportReset},
 	}
 	for _, test := range cases {
@@ -464,6 +467,30 @@ func TestFallbackHTTP500RetriesSameChannelButNeverSwitches(t *testing.T) {
 	}
 	if primaryHits.Load() != 3 {
 		t.Fatalf("primary 500 retries = %d, want 3", primaryHits.Load())
+	}
+	if candidateHits.Load() != 0 {
+		t.Fatalf("candidate hits = %d, want 0", candidateHits.Load())
+	}
+}
+
+func TestFallbackHTTP529NeverRetriesOrSwitches(t *testing.T) {
+	primary, primaryHits := startOpenAIScript(t, []httpScriptStep{{status: 529}})
+	candidate, candidateHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
+	plan := &legacyruntime.ChannelPlan{
+		Channels: []legacyruntime.ResolvedChannel{
+			openaiHTTPChannel("ch-a", primary),
+			openaiHTTPChannel("ch-b", candidate),
+		},
+		FallbackEnabled: true,
+		MaxHttpAttempts: 5,
+		MaxWaitSeconds:  8,
+	}
+	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
+	if err == nil {
+		t.Fatal("expected HTTP 529 to remain terminal for the chain")
+	}
+	if primaryHits.Load() != 1 {
+		t.Fatalf("primary 529 hits = %d, want 1", primaryHits.Load())
 	}
 	if candidateHits.Load() != 0 {
 		t.Fatalf("candidate hits = %d, want 0", candidateHits.Load())

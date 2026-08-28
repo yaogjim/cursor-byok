@@ -142,6 +142,9 @@ type StreamRequest struct {
 	RequestBodyOverride map[string]any
 	// ProviderStreamIdleTimeout 表示 provider 流式响应无有效内容时的空闲超时。
 	ProviderStreamIdleTimeout time.Duration
+	// StreamDiagnostics 收集本次 HTTP 流的可选 header/body 时间线与 close_cause。
+	// nil 表示调用方不需要回读；适配器仍可分配局部实例。
+	StreamDiagnostics *StreamDiagnostics
 	// FallbackMaxAttempts 表示 FallbackAwareRouter 分配给当前渠道的最大尝试次数（共享预算）。
 	// 0 表示使用适配器默认值（providerRequestMaxAttempts）。非零值将覆盖适配器默认 maxAttempts，
 	// 以确保所有渠道共用同一总 attempt 预算，防止 fallback 链无限放大重试次数。

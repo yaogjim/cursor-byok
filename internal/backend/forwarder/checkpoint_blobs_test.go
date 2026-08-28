@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
+	"cursor/internal/observability"
 )
 
 func TestCheckpointAcknowledgesSubagentOnlyAfterCheckpointPublished(t *testing.T) {
@@ -165,6 +166,57 @@ func TestCheckpointBlobTimeoutDoesNotFailSuccessfulTurn(t *testing.T) {
 	}
 	if checkpoint || !turnEnded || !successfulEnd {
 		t.Fatalf("timeout events checkpoint=%v turn_ended=%v successful_end=%v", checkpoint, turnEnded, successfulEnd)
+	}
+}
+
+func TestCheckpointBlobTimeoutEmitsDegradedEventWithoutFailingTurn(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(service.debug.Close)
+	completion := &pendingTurnCompletion{
+		RequestID: stream.RequestID,
+		Usage:     turnUsageSnapshot{InputTokens: 11, OutputTokens: 7},
+	}
+	if err := service.queueCheckpointProjection(stream, projection, completion); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	if err := service.handleCheckpointBlobTimeout(stream); err != nil {
+		t.Fatalf("handleCheckpointBlobTimeout() error = %v", err)
+	}
+
+	events := readCheckpointTestEvents(t, service, stream)
+	var turnEnded, successfulEnd bool
+	for _, event := range events {
+		turnEnded = turnEnded || event.Message.GetInteractionUpdate().GetTurnEnded() != nil
+		successfulEnd = successfulEnd || event.End && event.TerminalErrorCode == ""
+	}
+	if !turnEnded || !successfulEnd {
+		t.Fatalf("timeout still has to complete the turn: turn_ended=%v successful_end=%v", turnEnded, successfulEnd)
+	}
+
+	var skipped observability.Capture
+	for _, item := range capture.captures {
+		if item.Event.Event == "checkpoint_blob_sync_skipped" {
+			skipped = item
+		}
+	}
+	if skipped.Event.Event == "" {
+		t.Fatalf("missing checkpoint skip event: %+v", capture.captures)
+	}
+	if skipped.Event.Status != "degraded" || skipped.Event.SemanticOutcome != observability.OutcomeDegraded {
+		t.Fatalf("skip event = %+v", skipped.Event)
+	}
+	if skipped.Event.Fields["kind"] != "blob_sync" || skipped.Event.Fields["skip_reason"] != "blob_sync" || skipped.Event.Fields["error_summary"] == nil {
+		t.Fatalf("skip event fields = %#v", skipped.Event.Fields)
+	}
+	keys, _ := skipped.Event.Fields["missing_blob_keys"].([]string)
+	if len(keys) == 0 || skipped.Event.Fields["missing_blob_key_count"] != len(keys) {
+		t.Fatalf("missing blob keys not recorded: %#v", skipped.Event.Fields)
+	}
+	raw, _ := skipped.Payload.Data.(map[string]any)
+	if raw["request_id"] != stream.RequestID || raw["conversation_id"] != stream.ConversationID {
+		t.Fatalf("skip payload lost query fields: %#v", raw)
 	}
 }
 

@@ -1,4 +1,4 @@
-const SUPPORTED_THEMES = new Set(["light", "dark"]);
+const SUPPORTED_THEMES = new Set(["light", "dark", "system"]);
 const SUPPORTED_OBSERVABILITY_MODES = new Set(["off", "basic", "full"]);
 
 export const DEFAULT_OBSERVABILITY_CONFIG = Object.freeze({
@@ -62,9 +62,20 @@ function asBoolean(value) {
   return ["true", "1", "yes"].includes(asString(value).toLowerCase());
 }
 
-function normalizeTheme(value) {
+export function normalizeTheme(value) {
   const theme = asString(value).toLowerCase();
   return SUPPORTED_THEMES.has(theme) ? theme : DEFAULT_CLIENT_PREFERENCES.appearance.theme;
+}
+
+export function resolveEffectiveTheme(value, prefersDark = false) {
+  const theme = normalizeTheme(value);
+  if (theme === "dark") {
+    return "dark";
+  }
+  if (theme === "system") {
+    return prefersDark ? "dark" : "light";
+  }
+  return "light";
 }
 
 function boundedInteger(value, fallback, { min, max }) {
@@ -251,13 +262,6 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
   return "";
 }
 
-export function stripDerivedModelAdapterIDs(source) {
-  return (Array.isArray(source) ? source : []).map((adapter) => {
-    const { id: _id, ...rest } = adapter && typeof adapter === "object" ? adapter : {};
-    return rest;
-  });
-}
-
 export function prepareModelAdaptersForPersist(source, validate = validateProviderFallbackAdapters) {
   const adaptersWithIds = (Array.isArray(source) ? source : []).map((adapter) => (
     adapter && typeof adapter === "object" ? { ...adapter } : {}
@@ -275,7 +279,9 @@ export function prepareModelAdaptersForPersist(source, validate = validateProvid
     ok: true,
     error: "",
     adaptersWithIds,
-    payloadAdapters: stripDerivedModelAdapterIDs(adaptersWithIds),
+    // The backend uses the last persisted id as an identity hint while
+    // recomputing derived channel IDs. New adapters keep an empty id.
+    payloadAdapters: adaptersWithIds,
   };
 }
 

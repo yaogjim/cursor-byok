@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -404,14 +405,6 @@ func observeGoproxyLog(capture captureRecorder, sessions *connectSessionStore, m
 	return observation, true
 }
 
-func observeHTTPServerLog(capture captureRecorder, msg string) {
-	observation, ok := parseHTTPServerTLSLog(msg)
-	if !ok {
-		return
-	}
-	recordMitmCapture(capture, context.Background(), handshakeEvent(observation, nil))
-}
-
 func handshakeEvent(observation handshakeObservation, state *connectState) observability.Event {
 	classified := classifyHandshake(observation)
 	hostname, port := splitConnectHostPort(observation.Host)
@@ -452,9 +445,46 @@ func handshakeEvent(observation handshakeObservation, state *connectState) obser
 		Status:              "error",
 		SemanticOutcome:     observability.OutcomeFailed,
 		ImplementationState: observability.ImplementationImplemented,
+		Severity:            handshakeSeverity(classified.ErrorCategory),
 		ErrorCategory:       classified.ErrorCategory,
 		Fields:              mitmFields(fields),
 	}
+}
+
+func handshakeSeverity(category string) string {
+	if isClientHandshakeNoise(category) {
+		return observability.SeverityWarning
+	}
+	return observability.SeverityError
+}
+
+func isClientHandshakeNoise(category string) bool {
+	switch strings.TrimSpace(category) {
+	case errorClientUnknownCA, errorHandshakeMismatch, errorClientTLSHandshakeFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func classifyMITMRequest(path string) (capability, operation, implementation string) {
+	capability = ClassifyCapability(path)
+	operation = ClassifyOperation(capability)
+	implementation = observability.ImplementationImplemented
+	if ClassifyTraffic("", "", path) == TrafficClassUnknown {
+		implementation = observability.ImplementationUnknown
+	}
+	return capability, operation, implementation
+}
+
+func forwardFinishSeverity(statusCode int, unavailable bool) string {
+	if unavailable || statusCode >= http.StatusInternalServerError {
+		return observability.SeverityError
+	}
+	if statusCode >= http.StatusBadRequest {
+		return observability.SeverityWarning
+	}
+	return observability.SeverityInfo
 }
 
 func backendForwardFields(incomingHost, method, path, action string, state *connectState, extra map[string]any) map[string]any {

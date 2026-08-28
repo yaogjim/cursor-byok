@@ -143,6 +143,9 @@ func TestHTTPTraceReplacesPrematureBackgroundCorrelation(t *testing.T) {
 	if bidiEvent.TraceID != authoritative.TraceID || providerEvent.TraceID != authoritative.TraceID {
 		t.Fatalf("authoritative trace was not retained: bidi=%+v provider=%+v", bidiEvent, providerEvent)
 	}
+	if bidiEvent.DecodeError {
+		t.Fatal("accepted bidi_raw set decode_error")
+	}
 	if providerEvent.HTTPRequestID != authoritative.HTTPRequestID {
 		t.Fatalf("provider HTTP correlation = %q, want %q", providerEvent.HTTPRequestID, authoritative.HTTPRequestID)
 	}

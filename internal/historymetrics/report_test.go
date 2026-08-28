@@ -35,9 +35,24 @@ func TestSelectDailyRangeFillsMissingDays(t *testing.T) {
 	}
 }
 
+func TestSelectDailyRange24hReturnsEmpty(t *testing.T) {
+	now := time.Date(2026, 8, 26, 15, 4, 0, 0, time.UTC)
+	items := []DailySummary{{Date: "2026-08-26", ProviderCalls: 5}}
+	got := SelectDailyRange(items, "24h", now)
+	if len(got) != 0 {
+		t.Fatalf("24h daily select = %+v, want empty", got)
+	}
+}
+
 func TestNormalizeRange(t *testing.T) {
 	if NormalizeRange("30D") != "30d" {
 		t.Fatalf("30D = %q", NormalizeRange("30D"))
+	}
+	if NormalizeRange("24H") != "24h" {
+		t.Fatalf("24H = %q", NormalizeRange("24H"))
+	}
+	if NormalizeRange("7d") != "7d" {
+		t.Fatalf("7d = %q", NormalizeRange("7d"))
 	}
 	if NormalizeRange("custom") != "all" {
 		t.Fatalf("custom = %q", NormalizeRange("custom"))

@@ -4,6 +4,8 @@ import (
 	"net"
 	"strings"
 	"unicode"
+
+	"cursor/internal/observability"
 )
 
 const (
@@ -66,6 +68,15 @@ func ClassifyTraffic(host, method, path string) string {
 	default:
 		return TrafficClassUnknown
 	}
+}
+
+// ClassifyCapability 仅识别可聚合的 SCM/FSSync/repository 路径；其余保持 unknown，避免发明能力。
+func ClassifyCapability(path string) string {
+	return observability.ClassifyRequestCapability(observabilityPath(path))
+}
+
+func ClassifyOperation(capability string) string {
+	return observability.ClassifyRequestOperation(capability, "transport.forward")
 }
 
 func observabilityPath(path string) string {

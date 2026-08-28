@@ -1,9 +1,11 @@
 package forwarder
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,10 +32,19 @@ func successfulCheckpointTerminalAction(completion *pendingTurnCompletion) check
 }
 
 func failedCheckpointTerminalAction(errorCode string, errorMessage string) checkpointTerminalAction {
+	return failedCheckpointTerminalActionWithMeta(errorCode, errorMessage, checkpointTerminalAction{})
+}
+
+func failedCheckpointTerminalActionWithMeta(errorCode string, errorMessage string, meta checkpointTerminalAction) checkpointTerminalAction {
 	return checkpointTerminalAction{
-		Kind:         checkpointTerminalActionFail,
-		ErrorCode:    strings.TrimSpace(errorCode),
-		ErrorMessage: strings.TrimSpace(errorMessage),
+		Kind:          checkpointTerminalActionFail,
+		ErrorCode:     strings.TrimSpace(errorCode),
+		ErrorMessage:  strings.TrimSpace(errorMessage),
+		Retryable:     meta.Retryable,
+		HTTPStatus:    strings.TrimSpace(meta.HTTPStatus),
+		ErrorCategory: strings.TrimSpace(meta.ErrorCategory),
+		ModelCallID:   strings.TrimSpace(meta.ModelCallID),
+		RequestID:     strings.TrimSpace(meta.RequestID),
 	}
 }
 
@@ -52,6 +63,11 @@ func mergeCheckpointTerminalAction(existing checkpointTerminalAction, incoming c
 		merged.Completion = incoming.Completion
 		merged.ErrorCode = incoming.ErrorCode
 		merged.ErrorMessage = incoming.ErrorMessage
+		merged.Retryable = incoming.Retryable
+		merged.HTTPStatus = incoming.HTTPStatus
+		merged.ErrorCategory = incoming.ErrorCategory
+		merged.ModelCallID = incoming.ModelCallID
+		merged.RequestID = incoming.RequestID
 	}
 	seen := make(map[string]struct{}, len(existing.AcknowledgeSubagentRunIDs)+len(incoming.AcknowledgeSubagentRunIDs))
 	merged.AcknowledgeSubagentRunIDs = nil
@@ -230,6 +246,7 @@ func (service *Service) publishReadyCheckpoint(stream *ActiveStream) error {
 	if err := service.broker.Publish(stream.RequestID, StreamEvent{Message: buildCheckpointMessage(state)}); err != nil {
 		if terminal.Kind != checkpointTerminalActionNone {
 			log.Printf("forwarder checkpoint publish skipped before terminal request_id=%s err=%v", stream.RequestID, err)
+			service.recordCheckpointSkip(stream, "checkpoint_publish_skipped", "publish_before_terminal", err, nil)
 			return service.finishCheckpointTerminalAction(stream, terminal)
 		}
 		return err
@@ -269,6 +286,7 @@ func (service *Service) finishAfterCheckpointSyncFailure(stream *ActiveStream, c
 	}
 	stream.mu.Lock()
 	pending := stream.PendingCheckpoint
+	missingKeys := checkpointMissingBlobKeys(stream.PendingCheckpointBlobWrites)
 	stream.PendingCheckpoint = nil
 	stream.PendingCheckpointBlobWrites = make(map[uint32]string)
 	stream.UpdatedAt = time.Now().UTC()
@@ -276,6 +294,7 @@ func (service *Service) finishAfterCheckpointSyncFailure(stream *ActiveStream, c
 	clearStreamTimer(stream, providerTimerKey(streamTimerCheckpointBlobs, ""))
 	if cause != nil {
 		log.Printf("forwarder checkpoint blob sync skipped request_id=%s conversation_id=%s err=%v", stream.RequestID, stream.ConversationID, cause)
+		service.recordCheckpointSkip(stream, "checkpoint_blob_sync_skipped", "blob_sync", cause, missingKeys)
 	}
 	if pending != nil {
 		return service.finishCheckpointTerminalAction(stream, pending.Terminal)
@@ -288,7 +307,7 @@ func (service *Service) finishCheckpointTerminalAction(stream *ActiveStream, ter
 	case checkpointTerminalActionComplete:
 		return service.finishSuccessfulTurnAfterCheckpoint(stream, terminal.Completion)
 	case checkpointTerminalActionFail:
-		return service.finishFailedTurnAfterCheckpoint(stream, terminal.ErrorCode, terminal.ErrorMessage)
+		return service.finishFailedTurnAfterCheckpoint(stream, terminal)
 	default:
 		return nil
 	}
@@ -307,4 +326,45 @@ func (service *Service) discardPendingCheckpoint(stream *ActiveStream, reason st
 	if strings.TrimSpace(reason) != "" {
 		log.Printf("forwarder pending checkpoint discarded request_id=%s conversation_id=%s reason=%s", stream.RequestID, stream.ConversationID, strings.TrimSpace(reason))
 	}
+}
+
+func (service *Service) recordCheckpointSkip(stream *ActiveStream, eventName string, reason string, cause error, missingBlobKeys []string) {
+	if service == nil || stream == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	fields := map[string]any{
+		"status":      "degraded",
+		"kind":        reason,
+		"skip_reason": reason,
+	}
+	if cause != nil {
+		fields["error_summary"] = cause.Error()
+	}
+	if len(missingBlobKeys) > 0 {
+		fields["missing_blob_keys"] = append([]string(nil), missingBlobKeys...)
+		fields["missing_blob_key_count"] = len(missingBlobKeys)
+	}
+	service.debug.LogRuntime(context.Background(), stream.RequestID, stream.ConversationID, eventName, fields)
+}
+
+func checkpointMissingBlobKeys(writes map[uint32]string) []string {
+	if len(writes) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(writes))
+	keys := make([]string, 0, len(writes))
+	for _, key := range writes {
+		encoded := hex.EncodeToString([]byte(key))
+		if encoded == "" {
+			continue
+		}
+		if _, ok := seen[encoded]; ok {
+			continue
+		}
+		seen[encoded] = struct{}{}
+		keys = append(keys, encoded)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -7,8 +7,20 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 143,
+          "line": 178,
           "column": 13
+        }
+      ]
+    },
+    "013d2b8a8b3c31d0": {
+      "source": "界面偏好、启动窗口、广告与更新",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 139,
+          "column": 35
         }
       ]
     },
@@ -36,8 +48,32 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1510,
+          "line": 1531,
           "column": 14
+        }
+      ]
+    },
+    "0233358be914258a": {
+      "source": "仅检查版本；下载和安装仍需分别确认",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 201,
+          "column": 17
+        }
+      ]
+    },
+    "02d9c9ac80b45090": {
+      "source": "运行控制",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 228,
+          "column": 33
         }
       ]
     },
@@ -48,20 +84,8 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 44,
+          "line": 57,
           "column": 11
-        }
-      ]
-    },
-    "0388ba06d111b09c": {
-      "source": "客户端接入信息",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 265,
-          "column": 34
         }
       ]
     },
@@ -72,8 +96,73 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 548,
+          "line": 555,
           "column": 21
+        }
+      ]
+    },
+    "03d58f068113a2ef": {
+      "source": "Token 使用趋势，Input {0}，Output {1}，命中率使用独立百分比轴",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 36,
+          "column": 10
+        }
+      ]
+    },
+    "03de24ff233055c6": {
+      "source": "达到天数或容量上限时按策略清理旧日志。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 293,
+          "column": 1
+        }
+      ]
+    },
+    "03f3f19dee6f4b35": {
+      "source": "深度集成 · 尚未支持",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 42,
+          "column": 11
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 52,
+          "column": 11
+        }
+      ]
+    },
+    "04062edb583b7c39": {
+      "source": "已同步",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 65,
+          "column": 26
+        }
+      ]
+    },
+    "046c7f479e7224ae": {
+      "source": "保存基本设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 42,
+          "column": 54
         }
       ]
     },
@@ -86,11 +175,6 @@
           "file": "src/views/Config.vue",
           "line": 132,
           "column": 1
-        },
-        {
-          "file": "src/views/CursorView.vue",
-          "line": 129,
-          "column": 1
         }
       ]
     },
@@ -101,8 +185,8 @@
       "refs": [
         {
           "file": "src/views/CursorView.vue",
-          "line": 142,
-          "column": 13
+          "line": 140,
+          "column": 14
         }
       ]
     },
@@ -113,7 +197,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 511,
+          "line": 523,
           "column": 14
         }
       ]
@@ -125,8 +209,13 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 500,
-          "column": 138
+          "line": 631,
+          "column": 153
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 703,
+          "column": 153
         }
       ]
     },
@@ -137,12 +226,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 645,
+          "line": 652,
           "column": 15
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 673,
+          "line": 680,
           "column": 15
         }
       ]
@@ -154,8 +243,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 87,
+          "line": 103,
           "column": 12
+        }
+      ]
+    },
+    "05d2c56c656588de": {
+      "source": "关闭后不拉取广告，也不显示广告位与弹窗",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 189,
+          "column": 17
         }
       ]
     },
@@ -178,7 +279,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 82,
+          "line": 117,
           "column": 14
         }
       ]
@@ -195,8 +296,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 230,
-          "column": 13
+          "line": 153,
+          "column": 15
         }
       ]
     },
@@ -207,13 +308,56 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 74,
-          "column": 125
-        },
+          "line": 180,
+          "column": 25
+        }
+      ]
+    },
+    "07c7811cfdf7c3a5": {
+      "source": "Gateway · 未启用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 86,
+          "column": 12
+        }
+      ]
+    },
+    "07eb730af89936bf": {
+      "source": "时间范围",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 97,
-          "column": 19
+          "line": 95,
+          "column": 39
+        }
+      ]
+    },
+    "084b42f6e95e4e65": {
+      "source": "二",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 34
+        }
+      ]
+    },
+    "0898742ccb5a3f86": {
+      "source": "时间基准：{0}",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 67,
+          "column": 18
         }
       ]
     },
@@ -224,7 +368,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 830,
+          "line": 837,
           "column": 25
         }
       ]
@@ -236,7 +380,12 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 487,
+          "line": 357,
+          "column": 19
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 689,
           "column": 19
         }
       ]
@@ -248,7 +397,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 223,
+          "line": 234,
           "column": 14
         }
       ]
@@ -260,8 +409,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 851,
+          "line": 858,
           "column": 1
+        }
+      ]
+    },
+    "09d087e3581399ed": {
+      "source": "近 52 周活跃度",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 84,
+          "column": 37
         }
       ]
     },
@@ -277,7 +438,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 74,
+          "line": 96,
           "column": 27
         }
       ]
@@ -289,20 +450,20 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 412,
+          "line": 416,
           "column": 19
         }
       ]
     },
-    "0a92ee7ff6f5fa32": {
-      "source": "支持 Chat Completions、流式 SSE、公开模型别名。Token 明文不写入页面常驻状态、配置投影或日志。",
+    "0a98a48eaaac4175": {
+      "source": "测试连接",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 270,
-          "column": 1
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 95,
+          "column": 28
         }
       ]
     },
@@ -313,12 +474,12 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 85,
-          "column": 42
+          "line": 109,
+          "column": 12
         },
         {
           "file": "src/router/index.js",
-          "line": 47,
+          "line": 59,
           "column": 43
         }
       ]
@@ -330,7 +491,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 547,
+          "line": 559,
           "column": 14
         }
       ]
@@ -342,7 +503,7 @@
       "refs": [
         {
           "file": "src/router/index.js",
-          "line": 74,
+          "line": 96,
           "column": 14
         }
       ]
@@ -354,25 +515,13 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 130,
+          "line": 156,
           "column": 34
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 130,
+          "line": 156,
           "column": 52
-        }
-      ]
-    },
-    "0cc18c456054b8dd": {
-      "source": "暂无 Gateway 运行状态",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 274,
-          "column": 1
         }
       ]
     },
@@ -383,7 +532,17 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 111,
+          "line": 146,
+          "column": 21
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 189,
+          "column": 21
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 207,
           "column": 21
         }
       ]
@@ -397,11 +556,6 @@
           "file": "src/views/Config.vue",
           "line": 281,
           "column": 11
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 250,
-          "column": 11
         }
       ]
     },
@@ -412,20 +566,20 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 450,
+          "line": 456,
           "column": 14
         }
       ]
     },
-    "10ebcbdc1766e8e3": {
-      "source": "保存范围",
+    "0ef79cb694da0018": {
+      "source": "暂无近 52 周活跃度数据",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 258,
-          "column": 64
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 163,
+          "column": 90
         }
       ]
     },
@@ -460,7 +614,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 357,
+          "line": 361,
           "column": 1
         }
       ]
@@ -472,7 +626,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 243,
+          "line": 254,
           "column": 16
         }
       ]
@@ -484,7 +638,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 443,
+          "line": 450,
           "column": 34
         }
       ]
@@ -496,20 +650,8 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 390,
+          "line": 394,
           "column": 19
-        }
-      ]
-    },
-    "12c2585c04b22bf5": {
-      "source": "本页保存只包含日志、外观和客户端行为设置，不包含 Cursor 运行模式、Gateway 或上游模型。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 261,
-          "column": 1
         }
       ]
     },
@@ -520,7 +662,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 857,
+          "line": 864,
           "column": 1
         }
       ]
@@ -531,9 +673,50 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 101,
+          "column": 14
+        },
+        {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 317,
+          "line": 321,
           "column": 19
+        }
+      ]
+    },
+    "147264bc10cf551c": {
+      "source": "保存 Codex 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 17,
+          "column": 16
+        }
+      ]
+    },
+    "148d195e21b05db5": {
+      "source": "配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 362,
+          "column": 28
+        }
+      ]
+    },
+    "14a8dfbca413e130": {
+      "source": "去配置 →",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 370,
+          "column": 16
         }
       ]
     },
@@ -544,8 +727,20 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 229,
+          "line": 240,
           "column": 14
+        }
+      ]
+    },
+    "1568b59e9a2508ee": {
+      "source": "开机自启动，计划中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 169,
+          "column": 158
         }
       ]
     },
@@ -556,20 +751,8 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 166,
+          "line": 160,
           "column": 24
-        }
-      ]
-    },
-    "15fa140ff81397a1": {
-      "source": "Cursor 设置：",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/CursorView.vue",
-          "line": 141,
-          "column": 74
         }
       ]
     },
@@ -580,7 +763,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 360,
+          "line": 366,
           "column": 12
         }
       ]
@@ -592,7 +775,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 95,
+          "line": 130,
           "column": 31
         }
       ]
@@ -604,7 +787,17 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 118,
+          "line": 153,
+          "column": 21
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 196,
+          "column": 21
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 214,
           "column": 21
         }
       ]
@@ -616,8 +809,8 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 159,
-          "column": 11
+          "line": 209,
+          "column": 13
         }
       ]
     },
@@ -628,7 +821,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 98,
+          "line": 133,
           "column": 13
         }
       ]
@@ -640,7 +833,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 81,
+          "line": 116,
           "column": 12
         }
       ]
@@ -652,20 +845,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 363,
+          "line": 375,
           "column": 14
-        }
-      ]
-    },
-    "187559bd4b77a2fc": {
-      "source": "Gateway 错误：",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 199,
-          "column": 1
         }
       ]
     },
@@ -676,8 +857,18 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1477,
+          "line": 1498,
           "column": 47
+        },
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 155,
+          "column": 14
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 297,
+          "column": 16
         }
       ]
     },
@@ -688,8 +879,8 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 88,
-          "column": 278
+          "line": 201,
+          "column": 17
         }
       ]
     },
@@ -700,7 +891,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 83,
+          "line": 118,
           "column": 18
         }
       ]
@@ -712,7 +903,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 779,
+          "line": 786,
           "column": 75
         }
       ]
@@ -724,8 +915,32 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 596,
+          "line": 603,
           "column": 15
+        }
+      ]
+    },
+    "1b590914091ca145": {
+      "source": "清空全部",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 327,
+          "column": 61
+        }
+      ]
+    },
+    "1b9f1ba5403eb71a": {
+      "source": "暂无按日趋势",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 63,
+          "column": 53
         }
       ]
     },
@@ -736,7 +951,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 39,
+          "line": 40,
           "column": 9
         }
       ]
@@ -748,7 +963,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 70,
+          "line": 78,
           "column": 73
         }
       ]
@@ -760,7 +975,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 880,
+          "line": 835,
           "column": 10
         }
       ]
@@ -772,20 +987,8 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 197,
+          "line": 208,
           "column": 14
-        }
-      ]
-    },
-    "1d15cb9c37abcbf0": {
-      "source": "按日调用次数，少到多",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 86,
-          "column": 68
         }
       ]
     },
@@ -806,6 +1009,18 @@
         }
       ]
     },
+    "1e9f2561b7cf43c4": {
+      "source": "通过",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 352,
+          "column": 44
+        }
+      ]
+    },
     "1ef6d46957fa8f7d": {
       "source": "选择目标适配器",
       "kind": "text",
@@ -813,7 +1028,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 241,
+          "line": 301,
           "column": 13
         }
       ]
@@ -825,13 +1040,42 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 175,
-          "column": 40
+          "line": 49,
+          "column": 12
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 157,
+          "column": 26
         },
         {
           "file": "src/views/Home.vue",
-          "line": 260,
-          "column": 26
+          "line": 319,
+          "column": 17
+        }
+      ]
+    },
+    "1f968433b217f145": {
+      "source": "使用分析",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeMetricsCard.vue",
+          "line": 252,
+          "column": 34
+        }
+      ]
+    },
+    "206ebd365104052d": {
+      "source": "最小化到系统托盘",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 174,
+          "column": 1
         }
       ]
     },
@@ -847,8 +1091,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 239,
-          "column": 11
+          "line": 188,
+          "column": 17
         }
       ]
     },
@@ -864,49 +1108,37 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 694,
+          "line": 701,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 389,
+          "line": 401,
           "column": 36
         }
       ]
     },
-    "21b23154bd07c1cc": {
-      "source": "本页保存只包含 Gateway 启用状态、监听地址和公开模型映射；token 由后端保留或生成。",
+    "2148753a739c9354": {
+      "source": "保存 Cursor 配置",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 260,
-          "column": 1
+          "file": "src/views/CursorView.vue",
+          "line": 170,
+          "column": 14
         }
       ]
     },
-    "2261b06712a3c505": {
-      "source": "近 7 天",
+    "217cfe7db1e3d10a": {
+      "source": "跟随系统",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/Home.vue",
-          "line": 294,
-          "column": 24
-        }
-      ]
-    },
-    "230e44c2fab08db2": {
-      "source": "暂无活跃度数据",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 90,
-          "column": 93
+          "file": "src/state/appState.js",
+          "line": 109,
+          "column": 12
         }
       ]
     },
@@ -917,7 +1149,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1891,
+          "line": 1898,
           "column": 32
         }
       ]
@@ -929,23 +1161,47 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 960,
+          "line": 929,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1015,
+          "line": 984,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1669,
+          "line": 1690,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 1683,
+          "line": 1704,
           "column": 32
+        }
+      ]
+    },
+    "2374e5d33f7e02ca": {
+      "source": "接入方式",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 119,
+          "column": 36
+        }
+      ]
+    },
+    "23fd311753bd9ba4": {
+      "source": "打开中...",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 300,
+          "column": 16
         }
       ]
     },
@@ -966,20 +1222,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 51,
+          "line": 73,
           "column": 27
         }
       ]
     },
-    "2515375d9262d4ac": {
-      "source": "Gateway 不改变上述 Cursor 链路，使用独立端口 127.0.0.1:18091。",
+    "24eb5e379e3faf50": {
+      "source": "按小时",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/CursorView.vue",
-          "line": 146,
-          "column": 1
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 27,
+          "column": 81
         }
       ]
     },
@@ -995,6 +1251,18 @@
         }
       ]
     },
+    "254245d443d8402e": {
+      "source": "登录系统后自动启动 Cursor 助手服务",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 167,
+          "column": 40
+        }
+      ]
+    },
     "26a3855aed1d8d17": {
       "source": "服务未启动",
       "kind": "text",
@@ -1002,7 +1270,68 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1468,
+          "line": 1489,
+          "column": 12
+        }
+      ]
+    },
+    "26e515a6709d14c1": {
+      "source": "计划中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 147,
+          "column": 1
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 165,
+          "column": 50
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 174,
+          "column": 53
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 323,
+          "column": 49
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 355,
+          "column": 36
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 390,
+          "column": 47
+        }
+      ]
+    },
+    "2734634c70a5d10a": {
+      "source": "模型视图",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 529,
+          "column": 48
+        }
+      ]
+    },
+    "2764d09113f05cd3": {
+      "source": "Gateway · 运行中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 89,
           "column": 12
         }
       ]
@@ -1014,8 +1343,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 550,
+          "line": 562,
           "column": 14
+        }
+      ]
+    },
+    "28384d7afd2e4fa6": {
+      "source": "失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 355,
+          "column": 44
         }
       ]
     },
@@ -1028,11 +1369,18 @@
           "file": "src/views/Config.vue",
           "line": 242,
           "column": 1
-        },
+        }
+      ]
+    },
+    "29ad794694b9401c": {
+      "source": "本地代理、Backend 与控制面账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
-          "file": "src/views/SettingsView.vue",
-          "line": 211,
-          "column": 1
+          "file": "src/views/CursorView.vue",
+          "line": 85,
+          "column": 33
         }
       ]
     },
@@ -1045,11 +1393,6 @@
           "file": "src/views/Config.vue",
           "line": 254,
           "column": 1
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 223,
-          "column": 1
         }
       ]
     },
@@ -1060,7 +1403,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 98,
+          "line": 114,
           "column": 17
         },
         {
@@ -1070,7 +1413,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 897,
+          "line": 904,
           "column": 89
         },
         {
@@ -1105,8 +1448,18 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1561,
+          "line": 1582,
           "column": 12
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 275,
+          "column": 17
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 294,
+          "column": 17
         }
       ]
     },
@@ -1122,8 +1475,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 249,
-          "column": 11
+          "line": 200,
+          "column": 17
         }
       ]
     },
@@ -1139,6 +1492,18 @@
         }
       ]
     },
+    "2d89663a2bef8fdf": {
+      "source": "状态更新于 {0}:{1}",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 72,
+          "column": 10
+        }
+      ]
+    },
     "2f9daa828907b93f": {
       "source": "删除",
       "kind": "text",
@@ -1146,13 +1511,35 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 243,
-          "column": 87
+          "line": 304,
+          "column": 1
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 503,
+          "line": 293,
+          "column": 18
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 638,
+          "column": 168
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 706,
           "column": 94
+        }
+      ]
+    },
+    "2fbee191632d47c5": {
+      "source": "本地服务",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 98,
+          "column": 33
         }
       ]
     },
@@ -1163,20 +1550,8 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 889,
+          "line": 896,
           "column": 13
-        }
-      ]
-    },
-    "310b0db0c689b445": {
-      "source": "暂无 Cursor 运行状态",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 236,
-          "column": 1
         }
       ]
     },
@@ -1187,8 +1562,20 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 339,
+          "line": 345,
           "column": 14
+        }
+      ]
+    },
+    "3221a042ea3677a8": {
+      "source": "重新生成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 274,
+          "column": 1
         }
       ]
     },
@@ -1199,17 +1586,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 531,
-          "column": 16
-        },
-        {
-          "file": "src/state/appState.js",
-          "line": 537,
-          "column": 16
-        },
-        {
-          "file": "src/state/appState.js",
           "line": 543,
+          "column": 16
+        },
+        {
+          "file": "src/state/appState.js",
+          "line": 549,
+          "column": 16
+        },
+        {
+          "file": "src/state/appState.js",
+          "line": 555,
           "column": 16
         }
       ]
@@ -1233,7 +1620,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 146,
+          "line": 172,
           "column": 21
         }
       ]
@@ -1257,7 +1644,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 124,
+          "line": 159,
           "column": 13
         }
       ]
@@ -1286,8 +1673,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 118,
-          "column": 72
+          "line": 246,
+          "column": 35
         }
       ]
     },
@@ -1303,15 +1690,20 @@
         }
       ]
     },
-    "364117e91897e1a7": {
-      "source": "轮换 token",
+    "3687b041114f7115": {
+      "source": "接入模式",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 215,
-          "column": 80
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 56,
+          "column": 47
+        },
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 62,
+          "column": 13
         }
       ]
     },
@@ -1322,8 +1714,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1550,
+          "line": 1571,
           "column": 14
+        }
+      ]
+    },
+    "3870b850ec101a01": {
+      "source": "切换后立即应用并保存在本机",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 146,
+          "column": 35
         }
       ]
     },
@@ -1334,20 +1738,32 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 253,
-          "column": 20
+          "line": 368,
+          "column": 72
         }
       ]
     },
-    "38f36ed30008bc7c": {
-      "source": "网关",
+    "38c7896fe8026d7d": {
+      "source": "清除全部模型",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 80,
+          "file": "src/views/ModelConfig.vue",
+          "line": 272,
           "column": 12
+        }
+      ]
+    },
+    "38dfe24031dc2887": {
+      "source": "跳过 SSL 验证，计划中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 376,
+          "column": 154
         }
       ]
     },
@@ -1397,7 +1813,7 @@
       "refs": [
         {
           "file": "src/components/charts/CacheHitRateChart.vue",
-          "line": 93,
+          "line": 94,
           "column": 12
         }
       ]
@@ -1409,8 +1825,8 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 264,
-          "column": 74
+          "line": 329,
+          "column": 72
         }
       ]
     },
@@ -1421,8 +1837,20 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 176,
+          "line": 180,
           "column": 13
+        }
+      ]
+    },
+    "3a81c3d9084e7d78": {
+      "source": "上游请求的全局超时时间",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 367,
+          "column": 65
         }
       ]
     },
@@ -1433,17 +1861,17 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 95,
+          "line": 111,
           "column": 12
         },
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 97,
+          "line": 113,
           "column": 18
         },
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 188,
+          "line": 199,
           "column": 1
         }
       ]
@@ -1455,8 +1883,20 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 292,
+          "line": 295,
           "column": 21
+        }
+      ]
+    },
+    "3b8bc5cec50b4e84": {
+      "source": "确定删除「{0}」吗？删除后需要保存本页才会写入配置。",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 292,
+          "column": 14
         }
       ]
     },
@@ -1467,7 +1907,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 86,
+          "line": 102,
           "column": 12
         }
       ]
@@ -1479,7 +1919,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 496,
+          "line": 508,
           "column": 14
         }
       ]
@@ -1496,8 +1936,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 176,
-          "column": 20
+          "line": 240,
+          "column": 16
         }
       ]
     },
@@ -1508,7 +1948,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 246,
+          "line": 257,
           "column": 16
         }
       ]
@@ -1525,7 +1965,7 @@
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 293,
+          "line": 343,
           "column": 11
         },
         {
@@ -1535,8 +1975,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 209,
-          "column": 70
+          "line": 144,
+          "column": 35
         }
       ]
     },
@@ -1547,8 +1987,37 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 61,
+          "line": 74,
           "column": 10
+        },
+        {
+          "file": "src/components/CursorAccountCard.vue",
+          "line": 77,
+          "column": 43
+        }
+      ]
+    },
+    "3d5a46e3e03548f9": {
+      "source": "本地代理设置已应用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 133,
+          "column": 16
+        }
+      ]
+    },
+    "3de7489212d6abfc": {
+      "source": "当前版本尚未接通此客户端的账号授权能力，不会展示截图中的演示账号。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 87,
+          "column": 1
         }
       ]
     },
@@ -1559,7 +2028,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1507,
+          "line": 1528,
           "column": 5
         }
       ]
@@ -1576,6 +2045,18 @@
         }
       ]
     },
+    "3f3eedb90603e16e": {
+      "source": "只影响 Gateway 的 HTTP 接口、Token 与公开模型映射；不改变 Cursor 18080/18090 链路。Token 明文不写入页面常驻状态、配置投影或日志。本页保存只包含启用状态、监听地址和公开模型映射。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 337,
+          "column": 1
+        }
+      ]
+    },
     "3fd47edce45b3603": {
       "source": "关闭",
       "kind": "text",
@@ -1587,26 +2068,19 @@
           "column": 15
         },
         {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 269,
+          "column": 13
+        },
+        {
           "file": "src/views/Config.vue",
           "line": 29,
           "column": 12
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 25,
+          "line": 32,
           "column": 12
-        }
-      ]
-    },
-    "407eded2da2095fe": {
-      "source": "连接与路由",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/CursorView.vue",
-          "line": 127,
-          "column": 47
         }
       ]
     },
@@ -1617,7 +2091,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 435,
+          "line": 441,
           "column": 14
         }
       ]
@@ -1629,7 +2103,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 383,
+          "line": 387,
           "column": 1
         }
       ]
@@ -1646,7 +2120,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 79,
+          "line": 101,
           "column": 14
         }
       ]
@@ -1658,20 +2132,25 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 179,
+          "line": 183,
           "column": 19
         }
       ]
     },
-    "429ea3af443dd80b": {
-      "source": "导出配置",
+    "428fb8bfeecf7f91": {
+      "source": "异常",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/ModelConfig.vue",
-          "line": 421,
-          "column": 1
+          "file": "src/components/GatewayCard.vue",
+          "line": 52,
+          "column": 12
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 157,
+          "column": 26
         }
       ]
     },
@@ -1684,6 +2163,18 @@
           "file": "src/components/ModelAdapterTestCard.vue",
           "line": 144,
           "column": 93
+        }
+      ]
+    },
+    "431c2364cef8f462": {
+      "source": "模型 {0} 的模型标识不能为空",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/state/modelAdapterTypeChange.test.js",
+          "line": 9,
+          "column": 14
         }
       ]
     },
@@ -1706,7 +2197,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 178,
+          "line": 172,
           "column": 19
         }
       ]
@@ -1723,8 +2214,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 127,
+          "line": 250,
           "column": 15
+        }
+      ]
+    },
+    "458748c7478ef72d": {
+      "source": "测试中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 349,
+          "column": 21
         }
       ]
     },
@@ -1737,11 +2240,6 @@
           "file": "src/views/Config.vue",
           "line": 273,
           "column": 11
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 242,
-          "column": 11
         }
       ]
     },
@@ -1752,7 +2250,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 325,
+          "line": 329,
           "column": 21
         }
       ]
@@ -1763,14 +2261,24 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 236,
+          "column": 13
+        },
+        {
           "file": "src/router/index.js",
-          "line": 73,
+          "line": 95,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 878,
+          "line": 833,
           "column": 12
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 138,
+          "column": 17
         }
       ]
     },
@@ -1798,6 +2306,23 @@
         }
       ]
     },
+    "48847145db0d0250": {
+      "source": "栅格视图",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 542,
+          "column": 15
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 543,
+          "column": 15
+        }
+      ]
+    },
     "49028a1d2bd84dfc": {
       "source": "发现必要更新",
       "kind": "text",
@@ -1805,7 +2330,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1525,
+          "line": 1546,
           "column": 43
         }
       ]
@@ -1817,7 +2342,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 508,
+          "line": 520,
           "column": 14
         }
       ]
@@ -1841,8 +2366,8 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 215,
-          "column": 53
+          "line": 300,
+          "column": 16
         }
       ]
     },
@@ -1853,8 +2378,20 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 196,
+          "line": 207,
           "column": 12
+        }
+      ]
+    },
+    "4a48d745e3508267": {
+      "source": "设置分组",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 120,
+          "column": 46
         }
       ]
     },
@@ -1882,8 +2419,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 66,
+          "line": 88,
           "column": 14
+        }
+      ]
+    },
+    "4b5881161d703489": {
+      "source": "Token 使用趋势",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 84,
+          "column": 37
         }
       ]
     },
@@ -1894,7 +2443,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 595,
+          "line": 602,
           "column": 15
         }
       ]
@@ -1923,7 +2472,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 27,
+          "line": 34,
           "column": 12
         }
       ]
@@ -1947,7 +2496,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 160,
+          "line": 177,
           "column": 12
         }
       ]
@@ -1969,6 +2518,18 @@
         }
       ]
     },
+    "4eb909d9c191b434": {
+      "source": "立即清空全部日志",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 323,
+          "column": 1
+        }
+      ]
+    },
     "4f0982ba1d37e51b": {
       "source": "当前出站请求使用环境变量代理",
       "kind": "text",
@@ -1976,7 +2537,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 44,
+          "line": 45,
           "column": 9
         }
       ]
@@ -2014,11 +2575,18 @@
           "file": "src/views/Config.vue",
           "line": 185,
           "column": 64
-        },
+        }
+      ]
+    },
+    "51a75f4634dfa859": {
+      "source": "一",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
-          "file": "src/views/SettingsView.vue",
-          "line": 154,
-          "column": 64
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 29
         }
       ]
     },
@@ -2029,8 +2597,32 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 173,
+          "line": 167,
           "column": 23
+        }
+      ]
+    },
+    "52fff1680de153af": {
+      "source": "端点",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 571,
+          "column": 18
+        }
+      ]
+    },
+    "534d34c098726af7": {
+      "source": "Cursor 控制面账号 · 用于插件、Skills 和 MCP",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/CursorAccountCard.vue",
+          "line": 177,
+          "column": 34
         }
       ]
     },
@@ -2041,8 +2633,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 443,
+          "line": 450,
           "column": 41
+        }
+      ]
+    },
+    "53db1b191a81ba38": {
+      "source": "不受保留策略影响，立即删除所有日志文件",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 325,
+          "column": 36
         }
       ]
     },
@@ -2053,8 +2657,37 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 220,
+          "line": 231,
           "column": 14
+        }
+      ]
+    },
+    "55f1033fab699842": {
+      "source": "清除全部",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 274,
+          "column": 18
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 499,
+          "column": 1
+        }
+      ]
+    },
+    "56103e4d73b9210c": {
+      "source": "按日",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 27,
+          "column": 89
         }
       ]
     },
@@ -2065,13 +2698,102 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 639,
+          "line": 646,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 667,
+          "line": 674,
           "column": 21
+        }
+      ]
+    },
+    "569c43d6cc55202d": {
+      "source": "复制 Base URL",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 322,
+          "column": 59
+        }
+      ]
+    },
+    "56aca1d3ef3dc852": {
+      "source": "网络与请求",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 28,
+          "column": 27
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 352,
+          "column": 36
+        }
+      ]
+    },
+    "56db6ca1cad6cb9a": {
+      "source": "深度集成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 27,
+          "column": 31
+        }
+      ]
+    },
+    "576d81bb0631b165": {
+      "source": "导入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 482,
+          "column": 1
+        }
+      ]
+    },
+    "579b964869182355": {
+      "source": "深度集成 · 未启动",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 98,
+          "column": 10
+        }
+      ]
+    },
+    "58a58a175b2d7e48": {
+      "source": "近 52 周每日调用次数",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 173,
+          "column": 15
+        }
+      ]
+    },
+    "58aa98a40ce1ac9b": {
+      "source": "Token 使用趋势，暂无数据",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 32,
+          "column": 12
         }
       ]
     },
@@ -2082,7 +2804,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 73,
+          "line": 89,
           "column": 21
         }
       ]
@@ -2094,8 +2816,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 366,
+          "line": 378,
           "column": 12
+        }
+      ]
+    },
+    "59f79804f80eb2df": {
+      "source": "数据与恢复",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 29,
+          "column": 28
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 384,
+          "column": 34
         }
       ]
     },
@@ -2111,18 +2850,6 @@
         }
       ]
     },
-    "5af6d86bda0de421": {
-      "source": "本地代理与 Backend",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 213,
-          "column": 72
-        }
-      ]
-    },
     "5beb1206c532729f": {
       "source": "单次回复允许生成的最大 Token 数。留空时使用默认值。",
       "kind": "text",
@@ -2130,20 +2857,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 168,
+          "line": 162,
           "column": 24
         }
       ]
     },
-    "5c08da81dc7a8927": {
-      "source": "配置状态",
+    "5c2fe98c98d4208e": {
+      "source": "配置意图：已启用",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 153,
-          "column": 70
+          "line": 45,
+          "column": 29
         }
       ]
     },
@@ -2153,13 +2880,25 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/Home.vue",
-          "line": 294,
-          "column": 24
+          "file": "src/state/homeMetrics.js",
+          "line": 4,
+          "column": 26
         },
         {
+          "file": "src/state/modelCatalog.js",
+          "line": 79,
+          "column": 14
+        }
+      ]
+    },
+    "5c8fbdb616cb7872": {
+      "source": "没有匹配当前搜索的模型。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
           "file": "src/views/ModelConfig.vue",
-          "line": 34,
+          "line": 85,
           "column": 12
         }
       ]
@@ -2171,8 +2910,20 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 63,
+          "line": 71,
           "column": 12
+        }
+      ]
+    },
+    "5e2f0d90dc3c6b2f": {
+      "source": "按提供商筛选",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 509,
+          "column": 67
         }
       ]
     },
@@ -2183,7 +2934,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 43,
+          "line": 44,
           "column": 9
         }
       ]
@@ -2194,9 +2945,48 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/views/Home.vue",
+          "line": 266,
+          "column": 37
+        }
+      ]
+    },
+    "5f696bacfe2aab6e": {
+      "source": "重新加载失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 186,
+          "column": 21
+        },
+        {
           "file": "src/views/CursorView.vue",
-          "line": 94,
-          "column": 1
+          "line": 68,
+          "column": 21
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 330,
+          "column": 21
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 65,
+          "column": 21
+        }
+      ]
+    },
+    "6003d3246f0fca2b": {
+      "source": "模型管理",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 457,
+          "column": 32
         }
       ]
     },
@@ -2207,20 +2997,8 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 375,
+          "line": 381,
           "column": 12
-        }
-      ]
-    },
-    "607b2ab7e5254ca1": {
-      "source": "影响本机客户端行为，不包含 Cursor/Gateway 运行配置",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 98,
-          "column": 1
         }
       ]
     },
@@ -2236,8 +3014,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 184,
-          "column": 20
+          "line": 311,
+          "column": 18
         }
       ]
     },
@@ -2248,7 +3026,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 237,
+          "line": 248,
           "column": 16
         }
       ]
@@ -2258,16 +3036,6 @@
       "kind": "text",
       "placeholders": 0,
       "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 81,
-          "column": 12
-        },
-        {
-          "file": "src/router/index.js",
-          "line": 42,
-          "column": 43
-        },
         {
           "file": "src/views/GatewayView.vue",
           "line": 10,
@@ -2281,23 +3049,18 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 185,
+          "column": 21
+        },
+        {
           "file": "src/views/CursorView.vue",
-          "line": 43,
+          "line": 51,
           "column": 21
         },
         {
           "file": "src/views/Home.vue",
-          "line": 138,
-          "column": 21
-        },
-        {
-          "file": "src/views/Home.vue",
-          "line": 143,
-          "column": 21
-        },
-        {
-          "file": "src/views/Home.vue",
-          "line": 153,
+          "line": 156,
           "column": 19
         }
       ]
@@ -2309,20 +3072,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1556,
+          "line": 1577,
           "column": 14
-        }
-      ]
-    },
-    "62873083fcaed27d": {
-      "source": "会话统计",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeMetricsCard.vue",
-          "line": 252,
-          "column": 82
         }
       ]
     },
@@ -2333,13 +3084,13 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 175,
-          "column": 40
+          "line": 54,
+          "column": 10
         },
         {
           "file": "src/views/Home.vue",
-          "line": 260,
-          "column": 26
+          "line": 319,
+          "column": 17
         }
       ]
     },
@@ -2350,8 +3101,8 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 88,
-          "column": 95
+          "line": 196,
+          "column": 17
         }
       ]
     },
@@ -2362,7 +3113,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 56,
+          "line": 91,
           "column": 21
         },
         {
@@ -2382,17 +3133,17 @@
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 50,
+          "line": 58,
           "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 275,
+          "line": 320,
           "column": 21
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 40,
+          "line": 53,
           "column": 21
         }
       ]
@@ -2404,12 +3155,12 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 304,
+          "line": 307,
           "column": 21
         },
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 307,
+          "line": 310,
           "column": 16
         }
       ]
@@ -2421,17 +3172,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 494,
+          "line": 506,
           "column": 20
         },
         {
           "file": "src/state/configProjection.js",
-          "line": 210,
+          "line": 221,
           "column": 20
         },
         {
           "file": "src/state/configProjection.js",
-          "line": 429,
+          "line": 435,
           "column": 20
         }
       ]
@@ -2443,8 +3194,13 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 501,
+          "line": 637,
           "column": 155
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 704,
+          "column": 170
         }
       ]
     },
@@ -2455,7 +3211,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 382,
+          "line": 394,
           "column": 14
         }
       ]
@@ -2479,8 +3235,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1466,
+          "line": 1487,
           "column": 14
+        }
+      ]
+    },
+    "663ddbdbe9e4ce68": {
+      "source": "提供商",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 569,
+          "column": 18
         }
       ]
     },
@@ -2491,7 +3259,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 502,
+          "line": 514,
           "column": 14
         }
       ]
@@ -2532,7 +3300,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 197,
+          "line": 208,
           "column": 14
         }
       ]
@@ -2544,18 +3312,18 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 86,
-          "column": 44
+          "line": 118,
+          "column": 12
         },
         {
           "file": "src/router/index.js",
-          "line": 52,
+          "line": 64,
           "column": 43
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 96,
-          "column": 43
+          "line": 118,
+          "column": 32
         }
       ]
     },
@@ -2566,7 +3334,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1499,
+          "line": 1520,
           "column": 9
         }
       ]
@@ -2578,7 +3346,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 567,
+          "line": 574,
           "column": 15
         }
       ]
@@ -2590,13 +3358,30 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 486,
+          "line": 629,
+          "column": 22
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 688,
           "column": 19
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 498,
+          "line": 701,
           "column": 22
+        }
+      ]
+    },
+    "6ad3bfdfee35b515": {
+      "source": "采集中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 240,
+          "column": 16
         }
       ]
     },
@@ -2607,27 +3392,27 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 65,
+          "line": 81,
           "column": 34
         },
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 65,
+          "line": 81,
           "column": 52
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 41,
+          "line": 63,
           "column": 34
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 41,
+          "line": 63,
           "column": 52
         },
         {
           "file": "src/state/appState.js",
-          "line": 58,
+          "line": 75,
           "column": 31
         },
         {
@@ -2642,12 +3427,12 @@
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 28,
+          "line": 36,
           "column": 34
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 28,
+          "line": 36,
           "column": 52
         },
         {
@@ -2662,22 +3447,22 @@
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 92,
+          "line": 107,
           "column": 34
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 92,
+          "line": 107,
           "column": 52
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 33,
+          "line": 46,
           "column": 34
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 33,
+          "line": 46,
           "column": 52
         }
       ]
@@ -2689,20 +3474,8 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 206,
-          "column": 62
-        }
-      ]
-    },
-    "6c72c0ca8d6c12b6": {
-      "source": "暂无按日数据",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 70,
-          "column": 85
+          "line": 219,
+          "column": 33
         }
       ]
     },
@@ -2713,8 +3486,20 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 85,
-          "column": 43
+          "line": 119,
+          "column": 1
+        }
+      ]
+    },
+    "6d170a5de29797e9": {
+      "source": "0 个账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 77,
+          "column": 17
         }
       ]
     },
@@ -2730,8 +3515,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 78,
+          "line": 100,
           "column": 12
+        }
+      ]
+    },
+    "6d7421789e312077": {
+      "source": "添加授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 50,
+          "column": 1
         }
       ]
     },
@@ -2756,23 +3553,6 @@
           "file": "src/views/Config.vue",
           "line": 217,
           "column": 56
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 186,
-          "column": 56
-        }
-      ]
-    },
-    "6e201228f893e4b0": {
-      "source": "打开网关",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 248,
-          "column": 54
         }
       ]
     },
@@ -2795,12 +3575,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2023,
+          "line": 2027,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2043,
+          "line": 2047,
           "column": 32
         }
       ]
@@ -2841,7 +3621,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 199,
+          "line": 300,
           "column": 1
         }
       ]
@@ -2853,7 +3633,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 396,
+          "line": 403,
           "column": 12
         }
       ]
@@ -2865,13 +3645,25 @@
       "refs": [
         {
           "file": "src/views/CursorView.vue",
-          "line": 53,
+          "line": 61,
           "column": 11
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 278,
+          "line": 323,
           "column": 11
+        }
+      ]
+    },
+    "72ec61d7855c86a1": {
+      "source": "请求超时（秒）",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 366,
+          "column": 77
         }
       ]
     },
@@ -2882,7 +3674,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 324,
+          "line": 328,
           "column": 21
         }
       ]
@@ -2894,8 +3686,20 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 304,
+          "line": 307,
           "column": 21
+        }
+      ]
+    },
+    "7338752b94229ef9": {
+      "source": "支持独立套餐或重新授权现有账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 23,
+          "column": 18
         }
       ]
     },
@@ -2906,7 +3710,7 @@
       "refs": [
         {
           "file": "src/router/index.js",
-          "line": 75,
+          "line": 97,
           "column": 18
         }
       ]
@@ -2918,7 +3722,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1792,
+          "line": 1806,
           "column": 14
         }
       ]
@@ -2935,18 +3739,6 @@
         }
       ]
     },
-    "73863f6fa50d3b20": {
-      "source": "统计趋势",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 292,
-          "column": 39
-        }
-      ]
-    },
     "75156340a3d3dde8": {
       "source": "映射已失效，请重新选择目标适配器",
       "kind": "text",
@@ -2954,7 +3746,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 248,
+          "line": 310,
           "column": 1
         }
       ]
@@ -2966,7 +3758,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 68,
+          "line": 76,
           "column": 10
         }
       ]
@@ -2978,7 +3770,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 811,
+          "line": 818,
           "column": 25
         }
       ]
@@ -2990,33 +3782,55 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 66,
-          "column": 23
-        },
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 70,
-          "column": 23
-        },
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 75,
+          "line": 78,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 95,
+          "line": 82,
+          "column": 21
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 101,
+          "column": 23
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 105,
+          "column": 23
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 110,
+          "column": 21
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 130,
           "column": 23
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 263,
+          "line": 308,
           "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 268,
+          "line": 313,
           "column": 21
+        }
+      ]
+    },
+    "754a9d5828d502f1": {
+      "source": "四",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 44
         }
       ]
     },
@@ -3029,11 +3843,30 @@
           "file": "src/views/Config.vue",
           "line": 271,
           "column": 11
-        },
+        }
+      ]
+    },
+    "76420433f22d1c80": {
+      "source": "导出",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
-          "file": "src/views/SettingsView.vue",
-          "line": 240,
-          "column": 11
+          "file": "src/views/ModelConfig.vue",
+          "line": 491,
+          "column": 1
+        }
+      ]
+    },
+    "7729d9adc9a810ca": {
+      "source": "需先启用并保存配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 234,
+          "column": 23
         }
       ]
     },
@@ -3056,12 +3889,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 521,
+          "line": 528,
           "column": 18
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 521,
+          "line": 528,
           "column": 18
         }
       ]
@@ -3073,8 +3906,32 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 771,
+          "line": 778,
           "column": 13
+        }
+      ]
+    },
+    "7931370df09846ef": {
+      "source": "暂无小时数据",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 63,
+          "column": 42
+        }
+      ]
+    },
+    "79fc1150ac93dfb9": {
+      "source": "仅用于开发或自签名证书",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 374,
+          "column": 65
         }
       ]
     },
@@ -3085,20 +3942,8 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 162,
+          "line": 156,
           "column": 16
-        }
-      ]
-    },
-    "7b3c22fb10fea1de": {
-      "source": "请求趋势",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 51,
-          "column": 43
         }
       ]
     },
@@ -3114,17 +3959,22 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 899,
+          "line": 906,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 259,
+          "line": 271,
           "column": 12
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 498,
+          "line": 629,
+          "column": 22
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 701,
           "column": 22
         }
       ]
@@ -3141,8 +3991,64 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 67,
+          "line": 89,
           "column": 18
+        }
+      ]
+    },
+    "7bb5de20f65657eb": {
+      "source": "{0}月",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 47,
+          "column": 13
+        }
+      ]
+    },
+    "7bca724a732ab55d": {
+      "source": "关闭窗口时保持服务在后台运行",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 176,
+          "column": 40
+        }
+      ]
+    },
+    "7bdd5ce1e298a972": {
+      "source": "重新加载",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 357,
+          "column": 1
+        },
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 167,
+          "column": 1
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 726,
+          "column": 1
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 219,
+          "column": 1
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 339,
+          "column": 1
         }
       ]
     },
@@ -3158,15 +4064,15 @@
         }
       ]
     },
-    "7d7f6d0a85d98ea9": {
-      "source": "按日统计，时间基准：",
+    "7d0d5850515d9421": {
+      "source": "打开目录",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 52,
-          "column": 68
+          "file": "src/views/SettingsView.vue",
+          "line": 313,
+          "column": 69
         }
       ]
     },
@@ -3189,7 +4095,7 @@
       "refs": [
         {
           "file": "src/views/CursorView.vue",
-          "line": 35,
+          "line": 43,
           "column": 21
         }
       ]
@@ -3201,12 +4107,12 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 253,
+          "line": 303,
           "column": 15
         },
         {
           "file": "src/state/appState.js",
-          "line": 1531,
+          "line": 1552,
           "column": 16
         }
       ]
@@ -3220,11 +4126,18 @@
           "file": "src/views/Config.vue",
           "line": 272,
           "column": 11
-        },
+        }
+      ]
+    },
+    "800ee6802e567789": {
+      "source": "通义千问",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
-          "file": "src/views/SettingsView.vue",
-          "line": 241,
-          "column": 11
+          "file": "src/state/modelCatalog.js",
+          "line": 7,
+          "column": 27
         }
       ]
     },
@@ -3235,7 +4148,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 424,
+          "line": 428,
           "column": 1
         }
       ]
@@ -3252,8 +4165,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 184,
-          "column": 20
+          "line": 311,
+          "column": 18
+        }
+      ]
+    },
+    "809c9dd118e32d44": {
+      "source": "{0} 已接入",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 102,
+          "column": 45
         }
       ]
     },
@@ -3263,9 +4188,21 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 162,
-          "column": 11
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 93,
+          "column": 44
+        }
+      ]
+    },
+    "80e56d4cee6da68b": {
+      "source": "采集级别、容量控制与日志维护",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 233,
+          "column": 35
         }
       ]
     },
@@ -3276,7 +4213,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 561,
+          "line": 568,
           "column": 21
         }
       ]
@@ -3288,7 +4225,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 171,
+          "line": 165,
           "column": 18
         }
       ]
@@ -3305,8 +4242,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 164,
-          "column": 66
+          "line": 278,
+          "column": 35
         }
       ]
     },
@@ -3322,6 +4259,18 @@
         }
       ]
     },
+    "82eb316d8b16003f": {
+      "source": "上游请求链路配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 353,
+          "column": 35
+        }
+      ]
+    },
     "83913e71fcf7ff60": {
       "source": "刷新成功",
       "kind": "text",
@@ -3329,20 +4278,32 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 150,
+          "line": 153,
           "column": 13
         }
       ]
     },
-    "83be9cac28873059": {
-      "source": "Cursor 控制面账号",
+    "83d1ddb627d80203": {
+      "source": "切换接入方式不会自动同步已有授权",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/CursorAccountCard.vue",
-          "line": 135,
-          "column": 70
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 69,
+          "column": 1
+        }
+      ]
+    },
+    "83d285aa3774d862": {
+      "source": "命中率 %",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 179,
+          "column": 15
         }
       ]
     },
@@ -3353,8 +4314,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 605,
+          "line": 612,
           "column": 25
+        }
+      ]
+    },
+    "85217f7aff778414": {
+      "source": "日",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 24
         }
       ]
     },
@@ -3365,12 +4338,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 66,
+          "line": 101,
           "column": 31
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 91,
+          "line": 126,
           "column": 31
         }
       ]
@@ -3399,7 +4372,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1463,
+          "line": 1484,
           "column": 14
         }
       ]
@@ -3428,18 +4401,6 @@
         }
       ]
     },
-    "87faf764d512632f": {
-      "source": "已生成，仅可通过复制/轮换读取",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 217,
-          "column": 16
-        }
-      ]
-    },
     "899add6275682210": {
       "source": "留空时默认 200000",
       "kind": "text",
@@ -3449,18 +4410,6 @@
           "file": "src/components/ModelAdapterModal.vue",
           "line": 200,
           "column": 19
-        }
-      ]
-    },
-    "89aeaf0ba7cdfe6e": {
-      "source": "Cursor 的本地代理和 Backend 运行控制",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/CursorView.vue",
-          "line": 63,
-          "column": 1
         }
       ]
     },
@@ -3483,8 +4432,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 167,
+          "line": 161,
           "column": 20
+        }
+      ]
+    },
+    "8bfd45dbf1bb61d1": {
+      "source": "请先保存 Gateway 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 347,
+          "column": 1
         }
       ]
     },
@@ -3497,6 +4458,23 @@
           "file": "src/components/ModelAdapterTestCard.vue",
           "line": 25,
           "column": 14
+        }
+      ]
+    },
+    "8c47dbc011de764f": {
+      "source": "共享入口",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 196,
+          "column": 34
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 21,
+          "column": 11
         }
       ]
     },
@@ -3514,6 +4492,18 @@
           "file": "src/views/Config.vue",
           "line": 296,
           "column": 70
+        }
+      ]
+    },
+    "8cdf1da0d4c7e55e": {
+      "source": "启动与窗口",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 161,
+          "column": 63
         }
       ]
     },
@@ -3541,6 +4531,30 @@
         }
       ]
     },
+    "8ea63fc0e83ee710": {
+      "source": "深度集成 · 运行中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 96,
+          "column": 12
+        }
+      ]
+    },
+    "8f171c404b7780a6": {
+      "source": "搜索别名、上游 ID 或端点",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 470,
+          "column": 15
+        }
+      ]
+    },
     "8f29293906e72525": {
       "source": "界面主题",
       "kind": "text",
@@ -3553,8 +4567,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 221,
-          "column": 70
+          "line": 149,
+          "column": 35
         }
       ]
     },
@@ -3601,7 +4615,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 175,
+          "line": 169,
           "column": 26
         }
       ]
@@ -3613,8 +4627,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 526,
+          "line": 538,
           "column": 14
+        }
+      ]
+    },
+    "90fa45059700d62c": {
+      "source": "路由模式",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 105,
+          "column": 33
         }
       ]
     },
@@ -3625,12 +4651,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 282,
+          "line": 360,
           "column": 14
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 902,
+          "line": 909,
           "column": 12
         },
         {
@@ -3640,18 +4666,18 @@
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 75,
+          "line": 170,
           "column": 14
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 432,
+          "line": 734,
           "column": 16
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 109,
-          "column": 14
+          "line": 40,
+          "column": 12
         }
       ]
     },
@@ -3662,8 +4688,20 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 66,
+          "line": 74,
           "column": 12
+        }
+      ]
+    },
+    "9199ae3315575b6a": {
+      "source": "Cursor 深度集成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 84,
+          "column": 34
         }
       ]
     },
@@ -3674,22 +4712,12 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 18,
-          "column": 50
-        },
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 76,
-          "column": 36
+          "line": 93,
+          "column": 12
         },
         {
           "file": "src/router/index.js",
-          "line": 32,
-          "column": 43
-        },
-        {
-          "file": "src/views/Home.vue",
-          "line": 199,
+          "line": 49,
           "column": 43
         }
       ]
@@ -3701,8 +4729,32 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 361,
+          "line": 365,
           "column": 1
+        }
+      ]
+    },
+    "9248356749d6fc83": {
+      "source": "24 小时",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/state/homeMetrics.js",
+          "line": 2,
+          "column": 26
+        }
+      ]
+    },
+    "9328ada26a784b1a": {
+      "source": "订阅授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 75,
+          "column": 48
         }
       ]
     },
@@ -3713,8 +4765,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 760,
+          "line": 715,
           "column": 44
+        }
+      ]
+    },
+    "93a8734cce300531": {
+      "source": "搜索模型",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 471,
+          "column": 15
         }
       ]
     },
@@ -3725,7 +4789,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 588,
+          "line": 595,
           "column": 21
         }
       ]
@@ -3737,8 +4801,20 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 119,
+          "line": 145,
           "column": 36
+        }
+      ]
+    },
+    "94e1eabbaffd1be1": {
+      "source": "Gateway · 已启用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 91,
+          "column": 10
         }
       ]
     },
@@ -3749,32 +4825,13 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 190,
-          "column": 12
-        }
-      ]
-    },
-    "95232b4a6b6fe285": {
-      "source": "停止 Cursor 服务",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
+          "line": 245,
+          "column": 1
+        },
         {
-          "file": "src/views/CursorView.vue",
-          "line": 104,
-          "column": 22
-        }
-      ]
-    },
-    "9541f4a078492cf3": {
-      "source": "复制 token",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 214,
-          "column": 78
+          "file": "src/views/Home.vue",
+          "line": 357,
+          "column": 16
         }
       ]
     },
@@ -3785,7 +4842,7 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 169,
+          "line": 172,
           "column": 18
         }
       ]
@@ -3814,6 +4871,18 @@
         }
       ]
     },
+    "976f8d2331ac262a": {
+      "source": "配置 HTTP/HTTPS/SOCKS5 代理",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 360,
+          "column": 65
+        }
+      ]
+    },
     "978f91eeb66558da": {
       "source": "更新已下载",
       "kind": "text",
@@ -3821,7 +4890,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1527,
+          "line": 1548,
           "column": 16
         }
       ]
@@ -3833,12 +4902,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1986,
+          "line": 1990,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2006,
+          "line": 2010,
           "column": 32
         }
       ]
@@ -3850,8 +4919,8 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 230,
-          "column": 77
+          "line": 288,
+          "column": 1
         }
       ]
     },
@@ -3862,7 +4931,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 232,
+          "line": 243,
           "column": 14
         }
       ]
@@ -3874,20 +4943,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 164,
+          "line": 158,
           "column": 12
         }
       ]
     },
-    "99abb1d47048533a": {
-      "source": "接入安全",
+    "9a170fc046bf2a34": {
+      "source": "模型 1 的模型标识不能为空",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 204,
-          "column": 42
+          "file": "src/state/modelAdapterTypeChange.test.js",
+          "line": 34,
+          "column": 47
         }
       ]
     },
@@ -3898,8 +4967,32 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 326,
+          "line": 330,
           "column": 21
+        }
+      ]
+    },
+    "9a70ef951b7af8d6": {
+      "source": "重置设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 394,
+          "column": 28
+        }
+      ]
+    },
+    "9a7f3e7867a9b96a": {
+      "source": "保存 Claude Code 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 22,
+          "column": 16
         }
       ]
     },
@@ -3915,6 +5008,30 @@
         }
       ]
     },
+    "9b59e637c83810ab": {
+      "source": "趋势",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 112,
+          "column": 1
+        }
+      ]
+    },
+    "9bae680405099fc8": {
+      "source": "主导航",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 218,
+          "column": 43
+        }
+      ]
+    },
     "9c41b3a9e12ac994": {
       "source": "思考强度",
       "kind": "text",
@@ -3922,8 +5039,44 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 653,
+          "line": 660,
           "column": 21
+        }
+      ]
+    },
+    "9c4430e41a593e39": {
+      "source": "保存日志设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 42,
+          "column": 43
+        }
+      ]
+    },
+    "9c992da53a2a4f42": {
+      "source": "作用范围与安全说明",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 333,
+          "column": 1
+        }
+      ]
+    },
+    "9d2a71640bafe244": {
+      "source": "Claude Code 接入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 21,
+          "column": 12
         }
       ]
     },
@@ -3934,7 +5087,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1559,
+          "line": 1580,
           "column": 14
         }
       ]
@@ -3963,7 +5116,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 136,
+          "line": 286,
           "column": 1
         }
       ]
@@ -3975,8 +5128,13 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 54,
-          "column": 77
+          "line": 140,
+          "column": 84
+        },
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 162,
+          "column": 92
         }
       ]
     },
@@ -3987,8 +5145,37 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 554,
+          "line": 566,
           "column": 14
+        }
+      ]
+    },
+    "9e77536fd40514d1": {
+      "source": "Cache 读取",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 91,
+          "column": 14
+        }
+      ]
+    },
+    "9f07d2ce4115f575": {
+      "source": "更多操作",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 633,
+          "column": 28
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 633,
+          "column": 46
         }
       ]
     },
@@ -4004,18 +5191,6 @@
         }
       ]
     },
-    "9f162d121f219603": {
-      "source": "本地代理：",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/CursorView.vue",
-          "line": 141,
-          "column": 1
-        }
-      ]
-    },
     "a026f37e613cf48b": {
       "source": "输出 Token",
       "kind": "text",
@@ -4028,6 +5203,18 @@
         }
       ]
     },
+    "a080764958512426": {
+      "source": "Cursor 助手",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 215,
+          "column": 37
+        }
+      ]
+    },
     "a0d36236c523667c": {
       "source": "{0} 的 Anthropic 思考强度仅支持 low、medium、high、xhigh、max",
       "kind": "template",
@@ -4035,7 +5222,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 520,
+          "line": 532,
           "column": 14
         }
       ]
@@ -4047,12 +5234,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1486,
+          "line": 1507,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1542,
+          "line": 1563,
           "column": 87
         }
       ]
@@ -4064,8 +5251,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 875,
+          "line": 830,
           "column": 12
+        }
+      ]
+    },
+    "a1d078b22f1d9611": {
+      "source": "复制 Token",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 271,
+          "column": 1
         }
       ]
     },
@@ -4076,13 +5275,25 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 91,
+          "line": 126,
           "column": 23
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 100,
+          "line": 135,
           "column": 21
+        }
+      ]
+    },
+    "a24cd48155fe600c": {
+      "source": "导入完整配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 479,
+          "column": 15
         }
       ]
     },
@@ -4098,7 +5309,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 902,
+          "line": 909,
           "column": 12
         }
       ]
@@ -4110,25 +5321,61 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1841,
+          "line": 1855,
           "column": 14
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 263,
+          "line": 308,
           "column": 29
         }
       ]
     },
-    "a43d2af983354ee9": {
-      "source": "启动 Cursor 服务",
+    "a33db573055626c5": {
+      "source": "总览",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/CursorView.vue",
-          "line": 104,
-          "column": 22
+          "file": "src/layouts/MainLayout.vue",
+          "line": 92,
+          "column": 12
+        }
+      ]
+    },
+    "a3ebdd786fb62f67": {
+      "source": "保存模型配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 734,
+          "column": 16
+        }
+      ]
+    },
+    "a48b97349147a6cb": {
+      "source": "分析视图",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 106,
+          "column": 39
+        }
+      ]
+    },
+    "a4c3313deb180960": {
+      "source": "三",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 39
         }
       ]
     },
@@ -4144,18 +5391,6 @@
         }
       ]
     },
-    "a51794f2d2a3c79d": {
-      "source": "柱高表示 LLM 调用次数；当前区间 Token：",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 79,
-          "column": 88
-        }
-      ]
-    },
     "a54d745d9a9249e2": {
       "source": "开启后会把 JSON 对象覆盖到 Anthropic 请求体。同名字段以这里为准。",
       "kind": "text",
@@ -4163,7 +5398,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 172,
+          "line": 166,
           "column": 25
         }
       ]
@@ -4202,7 +5437,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 165,
+          "line": 159,
           "column": 11
         }
       ]
@@ -4214,7 +5449,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 899,
+          "line": 906,
           "column": 12
         }
       ]
@@ -4226,7 +5461,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 92,
+          "line": 108,
           "column": 12
         }
       ]
@@ -4238,8 +5473,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1547,
+          "line": 1568,
           "column": 14
+        }
+      ]
+    },
+    "a7d753298345bd94": {
+      "source": "暂无授权账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 85,
+          "column": 57
         }
       ]
     },
@@ -4250,7 +5497,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 860,
+          "line": 867,
           "column": 72
         }
       ]
@@ -4262,7 +5509,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 805,
+          "line": 812,
           "column": 1
         }
       ]
@@ -4279,20 +5526,8 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 575,
+          "line": 582,
           "column": 21
-        }
-      ]
-    },
-    "a9fe715aafc779dd": {
-      "source": "这是配置意图，需要保存后才会生效",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 160,
-          "column": 11
         }
       ]
     },
@@ -4303,8 +5538,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 91,
+          "line": 107,
           "column": 12
+        }
+      ]
+    },
+    "aa931c66faf48374": {
+      "source": "请先保存 Cursor 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 279,
+          "column": 1
         }
       ]
     },
@@ -4347,8 +5594,20 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 26,
+          "line": 33,
           "column": 12
+        }
+      ]
+    },
+    "ab84f173021dc576": {
+      "source": "Base URL 不可用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 78,
+          "column": 29
         }
       ]
     },
@@ -4359,8 +5618,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1525,
+          "line": 1546,
           "column": 54
+        }
+      ]
+    },
+    "ac29e57a46f41c30": {
+      "source": "最小化",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 261,
+          "column": 13
         }
       ]
     },
@@ -4371,8 +5642,25 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 70,
+          "line": 82,
+          "column": 29
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 105,
           "column": 31
+        }
+      ]
+    },
+    "adbd7277089fb481": {
+      "source": "尚未登录；登录后用于插件、Skills 和 MCP，不会改变 Cursor 客户端当前账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/CursorAccountCard.vue",
+          "line": 69,
+          "column": 10
         }
       ]
     },
@@ -4383,7 +5671,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 240,
+          "line": 251,
           "column": 16
         }
       ]
@@ -4407,7 +5695,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 73,
+          "line": 88,
           "column": 7
         }
       ]
@@ -4431,13 +5719,8 @@
       "refs": [
         {
           "file": "src/views/CursorView.vue",
-          "line": 73,
-          "column": 45
-        },
-        {
-          "file": "src/views/Home.vue",
-          "line": 204,
-          "column": 43
+          "line": 157,
+          "column": 60
         }
       ]
     },
@@ -4453,8 +5736,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 199,
-          "column": 90
+          "line": 300,
+          "column": 88
         }
       ]
     },
@@ -4475,13 +5758,13 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 65,
+          "line": 87,
           "column": 12
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 188,
-          "column": 20
+          "line": 315,
+          "column": 18
         }
       ]
     },
@@ -4492,20 +5775,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1966,
+          "line": 1970,
           "column": 32
-        }
-      ]
-    },
-    "b03a7800deca9eec": {
-      "source": "只影响 Gateway 的本机 HTTP 接口、Bearer token 和公开模型映射；不改变 Cursor 18080/18090、Cursor 会话或工具桥。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 256,
-          "column": 1
         }
       ]
     },
@@ -4560,18 +5831,6 @@
         }
       ]
     },
-    "b263cfea45d8fb9f": {
-      "source": "本机 HTTP 入口",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/Home.vue",
-          "line": 246,
-          "column": 72
-        }
-      ]
-    },
     "b2cae9cd92acbfc8": {
       "source": "留下",
       "kind": "text",
@@ -4579,7 +5838,7 @@
       "refs": [
         {
           "file": "src/router/index.js",
-          "line": 76,
+          "line": 98,
           "column": 17
         }
       ]
@@ -4591,27 +5850,27 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 106,
+          "line": 141,
           "column": 13
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 195,
+          "line": 253,
           "column": 1
         },
         {
           "file": "src/state/appState.js",
-          "line": 1989,
+          "line": 1993,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2026,
+          "line": 2030,
           "column": 32
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 111,
+          "line": 124,
           "column": 1
         }
       ]
@@ -4623,32 +5882,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 791,
+          "line": 798,
           "column": 1
         }
       ]
     },
-    "b3e4b3a38c71912c": {
-      "source": "查看 Cursor / Gateway 是否可用，以及当前会话统计",
+    "b39eff720478fcc8": {
+      "source": "客户端接入",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/Home.vue",
-          "line": 201,
-          "column": 1
-        }
-      ]
-    },
-    "b48b6518293a604e": {
-      "source": "导入配置",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/ModelConfig.vue",
-          "line": 414,
-          "column": 1
+          "file": "src/components/GatewayCard.vue",
+          "line": 317,
+          "column": 34
         }
       ]
     },
@@ -4683,8 +5930,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 177,
+          "line": 171,
           "column": 20
+        }
+      ]
+    },
+    "b6230da0bf753020": {
+      "source": "请先在接入页把 Gateway 配置为启用并保存",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 202,
+          "column": 13
         }
       ]
     },
@@ -4695,20 +5954,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1500,
+          "line": 1521,
           "column": 9
         }
       ]
     },
-    "b6b689f95af6878a": {
-      "source": "只经显式映射解析，不会回落到 provider modelID 或内部 hash。目标适配器变化后需重选。",
+    "b71a1380d98e5d2c": {
+      "source": "腾讯接口",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 227,
-          "column": 1
+          "file": "src/state/modelCatalog.js",
+          "line": 9,
+          "column": 30
         }
       ]
     },
@@ -4719,7 +5978,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 594,
+          "line": 601,
           "column": 15
         }
       ]
@@ -4731,7 +5990,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 169,
+          "line": 163,
           "column": 19
         }
       ]
@@ -4743,7 +6002,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 580,
+          "line": 587,
           "column": 15
         }
       ]
@@ -4755,7 +6014,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 786,
+          "line": 793,
           "column": 21
         }
       ]
@@ -4767,7 +6026,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 681,
+          "line": 688,
           "column": 21
         }
       ]
@@ -4779,8 +6038,25 @@
       "refs": [
         {
           "file": "src/components/HomeAnalyticsPanel.vue",
-          "line": 67,
+          "line": 137,
           "column": 1
+        },
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 159,
+          "column": 1
+        }
+      ]
+    },
+    "b89ba5de74e7b162": {
+      "source": "测试状态",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 570,
+          "column": 18
         }
       ]
     },
@@ -4805,11 +6081,6 @@
           "file": "src/views/Config.vue",
           "line": 207,
           "column": 20
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 176,
-          "column": 20
         }
       ]
     },
@@ -4820,7 +6091,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 31,
+          "line": 32,
           "column": 12
         }
       ]
@@ -4844,8 +6115,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 614,
+          "line": 621,
           "column": 21
+        }
+      ]
+    },
+    "bc3fc9b044c6eed3": {
+      "source": "Cache 写入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 81,
+          "column": 14
         }
       ]
     },
@@ -4856,7 +6139,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 292,
+          "line": 295,
           "column": 21
         }
       ]
@@ -4880,7 +6163,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 514,
+          "line": 526,
           "column": 14
         }
       ]
@@ -4892,7 +6175,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 47,
+          "line": 48,
           "column": 12
         }
       ]
@@ -4904,7 +6187,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 345,
+          "line": 349,
           "column": 19
         }
       ]
@@ -4916,8 +6199,32 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 333,
+          "line": 339,
           "column": 14
+        }
+      ]
+    },
+    "c090af42e7197f44": {
+      "source": "保存后同步应用到所有客户端窗口",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 155,
+          "column": 35
+        }
+      ]
+    },
+    "c0feb0b5c7de9af8": {
+      "source": "低频维护与恢复操作",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 385,
+          "column": 33
         }
       ]
     },
@@ -4928,13 +6235,25 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 251,
+          "line": 287,
           "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 256,
+          "line": 301,
           "column": 21
+        }
+      ]
+    },
+    "c29f73648d787fc1": {
+      "source": "{0} · 共 {1} 个模型",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 81,
+          "column": 10
         }
       ]
     },
@@ -4945,7 +6264,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 96,
+          "line": 112,
           "column": 14
         }
       ]
@@ -4962,20 +6281,8 @@
         },
         {
           "file": "src/views/CursorView.vue",
-          "line": 136,
-          "column": 15
-        }
-      ]
-    },
-    "c5101b7782e38563": {
-      "source": "作用范围",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 254,
-          "column": 59
+          "line": 109,
+          "column": 13
         }
       ]
     },
@@ -4986,8 +6293,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 174,
+          "line": 168,
           "column": 28
+        }
+      ]
+    },
+    "c618a60f69923157": {
+      "source": "Codex 接入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 16,
+          "column": 12
         }
       ]
     },
@@ -4998,7 +6317,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 74,
+          "line": 89,
           "column": 7
         }
       ]
@@ -5010,8 +6329,20 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 225,
-          "column": 46
+          "line": 281,
+          "column": 34
+        }
+      ]
+    },
+    "c6bc6a9b5ffc42d9": {
+      "source": "管理本机配置与多个订阅号授权，账号调用时路由到各自账户",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 45,
+          "column": 1
         }
       ]
     },
@@ -5024,6 +6355,11 @@
           "file": "src/composables/useConfigTransfer.js",
           "line": 18,
           "column": 14
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 488,
+          "column": 15
         }
       ]
     },
@@ -5034,7 +6370,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 825,
+          "line": 832,
           "column": 81
         }
       ]
@@ -5046,7 +6382,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 107,
+          "line": 123,
           "column": 21
         }
       ]
@@ -5058,7 +6394,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 628,
+          "line": 635,
           "column": 21
         }
       ]
@@ -5070,33 +6406,50 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 85,
-          "column": 29
+          "line": 108,
+          "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1813,
+          "line": 1827,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 1815,
+          "line": 1829,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 1849,
+          "line": 1863,
           "column": 93
         },
         {
           "file": "src/state/configProjection.js",
-          "line": 180,
+          "line": 191,
           "column": 65
         },
         {
           "file": "src/state/configProjection.js",
-          "line": 350,
+          "line": 356,
           "column": 63
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 292,
+          "column": 62
+        }
+      ]
+    },
+    "c9b87f516a38ea36": {
+      "source": "五",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 49
         }
       ]
     },
@@ -5108,11 +6461,6 @@
         {
           "file": "src/views/Config.vue",
           "line": 282,
-          "column": 11
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 251,
           "column": 11
         }
       ]
@@ -5136,8 +6484,18 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1475,
+          "line": 1496,
           "column": 51
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 297,
+          "column": 16
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 366,
+          "column": 16
         }
       ]
     },
@@ -5153,6 +6511,18 @@
         }
       ]
     },
+    "cafd6500eb58cff4": {
+      "source": "打开 Cursor 失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 227,
+          "column": 21
+        }
+      ]
+    },
     "cb5d682bac3d1a2d": {
       "source": "重置",
       "kind": "text",
@@ -5160,8 +6530,20 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 307,
+          "line": 310,
           "column": 16
+        }
+      ]
+    },
+    "cc0b8e2a7161436d": {
+      "source": "Base URL 已复制",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 85,
+          "column": 11
         }
       ]
     },
@@ -5184,8 +6566,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 358,
+          "line": 370,
           "column": 12
+        }
+      ]
+    },
+    "cdbe065a83e4141c": {
+      "source": "仅管理多套授权或重新授权现有账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 18,
+          "column": 18
         }
       ]
     },
@@ -5207,19 +6601,9 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 77,
-          "column": 46
-        },
-        {
-          "file": "src/router/index.js",
-          "line": 37,
-          "column": 43
-        },
-        {
           "file": "src/views/CursorView.vue",
-          "line": 61,
-          "column": 43
+          "line": 79,
+          "column": 30
         }
       ]
     },
@@ -5230,7 +6614,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 60,
+          "line": 73,
           "column": 42
         }
       ]
@@ -5242,20 +6626,32 @@
       "refs": [
         {
           "file": "src/components/charts/CacheHitRateChart.vue",
-          "line": 132,
+          "line": 133,
           "column": 20
         }
       ]
     },
-    "d16d76246e444dcb": {
-      "source": "已配置启用",
+    "d03277a79cca2231": {
+      "source": "本地代理与 Backend · 深度集成",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 253,
-          "column": 20
+          "line": 255,
+          "column": 37
+        }
+      ]
+    },
+    "d083dbf956726fe8": {
+      "source": "查看同步",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 66,
+          "column": 26
         }
       ]
     },
@@ -5266,7 +6662,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 505,
+          "line": 517,
           "column": 14
         }
       ]
@@ -5278,8 +6674,8 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 217,
-          "column": 16
+          "line": 59,
+          "column": 7
         }
       ]
     },
@@ -5290,7 +6686,7 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 70,
+          "line": 78,
           "column": 62
         }
       ]
@@ -5302,8 +6698,8 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 264,
-          "column": 39
+          "line": 329,
+          "column": 37
         }
       ]
     },
@@ -5314,12 +6710,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1760,
+          "line": 1781,
           "column": 14
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 251,
+          "line": 287,
           "column": 29
         }
       ]
@@ -5343,13 +6739,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 262,
+          "line": 274,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 292,
+          "line": 304,
           "column": 50
+        }
+      ]
+    },
+    "d50e6ea172b5c9b1": {
+      "source": "配置意图：未启用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 45,
+          "column": 42
         }
       ]
     },
@@ -5360,13 +6768,30 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 742,
+          "line": 749,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 372,
+          "line": 384,
           "column": 49
+        }
+      ]
+    },
+    "d56220435194bc1e": {
+      "source": "列表视图",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 532,
+          "column": 15
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 533,
+          "column": 15
         }
       ]
     },
@@ -5377,8 +6802,37 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1023,
+          "line": 992,
           "column": 34
+        }
+      ]
+    },
+    "d592380e314883ec": {
+      "source": "确定移除当前 {0} 个模型配置吗？移除后需要保存本页才会写入配置。",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 273,
+          "column": 14
+        }
+      ]
+    },
+    "d5b42940b065ce4a": {
+      "source": "停止服务",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 155,
+          "column": 14
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 289,
+          "column": 16
         }
       ]
     },
@@ -5389,8 +6843,32 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 844,
+          "line": 851,
           "column": 81
+        }
+      ]
+    },
+    "d624d5a73f94e185": {
+      "source": "最小化到系统托盘，计划中",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 178,
+          "column": 158
+        }
+      ]
+    },
+    "d634c9412b32fde0": {
+      "source": "刷新采集状态、打开目录或按当前策略清理",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 307,
+          "column": 36
         }
       ]
     },
@@ -5401,7 +6879,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 444,
+          "line": 451,
           "column": 10
         }
       ]
@@ -5418,15 +6896,25 @@
         }
       ]
     },
-    "d6ce4f0f88178144": {
-      "source": "独立用于插件、Skills 和 MCP；不会改变 Cursor 客户端当前账号",
+    "d7032e0cc86c54c4": {
+      "source": "接入中心",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/CursorAccountCard.vue",
-          "line": 170,
-          "column": 1
+          "file": "src/layouts/MainLayout.vue",
+          "line": 100,
+          "column": 12
+        },
+        {
+          "file": "src/router/index.js",
+          "line": 54,
+          "column": 43
+        },
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 114,
+          "column": 32
         }
       ]
     },
@@ -5437,13 +6925,25 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 718,
+          "line": 725,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 393,
+          "line": 405,
           "column": 36
+        }
+      ]
+    },
+    "d7983b0d0de10ef6": {
+      "source": "授权账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/CursorAccountCard.vue",
+          "line": 151,
+          "column": 1
         }
       ]
     },
@@ -5454,8 +6954,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 620,
+          "line": 627,
           "column": 15
+        }
+      ]
+    },
+    "d7eb33fd35702ad4": {
+      "source": "最大空间",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 268,
+          "column": 35
         }
       ]
     },
@@ -5468,11 +6980,18 @@
           "file": "src/views/Config.vue",
           "line": 283,
           "column": 11
-        },
+        }
+      ]
+    },
+    "d84a95ffdff43534": {
+      "source": "为外部 AI 客户端提供 OpenAI 兼容的本机 HTTP 接口",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
         {
-          "file": "src/views/SettingsView.vue",
-          "line": 252,
-          "column": 11
+          "file": "src/components/GatewayCard.vue",
+          "line": 197,
+          "column": 33
         }
       ]
     },
@@ -5488,7 +7007,7 @@
         },
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 323,
+          "line": 327,
           "column": 21
         }
       ]
@@ -5512,13 +7031,25 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 884,
+          "line": 891,
           "column": 19
         },
         {
           "file": "src/state/appState.js",
-          "line": 314,
+          "line": 326,
           "column": 18
+        }
+      ]
+    },
+    "db2cc10e3696f027": {
+      "source": "warning/error 始终保存",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 252,
+          "column": 35
         }
       ]
     },
@@ -5529,8 +7060,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 499,
+          "line": 511,
           "column": 14
+        }
+      ]
+    },
+    "dc2d3d295e3e16f0": {
+      "source": "Codex 与 Claude Code 仅作入口占位，不会加载示例账号或发起授权。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 171,
+          "column": 1
         }
       ]
     },
@@ -5541,7 +7084,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1506,
+          "line": 1527,
           "column": 5
         }
       ]
@@ -5553,20 +7096,37 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 185,
-          "column": 12
+          "line": 237,
+          "column": 1
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 366,
+          "column": 16
         }
       ]
     },
-    "ddf29ff6d407ace6": {
-      "source": "Gateway 的公开模型别名在网关集成页管理；本页只管理上游适配器。",
+    "dde8755715344bdb": {
+      "source": "保存 Gateway 配置",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/ModelConfig.vue",
-          "line": 383,
-          "column": 1
+          "file": "src/components/GatewayCard.vue",
+          "line": 360,
+          "column": 14
+        }
+      ]
+    },
+    "de07b5383874b2a3": {
+      "source": "六",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/HomeAnalyticsPanel.vue",
+          "line": 32,
+          "column": 54
         }
       ]
     },
@@ -5575,11 +7135,6 @@
       "kind": "text",
       "placeholders": 0,
       "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 161,
-          "column": 11
-        },
         {
           "file": "src/views/Config.vue",
           "line": 298,
@@ -5594,8 +7149,8 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 86,
-          "column": 31
+          "line": 117,
+          "column": 12
         }
       ]
     },
@@ -5611,30 +7166,15 @@
         }
       ]
     },
-    "e00566c4af987c3a": {
-      "source": "保存本页",
+    "dfd06a068256929d": {
+      "source": "本地代理设置尚未应用",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 282,
-          "column": 14
-        },
-        {
           "file": "src/views/CursorView.vue",
-          "line": 75,
-          "column": 14
-        },
-        {
-          "file": "src/views/ModelConfig.vue",
-          "line": 432,
+          "line": 133,
           "column": 16
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 109,
-          "column": 14
         }
       ]
     },
@@ -5645,7 +7185,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 170,
+          "line": 164,
           "column": 22
         }
       ]
@@ -5662,7 +7202,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1666,
+          "line": 1687,
           "column": 21
         }
       ]
@@ -5686,7 +7226,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 176,
+          "line": 170,
           "column": 21
         }
       ]
@@ -5698,7 +7238,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 226,
+          "line": 237,
           "column": 14
         }
       ]
@@ -5710,7 +7250,7 @@
       "refs": [
         {
           "file": "src/components/HomeMetricsCard.vue",
-          "line": 371,
+          "line": 375,
           "column": 19
         }
       ]
@@ -5734,7 +7274,7 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 167,
+          "line": 170,
           "column": 12
         }
       ]
@@ -5746,7 +7286,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 86,
+          "line": 102,
           "column": 21
         }
       ]
@@ -5758,8 +7298,20 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 146,
+          "line": 154,
           "column": 20
+        }
+      ]
+    },
+    "e4fd8ba4f8e2220d": {
+      "source": "个映射；只经显式映射解析，不回落到内部 modelID",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 283,
+          "column": 36
         }
       ]
     },
@@ -5770,7 +7322,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1501,
+          "line": 1522,
           "column": 34
         }
       ]
@@ -5782,7 +7334,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 173,
+          "line": 179,
           "column": 1
         }
       ]
@@ -5794,7 +7346,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 73,
+          "line": 108,
           "column": 13
         }
       ]
@@ -5806,8 +7358,8 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 430,
-          "column": 131
+          "line": 503,
+          "column": 1
         }
       ]
     },
@@ -5818,7 +7370,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 237,
+          "line": 297,
           "column": 70
         }
       ]
@@ -5830,7 +7382,7 @@
       "refs": [
         {
           "file": "src/state/configProjection.js",
-          "line": 189,
+          "line": 200,
           "column": 12
         }
       ]
@@ -5844,6 +7396,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 189,
           "column": 5
+        }
+      ]
+    },
+    "e6fc5eb8c3b83c01": {
+      "source": "未启动",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 157,
+          "column": 26
         }
       ]
     },
@@ -5866,7 +7430,7 @@
       "refs": [
         {
           "file": "src/components/CursorAccountCard.vue",
-          "line": 59,
+          "line": 72,
           "column": 43
         }
       ]
@@ -5878,8 +7442,20 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 168,
+          "line": 171,
           "column": 14
+        }
+      ]
+    },
+    "e8c6f34f7a9fd602": {
+      "source": "跳过 SSL 验证",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 373,
+          "column": 77
         }
       ]
     },
@@ -5890,8 +7466,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1048,
+          "line": 1017,
           "column": 32
+        }
+      ]
+    },
+    "eab73165e59e7674": {
+      "source": "本机 HTTP 入口 · 供外部 AI 客户端使用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 311,
+          "column": 37
         }
       ]
     },
@@ -5916,11 +7504,6 @@
           "file": "src/views/Config.vue",
           "line": 151,
           "column": 1
-        },
-        {
-          "file": "src/views/SettingsView.vue",
-          "line": 120,
-          "column": 1
         }
       ]
     },
@@ -5936,6 +7519,23 @@
         }
       ]
     },
+    "ec2b74ac3125e7a9": {
+      "source": "会话与日志",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 27,
+          "column": 24
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 232,
+          "column": 36
+        }
+      ]
+    },
     "ec3b17a75db49e24": {
       "source": "{0} t/s | 首字 {1}",
       "kind": "template",
@@ -5943,8 +7543,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 268,
+          "line": 280,
           "column": 10
+        }
+      ]
+    },
+    "ec8afbec40fa21f7": {
+      "source": "需先在接入页把 Gateway 配置为启用并保存",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 341,
+          "column": 1
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 363,
+          "column": 21
         }
       ]
     },
@@ -5955,8 +7572,44 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1529,
+          "line": 1550,
           "column": 16
+        }
+      ]
+    },
+    "ed208bbe241ea89e": {
+      "source": "内容与更新",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 182,
+          "column": 63
+        }
+      ]
+    },
+    "ed31fbb483ee1b0a": {
+      "source": "操作",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 572,
+          "column": 18
+        }
+      ]
+    },
+    "ede6d08f397df283": {
+      "source": "Cursor 设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/CursorView.vue",
+          "line": 131,
+          "column": 34
         }
       ]
     },
@@ -5967,7 +7620,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 765,
+          "line": 772,
           "column": 19
         }
       ]
@@ -5979,8 +7632,20 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 38,
+          "line": 39,
           "column": 9
+        }
+      ]
+    },
+    "ee9ddfab850ce0d0": {
+      "source": "已请求打开 Cursor",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 225,
+          "column": 13
         }
       ]
     },
@@ -5996,8 +7661,32 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 141,
-          "column": 64
+          "line": 255,
+          "column": 35
+        }
+      ]
+    },
+    "ef21541406bd3186": {
+      "source": "别名 / 上游 ID",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 568,
+          "column": 18
+        }
+      ]
+    },
+    "ef285db92c9ceea3": {
+      "source": "已生成，仅可通过复制或重新生成读取",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 58,
+          "column": 7
         }
       ]
     },
@@ -6013,8 +7702,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 200,
-          "column": 59
+          "line": 301,
+          "column": 57
         }
       ]
     },
@@ -6025,8 +7714,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 163,
+          "line": 157,
           "column": 12
+        }
+      ]
+    },
+    "f11cd26c612a8254": {
+      "source": "默认仅允许本机访问",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 225,
+          "column": 33
         }
       ]
     },
@@ -6037,12 +7738,22 @@
       "refs": [
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 459,
+          "line": 586,
+          "column": 19
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 587,
+          "column": 19
+        },
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 661,
           "column": 15
         },
         {
           "file": "src/views/ModelConfig.vue",
-          "line": 460,
+          "line": 662,
           "column": 15
         }
       ]
@@ -6054,7 +7765,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 179,
+          "line": 173,
           "column": 16
         }
       ]
@@ -6071,19 +7782,19 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 151,
-          "column": 66
+          "line": 265,
+          "column": 35
         }
       ]
     },
-    "f3072b1460205917": {
-      "source": "保存后允许 Gateway 启动；不等于当前进程已经运行",
+    "f366b8769e419ebf": {
+      "source": "开机自启动",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/GatewayCard.vue",
-          "line": 155,
+          "file": "src/views/SettingsView.vue",
+          "line": 165,
           "column": 1
         }
       ]
@@ -6095,8 +7806,37 @@
       "refs": [
         {
           "file": "src/components/charts/CacheHitRateChart.vue",
-          "line": 93,
+          "line": 94,
           "column": 18
+        }
+      ]
+    },
+    "f3b39245976133a7": {
+      "source": "接入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 99,
+          "column": 12
+        }
+      ]
+    },
+    "f3f905f2853a4dba": {
+      "source": "基本设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 26,
+          "column": 25
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 138,
+          "column": 36
         }
       ]
     },
@@ -6107,7 +7847,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 379,
+          "line": 391,
           "column": 14
         }
       ]
@@ -6119,7 +7859,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1477,
+          "line": 1498,
           "column": 38
         }
       ]
@@ -6148,23 +7888,40 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 702,
+          "line": 709,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 726,
+          "line": 733,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 750,
+          "line": 757,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 800,
+          "line": 807,
           "column": 21
+        }
+      ]
+    },
+    "f51f2971b667fcc2": {
+      "source": "配置 →",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Home.vue",
+          "line": 302,
+          "column": 85
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 370,
+          "column": 16
         }
       ]
     },
@@ -6175,8 +7932,49 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 138,
+          "line": 164,
           "column": 21
+        }
+      ]
+    },
+    "f5494110cb26d393": {
+      "source": "删除模型配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/ModelConfig.vue",
+          "line": 291,
+          "column": 12
+        }
+      ]
+    },
+    "f54baedb8cdc7b2e": {
+      "source": "{0}: 暂无",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/charts/HomeTrendChart.vue",
+          "line": 140,
+          "column": 20
+        }
+      ]
+    },
+    "f55886a0a1d0f655": {
+      "source": "刷新运行状态",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 248,
+          "column": 11
+        },
+        {
+          "file": "src/layouts/MainLayout.vue",
+          "line": 249,
+          "column": 11
         }
       ]
     },
@@ -6217,6 +8015,18 @@
         }
       ]
     },
+    "f56fea44baf66141": {
+      "source": "1 个账号；独立用于插件、Skills 和 MCP，后台调用策略不在此配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/CursorAccountCard.vue",
+          "line": 67,
+          "column": 12
+        }
+      ]
+    },
     "f5857434608149b5": {
       "source": "已应用",
       "kind": "text",
@@ -6224,8 +8034,8 @@
       "refs": [
         {
           "file": "src/views/CursorView.vue",
-          "line": 142,
-          "column": 13
+          "line": 140,
+          "column": 14
         }
       ]
     },
@@ -6236,12 +8046,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 517,
+          "line": 529,
           "column": 14
         },
         {
           "file": "src/state/appState.js",
-          "line": 523,
+          "line": 535,
           "column": 14
         }
       ]
@@ -6258,8 +8068,8 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 188,
-          "column": 20
+          "line": 315,
+          "column": 18
         }
       ]
     },
@@ -6270,7 +8080,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 49,
+          "line": 50,
           "column": 10
         }
       ]
@@ -6281,9 +8091,9 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/Home.vue",
-          "line": 294,
-          "column": 24
+          "file": "src/state/homeMetrics.js",
+          "line": 3,
+          "column": 26
         }
       ]
     },
@@ -6299,15 +8109,44 @@
         }
       ]
     },
+    "f9126e0f2c90c2ba": {
+      "source": "{0} 配置",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 178,
+          "column": 22
+        }
+      ]
+    },
     "f95ea7f4c063eea7": {
       "source": "未启用",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 83,
-          "column": 52
+          "file": "src/views/AccessView.vue",
+          "line": 157,
+          "column": 26
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 319,
+          "column": 17
+        }
+      ]
+    },
+    "fa7dc8fa820bc0c4": {
+      "source": "恢复基本设置、日志与网络配置的默认值，不影响模型和接入账号授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 392,
+          "column": 65
         }
       ]
     },
@@ -6338,7 +8177,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1552,
+          "line": 1573,
           "column": 12
         }
       ]
@@ -6350,20 +8189,42 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1475,
+          "line": 1496,
           "column": 40
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 289,
+          "column": 16
+        },
+        {
+          "file": "src/views/Home.vue",
+          "line": 357,
+          "column": 16
         }
       ]
     },
-    "fea405f9b01d1416": {
-      "source": "概览",
+    "fcd23b487d38a03b": {
+      "source": "日志维护",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 76,
-          "column": 23
+          "file": "src/views/SettingsView.vue",
+          "line": 306,
+          "column": 36
+        }
+      ]
+    },
+    "fe51a8c86091b1e6": {
+      "source": "HTTP 代理",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 359,
+          "column": 77
         }
       ]
     },
@@ -6374,7 +8235,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 261,
+          "line": 311,
           "column": 15
         }
       ]
@@ -6386,8 +8247,20 @@
       "refs": [
         {
           "file": "src/views/Home.vue",
-          "line": 158,
+          "line": 161,
           "column": 35
+        }
+      ]
+    },
+    "ff69241cfc272aab": {
+      "source": "重置所有设置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 390,
+          "column": 1
         }
       ]
     }

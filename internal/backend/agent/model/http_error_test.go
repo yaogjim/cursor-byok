@@ -168,6 +168,9 @@ func TestClassifyHTTPStatusAndProviderError(t *testing.T) {
 	if got := ClassifyHTTPStatus(http.StatusInternalServerError); got != ProviderErrorServer5xx {
 		t.Fatalf("500 category = %q", got)
 	}
+	if got := ClassifyHTTPStatus(HTTPStatusCloudflareTimeout); got != ProviderErrorServer5xx {
+		t.Fatalf("524 category = %q", got)
+	}
 	if got := ClassifyHTTPStatus(529); got != ProviderErrorServer5xx {
 		t.Fatalf("529 category = %q", got)
 	}

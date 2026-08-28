@@ -110,6 +110,7 @@
 - relay、官方直连、本地实现、no-op 和禁用之间的逐 RPC 功能影响。
 - Repository/Docs/Upload 改为诚实失败或完整持久化后的 Cursor UI/状态机影响。
 - 客户端体验治理的网络零请求、旧配置迁移、窗口首屏和发布资源实机验收。
+- v5 四页导航、`/access` 接入中心、系统主题、持久小时 usage 桶、Cursor 应用启动/有界重启，以及 Codex/Claude Code 真实授权。
 - schema v2 的项目/轮次/能力语义采集、独立分析 GUI、多维检索、调查案例、AI 调查包和修复后复验闭环。
 - 客户端“日志分析工具”按钮对独立安装应用的跨平台检测、启动与未安装引导。
 
@@ -514,3 +515,37 @@ MERGE_MSG 记录的 **8 个文本冲突**：
 - 非阻塞残余测试风险：缺少 `IsConnected` 精确路由测试；缺少 `ForceBackgroundShell` × replay trim 交叉测试。
 - 未用 `-tags gui` 专项编译 `tools/log-analyzer/cmd/log-analyzer-gui`。
 - 用户已确认创建本地 merge commit 并推进 `noad`。本记录仍不宣称已 push；运行时未验证边界仍成立。
+
+## 15. v5 四页控制面（已批准 Design，未实现）
+
+- **工作包**：`ui-v5-shell-20260826`
+- **决策来源**：已批准计划「v5 界面重构复审后的完整实施计划」；原型 [`docs/cursor-assistant-v5.html`](cursor-assistant-v5.html)
+- **权威冻结**：工作决策基线 §7.5 / §10.14；系统 Design §4.2 / §10.2 / §14.16
+- **状态**：阶段 0 文档已冻结；**代码未开始**。不得写成已实现、已验证或已交付。
+
+### 15.1 与当前已落地能力的关系
+
+- 当前控制面仍是五页同层导航（`/`、`/cursor`、`/gateway`、`/models`、`/settings`）与 daily `GetHomeMetricsReport`（`7d`/`30d`/`all`）。该实现见双集成工作包，Wails 视觉仍未做。
+- v5 将主导航改为总览 / 接入 / 模型 / 设置，并把 Cursor、Gateway 收进 `/access?client=...`。这是新产品 IA，不是对五页实现的事后描述。
+- section 保存、Gateway token 红线、18080/18090 隔离和「不用 `recent_events` 冒充完整热力图」继续有效，并扩展为：小时曲线也不得从 `recent_events` 推断。
+
+### 15.2 已冻结、尚未落地的合同
+
+| 能力 | 冻结口径 | 当前代码 |
+| --- | --- | --- |
+| 四页 IA | 顶部标签：总览 `/`、接入 `/access`、模型 `/models`、设置 `/settings` | 仍为五页侧栏 |
+| 旧路由 | `/cursor`→`/access?client=cursor`，`/gateway`→`/access?client=gateway`；`/config`、`/model-config` 保持 | 仅后两项重定向已落地 |
+| 脏状态 | 按 client/scope 检查；接入标签脏点为 OR；禁止总保存 | 按整页 dirty |
+| 计数 | 接入数、模型数来自真实状态 | 原型「3 / 14」不得进入产品 |
+| 模型导入导出 | 文案必须标明完整配置，不是仅模型文件 | 现有能力是完整配置；文案未按 v5 改写 |
+| 主题 | `light` / `dark` / `system`，默认 `light` | 仅 `light` / `dark` |
+| 小时统计 | 持久 `usage.json` 小时桶；`24h` 用小时，`30d`/`all` 用日桶 | 仅 daily；无小时字段 |
+| Cursor 重启/打开 | 无 `RestartProxy` 则不显示重启；打开应用必须有平台失败语义 | 无有界重启、无 LaunchCursor 合同 |
+| Codex/Claude | 生产空态/`unsupported`；fixture 仅测试/DEV；真实授权另过 Design Gate | 无账号中心；原型 example.com 账号禁止进生产 |
+
+### 15.3 明确不能宣称
+
+- 未改前端/后端源码，未跑 Go/前端门禁，未做 Wails 视觉。
+- 原型 HTML 不是产品实现。
+- Codex HTTP `/v1/responses` 已存在，不等于 Codex 订阅账号授权中心已实现。
+- 本记录不改变 ACP 工作包的 blocked 状态。

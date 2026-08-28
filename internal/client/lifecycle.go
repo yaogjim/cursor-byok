@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"cursor/internal/backend"
 	"cursor/internal/cursor"
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
@@ -115,7 +116,10 @@ func (s *ProxyService) StartProxy() (ProxyState, error) {
 		if s.proxy != nil {
 			_ = s.proxy.Stop(stopCtx)
 		}
-		_ = s.backendHost.Stop(stopCtx)
+		_ = s.backendHost.StopWithCause(stopCtx, backend.ShutdownCause{
+			Reason:    backend.ShutdownReasonServiceStop,
+			Initiator: backend.ShutdownInitiatorStartFail,
+		})
 		startErr := fmt.Errorf("服务已启动，但注入 Cursor 配置失败: %w", err)
 		logger.Errorf("start service failed step=apply_cursor_settings err=%v", startErr)
 		s.setLastError(startErr)
@@ -162,7 +166,12 @@ func (s *ProxyService) StopProxy() (ProxyState, error) {
 	}
 	if s.backendHost != nil {
 		logger.Infof("stopping embedded backend listen_addr=%s", s.backendHost.ListenAddr())
-		if err := s.backendHost.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		stopBackendCtx, stopBackendCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopBackendCancel()
+		if err := s.backendHost.StopWithCause(stopBackendCtx, backend.ShutdownCause{
+			Reason:    backend.ShutdownReasonServiceStop,
+			Initiator: backend.ShutdownInitiatorStopProxy,
+		}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return fail("stop_backend", err)
 		}
 	}
@@ -268,6 +277,25 @@ func (s *ProxyService) emitState() {
 
 // ShutdownForQuit 用于处理与 ShutdownForQuit 相关的逻辑。
 func (s *ProxyService) ShutdownForQuit() {
+	s.ShutdownForQuitFrom(backend.ShutdownInitiatorOnShutdown)
+}
+
+// ShutdownForQuitFrom 以指定 initiator 执行进程退出清理；托盘退出与 OnShutdown 共用同一条幂等路径。
+func (s *ProxyService) ShutdownForQuitFrom(initiator string) {
+	if s == nil {
+		return
+	}
+	s.shutdownOnce.Do(func() {
+		s.doShutdownForQuit(initiator)
+	})
+}
+
+func (s *ProxyService) doShutdownForQuit(initiator string) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if strings.TrimSpace(initiator) == "" {
+		initiator = backend.ShutdownInitiatorOnShutdown
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var finalErr error
@@ -278,20 +306,25 @@ func (s *ProxyService) ShutdownForQuit() {
 	}
 	s.stopGatewayBestEffort()
 	if s.proxy != nil {
-		if err := s.proxy.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := s.proxy.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			finalErr = err
+		}
+	}
+	if s.backendHost != nil {
+		backendCtx, backendCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.backendHost.StopWithCause(backendCtx, backend.ShutdownCause{
+			Reason:    backend.ShutdownReasonAppQuit,
+			Initiator: initiator,
+		}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			finalErr = errors.Join(finalErr, err)
+		}
+		backendCancel()
+		if err := s.backendHost.CloseObservability(); err != nil {
+			finalErr = errors.Join(finalErr, err)
 		}
 	}
 	if err := s.ClearCursorSettings(); err != nil {
 		finalErr = errors.Join(finalErr, err)
-	}
-	if s.backendHost != nil {
-		if err := s.backendHost.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			finalErr = errors.Join(finalErr, err)
-		}
-		if err := s.backendHost.CloseObservability(); err != nil {
-			finalErr = errors.Join(finalErr, err)
-		}
 	}
 	if s.cursorAccount != nil {
 		s.cursorAccount.Shutdown()

@@ -242,6 +242,177 @@ func TestProviderRetry503Exhausted(t *testing.T) {
 	}
 }
 
+func TestHTTPRetryObservationAllowlist(t *testing.T) {
+	cases := []struct {
+		status      int
+		retryable   bool
+		reason      string
+		suppression string
+	}{
+		{http.StatusTooManyRequests, true, "http_429", "not_recorded"},
+		{http.StatusInternalServerError, true, "http_5xx", "not_recorded"},
+		{http.StatusBadGateway, true, "http_5xx", "not_recorded"},
+		{http.StatusServiceUnavailable, true, "http_5xx", "not_recorded"},
+		{http.StatusGatewayTimeout, true, "http_5xx", "not_recorded"},
+		{HTTPStatusCloudflareTimeout, true, "http_524", "not_recorded"},
+		{529, false, "not_recorded", "http_status"},
+		{http.StatusBadRequest, false, "not_recorded", "http_status"},
+		{http.StatusOK, false, "not_recorded", "http_status"},
+	}
+	for _, test := range cases {
+		retryable, reason, suppression := HTTPRetryObservation(test.status)
+		if retryable != test.retryable || reason != test.reason || suppression != test.suppression {
+			t.Fatalf("status %d: retryable=%v reason=%q suppression=%q, want %v %q %q",
+				test.status, retryable, reason, suppression, test.retryable, test.reason, test.suppression)
+		}
+		if isRetryableHTTPStatus(test.status) != test.retryable {
+			t.Fatalf("isRetryableHTTPStatus(%d) = %v, want %v", test.status, !test.retryable, test.retryable)
+		}
+	}
+}
+
+func TestProviderRetry524ThenSucceeds(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		if hits == 1 {
+			writer.WriteHeader(HTTPStatusCloudflareTimeout)
+			_, _ = writer.Write([]byte("timeout"))
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("ok-body"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	var builds int
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			builds++
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("retry after 524: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatalf("read success body: %v", err)
+	}
+	if string(body) != "ok-body" {
+		t.Fatalf("2xx body = %q", body)
+	}
+	if hits != 2 || builds != 2 {
+		t.Fatalf("hits=%d builds=%d, want 2/2", hits, builds)
+	}
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != 2 {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].Status != HTTPStatusCloudflareTimeout || events[0].RetryDecision != retryDecisionRetry || events[0].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("first 524 response = %+v", events[0])
+	}
+	if events[1].RetryDecision != retryDecisionSuccessAfterRetry {
+		t.Fatalf("final response = %+v", events[1])
+	}
+}
+
+func TestProviderRetry524Exhausted(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(HTTPStatusCloudflareTimeout)
+		_, _ = writer.Write([]byte("timeout"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	var builds int
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			builds++
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("exhausted 524 should return response: %v", err)
+	}
+	if response.StatusCode != HTTPStatusCloudflareTimeout {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if hits != 3 || builds != 3 {
+		t.Fatalf("hits=%d builds=%d, want 3/3", hits, builds)
+	}
+	_ = response.Body.Close()
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != 3 {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].RetryDecision != retryDecisionRetry || events[1].RetryDecision != retryDecisionRetry {
+		t.Fatalf("intermediate decisions = %q, %q", events[0].RetryDecision, events[1].RetryDecision)
+	}
+	if events[2].RetryDecision != retryDecisionExhausted || events[2].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("final event = %+v", events[2])
+	}
+}
+
+func TestProviderRetry529DoesNotRetry(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(529)
+		_, _ = writer.Write([]byte("overloaded"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("529 should return response: %v", err)
+	}
+	if response.StatusCode != 529 {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if hits != 1 {
+		t.Fatalf("hits = %d, want 1", hits)
+	}
+	_ = response.Body.Close()
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != 1 {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].RetryDecision != retryDecisionNoRetryStatus || events[0].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("529 event = %+v", events[0])
+	}
+}
+
 func TestProviderRetry401DoesNotRetry(t *testing.T) {
 	hits := 0
 	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1004,11 +1175,12 @@ func TestLLMRequestArtifactOmitsRequestAndMessageBodies(t *testing.T) {
 	observer := &privacyArtifactObserver{}
 	const secret = "child prompt and result must not be logged"
 	req := StreamRequest{
-		RequestID:   "request-privacy",
-		RunID:       "run-privacy",
-		ModelCallID: "call-privacy",
-		Messages:    []Message{{Role: "user", Content: secret}},
-		Observer:    observer,
+		RequestID:              "request-privacy",
+		RunID:                  "run-privacy",
+		ModelCallID:            "call-privacy",
+		FallbackArtifactSuffix: "_fb0",
+		Messages:               []Message{{Role: "user", Content: secret}},
+		Observer:               observer,
 	}
 	recordLLMRequestArtifact(req, "openai", "gpt-test", http.MethodPost, "https://example.test/v1/responses?api_key=url-secret#fragment", map[string]any{"input": secret, "api_key": "secret-key"})
 	encoded, err := json.Marshal(observer.request)
@@ -1020,6 +1192,12 @@ func TestLLMRequestArtifactOmitsRequestAndMessageBodies(t *testing.T) {
 	}
 	if observer.request["body_byte_len"] == nil {
 		t.Fatalf("request artifact omitted body size metadata: %#v", observer.request)
+	}
+	if observer.request["model_call_id"] != "call-privacy" {
+		t.Fatalf("canonical model_call_id = %#v", observer.request["model_call_id"])
+	}
+	if observer.request["artifact_model_call_id"] != "call-privacy_fb0" || observer.request["fallback_channel_index"] != 0 {
+		t.Fatalf("fallback artifact identity = %#v", observer.request)
 	}
 }
 

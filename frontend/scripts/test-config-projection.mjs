@@ -17,7 +17,6 @@ import {
   PROVIDER_FALLBACK_LIMITS,
   selectAdaptersForEndpointTest,
   shouldTestModelAdapterEndpoint,
-  stripDerivedModelAdapterIDs,
   validateProviderFallbackAdapters,
   validateProviderFallbackBudget,
   DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -29,7 +28,9 @@ import {
   validateUpstreamCapacityAdapters,
   normalizeGatewayConfig,
   DEFAULT_GATEWAY_CONFIG,
+  resolveEffectiveTheme,
 } from "../src/state/configProjection.js";
+import { applyModelAdapterTypeChange } from "../src/state/modelAdapterTypeChange.js";
 
 function assertEqual(actual, expected, label) {
   const left = JSON.stringify(actual);
@@ -68,6 +69,25 @@ const expectedDefaults = {
   updates: { checkOnStartup: false },
 };
 assertEqual(defaults, expectedDefaults, "preference defaults mismatch");
+
+const systemProjected = buildClientPreferencesFromState({
+  appearanceTheme: " SYSTEM ",
+  advertisingEnabled: false,
+  updateCheckOnStartup: false,
+});
+assertEqual(systemProjected.appearance.theme, "system", "state projection must persist system theme");
+
+const systemNormalized = normalizeClientPreferences({
+  appearance: { theme: "system" },
+});
+assertEqual(systemNormalized.appearance.theme, "system", "normalize must keep system theme");
+
+assertEqual(resolveEffectiveTheme("light", true), "light", "explicit light ignores OS dark");
+assertEqual(resolveEffectiveTheme("dark", false), "dark", "explicit dark ignores OS light");
+assertEqual(resolveEffectiveTheme("system", true), "dark", "system follows OS dark");
+assertEqual(resolveEffectiveTheme("system", false), "light", "system follows OS light");
+assertEqual(resolveEffectiveTheme("unsupported", true), "light", "invalid theme resolves to default light");
+assertEqual(resolveEffectiveTheme("", true), "light", "empty theme resolves to default light");
 
 const legacyFull = normalizeObservabilityConfig(undefined, true);
 if (legacyFull.mode !== "full") {
@@ -311,7 +331,7 @@ assertEqual(
   "wait 31 inline error",
 );
 
-// ── 使用 backend 已返回的完整 adapter id 校验，然后序列化剥 id ──
+// ── 使用 backend 已返回的完整 adapter id 校验并作为保存身份提示 ──
 
 function physicalAdapter(id, name, url) {
   return {
@@ -385,19 +405,13 @@ assert(legalPersist.ok, `legal fallback save should succeed: ${legalPersist.erro
 assertEqual(legalPersist.adaptersWithIds[0].id, idA, "backend id A must be kept");
 assertEqual(legalPersist.adaptersWithIds[1].id, idB, "backend id B must be kept");
 assertEqual(legalPersist.adaptersWithIds[2].id, idLogical, "backend logical id must be kept");
-assert(
-  legalPersist.payloadAdapters.every((item) => !Object.prototype.hasOwnProperty.call(item, "id")),
-  `persist payload must strip id: ${JSON.stringify(legalPersist.payloadAdapters)}`,
-);
+assertEqual(legalPersist.payloadAdapters[0].id, idA, "persist payload keeps backend id A as identity hint");
+assertEqual(legalPersist.payloadAdapters[1].id, idB, "persist payload keeps backend id B as identity hint");
+assertEqual(legalPersist.payloadAdapters[2].id, idLogical, "persist payload keeps logical id as identity hint");
 assertEqual(
   legalPersist.payloadAdapters[2].providerFallback,
   logicalAdapter.providerFallback,
   "legal fallback fields survive persist",
-);
-assertEqual(
-  stripDerivedModelAdapterIDs(legalPersist.adaptersWithIds).every((item) => !("id" in item)),
-  true,
-  "stripDerivedModelAdapterIDs removes id",
 );
 
 const nestedPrimary = prepareModelAdaptersForPersist(
@@ -589,9 +603,10 @@ assertEqual(
   logicalAdapter.providerFallback,
   "enabled roundtrip keeps fallback chain and budget",
 );
-assert(
-  enabledRoundtrip.payload.modelAdapters.every((item) => !Object.prototype.hasOwnProperty.call(item, "id")),
-  "roundtrip persist payload must not include id",
+assertEqual(
+  enabledRoundtrip.payload.modelAdapters.map((item) => item.id),
+  [idA, idB, idLogical],
+  "roundtrip persist payload keeps backend ids as identity hints",
 );
 
 const disabledRoundtripAdapters = [
@@ -839,6 +854,7 @@ function extractSourceFunction(source, name) {
 const frontendSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const projectionSource = readFileSync(path.join(frontendSrc, "state/configProjection.js"), "utf8");
 const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"), "utf8");
+const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapterTypeChange.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
 const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
@@ -878,7 +894,71 @@ assert(
     && !projectionSource.includes("upstreamCapacityGroupKey"),
   "frontend must not persist derived capacity group keys",
 );
-assert(editorSource.includes("isLogicalRoutingAdapter(a)"), "fallback channel selectors must exclude logical aliases");
+assert(editorSource.includes("applyModelAdapterTypeChange"), "ModelEditor must use the shared type-change helper");
+assert(
+  !/draft\.modelID\s*=\s*["']["']/.test(extractSourceFunction(editorSource, "handleModelTypeChange")),
+  "switching model type must not clear modelID",
+);
+assert(
+  editorSource.includes("currentModelIDOptions"),
+  "ModelEditor must keep the current model identifier in the combobox options",
+);
+const typeChangeHelper = extractSourceFunction(typeChangeSource, "applyModelAdapterTypeChange");
+assert(
+  typeChangeHelper.includes("draft.type = nextType")
+    && !/modelID\s*=/.test(typeChangeHelper),
+  "type change helper must keep the current model identifier",
+);
+assert(
+  appStateSource.includes("export { applyModelAdapterTypeChange }"),
+  "appState must re-export applyModelAdapterTypeChange",
+);
+
+function modelIdentifierError(adapters) {
+  for (const [index, adapter] of adapters.entries()) {
+    if (!String(adapter?.modelID || "").trim()) {
+      return `模型 ${index + 1} 的模型标识不能为空`;
+    }
+  }
+  return "";
+}
+
+{
+  const draft = {
+    type: "openai",
+    modelID: "cc",
+    openAIEndpoint: "/v1/chat/completions",
+    anthropicThinkingEffort: "",
+  };
+  applyModelAdapterTypeChange(draft, "anthropic");
+  assertEqual(draft.type, "anthropic", "type switch to anthropic");
+  assertEqual(draft.modelID, "cc", "type switch keeps modelID");
+  assertEqual(draft.anthropicThinkingEffort, "xhigh", "type switch fills anthropic thinking default");
+  assertEqual(modelIdentifierError([draft]), "", "kept modelID must pass the user-facing identifier check");
+}
+
+{
+  const cleared = { type: "openai", modelID: "" };
+  assertEqual(
+    modelIdentifierError([cleared]),
+    "模型 1 的模型标识不能为空",
+    "empty modelID reproduces the user save error after type switch",
+  );
+}
+
+{
+  const draft = {
+    type: "anthropic",
+    modelID: "gpt-5.5",
+    openAIEndpoint: "",
+    anthropicThinkingEffort: "high",
+  };
+  applyModelAdapterTypeChange(draft, "openai");
+  assertEqual(draft.type, "openai", "type switch to openai");
+  assertEqual(draft.modelID, "gpt-5.5", "openai switch keeps modelID");
+  assertEqual(draft.openAIEndpoint, "/v1/chat/completions", "openai switch fills missing endpoint");
+}
+
 assert(editorSource.includes("formatFallbackBudgetInput"), "ModelEditor getter must hide NaN via helper");
 assert(editorSource.includes("parseFallbackBudgetInput"), "ModelEditor setter must parse via helper");
 assert(editorSource.includes("逻辑路由（建议仅子代理）"), "ModelEditor must mark logical routing");
@@ -981,7 +1061,264 @@ assert(modelConfigSource.includes("persistScopedUserConfig(\"models\")"), "model
 assert(modelConfigSource.includes("handleSavePage"), "models page must offer save-this-page");
 const sortHandler = extractSourceFunction(modelConfigSource, "handleModelSort");
 assert(!sortHandler.includes("saveModelAdapterOrder"), "model sort must stay a page draft until save");
-assert(routerSource.includes("isRouteConfigDirty"), "router must confirm leaving dirty config pages");
+assert(routerSource.includes("isConfigSectionDirty"), "router must confirm leaving dirty config pages");
 assert(editorSource.includes("setModelsEditorDraftDirty"), "ModelEditor must report unsaved draft dirty");
+
+const accessSource = readFileSync(path.join(frontendSrc, "router/access.js"), "utf8");
+const accessViewSource = readFileSync(path.join(frontendSrc, "views/AccessView.vue"), "utf8");
+const unsupportedSource = readFileSync(path.join(frontendSrc, "views/UnsupportedClientPanel.vue"), "utf8");
+const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
+const layoutSource = readFileSync(path.join(frontendSrc, "layouts/MainLayout.vue"), "utf8");
+const catalogSource = readFileSync(path.join(frontendSrc, "state/modelCatalog.js"), "utf8");
+
+const {
+  parseAccessClient,
+  accessClientConfigScope,
+  accessLeaveConfigScopes,
+  canonicalizeAccessRoute,
+  isAccessTabDirty,
+  sameAccessNavigation,
+  ACCESS_CONFIG_SCOPES,
+  ACCESS_PATH,
+  DEFAULT_ACCESS_CLIENT,
+} = await import("../src/router/access.js");
+const { filterModelAdapters, modelProviderTabs } = await import("../src/state/modelCatalog.js");
+
+assertEqual(parseAccessClient(""), DEFAULT_ACCESS_CLIENT, "empty access client defaults to gateway");
+assertEqual(parseAccessClient("CURSOR"), "cursor", "access client is case-insensitive");
+assertEqual(parseAccessClient("nope"), "gateway", "unknown access client falls back to gateway");
+assertEqual(parseAccessClient(["cursor", "gateway"]), "cursor", "array query uses the first client");
+assertEqual(accessClientConfigScope("cursor"), "cursor", "cursor access maps to cursor section");
+assertEqual(accessClientConfigScope("gateway"), "gateway", "gateway access maps to gateway section");
+assertEqual(accessClientConfigScope("codex"), "", "codex has no config section");
+assertEqual(accessClientConfigScope("claude"), "", "claude has no config section");
+assertEqual(accessClientConfigScope(["cursor"]), "cursor", "array cursor query maps to cursor section");
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  ["cursor"],
+  "switching access clients checks the current client scope",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "codex" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  [],
+  "codex has no draft scope during in-access switches",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "claude" } },
+    { path: "/models" },
+  ),
+  [...ACCESS_CONFIG_SCOPES],
+  "leaving access from claude checks cursor and gateway together",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/settings" },
+  ),
+  [...ACCESS_CONFIG_SCOPES],
+  "leaving access to another top-level route checks both config scopes",
+);
+assert(isAccessTabDirty({ cursor: true, gateway: false }), "access tab dirty is OR of cursor");
+assert(isAccessTabDirty({ cursor: false, gateway: true }), "access tab dirty is OR of gateway");
+assert(!isAccessTabDirty({ cursor: false, gateway: false }), "access tab clean when both clean");
+assert(
+  sameAccessNavigation(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  "same access client is the same navigation",
+);
+assert(
+  !sameAccessNavigation(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  "switching access client is a new navigation",
+);
+assert(
+  sameAccessNavigation(
+    { path: "/access", query: { client: "nope" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  "unknown client is the same navigation as gateway",
+);
+assert(
+  !sameAccessNavigation(
+    { path: "/access", query: { client: "nope" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  "unknown client leaving cursor is a new navigation",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: "cursor" } }),
+  null,
+  "canonical cursor query is left alone",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: "nope" } })?.query.client,
+  DEFAULT_ACCESS_CLIENT,
+  "unknown client canonicalizes to gateway",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: ["cursor", "gateway"] } })?.query.client,
+  "cursor",
+  "array query canonicalizes to the first known client",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: "/cursor", query: { client: "nope" } }),
+  null,
+  "canonicalize ignores non-access paths",
+);
+
+assert(routerSource.includes('path: "/cursor"'), "old /cursor route remains as redirect");
+assert(routerSource.includes('path: "/gateway"'), "old /gateway route remains as redirect");
+assert(routerSource.includes("accessRouteLocation(\"cursor\")"), "old /cursor redirects into access cursor");
+assert(routerSource.includes("accessRouteLocation(\"gateway\")"), "old /gateway redirects into access gateway");
+assert(routerSource.includes("canonicalizeAccessRoute"), "router canonicalizes access query before dirty guard");
+assert(routerSource.includes("accessLeaveConfigScopes"), "access dirty guard uses explicit leave scopes");
+assert(routerSource.includes("leaveConfigScopes"), "router discards the scopes it actually checked");
+assert(routerSource.includes("discardConfigSectionDraft(scope)"), "confirmed leave discards each checked scope");
+assert(appStateSource.includes("accessClientConfigScope"), "appState maps /access query to section");
+assert(appStateSource.includes("isAccessTabDirty"), "appState exposes access tab OR dirty");
+assert(layoutSource.includes("configSectionDirty.access"), "shell access tab uses OR dirty");
+assert(layoutSource.includes("app-tabbar"), "shell uses v5 top tab bar");
+assert(layoutSource.includes("--wails-draggable: drag"), "shell keeps Wails drag region");
+assert(layoutSource.includes("--wails-draggable: no-drag"), "tab controls remain no-drag");
+assert(!layoutSource.includes("h-[40px] w-screen"), "tab bar must not be covered by a 40px drag overlay");
+assert(!layoutSource.includes("z-[9999]"), "leftover full-width drag overlay z-index must be gone");
+assert(layoutSource.includes("Window.Minimise"), "shell keeps Windows minimize");
+assert(layoutSource.includes("checkForAppUpdates"), "shell keeps update check");
+assert(layoutSource.includes("LocaleSelect"), "shell keeps locale select");
+assert(layoutSource.includes("proxyBadgeText"), "shell keeps proxy badge");
+assert(layoutSource.includes("lastAccessClient"), "access nav remembers last client");
+assert(layoutSource.includes("accessRouteLocation"), "access nav always includes client query");
+assert(layoutSource.includes("gatewayRunning"), "access badge counts running gateway");
+assert(!layoutSource.includes("gatewayEnabled"), "access badge must not count merely enabled gateway");
+
+assert(accessViewSource.includes("GatewayCard"), "AccessView reuses GatewayCard");
+assert(accessViewSource.includes("CursorView"), "AccessView reuses Cursor features");
+assert(accessViewSource.includes("UnsupportedClientPanel"), "AccessView uses empty unsupported panels");
+assert(accessViewSource.includes('v-if="activeClient === \'gateway\'"'), "AccessView remounts client panes with v-if");
+assert(!accessViewSource.includes("keep-alive"), "AccessView must not keep-alive client panes");
+assert(accessViewSource.includes("is-embedded-pane"), "cursor pane uses nested overflow layout");
+assert(!accessViewSource.includes('aria-current="page"'), "client list buttons must not use page current");
+assert(accessViewSource.includes("icon-[bxl--openai]"), "Codex uses the OpenAI brand icon");
+assert(accessViewSource.includes("icon-[logos--claude-icon]"), "Claude Code uses the Anthropic brand icon");
+assert(accessViewSource.includes("is-codex"), "Codex icon keeps its brand class");
+assert(accessViewSource.includes("is-claude"), "Claude Code icon keeps its brand class");
+assert(!/example\.(com|org)/.test(accessViewSource), "AccessView must not ship sample accounts");
+assert(!/developer@|team@|personal@|work@/.test(accessViewSource + unsupportedSource), "unsupported panels must not ship sample emails");
+assert(unsupportedSource.includes("添加授权"), "codex/claude keep the screenshot add-auth action");
+assert(unsupportedSource.includes("暂无授权账号"), "codex/claude use empty account state");
+assert(!unsupportedSource.includes("@click"), "codex/claude auth actions stay unwired");
+const unsupportedButtons = [...unsupportedSource.matchAll(/<Button\b([^>]*)>/g)].map((match) => match[1]);
+assert(unsupportedButtons.length > 0, "codex/claude keep screenshot action buttons");
+assert(
+  unsupportedButtons.every((attrs) => /\bdisabled\b/.test(attrs)),
+  "codex/claude auth/sync/save buttons stay disabled",
+);
+assert(settingsSource.includes("基本设置") && settingsSource.includes("会话与日志") && settingsSource.includes("网络与请求") && settingsSource.includes("数据与恢复"), "settings has four segmented panels");
+assert(settingsSource.includes("inert"), "planned settings controls must be inert");
+assert(settingsSource.includes("开机自启动"), "settings shows planned autostart as inert");
+assert(settingsSource.includes('role="group"'), "settings segmented control uses group semantics");
+assert(!settingsSource.includes('role="tablist"'), "settings must not expose incomplete tabs");
+assert(settingsSource.includes("LocaleSelect"), "language remains immediate LocaleSelect");
+assert(appStateSource.includes('value: "system"'), "theme options include system");
+assert(appStateSource.includes("prefers-color-scheme"), "system theme resolves through matchMedia");
+assert(appStateSource.includes("effectiveAppearanceTheme"), "frontend tracks resolved theme separately from persisted enum");
+const homeTrendChartSource = readFileSync(path.join(frontendSrc, "components/charts/HomeTrendChart.vue"), "utf8");
+assert(homeTrendChartSource.includes("effectiveAppearanceTheme"), "trend chart redraws when resolved theme changes");
+assert(!settingsSource.includes("不能端到端保存 system"), "settings no longer treats system as planned-only");
+assert(settingsSource.includes("persistScopedUserConfig(\"settings\")"), "settings still saves its own section");
+assert(modelConfigSource.includes("filterModelAdapters"), "models page uses shared search/provider filter");
+assert(modelConfigSource.includes("layoutMode"), "models page has list/grid toggle");
+assert(modelConfigSource.includes("handleDuplicateModelAdapter"), "list/grid keep duplicate");
+assert(modelConfigSource.includes("handleDeleteModelAdapter"), "list/grid keep delete");
+assert(modelConfigSource.includes("showModal"), "model delete asks for confirmation");
+assert(modelConfigSource.includes("handleImportConfig"), "models import semantics remain");
+assert(modelConfigSource.includes("handleExportConfig"), "models export semantics remain");
+assert(modelConfigSource.includes("导入完整配置"), "models import button names full-config transfer");
+assert(modelConfigSource.includes("导出完整配置"), "models export button names full-config transfer");
+function extractNamedButtonInner(source, title) {
+  const match = source.match(new RegExp(`<Button[\\s\\S]*?title="${title}"[\\s\\S]*?>([\\s\\S]*?)</Button>`));
+  return match ? match[1] : "";
+}
+assert(!extractNamedButtonInner(modelConfigSource, "导入完整配置").includes("icon-["), "models import button has no icon");
+assert(!extractNamedButtonInner(modelConfigSource, "导出完整配置").includes("icon-["), "models export button has no icon");
+const deleteModelFn = extractSourceFunction(appStateSource, "deleteModelAdapterAt");
+const duplicateModelFn = extractSourceFunction(appStateSource, "duplicateModelAdapterAt");
+const deleteHandler = extractSourceFunction(modelConfigSource, "handleDeleteModelAdapter");
+assert(!deleteModelFn.includes("persistConfigPayload"), "model delete stays a page draft until save");
+assert(deleteModelFn.includes("appState.modelAdapters"), "model delete mutates the draft list");
+assert(!duplicateModelFn.includes("persistConfigPayload"), "model duplicate stays a page draft until save");
+assert(duplicateModelFn.includes("appState.modelAdapters"), "model duplicate mutates the draft list");
+assert(deleteHandler.includes("showModal"), "delete handler confirms before mutating");
+assert(catalogSource.includes("adapterSearchText"), "model catalog search is a pure helper");
+
+const catalogAdapters = [
+  { type: "openai", displayName: "gpt", modelID: "gpt-5", baseURL: "https://api.openai.com", openAIEndpoint: "/v1/responses" },
+  { type: "anthropic", displayName: "claude", modelID: "claude-3", baseURL: "https://api.anthropic.com" },
+];
+assertEqual(filterModelAdapters(catalogAdapters, { type: "openai" }).map((item) => item.modelID), ["gpt-5"], "provider filter keeps openai");
+assertEqual(filterModelAdapters(catalogAdapters, { query: "claude-3" }).map((item) => item.modelID), ["claude-3"], "search matches upstream id");
+assertEqual(filterModelAdapters(catalogAdapters, { query: "/v1/responses" }).map((item) => item.modelID), ["gpt-5"], "search matches endpoint");
+assertEqual(
+  modelProviderTabs(catalogAdapters).map((tab) => [tab.value, tab.count]),
+  [
+    ["all", 2],
+    ["openai", 1],
+    ["anthropic", 1],
+    ["google", 0],
+    ["deepseek", 0],
+    ["xai", 0],
+    ["qwen", 0],
+    ["moonshot", 0],
+    ["tencent", 0],
+  ],
+  "provider tabs keep the full catalog and count real adapters",
+);
+
+const cursorViewSource = readFileSync(path.join(frontendSrc, "views/CursorView.vue"), "utf8");
+assert(cursorViewSource.includes("embedded"), "CursorView supports nested access layout");
+assert(cursorViewSource.includes("p-0"), "nested CursorView strips page padding");
+
+const localeDir = path.join(frontendSrc, "i18n/locales");
+const zhMessages = JSON.parse(readFileSync(path.join(localeDir, "zh-CN.json"), "utf8"));
+const requiredLocaleSources = new Set([
+  "主导航",
+  "总览",
+  "接入",
+  "接入中心",
+  "{0} 已接入",
+  "Cursor 助手",
+  "刷新运行状态",
+  "共享入口",
+  "接入方式",
+  "基本设置",
+  "会话与日志",
+  "网络与请求",
+  "数据与恢复",
+  "设置分组",
+  "开机自启动",
+  "跟随系统",
+  "删除模型配置",
+  "确定删除「{0}」吗？删除后需要保存本页才会写入配置。",
+]);
+const zhBySource = new Map(Object.entries(zhMessages).map(([id, source]) => [source, id]));
+for (const source of requiredLocaleSources) {
+  const id = zhBySource.get(source);
+  assert(id, `zh-CN must contain source ${source}`);
+  for (const locale of ["zh-CN", "en-US", "ja-JP", "ru-RU"]) {
+    const messages = JSON.parse(readFileSync(path.join(localeDir, `${locale}.json`), "utf8"));
+    assert(String(messages[id] || "").trim(), `${locale} must translate ${source}`);
+  }
+}
 
 console.log("config projection tests passed");

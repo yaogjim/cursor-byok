@@ -24,12 +24,19 @@ type HomeMetricsSummary struct {
 // MetricsService defines overview metrics methods exposed through Wails.
 type MetricsService struct{}
 
-// HomeMetricsReport contains range-filtered aggregate and daily metrics.
+// HomeMetricsReport contains a unified range report.
+// Daily remains populated for 7d/30d/all so existing daily consumers keep working.
 type HomeMetricsReport struct {
-	Range    string                        `json:"range"`
-	Timezone string                        `json:"timezone"`
-	Summary  HomeMetricsSummary            `json:"summary"`
-	Daily    []historymetrics.DailySummary `json:"daily"`
+	Range       string                        `json:"range"`
+	Granularity string                        `json:"granularity"`
+	Timezone    string                        `json:"timezone"`
+	Start       string                        `json:"start"`
+	End         string                        `json:"end"`
+	GeneratedAt string                        `json:"generatedAt"`
+	DataVersion string                        `json:"dataVersion"`
+	Summary     HomeMetricsSummary            `json:"summary"`
+	Daily       []historymetrics.DailySummary `json:"daily"`
+	Buckets     []historymetrics.Bucket       `json:"buckets"`
 }
 
 // NewMetricsService creates the metrics service.
@@ -59,7 +66,7 @@ func (service *MetricsService) GetHomeMetricsSummary() (HomeMetricsSummary, erro
 	}, nil
 }
 
-// GetHomeMetricsReport returns daily metrics for 7d, 30d, or all.
+// GetHomeMetricsReport returns 24h hourly buckets or 7d/30d/all daily buckets.
 func (service *MetricsService) GetHomeMetricsReport(rangeName string) (HomeMetricsReport, error) {
 	if err := appdata.EnsureAssistantHome(); err != nil {
 		return HomeMetricsReport{}, err
@@ -68,44 +75,32 @@ func (service *MetricsService) GetHomeMetricsReport(rangeName string) (HomeMetri
 	if err != nil {
 		return HomeMetricsReport{}, err
 	}
-	selected := historymetrics.SelectDailyRange(summary.Daily, rangeName, time.Now().UTC())
-	return HomeMetricsReport{
-		Range:    historymetrics.NormalizeRange(rangeName),
-		Timezone: "UTC",
-		Daily:    selected,
-		Summary:  summarizeDaily(selected),
-	}, nil
+	built := historymetrics.BuildRangeReport(summary, rangeName, time.Now().UTC())
+	return homeMetricsReportFromRange(built), nil
 }
 
-func summarizeDaily(items []historymetrics.DailySummary) HomeMetricsSummary {
-	var providerCalls, turns, valid, invalid int
-	var requestTokens, promptTokens, cacheRead, cacheWrite int64
-	for _, item := range items {
-		providerCalls += int(item.ProviderCalls)
-		turns += int(item.TurnsTotal)
-		valid += int(item.ValidTurnsTotal)
-		invalid += int(item.InvalidTurnsTotal)
-		requestTokens += item.RequestTokens
-		promptTokens += item.PromptTokens
-		cacheRead += item.CacheReadTokens
-		cacheWrite += item.CacheWriteTokens
-	}
-	var rate *float64
-	if cacheRead+promptTokens-cacheRead-cacheWrite > 0 {
-		input := promptTokens - cacheRead - cacheWrite
-		value := float64(cacheRead) / float64(cacheRead+input)
-		rate = &value
-	}
-	return HomeMetricsSummary{
-		ProviderCallsTotal: providerCalls,
-		TurnsTotal:         turns,
-		ValidTurnsTotal:    valid,
-		InvalidTurnsTotal:  invalid,
-		RequestTokensTotal: requestTokens,
-		PromptTokensTotal:  promptTokens,
-		CacheReadTokens:    cacheRead,
-		CacheWriteTokens:   cacheWrite,
-		CacheHitRate:       rate,
+func homeMetricsReportFromRange(built historymetrics.RangeReport) HomeMetricsReport {
+	return HomeMetricsReport{
+		Range:       built.Range,
+		Granularity: built.Granularity,
+		Timezone:    built.Timezone,
+		Start:       built.Start,
+		End:         built.End,
+		GeneratedAt: built.GeneratedAt,
+		DataVersion: built.DataVersion,
+		Daily:       built.Daily,
+		Buckets:     built.Buckets,
+		Summary: HomeMetricsSummary{
+			ProviderCallsTotal: built.Summary.ProviderCallsTotal,
+			TurnsTotal:         built.Summary.TurnsTotal,
+			ValidTurnsTotal:    built.Summary.ValidTurnsTotal,
+			InvalidTurnsTotal:  built.Summary.InvalidTurnsTotal,
+			RequestTokensTotal: built.Summary.RequestTokensTotal,
+			PromptTokensTotal:  built.Summary.PromptTokensTotal,
+			CacheReadTokens:    built.Summary.CacheReadTokens,
+			CacheWriteTokens:   built.Summary.CacheWriteTokens,
+			CacheHitRate:       built.Summary.CacheHitRate,
+		},
 	}
 }
 

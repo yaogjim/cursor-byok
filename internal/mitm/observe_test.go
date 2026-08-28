@@ -123,6 +123,28 @@ func TestClassifyTrafficPathFirst(t *testing.T) {
 	}
 }
 
+func TestClassifyCapabilityAndOperation(t *testing.T) {
+	tests := []struct {
+		path       string
+		capability string
+		operation  string
+	}{
+		{path: "/aiserver.v1.FileSyncService/UnknownOp", capability: "filesync", operation: "filesync.request"},
+		{path: "/aiserver.v1.AiService/WriteGitCommitMessage", capability: "git", operation: "git.request"},
+		{path: "/aiserver.v1.RepositoryService/FastUpdateFileV2", capability: "repository", operation: "repository.request"},
+		{path: "/aiserver.v1.BidiService/BidiAppend", capability: "unknown", operation: "transport.forward"},
+		{path: "/unknown/resource", capability: "unknown", operation: "transport.forward"},
+	}
+	for _, test := range tests {
+		if got := ClassifyCapability(test.path); got != test.capability {
+			t.Fatalf("ClassifyCapability(%q) = %q, want %q", test.path, got, test.capability)
+		}
+		if got := ClassifyOperation(test.capability); got != test.operation {
+			t.Fatalf("ClassifyOperation(%q) = %q, want %q", test.capability, got, test.operation)
+		}
+	}
+}
+
 func TestRedactObservabilityPathStripsQueryAndDynamicSegments(t *testing.T) {
 	got := redactObservabilityPath("/aiserver.v1.AiService/GetDoc/550e8400-e29b-41d4-a716-446655440000?token=secret-token#frag")
 	if strings.Contains(got, "secret-token") || strings.Contains(got, "550e8400") || strings.Contains(got, "?") {
@@ -652,4 +674,151 @@ func readTraceFile(t *testing.T, sessionPath string) string {
 		t.Fatalf("read events.jsonl: %v", err)
 	}
 	return string(payload)
+}
+
+func TestHandshakeEventSeverityIsDecoupledFromStatus(t *testing.T) {
+	client := handshakeEvent(handshakeObservation{
+		Source:  handshakeSourceGoproxyClient,
+		Host:    "api2.cursor.sh:443",
+		ErrText: "remote error: tls: unknown certificate",
+	}, &connectState{ConnectionID: "conn-client", Action: actionMITM, Host: "api2.cursor.sh:443"})
+	if client.Status != "error" || client.ErrorCategory != errorClientUnknownCA || client.Severity != observability.SeverityWarning {
+		t.Fatalf("client handshake = %+v", client)
+	}
+	if fieldString(client, "source") == "" || fieldString(client, "host") != "api2.cursor.sh" || fieldString(client, "connection_id") != "conn-client" {
+		t.Fatalf("client handshake lost query fields: %#v", client.Fields)
+	}
+
+	mismatch := handshakeEvent(handshakeObservation{
+		Source: handshakeSourceHTTPServer,
+		Err:    tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"},
+	}, nil)
+	if mismatch.ErrorCategory != errorHandshakeMismatch || mismatch.Severity != observability.SeverityWarning || mismatch.Status != "error" {
+		t.Fatalf("mismatch handshake = %+v", mismatch)
+	}
+
+	upstream := handshakeEvent(handshakeObservation{
+		Source: handshakeSourceUpstream,
+		Host:   "api2.cursor.sh:443",
+		Action: actionBackendForward,
+		Err:    x509.UnknownAuthorityError{Cert: &x509.Certificate{}},
+	}, &connectState{ConnectionID: "conn-up", Action: actionBackendForward, Host: "api2.cursor.sh:443"})
+	if upstream.ErrorCategory != errorUpstreamUnknownCA || upstream.Severity != observability.SeverityError || upstream.Status != "error" {
+		t.Fatalf("upstream handshake = %+v", upstream)
+	}
+	if !isClientHandshakeNoise(errorClientUnknownCA) || !isClientHandshakeNoise(errorHandshakeMismatch) || isClientHandshakeNoise(errorUpstreamUnknownCA) || isClientHandshakeNoise("backend_unavailable") {
+		t.Fatalf("client handshake sampling allowlist is wrong")
+	}
+}
+
+func TestBackendForwardExpected404KeepsHTTPSemanticsAndUnknownPathStaysUnknown(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/aiserver.v1.FileSyncService/UnknownOp":
+			writer.WriteHeader(http.StatusNotFound)
+		case "/aiserver.v1.AiService/WriteGitCommitMessage":
+			writer.WriteHeader(http.StatusNotFound)
+		case "/aiserver.v1.BidiService/BidiAppend":
+			writer.WriteHeader(http.StatusBadGateway)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(backend.Close)
+
+	capture := &recordingCapture{}
+	server, err := NewProxyServer("127.0.0.1:0", backend.URL, "", "", nil, capture)
+	if err != nil {
+		t.Fatalf("NewProxyServer() error = %v", err)
+	}
+
+	forward := func(path string) observability.Event {
+		req := httptest.NewRequest(http.MethodPost, "https://api2.cursor.sh"+path, strings.NewReader("{}"))
+		req.Host = "api2.cursor.sh"
+		resp, err := server.forwardToServer(req, &connectState{ConnectionID: "conn-404", Action: actionMITM, Host: "api2.cursor.sh:443"})
+		if err != nil {
+			t.Fatalf("forwardToServer(%s) error = %v", path, err)
+		}
+		status := resp.StatusCode
+		_ = resp.Body.Close()
+		events := capture.snapshot()
+		var finished observability.Event
+		for _, event := range events {
+			if event.Event == "backend_forward_finished" && event.Route == redactObservabilityPath(path) {
+				finished = event
+			}
+		}
+		if finished.Event == "" {
+			t.Fatalf("missing backend_forward_finished for %s in %+v", path, events)
+		}
+		if statusCodeOf(finished) != status {
+			t.Fatalf("HTTP status changed for %s: response=%d fields=%#v", path, status, finished.Fields)
+		}
+		return finished
+	}
+
+	filesync := forward("/aiserver.v1.FileSyncService/UnknownOp")
+	if filesync.Status != "error" || filesync.ErrorCategory != "client_error" || filesync.Severity != observability.SeverityWarning {
+		t.Fatalf("filesync 404 event = %+v", filesync)
+	}
+	if filesync.Capability != "filesync" || filesync.Operation != "filesync.request" || statusCodeOf(filesync) != http.StatusNotFound {
+		t.Fatalf("filesync 404 classification = %+v fields=%#v", filesync, filesync.Fields)
+	}
+
+	scm := forward("/aiserver.v1.AiService/WriteGitCommitMessage")
+	if scm.Status != "error" || scm.Capability != "git" || scm.Severity != observability.SeverityWarning || statusCodeOf(scm) != http.StatusNotFound {
+		t.Fatalf("scm 404 event = %+v fields=%#v", scm, scm.Fields)
+	}
+
+	unknown := forward("/mystery/endpoint")
+	if unknown.ImplementationState != observability.ImplementationUnknown || unknown.Capability != "unknown" {
+		t.Fatalf("unknown path event = %+v", unknown)
+	}
+	if unknown.Severity != observability.SeverityWarning || unknown.Status != "error" {
+		t.Fatalf("unknown 404 should stay warning without changing HTTP status: %+v", unknown)
+	}
+
+	serverError := forward("/aiserver.v1.BidiService/BidiAppend")
+	if serverError.Severity != observability.SeverityError || serverError.ErrorCategory != "server_error" || statusCodeOf(serverError) != http.StatusBadGateway {
+		t.Fatalf("5xx event = %+v fields=%#v", serverError, serverError.Fields)
+	}
+}
+
+func TestBackendUnavailableStaysError(t *testing.T) {
+	capture := &recordingCapture{}
+	server, err := NewProxyServer("127.0.0.1:0", "http://127.0.0.1:1", "", "", nil, capture)
+	if err != nil {
+		t.Fatalf("NewProxyServer() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "https://api2.cursor.sh/aiserver.v1.BidiService/BidiAppend", strings.NewReader("{}"))
+	req.Host = "api2.cursor.sh"
+	_, err = server.forwardToServer(req, &connectState{ConnectionID: "conn-down"})
+	if err == nil {
+		t.Fatal("expected backend unavailable")
+	}
+	var finished observability.Event
+	for _, event := range capture.snapshot() {
+		if event.Event == "backend_forward_finished" {
+			finished = event
+		}
+	}
+	if finished.ErrorCategory != "backend_unavailable" || finished.Severity != observability.SeverityError || finished.Status != "error" {
+		t.Fatalf("unavailable event = %+v", finished)
+	}
+}
+
+func statusCodeOf(event observability.Event) int {
+	if event.Fields == nil {
+		return 0
+	}
+	switch value := event.Fields["status_code"].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }

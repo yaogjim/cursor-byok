@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"cursor/internal/appearance"
 	"cursor/internal/modelchannel"
 )
 
@@ -47,6 +48,15 @@ const (
 	GatewayTokenByteLength   = 32
 	PreGatewayBackupSuffix   = ".bak-pre-gateway"
 	configFilePerm           = 0o600
+
+	DefaultStreamContinuationMaxPerTurn         = 1
+	MaxStreamContinuationMaxPerTurn             = 1
+	DefaultStreamContinuationDeadlineSeconds    = 120
+	MinStreamContinuationDeadlineSeconds        = 5
+	MaxStreamContinuationDeadlineSeconds        = 600
+	DefaultStreamContinuationOverlapWindowChars = 2048
+	MinStreamContinuationOverlapWindowChars     = 64
+	MaxStreamContinuationOverlapWindowChars     = 8192
 )
 
 type ModelAdapterConfig struct {
@@ -146,20 +156,30 @@ type ObservabilityConfig struct {
 	MaxDiskMB     int    `json:"maxDiskMB" yaml:"maxDiskMB"`
 }
 
+// StreamContinuationConfig 控制同一 turn 下中断后的自动续写。
+// 缺省关闭；旧配置缺失视为 disabled，无磁盘迁移。maxPerTurn 固定上限 1，禁止嵌套。
+type StreamContinuationConfig struct {
+	Enabled              bool `json:"enabled" yaml:"enabled"`
+	MaxPerTurn           int  `json:"maxPerTurn,omitempty" yaml:"maxPerTurn,omitempty"`
+	TotalDeadlineSeconds int  `json:"totalDeadlineSeconds,omitempty" yaml:"totalDeadlineSeconds,omitempty"`
+	OverlapWindowChars   int  `json:"overlapWindowChars,omitempty" yaml:"overlapWindowChars,omitempty"`
+}
+
 type Config struct {
-	LegacyLog                 *bool                `json:"-" yaml:"log,omitempty"`
-	Observability             ObservabilityConfig  `json:"observability" yaml:"observability"`
-	ProviderStreamIdleTimeout int                  `json:"providerStreamIdleTimeout" yaml:"providerStreamIdleTimeout"`
-	BackendListenAddr         string               `json:"backendListenAddr" yaml:"backendListenAddr"`
-	ProxyListenAddr           string               `json:"proxyListenAddr" yaml:"proxyListenAddr"`
-	ModelAdapters             []ModelAdapterConfig `json:"modelAdapters" yaml:"modelAdapters"`
-	Routing                   RoutingConfig        `json:"routing" yaml:"routing"`
-	HomeMetrics               HomeMetricsConfig    `json:"homeMetrics" yaml:"homeMetrics"`
-	Appearance                AppearanceConfig     `json:"appearance" yaml:"appearance"`
-	Advertising               AdvertisingConfig    `json:"advertising" yaml:"advertising"`
-	Updates                   UpdatesConfig        `json:"updates" yaml:"updates"`
-	LastAgentModelHash        string               `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
-	Gateway                   GatewayConfig        `json:"gateway" yaml:"gateway"`
+	LegacyLog                 *bool                    `json:"-" yaml:"log,omitempty"`
+	Observability             ObservabilityConfig      `json:"observability" yaml:"observability"`
+	ProviderStreamIdleTimeout int                      `json:"providerStreamIdleTimeout" yaml:"providerStreamIdleTimeout"`
+	BackendListenAddr         string                   `json:"backendListenAddr" yaml:"backendListenAddr"`
+	ProxyListenAddr           string                   `json:"proxyListenAddr" yaml:"proxyListenAddr"`
+	ModelAdapters             []ModelAdapterConfig     `json:"modelAdapters" yaml:"modelAdapters"`
+	Routing                   RoutingConfig            `json:"routing" yaml:"routing"`
+	HomeMetrics               HomeMetricsConfig        `json:"homeMetrics" yaml:"homeMetrics"`
+	Appearance                AppearanceConfig         `json:"appearance" yaml:"appearance"`
+	Advertising               AdvertisingConfig        `json:"advertising" yaml:"advertising"`
+	Updates                   UpdatesConfig            `json:"updates" yaml:"updates"`
+	LastAgentModelHash        string                   `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
+	Gateway                   GatewayConfig            `json:"gateway" yaml:"gateway"`
+	StreamContinuation        StreamContinuationConfig `json:"streamContinuation,omitempty" yaml:"streamContinuation,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -190,6 +210,10 @@ func DefaultConfig() Config {
 }
 
 func NormalizeConfig(input Config) (Config, error) {
+	return normalizeConfig(input, nil)
+}
+
+func normalizeConfig(input Config, previousAdapters []ModelAdapterConfig) (Config, error) {
 	output := DefaultConfig()
 	if strings.TrimSpace(input.Observability.Mode) != "" && normalizeObservabilityMode(input.Observability.Mode) == "" {
 		return Config{}, errors.New("observability.mode 仅支持 off、basic 或 full")
@@ -207,30 +231,59 @@ func NormalizeConfig(input Config) (Config, error) {
 	output.BackendListenAddr = backendListenAddr
 	output.ProxyListenAddr = proxyListenAddr
 	output.HomeMetrics.IncludeCacheWriteInHitRate = input.HomeMetrics.IncludeCacheWriteInHitRate
-	output.Appearance.Theme = normalizeTheme(input.Appearance.Theme)
+	output.Appearance.Theme = appearance.Normalize(input.Appearance.Theme)
 	output.Advertising.Enabled = input.Advertising.Enabled
 	output.Updates.CheckOnStartup = input.Updates.CheckOnStartup
-	output.LastAgentModelHash = strings.TrimSpace(input.LastAgentModelHash)
 	output.Routing.Mode = normalizeRoutingMode(input.Routing.Mode)
 	if output.Routing.Mode == "" {
 		output.Routing.Mode = DefaultRoutingMode
 	}
-	adapters, err := NormalizeModelAdapterConfigs(input.ModelAdapters)
+	adapters, knownIDs, err := normalizeModelAdapterIdentities(input.ModelAdapters)
 	if err != nil {
+		return Config{}, err
+	}
+	// Use the submitted previous IDs as stable identity hints. Newly added
+	// adapters have no hint, so deletion plus insertion is never auto-paired.
+	remap := deriveChannelIDRemap(previousAdapters, input.ModelAdapters, adapters)
+	applyChannelIDRemap(adapters, remap)
+	normalizeModelAdapterSorts(adapters)
+	if err := validateProviderFallbacks(adapters, knownIDs); err != nil {
+		return Config{}, err
+	}
+	if err := validateUpstreamCapacityGroups(adapters); err != nil {
 		return Config{}, err
 	}
 	output.ModelAdapters = adapters
-	gateway, err := NormalizeGatewayConfig(input.Gateway)
+	gateway := input.Gateway
+	applyChannelIDRemapToGateway(&gateway, remap)
+	normalizedGateway, err := NormalizeGatewayConfig(gateway)
 	if err != nil {
 		return Config{}, err
 	}
-	output.Gateway = gateway
+	output.Gateway = normalizedGateway
+	output.LastAgentModelHash = rewriteChannelID(strings.TrimSpace(input.LastAgentModelHash), remap)
+	output.StreamContinuation = normalizeStreamContinuationConfig(input.StreamContinuation)
 	return output, nil
 }
 
 func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterConfig, error) {
+	adapters, knownIDs, err := normalizeModelAdapterIdentities(input)
+	if err != nil {
+		return nil, err
+	}
+	normalizeModelAdapterSorts(adapters)
+	if err := validateProviderFallbacks(adapters, knownIDs); err != nil {
+		return nil, err
+	}
+	if err := validateUpstreamCapacityGroups(adapters); err != nil {
+		return nil, err
+	}
+	return adapters, nil
+}
+
+func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapterConfig, map[string]struct{}, error) {
 	if len(input) == 0 {
-		return []ModelAdapterConfig{}, nil
+		return []ModelAdapterConfig{}, map[string]struct{}{}, nil
 	}
 
 	normalized := make([]ModelAdapterConfig, 0, len(input))
@@ -238,7 +291,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 	for _, item := range input {
 		baseURL, err := modelchannel.NormalizeBaseURL(item.BaseURL)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		nextType := normalizeModelAdapterType(item.Type)
 		next := ModelAdapterConfig{
@@ -269,56 +322,49 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
 		switch {
 		case next.DisplayName == "":
-			return nil, errors.New("模型适配器 displayName 不能为空")
+			return nil, nil, errors.New("模型适配器 displayName 不能为空")
 		case next.Type == "":
-			return nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
+			return nil, nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
 		case next.APIKey == "":
-			return nil, errors.New("模型适配器 apiKey 不能为空")
+			return nil, nil, errors.New("模型适配器 apiKey 不能为空")
 		case next.TooltipData == "":
-			return nil, errors.New("模型适配器 tooltipData 不能为空")
+			return nil, nil, errors.New("模型适配器 tooltipData 不能为空")
 		case next.ModelID == "":
-			return nil, errors.New("模型适配器 modelID 不能为空")
+			return nil, nil, errors.New("模型适配器 modelID 不能为空")
 		case next.Type == "openai" && !isSupportedReasoningEffort(next.ReasoningEffort):
-			return nil, errors.New("模型适配器 reasoningEffort 仅支持空值、low、medium、high、xhigh、max")
+			return nil, nil, errors.New("模型适配器 reasoningEffort 仅支持空值、low、medium、high、xhigh、max")
 		case next.Type == "openai" && next.OpenAIEndpoint == "":
-			return nil, errors.New("模型适配器 openAIEndpoint 仅支持 /v1/responses、/v1/chat/completions 或 /custom（自定义路径）")
+			return nil, nil, errors.New("模型适配器 openAIEndpoint 仅支持 /v1/responses、/v1/chat/completions 或 /custom（自定义路径）")
 		case next.Type == "openai" && next.OpenAIExtraParamsEnabled:
 			if err := validateJSONMap(next.OpenAIExtraParamsJSON, "openAIExtraParamsJSON"); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.CustomHeadersEnabled:
 			if err := validateHeadersJSON(next.CustomHeadersJSON); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.Type == "anthropic" && next.AnthropicExtraParamsEnabled:
 			if err := validateJSONMap(next.AnthropicExtraParamsJSON, "anthropicExtraParamsJSON"); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.Type == "anthropic" && next.AnthropicThinkingEffort == "":
-			return nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
+			return nil, nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
 		}
 		limit, err := normalizeMaxConcurrentRequests(next.MaxConcurrentRequests)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		next.MaxConcurrentRequests = limit
 		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
-			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
+			return nil, nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
 		seenChannelIDs[next.ID] = struct{}{}
-		// 原样复制 ProviderFallback；第二遍在 validateProviderFallbacks 中校验与归一化。
+		// 原样复制 ProviderFallback；引用重写在 normalizeConfig 中、校验在 validateProviderFallbacks。
 		next.ProviderFallback = item.ProviderFallback
 		normalized = append(normalized, next)
 	}
-	normalizeModelAdapterSorts(normalized)
-	if err := validateProviderFallbacks(normalized, seenChannelIDs); err != nil {
-		return nil, err
-	}
-	if err := validateUpstreamCapacityGroups(normalized); err != nil {
-		return nil, err
-	}
-	return normalized, nil
+	return normalized, seenChannelIDs, nil
 }
 
 func normalizeModelAdapterSorts(adapters []ModelAdapterConfig) {
@@ -424,6 +470,28 @@ func normalizeProviderStreamIdleTimeout(value int) int {
 		return MinProviderStreamIdleTimeoutSeconds
 	}
 	return value
+}
+
+func normalizeStreamContinuationConfig(input StreamContinuationConfig) StreamContinuationConfig {
+	output := StreamContinuationConfig{Enabled: input.Enabled}
+	if input.MaxPerTurn > 0 || input.Enabled {
+		output.MaxPerTurn = DefaultStreamContinuationMaxPerTurn
+		if input.MaxPerTurn > MaxStreamContinuationMaxPerTurn {
+			output.MaxPerTurn = MaxStreamContinuationMaxPerTurn
+		} else if input.MaxPerTurn > 0 {
+			output.MaxPerTurn = input.MaxPerTurn
+			if output.MaxPerTurn > MaxStreamContinuationMaxPerTurn {
+				output.MaxPerTurn = MaxStreamContinuationMaxPerTurn
+			}
+		}
+	}
+	if input.TotalDeadlineSeconds > 0 || input.Enabled {
+		output.TotalDeadlineSeconds = clampPositiveInt(input.TotalDeadlineSeconds, DefaultStreamContinuationDeadlineSeconds, MinStreamContinuationDeadlineSeconds, MaxStreamContinuationDeadlineSeconds)
+	}
+	if input.OverlapWindowChars > 0 || input.Enabled {
+		output.OverlapWindowChars = clampPositiveInt(input.OverlapWindowChars, DefaultStreamContinuationOverlapWindowChars, MinStreamContinuationOverlapWindowChars, MaxStreamContinuationOverlapWindowChars)
+	}
+	return output
 }
 
 func normalizeObservabilityConfig(input ObservabilityConfig, legacyLog *bool) ObservabilityConfig {
@@ -632,17 +700,6 @@ func validateUpstreamCapacityGroups(normalized []ModelAdapterConfig) error {
 		}
 	}
 	return nil
-}
-
-func normalizeTheme(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "light":
-		return "light"
-	case "dark":
-		return "dark"
-	default:
-		return DefaultTheme
-	}
 }
 
 func normalizeRoutingMode(value string) string {
