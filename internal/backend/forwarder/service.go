@@ -28,6 +28,7 @@ import (
 	promptengine "cursor/internal/backend/agent/prompt"
 	protocol "cursor/internal/backend/agent/protocol"
 	"cursor/internal/observability"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
@@ -277,6 +278,10 @@ type agentModelMemory interface {
 
 // NewService 使用默认依赖创建 forwarder 服务。
 func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captures ...captureRecorder) *Service {
+	return NewServiceWithCredentials(historyRoot, resolver, nil, captures...)
+}
+
+func NewServiceWithCredentials(historyRoot string, resolver modeladapter.ChannelResolver, credentials subscriptionauth.CredentialResolver, captures ...captureRecorder) *Service {
 	projector := NewHistoryProjector()
 	store := NewConversationFileStore(historyRoot)
 	contentBlobs := NewContentBlobStore(historyRoot)
@@ -300,7 +305,7 @@ func NewService(historyRoot string, resolver modeladapter.ChannelResolver, captu
 		rules:              rules,
 		projector:          projector,
 		compiler:           NewPromptCompiler(projector, NewToolCatalog(), NewReminderInjector(), rules, contentBlobs),
-		provider:           NewProviderGateway(resolver),
+		provider:           NewProviderGateway(resolver, credentials),
 		resolver:           resolver,
 		modelMemory:        modelMemory,
 		broker:             broker,

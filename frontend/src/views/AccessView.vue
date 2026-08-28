@@ -1,5 +1,6 @@
 <script setup>
 import GatewayCard from "@/components/GatewayCard.vue";
+import SubscriptionAuthPanel from "@/components/SubscriptionAuthPanel.vue";
 import CursorView from "@/views/CursorView.vue";
 import UnsupportedClientPanel from "@/views/UnsupportedClientPanel.vue";
 import { appState, configSectionDirty } from "@/state/appState";
@@ -182,5 +183,7 @@ function selectClient(client) {
         <UnsupportedClientPanel v-else :client="activeClient" />
       </section>
     </div>
+
+    <SubscriptionAuthPanel />
   </div>
 </template>

@@ -16,6 +16,7 @@ import {
   fetchAvailableModelIDs,
   getModelAdapterTestResult,
   getModelAdapterTestResultByID,
+  isManagedCredentialSource,
   isModelAdapterTestResultStale,
   normalizeModelAdapter,
   OPENAI_ENDPOINT_CHAT_COMPLETIONS,
@@ -69,6 +70,12 @@ const openAIEndpointOptions = [
   { label: "自定义路径(请输入完整请求地址)", value: OPENAI_ENDPOINT_CUSTOM, icon: "icon-[mdi--pencil-outline]" },
 ];
 
+const credentialSourceOptions = [
+  { label: "静态 API key", value: "static" },
+  { label: "ChatGPT / Codex 订阅", value: "codex" },
+  { label: "Grok 订阅", value: "grok" },
+];
+
 const props = defineProps({
   index: { type: Number, default: -1 },
   adapter: { type: Object, default: () => createEmptyModelAdapter() },
@@ -114,8 +121,11 @@ const modelOptions = computed(() => availableModelIDs.value.map((modelID) => ({
   icon: "icon-[mdi--cube-outline]",
 })));
 const canFetchModels = computed(() => Boolean(
-  draft.type && String(draft.baseURL || "").trim() && String(draft.apiKey || "").trim(),
+  draft.type
+  && String(draft.baseURL || "").trim()
+  && (isManagedCredentialSource(draft.credentialSource) || String(draft.apiKey || "").trim()),
 ));
+const isManagedCredential = computed(() => isManagedCredentialSource(draft.credentialSource));
 const selectedTestAdapter = computed(() => normalizeModelAdapter(draft));
 const currentRequestHash = computed(() => buildModelAdapterTestRequestHash(selectedTestAdapter.value));
 const directModelTestResult = computed(() => getModelAdapterTestResult(selectedTestAdapter.value));
@@ -156,7 +166,8 @@ const fieldTips = {
   displayName: "仅用于界面展示，便于你区分不同模型。",
   modelID: "可以直接输入模型标识，或从服务端返回的列表中选择。",
   baseURL: "模型服务的 API 根地址，通常为兼容 OpenAI 或 Anthropic 的接口入口。",
-  apiKey: "调用该模型服务需要使用的访问密钥。",
+  apiKey: "调用该模型服务需要使用的访问密钥。订阅认证渠道请改用接入中心下方的上游订阅认证，不要把 token 填到这里。",
+  credentialSource: "静态 API key 使用本页密钥；Codex / Grok 订阅从本机认证副本解析，不会写入 config.yaml。",
   contextWindowTokens: "模型单次可接受的最大上下文 Token 数。留空时使用默认值。",
   reasoningEffort: "仅当模型支持 reasoning_effort 时才选择推理强度；选择“不设置”后，请求不会携带该参数。越高通常越稳，但也可能更慢。",
   maxCompletionTokens: "单次回复允许生成的最大 Token 数。留空时使用默认值。",
@@ -564,6 +575,18 @@ watch(
 
           <label class="flex flex-col gap-1">
             <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+              <Tooltip :content="fieldTips.credentialSource" />
+              <span>凭据来源</span>
+            </span>
+            <Select
+              v-model="draft.credentialSource"
+              :options="credentialSourceOptions"
+              aria-label="凭据来源"
+            />
+          </label>
+
+          <label v-if="!isManagedCredential" class="flex flex-col gap-1">
+            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
               <Tooltip :content="fieldTips.apiKey" />
               <span>访问密钥</span>
             </span>
@@ -575,6 +598,9 @@ watch(
               autocomplete="off"
             />
           </label>
+          <p v-else class="note plain md:col-span-2">
+            该渠道使用接入中心下方的上游订阅认证，不会把 token 写入 config.yaml。
+          </p>
 
           <label class="flex flex-col gap-1">
             <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">

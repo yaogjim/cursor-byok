@@ -57,6 +57,18 @@ func DocsIndexRootPath() string {
 	return filepath.Join(DataRootPath(), "docs-index")
 }
 
+func SubscriptionAuthRootPath() string {
+	return filepath.Join(DataRootPath(), "subscription-auth")
+}
+
+func CodexAuthFilePath() string {
+	return filepath.Join(SubscriptionAuthRootPath(), "codex-auth.json")
+}
+
+func GrokAccountsFilePath() string {
+	return filepath.Join(SubscriptionAuthRootPath(), "grok-accounts.json")
+}
+
 func RulesRootPath() string {
 	return filepath.Join(RootDir(), "rules")
 }

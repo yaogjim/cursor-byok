@@ -18,6 +18,7 @@ import (
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
 	"cursor/internal/observability"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
@@ -76,6 +77,8 @@ type ProxyService struct {
 	// modelTestResults 保存当前进程内的模型测速结果。
 	modelTestResults map[string]ModelAdapterTestResult
 
+	subscriptionAuth *subscriptionauth.Service
+
 	gatewayMu                sync.Mutex
 	gateway                  *gateway.Server
 	gatewayLastError         string
@@ -119,8 +122,12 @@ func NewProxyService(proxy *mitm.ProxyServer, certManager *certs.Manager, caCert
 		filepath.Join(appdata.DataRootPath(), "cursor-account.json"),
 		netproxy.NewHTTPClient(publicAPITimeout),
 	)
+	service.subscriptionAuth = subscriptionauth.NewService(
+		appdata.SubscriptionAuthRootPath(),
+		netproxy.NewHTTPClient(publicAPITimeout),
+	)
 	service.store = serverconfig.NewStore(service.configPath, service.logsRoot)
-	host, err := backend.NewHost(service.store, service.cursorAccount)
+	host, err := backend.NewHost(service.store, service.cursorAccount, service.subscriptionAuth)
 	if err != nil {
 		logger.Errorf("init backend host failed: %v", err)
 	} else {
@@ -136,7 +143,7 @@ func (s *ProxyService) ensureBackendHost() error {
 	if s.backendHost != nil {
 		return nil
 	}
-	host, err := backend.NewHost(s.store, s.cursorAccount)
+	host, err := backend.NewHost(s.store, s.cursorAccount, s.subscriptionAuth)
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 // Router 是 MVP 阶段的模型适配路由器。
@@ -18,6 +19,8 @@ type Router struct {
 	anthropic ModelAdapter
 	// resolver 负责从本地配置中解析实际模型通道。
 	resolver ChannelResolver
+	// credentials 负责 managed channel 的运行时凭据解析；nil 时 static 行为不变。
+	credentials subscriptionauth.CredentialResolver
 }
 
 type ChannelResolver interface {
@@ -41,6 +44,13 @@ func NewRouter(resolver ChannelResolver) *Router {
 	}
 }
 
+func (router *Router) SetCredentialResolver(credentials subscriptionauth.CredentialResolver) {
+	if router == nil {
+		return
+	}
+	router.credentials = credentials
+}
+
 // Stream 根据模型标识选择具体 provider 并转发请求。
 func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
 	if router == nil || router.resolver == nil {
@@ -61,19 +71,48 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 // streamPreResolved 使用已完整填充的 StreamRequest（Provider 字段已设置）直接选择适配器。
 // 供 FallbackAwareRouter 使用，跳过 SelectChannelForModel 解析步骤。
 func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
-	release, err := acquireUpstreamCapacity(ctx, req)
+	resolved, err := router.applyRuntimeCredentials(ctx, req)
+	if err != nil {
+		return err
+	}
+	release, err := acquireUpstreamCapacity(ctx, resolved)
 	if err != nil {
 		return err
 	}
 	defer release()
-	switch strings.TrimSpace(req.Provider) {
+	switch strings.TrimSpace(resolved.Provider) {
 	case "anthropic":
-		return router.anthropic.Stream(ctx, req, sink)
+		return router.anthropic.Stream(ctx, resolved, sink)
 	case "openai":
-		return router.openai.Stream(ctx, req, sink)
+		return router.openai.Stream(ctx, resolved, sink)
 	default:
-		return fmt.Errorf("unsupported provider %q", req.Provider)
+		return fmt.Errorf("unsupported provider %q", resolved.Provider)
 	}
+}
+
+func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamRequest) (StreamRequest, error) {
+	source := subscriptionauth.NormalizeCredentialSource(req.CredentialSource)
+	if source == "" {
+		source = subscriptionauth.CredentialSourceStatic
+	}
+	req.CredentialSource = string(source)
+	if !source.Managed() {
+		return req, nil
+	}
+	if router == nil || router.credentials == nil {
+		return req, fmt.Errorf("managed credential source %q is unavailable", source)
+	}
+	cred, err := router.credentials.Resolve(ctx, source)
+	if err != nil {
+		return req, err
+	}
+	req.APIKey = strings.TrimSpace(cred.AccessToken)
+	req.CredentialID = strings.TrimSpace(cred.AccountID)
+	req.ChatGPTAccountID = strings.TrimSpace(cred.ChatGPTAccountID)
+	if req.APIKey == "" {
+		return req, subscriptionauth.ErrAuthRequired
+	}
+	return req, nil
 }
 
 // applyChannelToRequest 将 ResolvedChannel 的字段映射到 StreamRequest 副本中并返回。
@@ -91,6 +130,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.Provider = strings.TrimSpace(channel.Provider)
 	resolved.BaseURL = strings.TrimSpace(channel.BaseURL)
 	resolved.APIKey = strings.TrimSpace(channel.APIKey)
+	resolved.CredentialSource = strings.TrimSpace(channel.CredentialSource)
 	resolved.MaxConcurrentRequests = channel.MaxConcurrentRequests
 	resolved.UpstreamCapacityGroupKey = strings.TrimSpace(channel.UpstreamCapacityGroupKey)
 	if resolved.UpstreamCapacityGroupKey == "" {

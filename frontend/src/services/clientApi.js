@@ -269,3 +269,69 @@ export function fetchModelAdapterModels(payload) {
     Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, payload),
   );
 }
+
+export function getCodexAuthStatus() {
+  return withApiLogging("GetCodexAuthStatus", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.GetCodexAuthStatus`),
+  );
+}
+
+export function importCodexAuth(path) {
+  return withApiLogging("ImportCodexAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ImportCodexAuth`, path),
+  );
+}
+
+export function clearCodexAuth() {
+  return withApiLogging("ClearCodexAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ClearCodexAuth`),
+  );
+}
+
+export function startCodexDeviceAuth() {
+  return withApiLogging("StartCodexDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartCodexDeviceAuth`),
+  );
+}
+
+export function pollCodexDeviceAuth(input) {
+  return withApiLogging("PollCodexDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PollCodexDeviceAuth`, input),
+  );
+}
+
+export function startGrokDeviceAuth() {
+  return withApiLogging("StartGrokDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartGrokDeviceAuth`),
+  );
+}
+
+export function pollGrokDeviceAuth(input) {
+  return withApiLogging("PollGrokDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PollGrokDeviceAuth`, input),
+  );
+}
+
+export function listSubscriptionAccounts(provider) {
+  return withApiLogging("ListSubscriptionAccounts", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ListSubscriptionAccounts`, provider),
+  );
+}
+
+export function activateSubscriptionAccount(accountID) {
+  return withApiLogging("ActivateSubscriptionAccount", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ActivateSubscriptionAccount`, accountID),
+  );
+}
+
+export function deleteSubscriptionAccount(accountID) {
+  return withApiLogging("DeleteSubscriptionAccount", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.DeleteSubscriptionAccount`, accountID),
+  );
+}
+
+export function refreshSubscriptionUsage(provider) {
+  return withApiLogging("RefreshSubscriptionUsage", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RefreshSubscriptionUsage`, provider),
+  );
+}

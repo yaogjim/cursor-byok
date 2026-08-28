@@ -23,6 +23,7 @@ import (
 	"cursor/internal/netproxy"
 	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 const healthPath = "/healthz"
@@ -68,6 +69,7 @@ type Host struct {
 	stopConfigObserver func()
 	healthHTTP         *http.Client
 	controlPlaneAuth   upstream.AuthorizationProvider
+	credentials        subscriptionauth.CredentialResolver
 
 	runMu       sync.RWMutex
 	httpServer  *http.Server
@@ -80,7 +82,7 @@ type Host struct {
 	lastShutdown ShutdownReport
 }
 
-func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationProvider) (*Host, error) {
+func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationProvider, credentials ...subscriptionauth.CredentialResolver) (*Host, error) {
 	if store == nil {
 		return nil, fmt.Errorf("backend config store is required")
 	}
@@ -89,12 +91,17 @@ func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationP
 		return nil, err
 	}
 	cfg := configs.Current()
+	var creds subscriptionauth.CredentialResolver
+	if len(credentials) > 0 {
+		creds = credentials[0]
+	}
 	host := &Host{
 		store:            store,
 		listenAddr:       cfg.BackendListenAddr,
 		configs:          configs,
 		healthHTTP:       newLoopbackHTTPClient(),
 		controlPlaneAuth: controlPlaneAuth,
+		credentials:      creds,
 	}
 	controller, observabilityErr := observability.NewControllerWithHumanSink(
 		store.LogsRoot(),
@@ -126,6 +133,13 @@ func (host *Host) ConfigManager() *serverconfig.Manager {
 		return nil
 	}
 	return host.configs
+}
+
+func (host *Host) CredentialResolver() subscriptionauth.CredentialResolver {
+	if host == nil {
+		return nil
+	}
+	return host.credentials
 }
 
 func (host *Host) Observability() *observability.Controller {
@@ -591,7 +605,7 @@ func (host *Host) rebuild(cfg serverconfig.Config) error {
 
 func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 	host.listenAddr = cfg.BackendListenAddr
-	agentModule := forwarder.NewModule(appdata.HistoryRootPath(), host.configs, host.observability)
+	agentModule := forwarder.NewModuleWithCredentials(appdata.HistoryRootPath(), host.configs, host.credentials, host.observability)
 	legacyBidiAppendProcedure := "/aiserver.v1.BidiService/BidiAppend"
 	legacyRunSSEProcedure := "/agent.v1.AgentService/RunSSE"
 	routeDeps := upstream.Dependencies{

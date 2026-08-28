@@ -245,6 +245,7 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 			Type:                        item.Type,
 			BaseURL:                     item.BaseURL,
 			APIKey:                      item.APIKey,
+			CredentialSource:            item.CredentialSource,
 			TooltipData:                 item.TooltipData,
 			ModelID:                     item.ModelID,
 			ReasoningEffort:             item.ReasoningEffort,

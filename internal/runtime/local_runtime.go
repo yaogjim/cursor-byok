@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cursor/internal/modelchannel"
+	"cursor/internal/subscriptionauth"
 )
 
 var (
@@ -104,6 +105,8 @@ type ModelAdapterConfig struct {
 	BaseURL string `json:"baseURL"`
 	// APIKey 表示当前声明中的 APIKey。
 	APIKey string `json:"apiKey"`
+	// CredentialSource 表示凭据来源：static、codex 或 grok。
+	CredentialSource string `json:"credentialSource,omitempty"`
 	// TooltipData 表示当前声明中的 TooltipData。
 	TooltipData string `json:"tooltipData"`
 	// ModelID 表示当前声明中的 ModelID。
@@ -170,6 +173,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			Type:                  normalizeModelAdapterType(item.Type),
 			BaseURL:               baseURL,
 			APIKey:                strings.TrimSpace(item.APIKey),
+			CredentialSource:      string(subscriptionauth.NormalizeCredentialSource(item.CredentialSource)),
 			TooltipData:           strings.TrimSpace(item.TooltipData),
 			ModelID:               strings.TrimSpace(item.ModelID),
 			ReasoningEffort:       normalizeReasoningEffort(item.ReasoningEffort),
@@ -190,12 +194,20 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		}
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
+		source := subscriptionauth.NormalizeCredentialSource(next.CredentialSource)
+		if source == "" {
+			return nil, errors.New("模型适配器 credentialSource 仅支持 static、codex 或 grok")
+		}
+		next.CredentialSource = string(source)
+		if source.Managed() {
+			next.APIKey = ""
+		}
 		switch {
 		case next.DisplayName == "":
 			return nil, errors.New("模型适配器 displayName 不能为空")
 		case next.Type == "":
 			return nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
-		case next.APIKey == "":
+		case !source.Managed() && next.APIKey == "":
 			return nil, errors.New("模型适配器 apiKey 不能为空")
 		case next.TooltipData == "":
 			return nil, errors.New("模型适配器 tooltipData 不能为空")
@@ -225,7 +237,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			return nil, err
 		}
 		next.MaxConcurrentRequests = limit
-		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
+		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, subscriptionauth.ChannelIDSecret(source, next.APIKey), next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
 			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
@@ -409,6 +421,8 @@ type ResolvedChannel struct {
 	MaxConcurrentRequests int
 	// UpstreamCapacityGroupKey 是按 provider type + 归一化 BaseURL + API Key 计算的瞬态组身份，仅内存使用。
 	UpstreamCapacityGroupKey string
+	// CredentialSource 表示渠道凭据来源。
+	CredentialSource string
 }
 
 // ChannelUsageRecordCreatePayload 定义了一次渠道使用记录的最小载荷。

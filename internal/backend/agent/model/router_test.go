@@ -7,6 +7,7 @@ import (
 	"time"
 
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 type recordingModelAdapter struct {
@@ -179,5 +180,74 @@ func TestSanitizeProviderMessagesKeepsMultipleToolCallsAndReasoningMetadata(t *t
 	second := sanitizeProviderMessages(first)
 	if !reflect.DeepEqual(second, first) {
 		t.Fatalf("sanitizing normalized messages changed them:\nfirst: %#v\nsecond: %#v", first, second)
+	}
+}
+
+type stubCredentialResolver struct {
+	token     string
+	accountID string
+	calls     int
+}
+
+func (stub *stubCredentialResolver) Resolve(context.Context, subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
+	stub.calls++
+	return subscriptionauth.Credential{Provider: subscriptionauth.ProviderCodex, AccountID: stub.accountID, AccessToken: stub.token}, nil
+}
+
+func (stub *stubCredentialResolver) MarkQuotaExhausted(context.Context, string) error {
+	return nil
+}
+
+func (stub *stubCredentialResolver) RefreshUsage(context.Context, subscriptionauth.ProviderKind) (subscriptionauth.UsageSnapshot, error) {
+	return subscriptionauth.UsageSnapshot{}, nil
+}
+
+func TestRouterStaticChannelKeepsConfiguredAPIKey(t *testing.T) {
+	openAI := &recordingModelAdapter{}
+	creds := &stubCredentialResolver{token: "managed-token", accountID: "codex:acct"}
+	router := &Router{
+		openai:      openAI,
+		credentials: creds,
+		resolver: staticChannelResolver{channel: &legacyruntime.ResolvedChannel{
+			ID:               "channel-static",
+			Provider:         "openai",
+			APIKey:           "static-key",
+			CredentialSource: "static",
+			Model:            "gpt-test",
+		}},
+	}
+	if err := router.Stream(context.Background(), StreamRequest{ModelID: "channel-static"}, func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if openAI.request.APIKey != "static-key" {
+		t.Fatalf("APIKey = %q, want static-key", openAI.request.APIKey)
+	}
+	if creds.calls != 0 {
+		t.Fatalf("static channel must not resolve managed credentials, calls=%d", creds.calls)
+	}
+}
+
+func TestRouterManagedChannelUsesResolverToken(t *testing.T) {
+	openAI := &recordingModelAdapter{}
+	creds := &stubCredentialResolver{token: "managed-token", accountID: "codex:acct"}
+	router := &Router{
+		openai:      openAI,
+		credentials: creds,
+		resolver: staticChannelResolver{channel: &legacyruntime.ResolvedChannel{
+			ID:               "channel-codex",
+			Provider:         "openai",
+			APIKey:           "",
+			CredentialSource: "codex",
+			Model:            "gpt-test",
+		}},
+	}
+	if err := router.Stream(context.Background(), StreamRequest{ModelID: "channel-codex"}, func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if openAI.request.APIKey != "managed-token" {
+		t.Fatalf("APIKey = %q", openAI.request.APIKey)
+	}
+	if openAI.request.CredentialID != "codex:acct" {
+		t.Fatalf("CredentialID = %q", openAI.request.CredentialID)
 	}
 }

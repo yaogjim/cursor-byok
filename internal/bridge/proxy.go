@@ -5,6 +5,7 @@ import (
 	"cursor/internal/certs"
 	"cursor/internal/client"
 	"cursor/internal/mitm"
+	"cursor/internal/subscriptionauth"
 	"runtime"
 )
 
@@ -32,6 +33,14 @@ type ModelAdapterModelsResult = client.ModelAdapterModelsResult
 
 // CursorAccountStatus 是可安全展示给桌面前端的独立 Cursor 账号状态。
 type CursorAccountStatus = client.CursorAccountStatus
+
+type SubscriptionAccountStatus = subscriptionauth.AccountStatus
+type SubscriptionUsageSnapshot = subscriptionauth.UsageSnapshot
+type GrokDeviceCode = subscriptionauth.GrokDeviceCode
+type GrokPollInput = subscriptionauth.GrokPollInput
+type CodexDeviceCode = subscriptionauth.CodexDeviceCode
+type CodexPollInput = subscriptionauth.CodexPollInput
+type SubscriptionPollResult = subscriptionauth.PollResult
 
 // LicenseActionRequest 定义了当前模块中的 LicenseActionRequest 类型。
 type LicenseActionRequest = client.LicenseActionRequest
@@ -171,6 +180,50 @@ func (s *ProxyService) StartCursorAccountLogin() (CursorAccountStatus, error) {
 // DisconnectCursorAccount 只断开 cursor-byok 自己的账号。
 func (s *ProxyService) DisconnectCursorAccount() (CursorAccountStatus, error) {
 	return s.core.DisconnectCursorAccount()
+}
+
+func (s *ProxyService) GetCodexAuthStatus() SubscriptionAccountStatus {
+	return s.core.GetCodexAuthStatus()
+}
+
+func (s *ProxyService) ImportCodexAuth(path string) (SubscriptionAccountStatus, error) {
+	return s.core.ImportCodexAuth(path)
+}
+
+func (s *ProxyService) ClearCodexAuth() (SubscriptionAccountStatus, error) {
+	return s.core.ClearCodexAuth()
+}
+
+func (s *ProxyService) StartCodexDeviceAuth() (CodexDeviceCode, error) {
+	return s.core.StartCodexDeviceAuth()
+}
+
+func (s *ProxyService) PollCodexDeviceAuth(input CodexPollInput) (SubscriptionPollResult, error) {
+	return s.core.PollCodexDeviceAuth(input)
+}
+
+func (s *ProxyService) StartGrokDeviceAuth() (GrokDeviceCode, error) {
+	return s.core.StartGrokDeviceAuth()
+}
+
+func (s *ProxyService) PollGrokDeviceAuth(input GrokPollInput) (SubscriptionPollResult, error) {
+	return s.core.PollGrokDeviceAuth(input)
+}
+
+func (s *ProxyService) ListSubscriptionAccounts(provider string) ([]SubscriptionAccountStatus, error) {
+	return s.core.ListSubscriptionAccounts(provider)
+}
+
+func (s *ProxyService) ActivateSubscriptionAccount(accountID string) (SubscriptionAccountStatus, error) {
+	return s.core.ActivateSubscriptionAccount(accountID)
+}
+
+func (s *ProxyService) DeleteSubscriptionAccount(accountID string) error {
+	return s.core.DeleteSubscriptionAccount(accountID)
+}
+
+func (s *ProxyService) RefreshSubscriptionUsage(provider string) (SubscriptionUsageSnapshot, error) {
+	return s.core.RefreshSubscriptionUsage(provider)
 }
 
 // TestModelAdapter 用于处理与 TestModelAdapter 相关的逻辑。

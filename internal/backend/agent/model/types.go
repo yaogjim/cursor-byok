@@ -83,6 +83,12 @@ type StreamRequest struct {
 	BaseURL string
 	// APIKey 表示 provider 鉴权凭据。
 	APIKey string
+	// CredentialSource 表示渠道凭据来源：static、codex 或 grok。
+	CredentialSource string
+	// CredentialID 表示本次请求实际使用的订阅账号 ID。
+	CredentialID string
+	// ChatGPTAccountID 表示 Codex 请求使用的 ChatGPT 账号 ID。
+	ChatGPTAccountID string
 	// MaxConcurrentRequests 是物理上游组的可选并发上限。
 	// 0 表示不限流；非零合法范围 1–16。路由解析后以 ResolvedChannel 的值为准。
 	MaxConcurrentRequests int

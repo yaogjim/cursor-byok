@@ -789,3 +789,34 @@ func TestNormalizeStreamContinuationMissingIsDisabled(t *testing.T) {
 		t.Fatalf("overlap = %d, want %d", enabled.StreamContinuation.OverlapWindowChars, DefaultStreamContinuationOverlapWindowChars)
 	}
 }
+
+func TestNormalizeModelAdapterConfigsAllowsManagedCredentialSourceWithoutAPIKey(t *testing.T) {
+	adapter := testModelAdapter("codex-model", 1)
+	adapter.APIKey = ""
+	adapter.CredentialSource = "codex"
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+	if err != nil {
+		t.Fatalf("managed adapter should allow empty apiKey: %v", err)
+	}
+	if got[0].APIKey != "" {
+		t.Fatalf("managed adapter persisted apiKey %q", got[0].APIKey)
+	}
+	if got[0].CredentialSource != "codex" {
+		t.Fatalf("credentialSource = %q", got[0].CredentialSource)
+	}
+	static := testModelAdapter("static-model", 1)
+	static.APIKey = ""
+	if _, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{static}); err == nil {
+		t.Fatal("static adapter still requires apiKey")
+	}
+	tokenA := testModelAdapter("same", 1)
+	tokenA.APIKey = ""
+	tokenA.CredentialSource = "codex"
+	tokenB := tokenA
+	tokenB.APIKey = "should-be-stripped"
+	normalizedA, _ := NormalizeModelAdapterConfigs([]ModelAdapterConfig{tokenA})
+	normalizedB, _ := NormalizeModelAdapterConfigs([]ModelAdapterConfig{tokenB})
+	if normalizedA[0].ID != normalizedB[0].ID {
+		t.Fatal("managed channel ID must not depend on a rotating token")
+	}
+}

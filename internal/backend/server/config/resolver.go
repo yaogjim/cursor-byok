@@ -7,6 +7,7 @@ import (
 
 	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
@@ -129,6 +130,7 @@ func resolveAdapterToChannel(matched ModelAdapterConfig) legacyruntime.ResolvedC
 		Provider:                    strings.TrimSpace(matched.Type),
 		BaseURL:                     strings.TrimSpace(matched.BaseURL),
 		APIKey:                      strings.TrimSpace(matched.APIKey),
+		CredentialSource:            strings.TrimSpace(matched.CredentialSource),
 		Model:                       strings.TrimSpace(matched.ModelID),
 		OpenAIEndpoint:              strings.TrimSpace(matched.OpenAIEndpoint),
 		OpenAIExtraParamsEnabled:    matched.OpenAIExtraParamsEnabled,
@@ -146,7 +148,7 @@ func resolveAdapterToChannel(matched ModelAdapterConfig) legacyruntime.ResolvedC
 		ThinkingEnabled:             true,
 		ThinkingBudgetTokens:        defaultChannelThinkingBudget,
 		MaxConcurrentRequests:       matched.MaxConcurrentRequests,
-		UpstreamCapacityGroupKey:    legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, matched.APIKey),
+		UpstreamCapacityGroupKey:    legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, subscriptionauth.ChannelIDSecret(subscriptionauth.NormalizeCredentialSource(matched.CredentialSource), matched.APIKey)),
 	}
 	if matched.ContextWindowTokens > 0 {
 		resolved.ContextWindowTokens = matched.ContextWindowTokens

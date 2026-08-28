@@ -74,6 +74,7 @@ export { applyModelAdapterTypeChange };
 const APP_STATE_STORAGE_KEY = "cursor-client:runtime-state:v2";
 const GENERIC_SERVICE_ERROR = "服务错误";
 const SUPPORTED_MODEL_ADAPTER_TYPES = new Set(["openai", "anthropic"]);
+const SUPPORTED_CREDENTIAL_SOURCES = new Set(["static", "codex", "grok"]);
 const SUPPORTED_ANTHROPIC_THINKING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 export const ANTHROPIC_THINKING_EFFORT_DEFAULT = "xhigh";
 export const OPENAI_ENDPOINT_RESPONSES = "/v1/responses";
@@ -214,7 +215,9 @@ function buildModelAdapterIdentityKey(adapter) {
   return [
     normalizeBaseURL(adapter.baseURL),
     asString(adapter.modelID),
-    asString(adapter.apiKey),
+    isManagedCredentialSource(adapter.credentialSource)
+      ? `credential:${normalizeCredentialSource(adapter.credentialSource)}`
+      : asString(adapter.apiKey),
     asString(adapter.displayName),
     adapter.type === "openai" ? normalizeOpenAIEndpoint(adapter.openAIEndpoint) : "",
   ].join("\n");
@@ -323,6 +326,7 @@ export function createEmptyModelAdapter() {
     type: "openai",
     baseURL: "",
     apiKey: "",
+    credentialSource: "static",
     tooltipData: "备注",
     modelID: "",
     reasoningEffort: "",
@@ -363,6 +367,18 @@ function normalizeOpenAIEndpoint(value) {
 function isValidOpenAIEndpoint(value) {
   return normalizeOpenAIEndpoint(value) !== "";
 }
+
+function normalizeCredentialSource(value) {
+  const source = asString(value).toLowerCase();
+  return SUPPORTED_CREDENTIAL_SOURCES.has(source) ? source : "static";
+}
+
+function isManagedCredentialSource(value) {
+  const source = normalizeCredentialSource(value);
+  return source === "codex" || source === "grok";
+}
+
+export { isManagedCredentialSource };
 
 function validateJSONObject(value, label) {
   const text = asString(value);
@@ -438,7 +454,8 @@ export function normalizeModelAdapter(source) {
     displayName: asString(raw.displayName || raw.name),
     type: SUPPORTED_MODEL_ADAPTER_TYPES.has(normalizedType) ? normalizedType : "",
     baseURL: normalizeBaseURL(raw.baseURL || raw.url),
-    apiKey: asString(raw.apiKey || raw.key),
+    apiKey: isManagedCredentialSource(raw.credentialSource ?? raw.credential_source) ? "" : asString(raw.apiKey || raw.key),
+    credentialSource: normalizeCredentialSource(raw.credentialSource ?? raw.credential_source),
     tooltipData: asString(raw.tooltipData),
     modelID: asString(raw.modelID),
     reasoningEffort: normalizedReasoningEffort,
@@ -510,7 +527,7 @@ export function validateModelAdapters(source, { allAdapters } = {}) {
     if (!adapter.baseURL) {
       return `${prefix} 的接口地址不能为空`;
     }
-    if (!adapter.apiKey) {
+    if (!isManagedCredentialSource(adapter.credentialSource) && !adapter.apiKey) {
       return `${prefix} 的访问密钥不能为空`;
     }
     if (!adapter.displayName) {

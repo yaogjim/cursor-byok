@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 
 	modeladapter "cursor/internal/backend/agent/model"
+	"cursor/internal/subscriptionauth"
 )
 
 type Module struct {
@@ -49,7 +50,11 @@ func (module *Module) CancelActiveProviders(message string) int {
 
 // NewModule 创建 forwarder 模块，并导出本地 Bidi / RunSSE 处理器。
 func NewModule(historyRoot string, channelService modeladapter.ChannelResolver, captures ...captureRecorder) *Module {
-	service := NewService(historyRoot, channelService, captures...)
+	return NewModuleWithCredentials(historyRoot, channelService, nil, captures...)
+}
+
+func NewModuleWithCredentials(historyRoot string, channelService modeladapter.ChannelResolver, credentials subscriptionauth.CredentialResolver, captures ...captureRecorder) *Module {
+	service := NewServiceWithCredentials(historyRoot, channelService, credentials, captures...)
 	legacyBidiAppendProcedure := "/aiserver.v1.BidiService/BidiAppend"
 	legacyRunSSEProcedure := "/agent.v1.AgentService/RunSSE"
 	return &Module{

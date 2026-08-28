@@ -11,6 +11,7 @@ import (
 
 	"cursor/internal/appearance"
 	"cursor/internal/modelchannel"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
@@ -66,6 +67,7 @@ type ModelAdapterConfig struct {
 	Type                        string `json:"type" yaml:"type"`
 	BaseURL                     string `json:"baseURL" yaml:"baseURL"`
 	APIKey                      string `json:"apiKey" yaml:"apiKey"`
+	CredentialSource            string `json:"credentialSource,omitempty" yaml:"credentialSource,omitempty"`
 	TooltipData                 string `json:"tooltipData" yaml:"tooltipData"`
 	ModelID                     string `json:"modelID" yaml:"modelID"`
 	ReasoningEffort             string `json:"reasoningEffort" yaml:"reasoningEffort"`
@@ -300,6 +302,7 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 			Type:                  nextType,
 			BaseURL:               baseURL,
 			APIKey:                strings.TrimSpace(item.APIKey),
+			CredentialSource:      string(subscriptionauth.NormalizeCredentialSource(item.CredentialSource)),
 			TooltipData:           strings.TrimSpace(item.TooltipData),
 			ModelID:               strings.TrimSpace(item.ModelID),
 			ReasoningEffort:       normalizeReasoningEffort(item.ReasoningEffort),
@@ -320,12 +323,20 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 		}
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
+		source := subscriptionauth.NormalizeCredentialSource(next.CredentialSource)
+		if source == "" {
+			return nil, nil, errors.New("模型适配器 credentialSource 仅支持 static、codex 或 grok")
+		}
+		next.CredentialSource = string(source)
+		if source.Managed() {
+			next.APIKey = ""
+		}
 		switch {
 		case next.DisplayName == "":
 			return nil, nil, errors.New("模型适配器 displayName 不能为空")
 		case next.Type == "":
 			return nil, nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
-		case next.APIKey == "":
+		case !source.Managed() && next.APIKey == "":
 			return nil, nil, errors.New("模型适配器 apiKey 不能为空")
 		case next.TooltipData == "":
 			return nil, nil, errors.New("模型适配器 tooltipData 不能为空")
@@ -355,7 +366,7 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 			return nil, nil, err
 		}
 		next.MaxConcurrentRequests = limit
-		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
+		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, subscriptionauth.ChannelIDSecret(source, next.APIKey), next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
 			return nil, nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
@@ -668,10 +679,11 @@ func normalizeMaxConcurrentRequests(value int) (int, error) {
 }
 
 func upstreamCapacityGroupIdentity(adapter ModelAdapterConfig) string {
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
 	return strings.Join([]string{
 		strings.TrimSpace(adapter.Type),
 		strings.TrimSpace(adapter.BaseURL),
-		strings.TrimSpace(adapter.APIKey),
+		subscriptionauth.ChannelIDSecret(source, strings.TrimSpace(adapter.APIKey)),
 	}, "\n")
 }
 

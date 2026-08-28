@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	modeladapter "cursor/internal/backend/agent/model"
+	"cursor/internal/subscriptionauth"
 )
 
 type DefaultProviderGateway struct {
@@ -16,12 +17,20 @@ type DefaultProviderGateway struct {
 // NewProviderGateway 创建默认 provider 网关。
 // 若 resolver 同时实现了 ChannelPlanResolver（如 config.Manager），则使用
 // FallbackAwareRouter；否则退回到普通 Router，行为与之前完全一致。
-func NewProviderGateway(resolver modeladapter.ChannelResolver) *DefaultProviderGateway {
+func NewProviderGateway(resolver modeladapter.ChannelResolver, credentials ...subscriptionauth.CredentialResolver) *DefaultProviderGateway {
+	var creds subscriptionauth.CredentialResolver
+	if len(credentials) > 0 {
+		creds = credentials[0]
+	}
 	var router modeladapter.ModelAdapterRouter
 	if planResolver, ok := resolver.(modeladapter.ChannelPlanResolver); ok {
-		router = modeladapter.NewFallbackAwareRouter(modeladapter.NewRouter(resolver), planResolver)
+		inner := modeladapter.NewRouter(resolver)
+		inner.SetCredentialResolver(creds)
+		router = modeladapter.NewFallbackAwareRouter(inner, planResolver)
 	} else {
-		router = modeladapter.NewRouter(resolver)
+		inner := modeladapter.NewRouter(resolver)
+		inner.SetCredentialResolver(creds)
+		router = inner
 	}
 	return &DefaultProviderGateway{router: router}
 }

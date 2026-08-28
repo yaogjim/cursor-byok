@@ -102,7 +102,7 @@ func (s *ProxyService) ensureGateway() *gateway.Server {
 		return nil
 	}
 	manager := s.backendHost.ConfigManager()
-	s.gateway = gateway.New(forwarder.NewProviderGateway(manager), manager)
+	s.gateway = gateway.New(forwarder.NewProviderGateway(manager, s.subscriptionAuth), manager)
 	return s.gateway
 }
 
