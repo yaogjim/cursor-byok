@@ -3,6 +3,7 @@ package modeladapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -80,13 +81,34 @@ func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, 
 		return err
 	}
 	defer release()
-	switch strings.TrimSpace(resolved.Provider) {
+
+	eventObserved := false
+	wrappedSink := func(event ModelEvent) error {
+		eventObserved = true
+		return sink(event)
+	}
+	err = router.dispatchResolved(ctx, resolved, wrappedSink)
+	if err == nil {
+		return nil
+	}
+	retryReq, shouldRetry, retryErr := router.prepareManagedCredentialRetry(ctx, resolved, err, eventObserved)
+	if retryErr != nil {
+		return retryErr
+	}
+	if !shouldRetry {
+		return err
+	}
+	return router.dispatchResolved(ctx, retryReq, wrappedSink)
+}
+
+func (router *Router) dispatchResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	switch strings.TrimSpace(req.Provider) {
 	case "anthropic":
-		return router.anthropic.Stream(ctx, resolved, sink)
+		return router.anthropic.Stream(ctx, req, sink)
 	case "openai":
-		return router.openai.Stream(ctx, resolved, sink)
+		return router.openai.Stream(ctx, req, sink)
 	default:
-		return fmt.Errorf("unsupported provider %q", resolved.Provider)
+		return fmt.Errorf("unsupported provider %q", req.Provider)
 	}
 }
 
@@ -106,6 +128,10 @@ func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamReq
 	if err != nil {
 		return req, err
 	}
+	return applyCredentialToRequest(req, cred)
+}
+
+func applyCredentialToRequest(req StreamRequest, cred subscriptionauth.Credential) (StreamRequest, error) {
 	req.APIKey = strings.TrimSpace(cred.AccessToken)
 	req.CredentialID = strings.TrimSpace(cred.AccountID)
 	req.ChatGPTAccountID = strings.TrimSpace(cred.ChatGPTAccountID)
@@ -113,6 +139,75 @@ func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamReq
 		return req, subscriptionauth.ErrAuthRequired
 	}
 	return req, nil
+}
+
+func isUnauthorizedHTTPStatus(err error) bool {
+	var httpErr *HTTPStatusError
+	return errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode == 401
+}
+
+func isModelAdapterTestRequest(req StreamRequest) bool {
+	const prefix = "model-adapter-test-"
+	return strings.HasPrefix(req.RequestID, prefix) ||
+		strings.HasPrefix(req.RunID, prefix) ||
+		strings.HasPrefix(req.ModelCallID, prefix)
+}
+
+func managedCredentialRetryBudgetAvailable(req StreamRequest) bool {
+	if req.FallbackBudget == nil {
+		return true
+	}
+	remaining, _ := req.FallbackBudget.Remaining()
+	return remaining > 0
+}
+
+func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req StreamRequest, err error, eventObserved bool) (StreamRequest, bool, error) {
+	if eventObserved || err == nil || router == nil || router.credentials == nil {
+		return StreamRequest{}, false, nil
+	}
+	if req.FallbackSafety != nil && req.FallbackSafety.Snapshot().ModelEventObserved {
+		return StreamRequest{}, false, nil
+	}
+	source := subscriptionauth.NormalizeCredentialSource(req.CredentialSource)
+	if !source.Managed() || !managedCredentialRetryBudgetAvailable(req) {
+		return StreamRequest{}, false, nil
+	}
+	switch source {
+	case subscriptionauth.CredentialSourceCodex:
+		if !isUnauthorizedHTTPStatus(err) {
+			return StreamRequest{}, false, nil
+		}
+		cred, resolveErr := router.credentials.ResolveAfterUnauthorized(ctx, source)
+		if resolveErr != nil {
+			return StreamRequest{}, false, resolveErr
+		}
+		next, applyErr := applyCredentialToRequest(req, cred)
+		if applyErr != nil {
+			return StreamRequest{}, false, applyErr
+		}
+		return next, true, nil
+	case subscriptionauth.CredentialSourceGrok:
+		if isModelAdapterTestRequest(req) || isUnauthorizedHTTPStatus(err) || !subscriptionauth.IsQuotaError(err) {
+			return StreamRequest{}, false, nil
+		}
+		if markErr := router.credentials.MarkQuotaExhausted(ctx, req.CredentialID); markErr != nil {
+			if errors.Is(markErr, subscriptionauth.ErrQuotaExhausted) {
+				return StreamRequest{}, false, markErr
+			}
+			return StreamRequest{}, false, nil
+		}
+		cred, resolveErr := router.credentials.Resolve(ctx, source)
+		if resolveErr != nil || strings.TrimSpace(cred.AccountID) == "" || strings.TrimSpace(cred.AccountID) == strings.TrimSpace(req.CredentialID) {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		next, applyErr := applyCredentialToRequest(req, cred)
+		if applyErr != nil {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		return next, true, nil
+	default:
+		return StreamRequest{}, false, nil
+	}
 }
 
 // applyChannelToRequest 将 ResolvedChannel 的字段映射到 StreamRequest 副本中并返回。

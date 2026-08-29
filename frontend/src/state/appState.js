@@ -238,6 +238,7 @@ export function buildModelAdapterTestRequestHash(source) {
     asString(adapter.type),
     normalizeBaseURL(adapter.baseURL),
     asString(adapter.apiKey),
+    asString(adapter.credentialSource),
     asString(adapter.modelID),
     adapter.type === "openai" ? asString(adapter.reasoningEffort) : "",
     adapter.type === "openai" ? normalizeOpenAIEndpoint(adapter.openAIEndpoint) : "",
@@ -1783,7 +1784,16 @@ export async function saveModelAdapterAt(index, adapter) {
 }
 
 export async function fetchAvailableModelIDs(payload) {
-  const result = await fetchModelAdapterModels(payload);
+  const source = payload && typeof payload === "object" ? payload : {};
+  const credentialSource = normalizeCredentialSource(source.credentialSource);
+  const result = await fetchModelAdapterModels({
+    type: asString(source.type),
+    baseURL: asString(source.baseURL),
+    apiKey: isManagedCredentialSource(credentialSource) ? "" : asString(source.apiKey),
+    credentialSource,
+    customHeadersEnabled: asBoolean(source.customHeadersEnabled),
+    customHeadersJSON: asString(source.customHeadersJSON),
+  });
   return asArray(result?.models)
     .map((item) => asString(item))
     .filter(Boolean);

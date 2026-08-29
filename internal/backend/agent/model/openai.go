@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	runtimecore "cursor/internal/backend/agent/core"
 	"cursor/internal/modelchannel"
 	"cursor/internal/netproxy"
+	"cursor/internal/subscriptionauth"
 )
 
 // OpenAIAdapter 实现 OpenAI 兼容流式请求。
@@ -512,7 +514,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+		applyOpenAIRequestHeaders(httpReq, req, requestURL)
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
@@ -1004,9 +1006,9 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
-	body = bodyMap
-
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
+	filterCodexResponsesBody(bodyMap, req, requestURL)
+	body = bodyMap
 	recordLLMRequestArtifact(req, "openai", modelID, "POST", requestURL, body)
 
 	payload, err := json.Marshal(body)
@@ -1028,7 +1030,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+		applyOpenAIRequestHeaders(httpReq, req, requestURL)
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
@@ -2349,4 +2351,52 @@ func openAIStreamErrorDetails(errorType string, code string, requestID string) s
 		return "provider_error"
 	}
 	return strings.Join(parts, " ")
+}
+
+func isChatGPTCodexHost(requestURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(requestURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "chatgpt.com")
+}
+
+func isManagedCodexChatGPTRequest(req StreamRequest, requestURL string) bool {
+	return subscriptionauth.NormalizeCredentialSource(req.CredentialSource) == subscriptionauth.CredentialSourceCodex &&
+		isChatGPTCodexHost(requestURL)
+}
+
+func applyOpenAIRequestHeaders(httpReq *http.Request, req StreamRequest, requestURL string) {
+	if httpReq == nil {
+		return
+	}
+	if isManagedCodexChatGPTRequest(req, requestURL) {
+		httpReq.Header.Set("originator", "codex_cli_rs")
+		if accountID := strings.TrimSpace(req.ChatGPTAccountID); accountID != "" {
+			httpReq.Header.Set("ChatGPT-Account-Id", accountID)
+		}
+		return
+	}
+	httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+}
+
+func isCodexResponsesAllowedKey(key string) bool {
+	switch key {
+	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "previous_response_id", "truncation":
+		return true
+	default:
+		return false
+	}
+}
+
+func filterCodexResponsesBody(body map[string]any, req StreamRequest, requestURL string) {
+	if body == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	body["store"] = false
+	for key := range body {
+		if !isCodexResponsesAllowedKey(key) {
+			delete(body, key)
+		}
+	}
 }

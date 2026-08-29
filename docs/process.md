@@ -111,6 +111,24 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 验证：`PATH=/Users/yaogj/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（约 22 MiB）。挂载后 Info.plist 版本为 `0.0.50.3`，可执行文件为 Mach-O arm64 且包含注入版本 `0.0.50.3`，adhoc codesign，`hdiutil verify` VALID，SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
 
+### 0.14 Cursor 设置清理所有权隔离
+
+2026-08-28 已修复 `internal/client` 生命周期测试误删真实 Cursor 代理设置并诱发 `ERROR_NOT_LOGGED_IN` 的问题。`ProxyService` 现在只有在成功执行 `ApplyCursorSettings` 后才获得清理资格；设置写入会用实例 owner 标记和跨进程文件锁转移所有权，旧实例或未 Apply 的测试实例不能删除新实例设置，macOS `NODE_EXTRA_CA_CERTS` 清理也在同一所有权校验内执行。生命周期 fixture 已改用临时 Cursor 配置路径，并覆盖未 Apply 退出保留设置、旧 owner 不清理新 owner 和所有权存储行为。
+
+验证通过：`go test ./internal/cursor -count=1`；`GOMAXPROCS=2 go test ./internal/client -count=1 -timeout 180s`。完整 client 测试前后真实 `~/Library/Application Support/Cursor/User/settings.json` 的 SHA-256 一致；未启动、停止或替换运行中的 18080/18090。
+
+### 0.15 本地编译 macOS v0.0.52.0
+
+2026-08-29 按用户要求将版本号升到 `0.0.52.0` 并编译 Apple Silicon macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.0.md` 已对齐；构建资产生成后恢复并保留工作树原有的 macOS 最低版本、Linux GTK/WebKit 和 Windows 安装范围改动。未发布 GitHub Release，未更新 README 当前稳定发布。
+
+首次使用 Go 1.26.3 构建时，大型生成文件 `aiserver_v1.connect.go` 的编译进程被系统终止；切换项目现有 Go 1.25.0 后定位到剩余磁盘空间不足。清理失败构建临时目录和 Go build cache 后，以 `GOMAXPROCS=2 GOFLAGS=-p=1 task build` 成功生成 `bin/macos-arm64.dmg`（24,000,981 bytes）。挂载验证 Info.plist 与二进制注入版本均为 `0.0.52.0`，可执行文件为 Mach-O arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `0adcb0b3a32c5d581169642c1b530b819380f200f027d15017db4d8f8bfcf365`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+
+### 0.16 Codex/Grok 授权接入页拆分
+
+2026-08-29 根据用户启动 `0.0.52.0` 后的截图反馈，移除接入中心底部混合展示的全局“上游订阅认证”区域。Codex 的 `auth.json` 导入、设备码授权、状态、用量和清除副本全部进入 Codex 接入详情；Grok 的设备码授权、账号列表、激活、删除和用量进入独立 Grok 接入详情。左侧顺序固定为共享入口、Cursor、Codex、Grok、Anthropic；Anthropic 保留计划中占位，旧 `client=claude` 查询兼容归一化到 `anthropic`。
+
+本轮只调整前端信息架构、提示、品牌样式、语言目录和路由门禁，不修改认证协议、凭据存储或模型请求链路。验证通过：`npm run build --prefix frontend`、`node frontend/scripts/test-config-projection.mjs`、`node --test frontend/src/router/access.test.js`（5/5）。构建只有既有 chunk-size warning；未重新打包 macOS DMG，未做真实 Wails 窗口点击，因此状态为 `verified-partial`。
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -292,6 +310,10 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 
 ### 2. 按时间索引
+
+- **2026-08-29**：完成 `v0.0.52.1` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，带版本号的产物位于 `bin/release/0.0.52.1/cursor-byok-0.0.52.1-macos-arm64.dmg`；已核验 `0.0.52.1` 版本、arm64 架构、adhoc 签名、DMG 完整性和 SHA-256。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+
+- **2026-08-29**：完成 `v0.0.52.0` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，`bin/macos-arm64.dmg` 的版本、arm64 架构、adhoc 签名、DMG 完整性及 SHA-256 已验证；未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
 - **2026-08-28**：修复模型页保存时身份字段变化导致 fallback 渠道 ID 悬空，以及切换 OpenAI/Anthropic 清空模型标识。`SaveModelAdapters`/`SaveUserConfig` 使用请求旧 ID 与磁盘 adapter 精确 remap；新 adapter 不携带旧 ID，删除加新增不会误配。类型切换保留当前 `modelID`。定向 Go/前端测试与生产构建通过；未做 Wails 视觉点击。详见 `task/todo.md` 的 `model-save-identity-remap-20260828`。
 - **2026-08-26**：冻结 v5 四页控制面阶段 0 合同（`/access?client=...`、per-scope dirty、真实计数、完整配置导入导出文案、`system` 主题、持久小时桶、Cursor 启动/重启安全语义、Codex/Claude 非生产 fixture）。决策基线 §7.5/§10.14、系统 Design §4.2/§10.2/§14.16 与 `task/todo.md` 的 `ui-v5-shell-20260826` 已同步。本轮只改文档，实现未开始，不得标完成。ACP 工作包保持 blocked。

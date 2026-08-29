@@ -1,0 +1,9 @@
+{
+  "auth_mode": "chatgpt",
+  "last_refresh": "2026-08-26T00:00:00Z",
+  "tokens": {
+    "access_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjQ0NDgwMH0.sig",
+    "refresh_token": "test-refresh-codex",
+    "id_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjQ0NDgwMH0.sig"
+  }
+}

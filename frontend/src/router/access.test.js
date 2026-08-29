@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ACCESS_CLIENTS,
   ACCESS_PATH,
   DEFAULT_ACCESS_CLIENT,
   accessClientConfigScope,
@@ -13,9 +14,12 @@ import {
 } from "./access.js";
 
 test("parseAccessClient normalizes unknown, empty, and array query values", () => {
+  assert.deepEqual(ACCESS_CLIENTS, ["gateway", "cursor", "codex", "grok", "anthropic"]);
   assert.equal(parseAccessClient(""), DEFAULT_ACCESS_CLIENT);
   assert.equal(parseAccessClient("nope"), DEFAULT_ACCESS_CLIENT);
   assert.equal(parseAccessClient("CURSOR"), "cursor");
+  assert.equal(parseAccessClient("GROK"), "grok");
+  assert.equal(parseAccessClient("claude"), "anthropic");
   assert.equal(parseAccessClient(["cursor", "gateway"]), "cursor");
   assert.equal(parseAccessClient([]), DEFAULT_ACCESS_CLIENT);
 });
@@ -90,6 +94,8 @@ test("legacy /cursor location maps to access cursor and cursor config scope", ()
   assert.equal(accessClientConfigScope("cursor"), "cursor");
   assert.equal(accessClientConfigScope("nope"), "gateway");
   assert.equal(accessClientConfigScope("codex"), "");
+  assert.equal(accessClientConfigScope("grok"), "");
+  assert.equal(accessClientConfigScope("anthropic"), "");
   assert.equal(accessClientConfigScope(["cursor"]), "cursor");
 });
 
@@ -117,7 +123,7 @@ test("accessLeaveConfigScopes checks current client inside /access and both scop
   );
   assert.deepEqual(
     accessLeaveConfigScopes(
-      { path: ACCESS_PATH, query: { client: "claude" } },
+      { path: ACCESS_PATH, query: { client: "anthropic" } },
       { path: ACCESS_PATH, query: { client: "gateway" } },
     ),
     [],
@@ -138,7 +144,7 @@ test("accessLeaveConfigScopes checks current client inside /access and both scop
   );
   assert.deepEqual(
     accessLeaveConfigScopes(
-      { path: ACCESS_PATH, query: { client: "claude" } },
+      { path: ACCESS_PATH, query: { client: "anthropic" } },
       { path: "/" },
     ),
     ["gateway", "cursor"],

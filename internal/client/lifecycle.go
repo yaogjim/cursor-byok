@@ -323,8 +323,10 @@ func (s *ProxyService) doShutdownForQuit(initiator string) {
 			finalErr = errors.Join(finalErr, err)
 		}
 	}
-	if err := s.ClearCursorSettings(); err != nil {
-		finalErr = errors.Join(finalErr, err)
+	if s.ownsAppliedCursorSettings() {
+		if err := s.ClearCursorSettings(); err != nil {
+			finalErr = errors.Join(finalErr, err)
+		}
 	}
 	if s.cursorAccount != nil {
 		s.cursorAccount.Shutdown()

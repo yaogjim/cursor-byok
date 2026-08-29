@@ -1,8 +1,9 @@
-export const ACCESS_CLIENTS = Object.freeze(["gateway", "cursor", "codex", "claude"]);
+export const ACCESS_CLIENTS = Object.freeze(["gateway", "cursor", "codex", "grok", "anthropic"]);
 export const DEFAULT_ACCESS_CLIENT = "gateway";
 export const ACCESS_PATH = "/access";
 
 const ACCESS_CLIENT_SET = new Set(ACCESS_CLIENTS);
+const ACCESS_CLIENT_ALIASES = Object.freeze({ claude: "anthropic" });
 
 const ACCESS_CLIENT_CONFIG_SCOPE = Object.freeze({
   gateway: "gateway",
@@ -20,7 +21,8 @@ function firstQueryValue(value) {
 
 export function parseAccessClient(value) {
   const client = String(firstQueryValue(value) ?? "").trim().toLowerCase();
-  return ACCESS_CLIENT_SET.has(client) ? client : DEFAULT_ACCESS_CLIENT;
+  const normalized = ACCESS_CLIENT_ALIASES[client] || client;
+  return ACCESS_CLIENT_SET.has(normalized) ? normalized : DEFAULT_ACCESS_CLIENT;
 }
 
 export function isCanonicalAccessClientQuery(query) {
@@ -45,7 +47,10 @@ export function canonicalizeAccessRoute(to) {
 
 export function isAccessClientSupported(client) {
   const normalized = parseAccessClient(client);
-  return normalized === "gateway" || normalized === "cursor";
+  return normalized === "gateway"
+    || normalized === "cursor"
+    || normalized === "codex"
+    || normalized === "grok";
 }
 
 export function accessClientConfigScope(client) {

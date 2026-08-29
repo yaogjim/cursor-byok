@@ -63,18 +63,36 @@ func (service *Service) forgetPending(token string) {
 	}
 }
 
+func (service *Service) forgetPendingByInput(pollToken string, deviceCode string) {
+	if service == nil {
+		return
+	}
+	service.pendingMu.Lock()
+	defer service.pendingMu.Unlock()
+	for _, key := range []string{trimSpace(pollToken), "device:" + trimSpace(deviceCode)} {
+		pending, ok := service.pending[key]
+		if !ok {
+			continue
+		}
+		delete(service.pending, key)
+		delete(service.pending, "device:"+pending.deviceCode)
+	}
+}
+
 func (service *Service) pendingByInput(pollToken string, deviceCode string) (pendingAuth, bool) {
 	service.pendingMu.Lock()
 	defer service.pendingMu.Unlock()
-	if pending, ok := service.pending[trimSpace(pollToken)]; ok {
-		if pending.expiresAt.IsZero() || pending.expiresAt.After(time.Now()) {
+	now := time.Now()
+	for _, key := range []string{trimSpace(pollToken), "device:" + trimSpace(deviceCode)} {
+		pending, ok := service.pending[key]
+		if !ok {
+			continue
+		}
+		if pending.expiresAt.IsZero() || pending.expiresAt.After(now) {
 			return pending, true
 		}
-	}
-	if pending, ok := service.pending["device:"+trimSpace(deviceCode)]; ok {
-		if pending.expiresAt.IsZero() || pending.expiresAt.After(time.Now()) {
-			return pending, true
-		}
+		delete(service.pending, key)
+		delete(service.pending, "device:"+pending.deviceCode)
 	}
 	return pendingAuth{}, false
 }
@@ -106,6 +124,9 @@ func (service *Service) Resolve(ctx context.Context, source CredentialSource) (C
 		if !ok {
 			return Credential{}, ErrAuthRequired
 		}
+		if account.LimitReached {
+			return Credential{}, ErrQuotaExhausted
+		}
 		accountID, _, _ := accountIdentity(ProviderGrok, account.AccessToken, "")
 		return Credential{
 			Provider:    ProviderGrok,
@@ -124,6 +145,9 @@ func (service *Service) ResolveAfterUnauthorized(ctx context.Context, source Cre
 	auth, err := service.refreshCodex(ctx, true)
 	if err != nil {
 		return Credential{}, err
+	}
+	if auth == nil {
+		return Credential{}, ErrAuthRequired
 	}
 	return auth.credential(), nil
 }

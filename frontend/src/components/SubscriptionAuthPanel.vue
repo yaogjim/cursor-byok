@@ -20,6 +20,14 @@ import { toUserError } from "@/state/appState";
 import { Browser, Dialogs } from "@wailsio/runtime";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 
+const props = defineProps({
+  provider: {
+    type: String,
+    default: "codex",
+    validator: (value) => value === "codex" || value === "grok",
+  },
+});
+
 const message = useMessage();
 const busy = ref(false);
 const lastError = ref("");
@@ -46,6 +54,9 @@ function asAccount(value) {
     hasRefreshToken: Boolean(raw.hasRefreshToken),
     remainingPercent: Number(raw.remainingPercent || 0),
     usedPercent: Number(raw.usedPercent || 0),
+    resetAt: raw.resetAt || "",
+    sessionRemainingPercent: Number(raw.sessionRemainingPercent || 0),
+    sessionResetAt: raw.sessionResetAt || "",
     limitReached: Boolean(raw.limitReached),
     active: Boolean(raw.active),
     error: String(raw.error || ""),
@@ -54,6 +65,17 @@ function asAccount(value) {
 
 const grokActive = computed(() => grokAccounts.value.find((item) => item.active) || null);
 const codexReady = computed(() => codexStatus.value.state === "ready");
+const isCodex = computed(() => props.provider === "codex");
+const accountCount = computed(() => {
+  if (isCodex.value) {
+    return codexStatus.value.state === "missing" ? 0 : 1;
+  }
+  return grokAccounts.value.length;
+});
+const panelTitle = computed(() => isCodex.value ? "Codex 接入" : "Grok 接入");
+const panelSubtitle = computed(() => isCodex.value
+  ? "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json 或设备码授权"
+  : "管理 Grok / xAI 订阅授权与账号切换");
 
 function stateLabel(state) {
   switch (state) {
@@ -79,12 +101,12 @@ function showActionError(title, error) {
 
 async function refreshAll() {
   try {
-    const [codex, grok] = await Promise.all([
-      getCodexAuthStatus(),
-      listSubscriptionAccounts("grok"),
-    ]);
-    codexStatus.value = asAccount(codex);
-    grokAccounts.value = Array.isArray(grok) ? grok.map(asAccount) : [];
+    if (isCodex.value) {
+      codexStatus.value = asAccount(await getCodexAuthStatus());
+    } else {
+      const grok = await listSubscriptionAccounts("grok");
+      grokAccounts.value = Array.isArray(grok) ? grok.map(asAccount) : [];
+    }
     lastError.value = "";
   } catch (error) {
     showActionError("读取订阅认证失败", toUserError(error));
@@ -174,6 +196,8 @@ async function pollOnce() {
     await refreshAll();
   } catch (error) {
     stopPolling();
+    deviceChallenge.value = null;
+    deviceProvider.value = "";
     showActionError("轮询设备授权失败", toUserError(error));
   }
 }
@@ -260,75 +284,144 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Card class="subscription-auth-panel">
-    <div class="flex flex-col gap-3">
-      <div class="page-title-block">
-        <h3 class="text-[15px] font-semibold text-[var(--color-text)]">上游订阅认证</h3>
-        <p class="note plain">
-          Codex / Grok 订阅用于上游模型请求，与接入中心的 Codex 客户端占位、Cursor 登录无关。Token 只保存在本机私有副本中。
+  <div class="subscription-access-panel">
+    <div class="subscription-access-head">
+      <div class="min-w-0">
+        <h2 class="subscription-access-title">{{ panelTitle }}</h2>
+        <p class="subscription-access-subtitle">{{ panelSubtitle }}</p>
+      </div>
+      <Button
+        v-if="isCodex"
+        variant="primary"
+        class="shrink-0"
+        :disabled="busy"
+        @click="handleImportCodex"
+      >
+        <span class="icon-[mdi--file-import-outline] text-[15px]" aria-hidden="true" />
+        导入 auth.json
+      </Button>
+      <Button
+        v-else
+        variant="primary"
+        class="shrink-0"
+        :disabled="busy"
+        @click="handleStartDevice('grok')"
+      >
+        <span class="icon-[mdi--plus] text-[15px]" aria-hidden="true" />
+        添加授权
+      </Button>
+    </div>
+
+    <Card :padded="false" class="subscription-mode-card">
+      <div class="subscription-mode-row">
+        <span class="subscription-mode-label">接入方式</span>
+        <div class="subscription-mode-select text-sm text-[var(--color-text-secondary)]">
+          {{ isCodex ? "ChatGPT / Codex" : "Grok / xAI" }}
+        </div>
+        <Button :disabled="busy" @click="handleStartDevice(provider)">设备码授权</Button>
+        <Button
+          :disabled="busy || (isCodex ? !codexReady : !grokActive)"
+          @click="handleRefreshUsage(provider)"
+        >
+          刷新用量
+        </Button>
+      </div>
+      <div class="subscription-mode-hint">
+        授权凭据只保存在本机私有副本中，不会写入模型配置或前端状态。
+      </div>
+    </Card>
+
+    <Card :padded="false" class="subscription-account-card">
+      <div class="subscription-account-head">
+        <h3 class="subscription-account-title">订阅授权</h3>
+        <p class="subscription-account-subtitle">
+          <span>{{ accountCount }} 个账号</span>
+          {{ isCodex ? "可导入现有 auth.json 或重新进行设备授权" : "可添加、激活或删除 Grok 授权账号" }}
         </p>
       </div>
 
-      <section class="rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <strong>ChatGPT / Codex</strong>
-          <span class="text-xs text-[var(--color-text-secondary)]">{{ stateLabel(codexStatus.state) }}</span>
-        </div>
-        <p class="text-sm text-[var(--color-text-secondary)]">
-          {{ codexStatus.email || codexStatus.displayName || "尚未导入认证副本" }}
-        </p>
-        <p v-if="codexStatus.chatgptAccountId" class="mt-1 text-xs text-[var(--color-text-secondary)]">
-          账号 {{ codexStatus.chatgptAccountId }}
-        </p>
-        <div class="mt-3 flex flex-wrap gap-2">
-          <Button variant="primary" :disabled="busy" @click="handleImportCodex">导入 auth.json</Button>
-          <Button :disabled="busy" @click="handleStartDevice('codex')">设备码授权</Button>
-          <Button :disabled="busy || !codexReady" @click="handleRefreshUsage('codex')">刷新用量</Button>
-          <Button :disabled="busy || codexStatus.state === 'missing'" @click="handleClearCodex">清除副本</Button>
-        </div>
-      </section>
-
-      <section class="rounded-[10px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <strong>Grok / xAI</strong>
-          <span class="text-xs text-[var(--color-text-secondary)]">
-            {{ grokActive ? stateLabel(grokActive.state) : "未配置" }}
-          </span>
-        </div>
-        <p class="text-sm text-[var(--color-text-secondary)]">
-          {{ grokActive ? (grokActive.displayName || grokActive.email || grokActive.accountId) : "尚未添加 Grok 账号" }}
-        </p>
-        <div class="mt-3 flex flex-wrap gap-2">
-          <Button variant="primary" :disabled="busy" @click="handleStartDevice('grok')">设备码授权</Button>
-          <Button :disabled="busy || !grokActive" @click="handleRefreshUsage('grok')">刷新用量</Button>
-        </div>
-        <ul v-if="grokAccounts.length" class="mt-3 flex flex-col gap-2">
-          <li
-            v-for="account in grokAccounts"
-            :key="account.accountId"
-            class="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
-          >
-            <div class="min-w-0">
-              <div class="truncate text-sm">{{ account.displayName || account.email || account.accountId }}</div>
-              <div class="text-xs text-[var(--color-text-secondary)]">
-                {{ account.active ? "当前使用" : "未激活" }}
-                <span v-if="account.planLabel"> · {{ account.planLabel }}</span>
-                <span v-if="account.remainingPercent"> · 剩余 {{ Math.round(account.remainingPercent) }}%</span>
-              </div>
+      <div v-if="isCodex && accountCount" class="flex flex-1 flex-col justify-center gap-3 px-7 py-6">
+        <div class="flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="truncate text-sm font-semibold text-[var(--color-text)]">
+              {{ codexStatus.email || codexStatus.displayName || "ChatGPT / Codex" }}
             </div>
-            <div class="flex shrink-0 gap-2">
-              <Button variant="text" :disabled="busy || account.active" @click="handleActivate(account.accountId)">激活</Button>
-              <Button variant="text" :disabled="busy" @click="handleDelete(account.accountId)">删除</Button>
+            <div class="mt-1 text-xs text-[var(--color-text-secondary)]">
+              {{ stateLabel(codexStatus.state) }}
+              <span v-if="codexStatus.planLabel"> · {{ codexStatus.planLabel }}</span>
+              <span v-if="codexStatus.chatgptAccountId"> · {{ codexStatus.chatgptAccountId }}</span>
             </div>
-          </li>
-        </ul>
-      </section>
+            <div v-if="codexReady" class="mt-1 text-xs text-[var(--color-text-secondary)]">
+              剩余 {{ Math.round(codexStatus.remainingPercent) }}%
+              <span v-if="codexStatus.sessionResetAt">
+                · 会话剩余 {{ Math.round(codexStatus.sessionRemainingPercent) }}%
+              </span>
+            </div>
+          </div>
+          <Button variant="text" :disabled="busy" @click="handleClearCodex">清除副本</Button>
+        </div>
+      </div>
 
-      <p v-if="deviceChallenge" class="note">
-        正在等待 {{ deviceProvider === "codex" ? "Codex" : "Grok" }} 授权，用户码
+      <ul v-else-if="!isCodex && grokAccounts.length" class="flex flex-1 flex-col gap-2 px-7 py-6">
+        <li
+          v-for="account in grokAccounts"
+          :key="account.accountId"
+          class="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3"
+        >
+          <div class="min-w-0">
+            <div class="truncate text-sm font-semibold text-[var(--color-text)]">
+              {{ account.displayName || account.email || account.accountId }}
+            </div>
+            <div class="mt-1 text-xs text-[var(--color-text-secondary)]">
+              {{ account.active ? "当前使用" : stateLabel(account.state) }}
+              <span v-if="account.planLabel"> · {{ account.planLabel }}</span>
+              <span v-if="account.remainingPercent"> · 剩余 {{ Math.round(account.remainingPercent) }}%</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 gap-2">
+            <Button variant="text" :disabled="busy || account.active" @click="handleActivate(account.accountId)">激活</Button>
+            <Button variant="text" :disabled="busy" @click="handleDelete(account.accountId)">删除</Button>
+          </div>
+        </li>
+      </ul>
+
+      <div v-else class="subscription-account-empty">
+        <span class="subscription-account-empty-icon icon-[mdi--account-outline]" aria-hidden="true" />
+        <div>
+          <div class="subscription-account-empty-title">暂无授权账号</div>
+          <div class="subscription-account-empty-copy">
+            {{ isCodex ? "导入 auth.json 或使用设备码完成 ChatGPT / Codex 授权。" : "使用设备码添加 Grok / xAI 授权账号。" }}
+          </div>
+        </div>
+      </div>
+
+      <div v-if="deviceChallenge" class="mx-7 mb-4 note">
+        正在等待 {{ isCodex ? "Codex" : "Grok" }} 授权，用户码
         <strong>{{ deviceChallenge.userCode }}</strong>
-      </p>
-      <p v-if="lastError" class="note">{{ lastError }}</p>
-    </div>
-  </Card>
+      </div>
+      <div v-if="lastError" class="mx-7 mb-4 note">{{ lastError }}</div>
+
+      <div class="subscription-account-footer">
+        <span class="config-action-status">
+          {{ isCodex ? stateLabel(codexStatus.state) : (grokActive ? stateLabel(grokActive.state) : "未配置") }}
+        </span>
+        <div class="config-action-buttons">
+          <Button
+            v-if="isCodex"
+            :disabled="busy"
+            @click="handleImportCodex"
+          >
+            导入 auth.json
+          </Button>
+          <Button
+            variant="primary"
+            :disabled="busy"
+            @click="handleStartDevice(provider)"
+          >
+            设备码授权
+          </Button>
+        </div>
+      </div>
+    </Card>
+  </div>
 </template>

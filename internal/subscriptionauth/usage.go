@@ -107,8 +107,9 @@ func parseCodexUsage(body map[string]any) UsageSnapshot {
 		rateLimit = nested
 	}
 	weekly, _ := rateLimit["secondary_window"].(map[string]any)
+	primary, _ := rateLimit["primary_window"].(map[string]any)
 	if weekly == nil {
-		weekly, _ = rateLimit["primary_window"].(map[string]any)
+		weekly = primary
 	}
 	used := 0.0
 	if weekly != nil {
@@ -124,10 +125,18 @@ func parseCodexUsage(body map[string]any) UsageSnapshot {
 		UpdatedAt:        time.Now().UTC(),
 		PlanLabel:        codexPlanLabel(jsonString(body, "plan_type")),
 	}
+	if _, hasSecondary := rateLimit["secondary_window"]; hasSecondary && primary != nil {
+		if sessionUsed, ok := anyFloat(primary["used_percent"]); ok {
+			snapshot.SessionRemainingPercent = clampPercent(100 - sessionUsed)
+		}
+		snapshot.SessionResetAt = windowResetAt(primary)
+	}
 	if reached, ok := rateLimit["limit_reached"].(bool); ok {
 		snapshot.LimitReached = reached
 	} else {
-		snapshot.LimitReached = snapshot.RemainingPercent <= 0
+		_, hasSecondary := rateLimit["secondary_window"]
+		snapshot.LimitReached = snapshot.RemainingPercent <= 0 ||
+			(hasSecondary && primary != nil && snapshot.SessionRemainingPercent <= 0)
 	}
 	return snapshot
 }
@@ -236,7 +245,9 @@ func (service *Service) RefreshUsage(ctx context.Context, provider ProviderKind)
 				file.Accounts[i].UpdatedAtMS = nowMS()
 			}
 		}
-		_ = service.store.SaveGrok(file)
+		if err := service.store.SaveGrok(file); err != nil {
+			return usage, err
+		}
 		return usage, nil
 	case ProviderCodex:
 		auth, err := service.refreshCodex(ctx, false)
@@ -249,10 +260,50 @@ func (service *Service) RefreshUsage(ctx context.Context, provider ProviderKind)
 		}
 		status := auth.status()
 		usage.AccountID = status.AccountID
+		next := *auth
+		next.PlanLabel = usage.PlanLabel
+		next.RemainingPercent = usage.RemainingPercent
+		next.UsedPercent = usage.UsedPercent
+		if !usage.ResetAt.IsZero() {
+			next.ResetAtMS = usage.ResetAt.UnixMilli()
+		}
+		next.SessionRemainingPercent = usage.SessionRemainingPercent
+		if !usage.SessionResetAt.IsZero() {
+			next.SessionResetAtMS = usage.SessionResetAt.UnixMilli()
+		}
+		next.LimitReached = usage.LimitReached
+		service.mu.Lock()
+		saveErr := service.store.SaveCodex(next)
+		service.mu.Unlock()
+		if saveErr != nil {
+			return usage, saveErr
+		}
 		return usage, nil
 	default:
 		return UsageSnapshot{}, safeErrorf("unsupported subscription provider")
 	}
+}
+
+func IsQuotaError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrQuotaExhausted) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "insufficient_quota") ||
+		strings.Contains(message, "usage_limit_reached") ||
+		strings.Contains(message, "exceeded your current quota") ||
+		strings.Contains(message, "quota_exceeded") ||
+		strings.Contains(message, "5-hour") ||
+		strings.Contains(message, "5 hour") {
+		return true
+	}
+	return strings.Contains(message, "429") &&
+		(strings.Contains(message, "quota") ||
+			strings.Contains(message, "usage_limit") ||
+			strings.Contains(message, "insufficient"))
 }
 
 func (service *Service) MarkQuotaExhausted(ctx context.Context, credentialID string) error {
@@ -266,21 +317,5 @@ func (service *Service) MarkQuotaExhausted(ctx context.Context, credentialID str
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	file, err := service.store.LoadGrok()
-	if err != nil {
-		return err
-	}
-	now := nowMS()
-	found := false
-	for i := range file.Accounts {
-		if file.Accounts[i].AccountID == trimmed {
-			file.Accounts[i].LimitReached = true
-			file.Accounts[i].UpdatedAtMS = now
-			found = true
-		}
-	}
-	if !found {
-		return nil
-	}
-	return service.store.SaveGrok(file)
+	return service.markGrokQuotaExhaustedLocked(trimmed)
 }

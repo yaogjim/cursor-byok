@@ -1,5 +1,17 @@
 {
   "entries": {
+    "00ac89ce97641095": {
+      "source": "删除后无法恢复该账号在本应用中的认证副本。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 246,
+          "column": 14
+        }
+      ]
+    },
     "00cc2d351aaf083b": {
       "source": "Gateway 配置已保存",
       "kind": "text",
@@ -8,6 +20,18 @@
         {
           "file": "src/components/GatewayCard.vue",
           "line": 178,
+          "column": 13
+        }
+      ]
+    },
+    "0121088ad0f8d841": {
+      "source": "已清除 Codex 认证副本",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 154,
           "column": 13
         }
       ]
@@ -30,6 +54,11 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 134,
+          "column": 21
+        },
+        {
           "file": "src/composables/useConfigTransfer.js",
           "line": 51,
           "column": 23
@@ -48,7 +77,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1531,
+          "line": 1549,
           "column": 14
         }
       ]
@@ -96,7 +125,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 555,
+          "line": 578,
           "column": 21
         }
       ]
@@ -132,12 +161,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 42,
-          "column": 11
-        },
-        {
-          "file": "src/views/AccessView.vue",
-          "line": 52,
+          "line": 63,
           "column": 11
         }
       ]
@@ -149,7 +173,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 65,
+          "line": 60,
           "column": 26
         }
       ]
@@ -197,7 +221,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 523,
+          "line": 541,
           "column": 14
         }
       ]
@@ -226,12 +250,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 652,
+          "line": 690,
           "column": 15
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 680,
+          "line": 718,
           "column": 15
         }
       ]
@@ -243,7 +267,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 103,
+          "line": 104,
           "column": 12
         }
       ]
@@ -320,7 +344,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 86,
+          "line": 97,
           "column": 12
         }
       ]
@@ -368,7 +392,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 837,
+          "line": 875,
           "column": 25
         }
       ]
@@ -409,7 +433,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 858,
+          "line": 896,
           "column": 1
         }
       ]
@@ -455,6 +479,18 @@
         }
       ]
     },
+    "09efbb5af50af256": {
+      "source": "清除副本",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 361,
+          "column": 77
+        }
+      ]
+    },
     "0a98a48eaaac4175": {
       "source": "测试连接",
       "kind": "text",
@@ -462,7 +498,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 95,
+          "line": 90,
           "column": 28
         }
       ]
@@ -491,8 +527,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 559,
+          "line": 577,
           "column": 14
+        }
+      ]
+    },
+    "0b8022e6346d6278": {
+      "source": "静态 API key 使用本页密钥；Codex / Grok 订阅从本机认证副本解析，不会写入 config.yaml。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 178,
+          "column": 21
         }
       ]
     },
@@ -583,6 +631,18 @@
         }
       ]
     },
+    "10002608f41b871b": {
+      "source": "轮询设备授权失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 201,
+          "column": 21
+        }
+      ]
+    },
     "1117a2f86030d03b": {
       "source": "缓存读写已计入 Prompt 侧统计。",
       "kind": "text",
@@ -638,7 +698,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 450,
+          "line": 473,
           "column": 34
         }
       ]
@@ -662,7 +722,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 864,
+          "line": 902,
           "column": 1
         }
       ]
@@ -681,18 +741,6 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 321,
           "column": 19
-        }
-      ]
-    },
-    "147264bc10cf551c": {
-      "source": "保存 Codex 配置",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 17,
-          "column": 16
         }
       ]
     },
@@ -744,6 +792,18 @@
         }
       ]
     },
+    "15c7c71126d46f05": {
+      "source": "配额已用尽",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 87,
+          "column": 14
+        }
+      ]
+    },
     "15d124b200ddabed": {
       "source": "模型单次可接受的最大上下文 Token 数。留空时使用默认值。",
       "kind": "text",
@@ -751,7 +811,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 160,
+          "line": 179,
           "column": 24
         }
       ]
@@ -845,7 +905,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 375,
+          "line": 392,
           "column": 14
         }
       ]
@@ -857,7 +917,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1498,
+          "line": 1516,
           "column": 47
         },
         {
@@ -903,8 +963,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 786,
+          "line": 824,
           "column": 75
+        }
+      ]
+    },
+    "1a714e007640fb5e": {
+      "source": "删除订阅账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 245,
+          "column": 12
         }
       ]
     },
@@ -915,7 +987,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 603,
+          "line": 641,
           "column": 15
         }
       ]
@@ -975,7 +1047,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 835,
+          "line": 853,
           "column": 10
         }
       ]
@@ -1045,7 +1117,7 @@
         },
         {
           "file": "src/views/AccessView.vue",
-          "line": 157,
+          "line": 168,
           "column": 26
         },
         {
@@ -1108,13 +1180,25 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 701,
+          "line": 739,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 401,
+          "line": 418,
           "column": 36
+        }
+      ]
+    },
+    "214174c301353ceb": {
+      "source": "导入 auth.json 或使用设备码完成 ChatGPT / Codex 授权。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 393,
+          "column": 16
         }
       ]
     },
@@ -1137,8 +1221,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 109,
+          "line": 110,
           "column": 12
+        }
+      ]
+    },
+    "21f503f154662b56": {
+      "source": "启动设备授权失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 225,
+          "column": 21
         }
       ]
     },
@@ -1149,7 +1245,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1898,
+          "line": 1925,
           "column": 32
         }
       ]
@@ -1161,22 +1257,22 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 929,
+          "line": 947,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 984,
+          "line": 1002,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1690,
+          "line": 1708,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 1704,
+          "line": 1722,
           "column": 32
         }
       ]
@@ -1187,8 +1283,13 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 317,
+          "column": 47
+        },
+        {
           "file": "src/views/AccessView.vue",
-          "line": 119,
+          "line": 130,
           "column": 36
         }
       ]
@@ -1270,7 +1371,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1489,
+          "line": 1507,
           "column": 12
         }
       ]
@@ -1282,7 +1383,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 147,
+          "line": 158,
           "column": 1
         },
         {
@@ -1331,7 +1432,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 89,
+          "line": 100,
           "column": 12
         }
       ]
@@ -1343,7 +1444,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 562,
+          "line": 580,
           "column": 14
         }
       ]
@@ -1360,6 +1461,18 @@
         }
       ]
     },
+    "2873504bb9691115": {
+      "source": "需要重新授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 85,
+          "column": 14
+        }
+      ]
+    },
     "28aeffc70ceb4267": {
       "source": "切换当前界面显示语言，设置会立即生效并保存在本机",
       "kind": "text",
@@ -1369,6 +1482,30 @@
           "file": "src/views/Config.vue",
           "line": 242,
           "column": 1
+        }
+      ]
+    },
+    "2907075e503bd7ba": {
+      "source": "激活失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 237,
+          "column": 21
+        }
+      ]
+    },
+    "2952f485318530a1": {
+      "source": "清除失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 156,
+          "column": 21
         }
       ]
     },
@@ -1396,6 +1533,30 @@
         }
       ]
     },
+    "2c3f009fea06b94d": {
+      "source": "Grok 接入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 75,
+          "column": 64
+        }
+      ]
+    },
+    "2cca51423bf0b280": {
+      "source": "刷新用量失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 271,
+          "column": 21
+        }
+      ]
+    },
     "2cd0f3be8738a86c": {
       "source": "取消",
       "kind": "text",
@@ -1413,8 +1574,18 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 904,
+          "line": 942,
           "column": 89
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 145,
+          "column": 17
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 248,
+          "column": 17
         },
         {
           "file": "src/components/ui/InputModal.vue",
@@ -1448,7 +1619,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1582,
+          "line": 1600,
           "column": 12
         },
         {
@@ -1515,6 +1686,16 @@
           "column": 1
         },
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 247,
+          "column": 18
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 383,
+          "column": 94
+        },
+        {
           "file": "src/views/ModelConfig.vue",
           "line": 293,
           "column": 18
@@ -1550,7 +1731,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 896,
+          "line": 934,
           "column": 13
         }
       ]
@@ -1586,17 +1767,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 543,
+          "line": 561,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 549,
+          "line": 567,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 555,
+          "line": 573,
           "column": 16
         }
       ]
@@ -1697,12 +1878,12 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 56,
+          "line": 51,
           "column": 47
         },
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 62,
+          "line": 57,
           "column": 13
         }
       ]
@@ -1714,7 +1895,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1571,
+          "line": 1589,
           "column": 14
         }
       ]
@@ -1740,6 +1921,18 @@
           "file": "src/views/Home.vue",
           "line": 368,
           "column": 72
+        }
+      ]
+    },
+    "38a4da89dba35fcc": {
+      "source": "导入 Codex auth.json",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 119,
+          "column": 14
         }
       ]
     },
@@ -1796,12 +1989,12 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 54,
+          "line": 55,
           "column": 12
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 62,
+          "line": 63,
           "column": 12
         }
       ]
@@ -1907,7 +2100,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 102,
+          "line": 103,
           "column": 12
         }
       ]
@@ -1919,7 +2112,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 508,
+          "line": 526,
           "column": 14
         }
       ]
@@ -2016,7 +2209,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 87,
+          "line": 82,
           "column": 1
         }
       ]
@@ -2028,7 +2221,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1528,
+          "line": 1546,
           "column": 5
         }
       ]
@@ -2148,8 +2341,13 @@
           "column": 12
         },
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 91,
+          "column": 14
+        },
+        {
           "file": "src/views/AccessView.vue",
-          "line": 157,
+          "line": 168,
           "column": 26
         }
       ]
@@ -2197,7 +2395,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 172,
+          "line": 191,
           "column": 19
         }
       ]
@@ -2272,12 +2470,12 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 833,
+          "line": 851,
           "column": 12
         },
         {
           "file": "src/views/AccessView.vue",
-          "line": 138,
+          "line": 149,
           "column": 17
         }
       ]
@@ -2289,8 +2487,25 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 109,
+          "line": 116,
           "column": 65
+        }
+      ]
+    },
+    "46cab3bd6fb3e6f3": {
+      "source": "凭据来源",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 591,
+          "column": 21
+        },
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 596,
+          "column": 15
         }
       ]
     },
@@ -2330,7 +2545,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1546,
+          "line": 1564,
           "column": 43
         }
       ]
@@ -2342,7 +2557,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 520,
+          "line": 538,
           "column": 14
         }
       ]
@@ -2443,7 +2658,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 602,
+          "line": 640,
           "column": 15
         }
       ]
@@ -2489,6 +2704,18 @@
         }
       ]
     },
+    "4d4e34cc3bc1702e": {
+      "source": "Codex 与 Grok 在各自页面管理真实订阅授权；Anthropic 暂为接入占位。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 182,
+          "column": 1
+        }
+      ]
+    },
     "4d8c1c5b42830791": {
       "source": "未知",
       "kind": "text",
@@ -2496,7 +2723,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 177,
+          "line": 178,
           "column": 12
         }
       ]
@@ -2513,7 +2740,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 50,
+          "line": 51,
           "column": 12
         }
       ]
@@ -2554,6 +2781,18 @@
         }
       ]
     },
+    "5088a9fe8dd5f7dc": {
+      "source": "个账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 338,
+          "column": 36
+        }
+      ]
+    },
     "51194c3ad014fb29": {
       "source": "需重测",
       "kind": "text",
@@ -2578,6 +2817,18 @@
         }
       ]
     },
+    "519c9914d33ceea9": {
+      "source": "保存 Anthropic 配置",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 17,
+          "column": 16
+        }
+      ]
+    },
     "51a75f4634dfa859": {
       "source": "一",
       "kind": "text",
@@ -2597,7 +2848,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 167,
+          "line": 186,
           "column": 23
         }
       ]
@@ -2633,8 +2884,25 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 450,
+          "line": 473,
           "column": 41
+        }
+      ]
+    },
+    "538f74a7efe612ac": {
+      "source": "设备码授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 321,
+          "column": 71
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 421,
+          "column": 1
         }
       ]
     },
@@ -2698,12 +2966,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 646,
+          "line": 684,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 674,
+          "line": 712,
           "column": 21
         }
       ]
@@ -2744,7 +3012,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 27,
+          "line": 22,
           "column": 31
         }
       ]
@@ -2761,6 +3029,18 @@
         }
       ]
     },
+    "5795300845ebeca3": {
+      "source": "授权，用户码",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 399,
+          "column": 47
+        }
+      ]
+    },
     "579b964869182355": {
       "source": "深度集成 · 未启动",
       "kind": "text",
@@ -2768,7 +3048,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 98,
+          "line": 109,
           "column": 10
         }
       ]
@@ -2816,8 +3096,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 378,
+          "line": 395,
           "column": 12
+        }
+      ]
+    },
+    "59cf0d2a2cb29e63": {
+      "source": "管理 Grok / xAI 订阅授权与账号切换",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 78,
+          "column": 5
         }
       ]
     },
@@ -2857,7 +3149,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 162,
+          "line": 181,
           "column": 24
         }
       ]
@@ -2915,6 +3207,18 @@
         }
       ]
     },
+    "5ddff4afab2765c3": {
+      "source": "当前使用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 376,
+          "column": 18
+        }
+      ]
+    },
     "5e2f0d90dc3c6b2f": {
       "source": "按提供商筛选",
       "kind": "text",
@@ -2948,6 +3252,18 @@
           "file": "src/views/Home.vue",
           "line": 266,
           "column": 37
+        }
+      ]
+    },
+    "5f320b22e125ba4f": {
+      "source": "xAI 订阅授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 53,
+          "column": 11
         }
       ]
     },
@@ -3065,6 +3381,18 @@
         }
       ]
     },
+    "6188e322479d181e": {
+      "source": "已导入 Codex 认证副本，未修改原始 auth.json",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 132,
+          "column": 13
+        }
+      ]
+    },
     "6204eca8946e477f": {
       "source": "暂不下载",
       "kind": "text",
@@ -3072,7 +3400,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1577,
+          "line": 1595,
           "column": 14
         }
       ]
@@ -3172,7 +3500,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 506,
+          "line": 524,
           "column": 20
         },
         {
@@ -3211,7 +3539,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 394,
+          "line": 411,
           "column": 14
         }
       ]
@@ -3235,7 +3563,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1487,
+          "line": 1505,
           "column": 14
         }
       ]
@@ -3259,7 +3587,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 514,
+          "line": 532,
           "column": 14
         }
       ]
@@ -3288,7 +3616,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 134,
+          "line": 152,
           "column": 54
         }
       ]
@@ -3334,7 +3662,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1520,
+          "line": 1538,
           "column": 9
         }
       ]
@@ -3346,7 +3674,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 574,
+          "line": 609,
           "column": 15
         }
       ]
@@ -3498,7 +3826,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 77,
+          "line": 72,
           "column": 17
         }
       ]
@@ -3526,8 +3854,13 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 311,
+          "column": 1
+        },
+        {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 50,
+          "line": 45,
           "column": 1
         }
       ]
@@ -3575,12 +3908,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2027,
+          "line": 2054,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2047,
+          "line": 2074,
           "column": 32
         }
       ]
@@ -3633,7 +3966,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 403,
+          "line": 426,
           "column": 12
         }
       ]
@@ -3698,7 +4031,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 23,
+          "line": 18,
           "column": 18
         }
       ]
@@ -3722,7 +4055,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1806,
+          "line": 1833,
           "column": 14
         }
       ]
@@ -3770,7 +4103,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 818,
+          "line": 856,
           "column": 25
         }
       ]
@@ -3834,6 +4167,18 @@
         }
       ]
     },
+    "75874a724ab54d59": {
+      "source": "设备授权未完成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 195,
+          "column": 21
+        }
+      ]
+    },
     "75f703912dcff131": {
       "source": "关闭后不拉取广告、不显示顶部广告位和广告弹窗",
       "kind": "text",
@@ -3870,6 +4215,23 @@
         }
       ]
     },
+    "772c57507b53f85e": {
+      "source": "导入 auth.json",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 301,
+          "column": 1
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 414,
+          "column": 1
+        }
+      ]
+    },
     "774d6e1b7cb89751": {
       "source": "默认口径",
       "kind": "text",
@@ -3889,13 +4251,25 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 528,
+          "line": 551,
           "column": 18
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 528,
+          "line": 551,
           "column": 18
+        }
+      ]
+    },
+    "77f321964fd9d84a": {
+      "source": "刷新用量",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 326,
+          "column": 1
         }
       ]
     },
@@ -3906,8 +4280,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 778,
+          "line": 816,
           "column": 13
+        }
+      ]
+    },
+    "79209170acff4896": {
+      "source": "等待授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 89,
+          "column": 14
         }
       ]
     },
@@ -3942,8 +4328,32 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 156,
+          "line": 174,
           "column": 16
+        }
+      ]
+    },
+    "7a287e16547c1189": {
+      "source": "正在等待",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 399,
+          "column": 1
+        }
+      ]
+    },
+    "7a40f2577d86ac11": {
+      "source": "ChatGPT 订阅授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 43,
+          "column": 11
         }
       ]
     },
@@ -3959,12 +4369,12 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 906,
+          "line": 944,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 271,
+          "line": 275,
           "column": 12
         },
         {
@@ -4017,6 +4427,18 @@
           "file": "src/views/SettingsView.vue",
           "line": 176,
           "column": 40
+        }
+      ]
+    },
+    "7bd2f51607f13786": {
+      "source": "可添加、激活或删除 Grok 授权账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 339,
+          "column": 14
         }
       ]
     },
@@ -4112,7 +4534,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1552,
+          "line": 1570,
           "column": 16
         }
       ]
@@ -4188,8 +4610,18 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/UnsupportedClientPanel.vue",
+          "file": "src/components/SubscriptionAuthPanel.vue",
           "line": 93,
+          "column": 14
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 406,
+          "column": 14
+        },
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 88,
           "column": 44
         }
       ]
@@ -4213,7 +4645,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 568,
+          "line": 603,
           "column": 21
         }
       ]
@@ -4225,7 +4657,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 165,
+          "line": 184,
           "column": 18
         }
       ]
@@ -4290,7 +4722,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 69,
+          "line": 64,
           "column": 1
         }
       ]
@@ -4314,7 +4746,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 612,
+          "line": 650,
           "column": 25
         }
       ]
@@ -4360,7 +4792,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 55,
+          "line": 56,
           "column": 12
         }
       ]
@@ -4372,7 +4804,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1484,
+          "line": 1502,
           "column": 14
         }
       ]
@@ -4432,7 +4864,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 161,
+          "line": 180,
           "column": 20
         }
       ]
@@ -4473,7 +4905,7 @@
         },
         {
           "file": "src/views/AccessView.vue",
-          "line": 21,
+          "line": 22,
           "column": 11
         }
       ]
@@ -4507,6 +4939,18 @@
         }
       ]
     },
+    "8d013702beb4468a": {
+      "source": "该渠道使用接入中心对应的 Codex 或 Grok 授权，不会把 token 写入 config.yaml。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 614,
+          "column": 1
+        }
+      ]
+    },
     "8d1de152be6360ce": {
       "source": "有效占比：{0}",
       "kind": "template",
@@ -4516,6 +4960,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 169,
           "column": 5
+        }
+      ]
+    },
+    "8d43c7751461744d": {
+      "source": "· 剩余",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 378,
+          "column": 54
         }
       ]
     },
@@ -4538,8 +4994,20 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 96,
+          "line": 107,
           "column": 12
+        }
+      ]
+    },
+    "8ec5d94eda2c0120": {
+      "source": "请在浏览器完成授权，用户码 {0}",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 221,
+          "column": 13
         }
       ]
     },
@@ -4615,7 +5083,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 169,
+          "line": 188,
           "column": 26
         }
       ]
@@ -4627,7 +5095,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 538,
+          "line": 556,
           "column": 14
         }
       ]
@@ -4656,7 +5124,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 909,
+          "line": 947,
           "column": 12
         },
         {
@@ -4752,8 +5220,13 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 336,
+          "column": 48
+        },
+        {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 75,
+          "line": 70,
           "column": 48
         }
       ]
@@ -4765,7 +5238,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 715,
+          "line": 733,
           "column": 44
         }
       ]
@@ -4789,7 +5262,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 595,
+          "line": 633,
           "column": 21
         }
       ]
@@ -4813,7 +5286,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 91,
+          "line": 102,
           "column": 10
         }
       ]
@@ -4890,7 +5363,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1548,
+          "line": 1566,
           "column": 16
         }
       ]
@@ -4902,12 +5375,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1990,
+          "line": 2017,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2010,
+          "line": 2037,
           "column": 32
         }
       ]
@@ -4943,7 +5416,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 158,
+          "line": 176,
           "column": 12
         }
       ]
@@ -4984,18 +5457,6 @@
         }
       ]
     },
-    "9a7f3e7867a9b96a": {
-      "source": "保存 Claude Code 配置",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 22,
-          "column": 16
-        }
-      ]
-    },
     "9b17fa889b307f7f": {
       "source": "有效轮次：{0}",
       "kind": "template",
@@ -5032,6 +5493,18 @@
         }
       ]
     },
+    "9c3345812af520d9": {
+      "source": "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json 或设备码授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 77,
+          "column": 5
+        }
+      ]
+    },
     "9c41b3a9e12ac994": {
       "source": "思考强度",
       "kind": "text",
@@ -5039,7 +5512,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 660,
+          "line": 698,
           "column": 21
         }
       ]
@@ -5068,18 +5541,6 @@
         }
       ]
     },
-    "9d2a71640bafe244": {
-      "source": "Claude Code 接入",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 21,
-          "column": 12
-        }
-      ]
-    },
     "9d2ca261281a158a": {
       "source": "稍后",
       "kind": "text",
@@ -5087,7 +5548,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1580,
+          "line": 1598,
           "column": 14
         }
       ]
@@ -5145,7 +5606,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 566,
+          "line": 584,
           "column": 14
         }
       ]
@@ -5222,7 +5683,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 532,
+          "line": 550,
           "column": 14
         }
       ]
@@ -5234,12 +5695,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1507,
+          "line": 1525,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1563,
+          "line": 1581,
           "column": 87
         }
       ]
@@ -5251,7 +5712,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 830,
+          "line": 848,
           "column": 12
         }
       ]
@@ -5309,7 +5770,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 909,
+          "line": 947,
           "column": 12
         }
       ]
@@ -5321,7 +5782,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1855,
+          "line": 1882,
           "column": 14
         },
         {
@@ -5398,7 +5859,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 166,
+          "line": 185,
           "column": 25
         }
       ]
@@ -5420,25 +5881,13 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 52,
+          "line": 53,
           "column": 12
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 60,
+          "line": 61,
           "column": 12
-        }
-      ]
-    },
-    "a5f1bd344c92e195": {
-      "source": "调用该模型服务需要使用的访问密钥。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/ModelEditor.vue",
-          "line": 159,
-          "column": 11
         }
       ]
     },
@@ -5449,7 +5898,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 906,
+          "line": 944,
           "column": 12
         }
       ]
@@ -5461,7 +5910,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 108,
+          "line": 109,
           "column": 12
         }
       ]
@@ -5473,7 +5922,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1568,
+          "line": 1586,
           "column": 14
         }
       ]
@@ -5484,8 +5933,13 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 391,
+          "column": 57
+        },
+        {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 85,
+          "line": 80,
           "column": 57
         }
       ]
@@ -5497,7 +5951,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 867,
+          "line": 905,
           "column": 72
         }
       ]
@@ -5509,7 +5963,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 812,
+          "line": 850,
           "column": 1
         }
       ]
@@ -5526,7 +5980,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 582,
+          "line": 620,
           "column": 21
         }
       ]
@@ -5538,7 +5992,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 107,
+          "line": 108,
           "column": 12
         }
       ]
@@ -5572,12 +6026,12 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 51,
+          "line": 52,
           "column": 12
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 59,
+          "line": 60,
           "column": 12
         }
       ]
@@ -5599,6 +6053,18 @@
         }
       ]
     },
+    "ab27f80d046f3d7f": {
+      "source": "已就绪",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 83,
+          "column": 14
+        }
+      ]
+    },
     "ab84f173021dc576": {
       "source": "Base URL 不可用",
       "kind": "text",
@@ -5611,6 +6077,30 @@
         }
       ]
     },
+    "ab9a6d81a7ef047a": {
+      "source": "ChatGPT / Codex 订阅",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 75,
+          "column": 12
+        }
+      ]
+    },
+    "abab65e853add5e3": {
+      "source": "Anthropic 接入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/UnsupportedClientPanel.vue",
+          "line": 16,
+          "column": 12
+        }
+      ]
+    },
     "ac217e4d1ca410f1": {
       "source": "发现新版本",
       "kind": "text",
@@ -5618,7 +6108,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1546,
+          "line": 1564,
           "column": 54
         }
       ]
@@ -5632,6 +6122,18 @@
           "file": "src/layouts/MainLayout.vue",
           "line": 261,
           "column": 13
+        }
+      ]
+    },
+    "ac43327f9f81928a": {
+      "source": "可导入现有 auth.json 或重新进行设备授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 339,
+          "column": 14
         }
       ]
     },
@@ -5775,8 +6277,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1970,
+          "line": 1997,
           "column": 32
+        }
+      ]
+    },
+    "b0b41bc39065d1bb": {
+      "source": "只删除本应用保存的认证副本，不会修改 ~/.codex/auth.json。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 143,
+          "column": 14
         }
       ]
     },
@@ -5821,12 +6335,24 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 53,
+          "line": 54,
           "column": 12
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 61,
+          "line": 62,
+          "column": 12
+        }
+      ]
+    },
+    "b265e0bb4e158854": {
+      "source": "Grok 订阅",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 76,
           "column": 12
         }
       ]
@@ -5860,12 +6386,12 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1993,
+          "line": 2020,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2030,
+          "line": 2057,
           "column": 32
         },
         {
@@ -5882,7 +6408,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 798,
+          "line": 836,
           "column": 1
         }
       ]
@@ -5906,7 +6432,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 69,
+          "line": 70,
           "column": 12
         }
       ]
@@ -5930,7 +6456,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 171,
+          "line": 190,
           "column": 20
         }
       ]
@@ -5954,7 +6480,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1521,
+          "line": 1539,
           "column": 9
         }
       ]
@@ -5978,7 +6504,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 601,
+          "line": 639,
           "column": 15
         }
       ]
@@ -5990,7 +6516,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 163,
+          "line": 182,
           "column": 19
         }
       ]
@@ -6002,7 +6528,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 587,
+          "line": 625,
           "column": 15
         }
       ]
@@ -6014,7 +6540,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 793,
+          "line": 831,
           "column": 21
         }
       ]
@@ -6026,7 +6552,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 688,
+          "line": 726,
           "column": 21
         }
       ]
@@ -6115,8 +6641,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 621,
+          "line": 659,
           "column": 21
+        }
+      ]
+    },
+    "bb731491dbeb7bff": {
+      "source": "授权凭据只保存在本机私有副本中，不会写入模型配置或前端状态。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 330,
+          "column": 1
         }
       ]
     },
@@ -6144,6 +6682,18 @@
         }
       ]
     },
+    "bce2377283c2455a": {
+      "source": "清除",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 144,
+          "column": 18
+        }
+      ]
+    },
     "bd4464ea88d3f24a": {
       "source": "总轮次：{0}",
       "kind": "template",
@@ -6163,7 +6713,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 526,
+          "line": 544,
           "column": 14
         }
       ]
@@ -6234,6 +6784,11 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 259,
+          "column": 21
+        },
+        {
           "file": "src/views/ModelConfig.vue",
           "line": 287,
           "column": 21
@@ -6254,6 +6809,18 @@
           "file": "src/views/ModelConfig.vue",
           "line": 81,
           "column": 10
+        }
+      ]
+    },
+    "c3405b2513f4d641": {
+      "source": "Codex 设备授权完成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 184,
+          "column": 38
         }
       ]
     },
@@ -6293,7 +6860,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 168,
+          "line": 187,
           "column": 28
         }
       ]
@@ -6304,9 +6871,9 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 16,
-          "column": 12
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 75,
+          "column": 51
         }
       ]
     },
@@ -6341,7 +6908,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 45,
+          "line": 40,
           "column": 1
         }
       ]
@@ -6370,7 +6937,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 832,
+          "line": 870,
           "column": 81
         }
       ]
@@ -6387,6 +6954,18 @@
         }
       ]
     },
+    "c8c0c4014f352265": {
+      "source": "清除 Codex 认证副本",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 142,
+          "column": 12
+        }
+      ]
+    },
     "c8c14507b2d37395": {
       "source": "推理强度",
       "kind": "text",
@@ -6394,7 +6973,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 635,
+          "line": 673,
           "column": 21
         }
       ]
@@ -6411,17 +6990,17 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1827,
+          "line": 1854,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 1829,
+          "line": 1856,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 1863,
+          "line": 1890,
           "column": 93
         },
         {
@@ -6484,7 +7063,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1496,
+          "line": 1514,
           "column": 51
         },
         {
@@ -6566,20 +7145,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 370,
+          "line": 387,
           "column": 12
-        }
-      ]
-    },
-    "cdbe065a83e4141c": {
-      "source": "仅管理多套授权或重新授权现有账号",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 18,
-          "column": 18
         }
       ]
     },
@@ -6619,6 +7186,18 @@
         }
       ]
     },
+    "cfeaa06254c8861e": {
+      "source": "· 会话剩余",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 357,
+          "column": 1
+        }
+      ]
+    },
     "d0325067fed88e5a": {
       "source": "缓存命中率 {0}",
       "kind": "template",
@@ -6650,7 +7229,7 @@
       "refs": [
         {
           "file": "src/views/UnsupportedClientPanel.vue",
-          "line": 66,
+          "line": 61,
           "column": 26
         }
       ]
@@ -6662,7 +7241,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 517,
+          "line": 535,
           "column": 14
         }
       ]
@@ -6703,6 +7282,18 @@
         }
       ]
     },
+    "d2b3d82b940bfb9d": {
+      "source": "调用该模型服务需要使用的访问密钥。订阅认证渠道请前往接入中心对应的 Codex 或 Grok 页面管理，不要把 token 填到这里。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 177,
+          "column": 11
+        }
+      ]
+    },
     "d3209b935ae86797": {
       "source": "模型配置不存在，无法删除",
       "kind": "text",
@@ -6710,7 +7301,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1781,
+          "line": 1808,
           "column": 14
         },
         {
@@ -6739,13 +7330,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 274,
+          "line": 278,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 304,
+          "line": 308,
           "column": 50
+        }
+      ]
+    },
+    "d40c952c87e97dbb": {
+      "source": "静态 API key",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 74,
+          "column": 12
         }
       ]
     },
@@ -6768,12 +7371,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 749,
+          "line": 787,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 384,
+          "line": 401,
           "column": 49
         }
       ]
@@ -6802,7 +7405,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 992,
+          "line": 1010,
           "column": 34
         }
       ]
@@ -6843,7 +7446,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 851,
+          "line": 889,
           "column": 81
         }
       ]
@@ -6879,7 +7482,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 451,
+          "line": 474,
           "column": 10
         }
       ]
@@ -6893,6 +7496,18 @@
           "file": "src/views/Config.vue",
           "line": 119,
           "column": 61
+        }
+      ]
+    },
+    "d6822b04178d6929": {
+      "source": "剩余",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 355,
+          "column": 1
         }
       ]
     },
@@ -6913,7 +7528,7 @@
         },
         {
           "file": "src/views/AccessView.vue",
-          "line": 114,
+          "line": 125,
           "column": 32
         }
       ]
@@ -6925,12 +7540,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 725,
+          "line": 763,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 405,
+          "line": 422,
           "column": 36
         }
       ]
@@ -6954,7 +7569,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 627,
+          "line": 665,
           "column": 15
         }
       ]
@@ -7031,12 +7646,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 891,
+          "line": 929,
           "column": 19
         },
         {
           "file": "src/state/appState.js",
-          "line": 326,
+          "line": 331,
           "column": 18
         }
       ]
@@ -7060,20 +7675,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 511,
+          "line": 529,
           "column": 14
-        }
-      ]
-    },
-    "dc2d3d295e3e16f0": {
-      "source": "Codex 与 Claude Code 仅作入口占位，不会加载示例账号或发起授权。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/AccessView.vue",
-          "line": 171,
-          "column": 1
         }
       ]
     },
@@ -7084,7 +7687,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1527,
+          "line": 1545,
           "column": 5
         }
       ]
@@ -7103,6 +7706,18 @@
           "file": "src/views/Home.vue",
           "line": 366,
           "column": 16
+        }
+      ]
+    },
+    "dd1286c29e9b158b": {
+      "source": "激活",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 382,
+          "column": 114
         }
       ]
     },
@@ -7185,7 +7800,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 164,
+          "line": 183,
           "column": 22
         }
       ]
@@ -7202,7 +7817,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1687,
+          "line": 1705,
           "column": 21
         }
       ]
@@ -7226,7 +7841,19 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 170,
+          "line": 189,
+          "column": 21
+        }
+      ]
+    },
+    "e25a99498b424ef4": {
+      "source": "读取订阅认证失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 112,
           "column": 21
         }
       ]
@@ -7322,7 +7949,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1522,
+          "line": 1540,
           "column": 34
         }
       ]
@@ -7406,7 +8033,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 157,
+          "line": 168,
           "column": 26
         }
       ]
@@ -7466,7 +8093,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1017,
+          "line": 1035,
           "column": 32
         }
       ]
@@ -7490,7 +8117,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 109,
+          "line": 116,
           "column": 32
         }
       ]
@@ -7519,6 +8146,30 @@
         }
       ]
     },
+    "ec0d9bdb00a4a8f6": {
+      "source": "未知状态",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 195,
+          "column": 67
+        }
+      ]
+    },
+    "ec2aad33b1d57c5c": {
+      "source": "Grok 设备授权完成",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 184,
+          "column": 55
+        }
+      ]
+    },
     "ec2b74ac3125e7a9": {
       "source": "会话与日志",
       "kind": "text",
@@ -7543,7 +8194,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 280,
+          "line": 284,
           "column": 10
         }
       ]
@@ -7572,7 +8223,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1550,
+          "line": 1568,
           "column": 16
         }
       ]
@@ -7620,7 +8271,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 772,
+          "line": 810,
           "column": 19
         }
       ]
@@ -7707,6 +8358,18 @@
         }
       ]
     },
+    "f04b971e8a461bb5": {
+      "source": "使用设备码添加 Grok / xAI 授权账号。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 393,
+          "column": 16
+        }
+      ]
+    },
     "f0b6a23368dd47cc": {
       "source": "可以直接输入模型标识，或从服务端返回的列表中选择。",
       "kind": "text",
@@ -7714,7 +8377,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 157,
+          "line": 175,
           "column": 12
         }
       ]
@@ -7765,7 +8428,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 173,
+          "line": 192,
           "column": 16
         }
       ]
@@ -7847,7 +8510,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 391,
+          "line": 408,
           "column": 14
         }
       ]
@@ -7859,7 +8522,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1498,
+          "line": 1516,
           "column": 38
         }
       ]
@@ -7888,22 +8551,22 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 709,
+          "line": 747,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 733,
+          "line": 771,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 757,
+          "line": 795,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 807,
+          "line": 845,
           "column": 21
         }
       ]
@@ -8046,12 +8709,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 529,
+          "line": 547,
           "column": 14
         },
         {
           "file": "src/state/appState.js",
-          "line": 535,
+          "line": 553,
           "column": 14
         }
       ]
@@ -8116,7 +8779,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 178,
+          "line": 189,
           "column": 22
         }
       ]
@@ -8128,7 +8791,7 @@
       "refs": [
         {
           "file": "src/views/AccessView.vue",
-          "line": 157,
+          "line": 168,
           "column": 26
         },
         {
@@ -8177,7 +8840,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1573,
+          "line": 1591,
           "column": 12
         }
       ]
@@ -8189,7 +8852,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1496,
+          "line": 1514,
           "column": 40
         },
         {

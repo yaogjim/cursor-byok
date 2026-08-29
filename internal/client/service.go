@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	backend "cursor/internal/backend"
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/certs"
+	"cursor/internal/cursor"
 	"cursor/internal/cursoraccount"
 	"cursor/internal/gateway"
 	"cursor/internal/logger"
@@ -47,8 +49,12 @@ type ProxyService struct {
 	mu sync.RWMutex
 	// lastError 表示当前声明中的 lastError。
 	lastError string
-	// cursorSettingsApplied 表示当前是否已完成宿主代理设置注入。
+	// cursorSettingsApplied 表示当前实例是否已完成宿主代理设置注入。
 	cursorSettingsApplied bool
+	// cursorSettingsStore 隔离 Cursor settings.json 路径并校验跨进程清理所有权。
+	cursorSettingsStore *cursor.UserProxySettingsStore
+	// cursorSettingsOwnerID 标识当前 ProxyService 实例持有的设置所有权。
+	cursorSettingsOwnerID string
 
 	// configMu 表示当前声明中的 configMu。
 	configMu sync.Mutex
@@ -110,13 +116,20 @@ func NewProxyService(proxy *mitm.ProxyServer, certManager *certs.Manager, caCert
 	copy(copiedCert, caCertPEM)
 
 	service := &ProxyService{
-		proxy:            proxy,
-		certManager:      certManager,
-		configPath:       resolveUserConfigPath(),
-		logsRoot:         resolveLogsRootPath(),
-		caCertPEM:        copiedCert,
-		publicClient:     netproxy.NewHTTPClient(publicAPITimeout),
-		modelTestResults: make(map[string]ModelAdapterTestResult),
+		proxy:                 proxy,
+		certManager:           certManager,
+		configPath:            resolveUserConfigPath(),
+		logsRoot:              resolveLogsRootPath(),
+		caCertPEM:             copiedCert,
+		publicClient:          netproxy.NewHTTPClient(publicAPITimeout),
+		modelTestResults:      make(map[string]ModelAdapterTestResult),
+		cursorSettingsOwnerID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()),
+	}
+	settingsStore, err := cursor.DefaultUserProxySettingsStore()
+	if err != nil {
+		logger.Errorf("init Cursor settings store failed: %v", err)
+	} else {
+		service.cursorSettingsStore = settingsStore
 	}
 	service.cursorAccount = cursoraccount.NewManager(
 		filepath.Join(appdata.DataRootPath(), "cursor-account.json"),

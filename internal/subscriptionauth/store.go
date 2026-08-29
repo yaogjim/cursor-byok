@@ -24,13 +24,20 @@ type FileStore struct {
 }
 
 type storedCodexAuth struct {
-	SchemaVersion    int               `json:"schema_version"`
-	AuthMode         string            `json:"auth_mode"`
-	LastRefresh      time.Time         `json:"last_refresh"`
-	Tokens           storedTokenBundle `json:"tokens"`
-	ChatGPTAccountID string            `json:"chatgpt_account_id,omitempty"`
-	Email            string            `json:"email,omitempty"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	SchemaVersion           int               `json:"schema_version"`
+	AuthMode                string            `json:"auth_mode"`
+	LastRefresh             time.Time         `json:"last_refresh"`
+	Tokens                  storedTokenBundle `json:"tokens"`
+	ChatGPTAccountID        string            `json:"chatgpt_account_id,omitempty"`
+	Email                   string            `json:"email,omitempty"`
+	PlanLabel               string            `json:"plan_label,omitempty"`
+	RemainingPercent        float64           `json:"remaining_percent,omitempty"`
+	UsedPercent             float64           `json:"used_percent,omitempty"`
+	ResetAtMS               int64             `json:"reset_at_ms,omitempty"`
+	SessionRemainingPercent float64           `json:"session_remaining_percent,omitempty"`
+	SessionResetAtMS        int64             `json:"session_reset_at_ms,omitempty"`
+	LimitReached            bool              `json:"limit_reached"`
+	UpdatedAt               time.Time         `json:"updated_at"`
 }
 
 type storedTokenBundle struct {
@@ -97,6 +104,8 @@ func (store *FileStore) EnsureDir() error {
 	return nil
 }
 
+var renameFile = os.Rename
+
 func (store *FileStore) writeJSON(path string, value any) error {
 	if err := store.EnsureDir(); err != nil {
 		return err
@@ -106,25 +115,70 @@ func (store *FileStore) writeJSON(path string, value any) error {
 		return err
 	}
 	data = append(data, '\n')
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, data, filePermission); err != nil {
+
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*.tmp")
+	if err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(tempPath, filePermission); err != nil {
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		if !committed {
 			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if runtime.GOOS != "windows" {
+		if err := temp.Chmod(filePermission); err != nil {
+			_ = temp.Close()
 			return err
 		}
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
 		return err
 	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFile(tempPath, path); err != nil {
+		return err
+	}
+	committed = true
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(path, filePermission); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+func replaceFile(tempPath string, path string) error {
+	err := renameFile(tempPath, path)
+	if err == nil || runtime.GOOS != "windows" {
+		return err
+	}
+	backupPath := path + ".bak"
+	_ = os.Remove(backupPath)
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := renameFile(path, backupPath); err != nil {
+			return err
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	if err := renameFile(tempPath, path); err != nil {
+		if _, bakErr := os.Stat(backupPath); bakErr == nil {
+			_ = renameFile(backupPath, path)
+		}
+		return err
+	}
+	_ = os.Remove(backupPath)
 	return nil
 }
 

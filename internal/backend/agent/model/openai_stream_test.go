@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -429,5 +430,188 @@ func TestOpenAIHalfFrameDoesNotRetryOrConcatResponses(t *testing.T) {
 	assertOpenAIStreamTruncated(t, err, "missing completion marker")
 	if hits != 1 {
 		t.Fatalf("hits=%d, want 1", hits)
+	}
+}
+
+type rewriteHostRoundTripper struct {
+	target *url.URL
+}
+
+func (rt rewriteHostRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = rt.target.Scheme
+	clone.URL.Host = rt.target.Host
+	clone.Host = rt.target.Host
+	clone.RequestURI = ""
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func chatgptLoopbackClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Transport: rewriteHostRoundTripper{target: target}}
+}
+
+func TestIsChatGPTCodexHost(t *testing.T) {
+	if !isChatGPTCodexHost("https://chatgpt.com/backend-api/codex/responses") {
+		t.Fatal("chatgpt.com host should match")
+	}
+	if isChatGPTCodexHost("https://api.openai.com/v1/responses") {
+		t.Fatal("api.openai.com must not match")
+	}
+}
+
+func TestFilterCodexResponsesBodyWhitelist(t *testing.T) {
+	body := map[string]any{
+		"model":                "gpt-5.6-luna",
+		"input":                []any{map[string]any{"role": "user", "content": "hi"}},
+		"instructions":         "",
+		"stream":               true,
+		"include":              []any{"reasoning.encrypted_content"},
+		"tools":                []any{},
+		"reasoning":            map[string]any{"effort": "high", "summary": "auto"},
+		"max_output_tokens":    128000,
+		"prompt_cache_key":     "cursor-byok",
+		"service_tier":         "fast",
+		"previous_response_id": "resp_prev",
+	}
+	req := StreamRequest{CredentialSource: "codex"}
+	filterCodexResponsesBody(body, req, "https://chatgpt.com/backend-api/codex/responses")
+	if body["store"] != false {
+		t.Fatalf("store = %#v, want false", body["store"])
+	}
+	if _, ok := body["max_output_tokens"]; ok {
+		t.Fatal("max_output_tokens should be dropped")
+	}
+	if _, ok := body["prompt_cache_key"]; ok {
+		t.Fatal("prompt_cache_key should be dropped")
+	}
+	if _, ok := body["service_tier"]; ok {
+		t.Fatal("service_tier should be dropped")
+	}
+	for _, key := range []string{"model", "input", "instructions", "stream", "include", "tools", "reasoning", "previous_response_id", "store"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("missing allowed key %s", key)
+		}
+	}
+
+	platform := map[string]any{"model": "gpt-5.4", "max_output_tokens": 4096, "prompt_cache_key": "cursor-byok"}
+	filterCodexResponsesBody(platform, StreamRequest{CredentialSource: "static"}, "https://api.openai.com/v1/responses")
+	if platform["max_output_tokens"] != 4096 {
+		t.Fatalf("static openai body changed: %#v", platform)
+	}
+	if _, ok := platform["store"]; ok {
+		t.Fatalf("static openai body should not gain store: %#v", platform)
+	}
+}
+
+func TestOpenAIManagedCodexResponsesHeadersAndWhitelist(t *testing.T) {
+	var (
+		gotUA, gotOriginator, gotAccountID string
+		requestBody                        map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotUA = request.Header.Get("User-Agent")
+		gotOriginator = request.Header.Get("originator")
+		gotAccountID = request.Header.Get("ChatGPT-Account-Id")
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: chatgptLoopbackClient(t, server)}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:                "request-1",
+		RunID:                    "run-1",
+		ModelCallID:              "model-call-1",
+		BaseURL:                  "https://chatgpt.com/backend-api/codex/responses",
+		APIKey:                   "codex-token",
+		CredentialSource:         "codex",
+		ChatGPTAccountID:         "acct-9",
+		ProviderModelID:          "gpt-5.6",
+		OpenAIEndpoint:           "/v1/responses",
+		OpenAIExtraParamsEnabled: true,
+		OpenAIExtraParamsJSON:    `{"max_output_tokens":128000,"prompt_cache_key":"cursor-byok","service_tier":"fast"}`,
+		Messages:                 []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:                128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if gotOriginator != "codex_cli_rs" {
+		t.Fatalf("originator = %q", gotOriginator)
+	}
+	if gotAccountID != "acct-9" {
+		t.Fatalf("ChatGPT-Account-Id = %q", gotAccountID)
+	}
+	if gotUA == ClaudeCodeUserAgent {
+		t.Fatal("managed Codex Responses must not send Claude UA")
+	}
+	if requestBody["store"] != false {
+		t.Fatalf("store = %#v, want false", requestBody["store"])
+	}
+	for _, key := range []string{"max_output_tokens", "prompt_cache_key", "service_tier"} {
+		if _, ok := requestBody[key]; ok {
+			t.Fatalf("%s should be stripped from Codex Responses: %#v", key, requestBody[key])
+		}
+	}
+}
+
+func TestOpenAIStaticResponsesKeepsClaudeUAAndExtraParams(t *testing.T) {
+	var (
+		gotUA, gotOriginator, gotAccountID string
+		requestBody                        map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotUA = request.Header.Get("User-Agent")
+		gotOriginator = request.Header.Get("originator")
+		gotAccountID = request.Header.Get("ChatGPT-Account-Id")
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:                "request-1",
+		RunID:                    "run-1",
+		ModelCallID:              "model-call-1",
+		BaseURL:                  server.URL,
+		APIKey:                   "static-key",
+		CredentialSource:         "static",
+		ProviderModelID:          "gpt-5.6",
+		OpenAIEndpoint:           "/v1/responses",
+		OpenAIExtraParamsEnabled: true,
+		OpenAIExtraParamsJSON:    `{"service_tier":"fast"}`,
+		Messages:                 []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:                128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if gotUA != ClaudeCodeUserAgent {
+		t.Fatalf("User-Agent = %q, want Claude UA", gotUA)
+	}
+	if gotOriginator != "" {
+		t.Fatalf("static path must not send originator, got %q", gotOriginator)
+	}
+	if gotAccountID != "" {
+		t.Fatalf("static path must not send ChatGPT-Account-Id, got %q", gotAccountID)
+	}
+	if requestBody["service_tier"] != "fast" {
+		t.Fatalf("static extra params dropped: %#v", requestBody)
 	}
 }

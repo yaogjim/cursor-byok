@@ -42,6 +42,9 @@ const (
 // ErrAuthRequired means the managed credential is missing, expired, or revoked.
 var ErrAuthRequired = errors.New("subscription auth required")
 
+// ErrQuotaExhausted means the managed account is out of quota and no next account is available.
+var ErrQuotaExhausted = errors.New("subscription quota exhausted")
+
 // ErrStaticCredential is returned when Resolve is asked for a static API key.
 var ErrStaticCredential = errors.New("static credentials are not managed by subscriptionauth")
 
@@ -57,33 +60,37 @@ type Credential struct {
 
 // AccountStatus is the redacted account DTO returned to the desktop UI.
 type AccountStatus struct {
-	AccountID        string       `json:"accountId"`
-	Provider         ProviderKind `json:"provider"`
-	State            string       `json:"state"`
-	Email            string       `json:"email,omitempty"`
-	DisplayName      string       `json:"displayName,omitempty"`
-	PlanLabel        string       `json:"planLabel,omitempty"`
-	ChatGPTAccountID string       `json:"chatgptAccountId,omitempty"`
-	LastRefresh      time.Time    `json:"lastRefresh,omitempty"`
-	ExpiresAt        time.Time    `json:"expiresAt,omitempty"`
-	HasRefreshToken  bool         `json:"hasRefreshToken"`
-	RemainingPercent float64      `json:"remainingPercent,omitempty"`
-	UsedPercent      float64      `json:"usedPercent,omitempty"`
-	ResetAt          time.Time    `json:"resetAt,omitempty"`
-	LimitReached     bool         `json:"limitReached"`
-	Active           bool         `json:"active"`
-	Error            string       `json:"error,omitempty"`
+	AccountID               string       `json:"accountId"`
+	Provider                ProviderKind `json:"provider"`
+	State                   string       `json:"state"`
+	Email                   string       `json:"email,omitempty"`
+	DisplayName             string       `json:"displayName,omitempty"`
+	PlanLabel               string       `json:"planLabel,omitempty"`
+	ChatGPTAccountID        string       `json:"chatgptAccountId,omitempty"`
+	LastRefresh             time.Time    `json:"lastRefresh,omitempty"`
+	ExpiresAt               time.Time    `json:"expiresAt,omitempty"`
+	HasRefreshToken         bool         `json:"hasRefreshToken"`
+	RemainingPercent        float64      `json:"remainingPercent,omitempty"`
+	UsedPercent             float64      `json:"usedPercent,omitempty"`
+	ResetAt                 time.Time    `json:"resetAt,omitempty"`
+	SessionRemainingPercent float64      `json:"sessionRemainingPercent,omitempty"`
+	SessionResetAt          time.Time    `json:"sessionResetAt,omitempty"`
+	LimitReached            bool         `json:"limitReached"`
+	Active                  bool         `json:"active"`
+	Error                   string       `json:"error,omitempty"`
 }
 
 type UsageSnapshot struct {
-	Provider         ProviderKind `json:"provider"`
-	AccountID        string       `json:"accountId"`
-	PlanLabel        string       `json:"planLabel,omitempty"`
-	RemainingPercent float64      `json:"remainingPercent"`
-	UsedPercent      float64      `json:"usedPercent"`
-	ResetAt          time.Time    `json:"resetAt,omitempty"`
-	LimitReached     bool         `json:"limitReached"`
-	UpdatedAt        time.Time    `json:"updatedAt"`
+	Provider                ProviderKind `json:"provider"`
+	AccountID               string       `json:"accountId"`
+	PlanLabel               string       `json:"planLabel,omitempty"`
+	RemainingPercent        float64      `json:"remainingPercent"`
+	UsedPercent             float64      `json:"usedPercent"`
+	ResetAt                 time.Time    `json:"resetAt,omitempty"`
+	SessionRemainingPercent float64      `json:"sessionRemainingPercent,omitempty"`
+	SessionResetAt          time.Time    `json:"sessionResetAt,omitempty"`
+	LimitReached            bool         `json:"limitReached"`
+	UpdatedAt               time.Time    `json:"updatedAt"`
 }
 
 type GrokDeviceCode struct {
@@ -128,6 +135,7 @@ type PollResult struct {
 // CredentialResolver maps a model channel credential source to a runtime token.
 type CredentialResolver interface {
 	Resolve(ctx context.Context, source CredentialSource) (Credential, error)
+	ResolveAfterUnauthorized(ctx context.Context, source CredentialSource) (Credential, error)
 	MarkQuotaExhausted(ctx context.Context, credentialID string) error
 	RefreshUsage(ctx context.Context, provider ProviderKind) (UsageSnapshot, error)
 }

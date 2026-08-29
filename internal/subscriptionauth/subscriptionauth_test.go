@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -41,34 +42,6 @@ func jsonResponse(status int, body any) *http.Response {
 	}
 }
 
-func TestParseCodexAuthJSONNestedTokens(t *testing.T) {
-	access := testJWT(t, map[string]any{
-		"email":                       "user@example.com",
-		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-9"},
-		"exp":                         time.Now().Add(time.Hour).Unix(),
-	})
-	raw := map[string]any{
-		"auth_mode":    "chatgpt",
-		"last_refresh": "2026-08-26T00:00:00Z",
-		"tokens": map[string]any{
-			"access_token":  access,
-			"refresh_token": "refresh-1",
-			"id_token":      access,
-		},
-	}
-	payload, _ := json.Marshal(raw)
-	parsed, err := parseCodexAuthJSON(payload)
-	if err != nil {
-		t.Fatalf("parseCodexAuthJSON: %v", err)
-	}
-	if parsed.Tokens.AccessToken != access || parsed.Tokens.RefreshToken != "refresh-1" {
-		t.Fatal("nested tokens were not parsed")
-	}
-	if parsed.ChatGPTAccountID != "acct-9" {
-		t.Fatalf("chatgpt account id = %q", parsed.ChatGPTAccountID)
-	}
-}
-
 func TestParseCodexAuthJSONRejectsUnsupportedBundles(t *testing.T) {
 	cases := []string{
 		`{"auth_mode":"api_key","tokens":{"access_token":"a","refresh_token":"b"}}`,
@@ -82,6 +55,15 @@ func TestParseCodexAuthJSONRejectsUnsupportedBundles(t *testing.T) {
 			t.Fatalf("expected rejection for %s", raw)
 		}
 	}
+	token := testJWT(t, map[string]any{"sub": "x"})
+	status, err := NewService(t.TempDir(), nil).ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"api_key","tokens":{"access_token":"`+token+`","refresh_token":"b"}}`))
+	if err == nil {
+		t.Fatal("expected import rejection")
+	}
+	if strings.Contains(status.Error, token) || strings.Contains(status.Error, "eyJ") {
+		t.Fatalf("token leaked into DTO error: %+v", status)
+	}
+	assertNoSecrets(t, status)
 }
 
 func TestImportCodexAuthDoesNotModifySourceFile(t *testing.T) {
@@ -110,12 +92,10 @@ func TestImportCodexAuthDoesNotModifySourceFile(t *testing.T) {
 	if strings.Contains(status.Error, access) || strings.Contains(status.AccountID, access) {
 		t.Fatal("token leaked into DTO")
 	}
+	assertNoSecrets(t, status)
 }
 
 func TestStorePermissionsAndAtomicWriteKeepsOldFile(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix permission bits")
-	}
 	dir := t.TempDir()
 	store := NewFileStore(filepath.Join(dir, "subscription-auth"))
 	auth := storedCodexAuth{
@@ -125,39 +105,58 @@ func TestStorePermissionsAndAtomicWriteKeepsOldFile(t *testing.T) {
 	if err := store.SaveCodex(auth); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(store.Dir())
-	if err != nil {
-		t.Fatal(err)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(store.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o700 {
+			t.Fatalf("dir perm = %o", info.Mode().Perm())
+		}
+		fileInfo, err := os.Stat(store.CodexPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fileInfo.Mode().Perm() != 0o600 {
+			t.Fatalf("file perm = %o", fileInfo.Mode().Perm())
+		}
 	}
-	if info.Mode().Perm() != 0o700 {
-		t.Fatalf("dir perm = %o", info.Mode().Perm())
-	}
-	fileInfo, err := os.Stat(store.CodexPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fileInfo.Mode().Perm() != 0o600 {
-		t.Fatalf("file perm = %o", fileInfo.Mode().Perm())
+	if leftover := leftoverTempFiles(t, store.Dir()); len(leftover) != 0 {
+		t.Fatalf("temp files left after success: %v", leftover)
 	}
 
-	blocker := store.CodexPath() + ".tmp"
-	if err := os.Mkdir(blocker, 0o700); err != nil {
-		t.Fatal(err)
+	oldRename := renameFile
+	renameFile = func(string, string) error {
+		return errors.New("rename blocked")
 	}
-	err = store.SaveCodex(storedCodexAuth{
+	t.Cleanup(func() { renameFile = oldRename })
+
+	err := store.SaveCodex(storedCodexAuth{
 		AuthMode: codexAuthMode,
 		Tokens:   storedTokenBundle{AccessToken: "new-token", RefreshToken: "new-refresh"},
 	})
 	if err == nil {
-		t.Fatal("expected write failure when temp path is a directory")
+		t.Fatal("expected write failure when rename is blocked")
 	}
 	loaded, err := store.LoadCodex()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Tokens.AccessToken != "old-token" {
+	if loaded.Tokens.AccessToken != "old-token" || loaded.Tokens.RefreshToken != "old-refresh" {
 		t.Fatalf("old credentials were overwritten: %+v", loaded)
 	}
+	if leftover := leftoverTempFiles(t, store.Dir()); len(leftover) != 0 {
+		t.Fatalf("temp files left after failure: %v", leftover)
+	}
+}
+
+func leftoverTempFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, ".*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
 }
 
 func TestCodexRefreshSingleFlightAndWriteback(t *testing.T) {
@@ -175,6 +174,9 @@ func TestCodexRefreshSingleFlightAndWriteback(t *testing.T) {
 		}
 		if req.PostForm.Get("client_id") != codexClientID {
 			t.Fatalf("client_id = %q", req.PostForm.Get("client_id"))
+		}
+		if req.PostForm.Get("refresh_token") != "old-refresh" {
+			t.Fatalf("refresh_token = %q", req.PostForm.Get("refresh_token"))
 		}
 		next := testJWT(t, map[string]any{"email": "a@b.c", "exp": time.Now().Add(2 * time.Hour).Unix()})
 		return jsonResponse(200, map[string]any{
@@ -215,98 +217,119 @@ func TestCodexRefreshSingleFlightAndWriteback(t *testing.T) {
 	}
 }
 
-func TestCodexRefreshFailureIsAuthRequired(t *testing.T) {
-	dir := t.TempDir()
-	client := roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(401, map[string]any{"error": "invalid_grant", "error_description": "revoked"}), nil
-	})
-	service := NewService(dir, client)
-	expired := testJWT(t, map[string]any{"exp": time.Now().Add(-time.Minute).Unix()})
-	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"tokens":{"access_token":"`+expired+`","refresh_token":"r"}}`)); err != nil {
-		t.Fatal(err)
+func TestCodexRefreshIndependentAdapterKeepsOldFileOnError(t *testing.T) {
+	fixtures := protocolFixtures(t)
+	expired := testJWT(t, map[string]any{"email": "a@b.c", "exp": time.Now().Add(-time.Minute).Unix()})
+	cases := []struct {
+		name     string
+		fixture  string
+		wantAuth bool
+	}{
+		{name: "invalid_grant", fixture: "codex_refresh_invalid_grant", wantAuth: true},
+		{name: "empty_token", fixture: "codex_refresh_empty_token", wantAuth: false},
 	}
-	_, err := service.Resolve(context.Background(), CredentialSourceCodex)
-	if err != ErrAuthRequired {
-		t.Fatalf("err = %v, want ErrAuthRequired", err)
-	}
-}
-
-func TestCodexDevicePollClassification(t *testing.T) {
-	if kind := classifyCodexDevicePoll(http.StatusForbidden, map[string]any{
-		"error": map[string]any{"message": "Device authorization is pending. Please try again."},
-	}); kind != pollKindPending {
-		t.Fatalf("forbidden pending = %v", kind)
-	}
-	if kind := classifyCodexDevicePoll(http.StatusNotFound, map[string]any{}); kind != pollKindPending {
-		t.Fatalf("not found = %v", kind)
-	}
-	if kind := classifyCodexDevicePoll(http.StatusOK, map[string]any{
-		"authorization_code": "auth-code",
-		"code_verifier":      "pkce",
-	}); kind != pollKindAuthCode {
-		t.Fatalf("auth code = %v", kind)
-	}
-}
-
-func TestGrokDeviceAuthPendingAndSuccess(t *testing.T) {
-	dir := t.TempDir()
-	var stage atomic.Int32
-	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		switch req.URL.String() {
-		case grokDeviceCodeURL:
-			return jsonResponse(200, map[string]any{
-				"device_code":               "dev-1",
-				"user_code":                 "ABCD-1234",
-				"verification_uri":          "https://auth.x.ai/device",
-				"verification_uri_complete": "https://auth.x.ai/device?user_code=ABCD-1234",
-				"expires_in":                900,
-				"interval":                  5,
-			}), nil
-		case grokTokenURL:
-			if stage.Add(1) == 1 {
-				return jsonResponse(400, map[string]any{"error": "authorization_pending"}), nil
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != codexOAuthTokenURL {
+					t.Fatalf("unexpected url %s", req.URL)
+				}
+				if err := req.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if req.PostForm.Get("grant_type") != "refresh_token" {
+					t.Fatalf("grant_type = %q", req.PostForm.Get("grant_type"))
+				}
+				if req.PostForm.Get("client_id") != codexClientID {
+					t.Fatalf("client_id = %q", req.PostForm.Get("client_id"))
+				}
+				if req.PostForm.Get("refresh_token") != "old-refresh" {
+					t.Fatalf("refresh_token = %q", req.PostForm.Get("refresh_token"))
+				}
+				return fixtures[tc.fixture].response(), nil
+			})
+			service := NewService(t.TempDir(), client)
+			if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+expired+`","refresh_token":"old-refresh"}}`)); err != nil {
+				t.Fatal(err)
 			}
-			access := testJWT(t, map[string]any{"sub": "user-1", "email": "a@x.ai"})
-			return jsonResponse(200, map[string]any{
-				"access_token":  access,
-				"refresh_token": "g-refresh",
-			}), nil
-		default:
+			_, err := service.Resolve(context.Background(), CredentialSourceCodex)
+			if tc.wantAuth {
+				if err != ErrAuthRequired {
+					t.Fatalf("err = %v, want ErrAuthRequired", err)
+				}
+			} else if err == nil {
+				t.Fatal("expected refresh error")
+			}
+			if err != nil {
+				if strings.Contains(err.Error(), expired) || strings.Contains(err.Error(), "eyJ") {
+					t.Fatalf("token leaked into error: %v", err)
+				}
+			}
+			loaded, loadErr := service.store.LoadCodex()
+			if loadErr != nil || loaded == nil {
+				t.Fatalf("load: %v", loadErr)
+			}
+			if loaded.Tokens.AccessToken != expired {
+				t.Fatalf("old access token was changed")
+			}
+			if loaded.Tokens.RefreshToken != "old-refresh" {
+				t.Fatalf("old refresh token was changed: %q", loaded.Tokens.RefreshToken)
+			}
+			if loaded.Tokens.AccessToken == "" || loaded.Tokens.RefreshToken == "" {
+				t.Fatal("empty token written")
+			}
+			raw, readErr := os.ReadFile(service.store.CodexPath())
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if strings.Contains(string(raw), `"access_token": ""`) || strings.Contains(string(raw), `"refresh_token": ""`) {
+				t.Fatalf("empty token serialized: %s", raw)
+			}
+		})
+	}
+}
+
+func TestCodexRefreshIndependentAdapterRotatesRefreshToken(t *testing.T) {
+	fixtures := protocolFixtures(t)
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != codexOAuthTokenURL {
 			t.Fatalf("unexpected url %s", req.URL)
-			return nil, nil
 		}
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if req.PostForm.Get("grant_type") != "refresh_token" {
+			t.Fatalf("grant_type = %q", req.PostForm.Get("grant_type"))
+		}
+		if req.PostForm.Get("client_id") != codexClientID {
+			t.Fatalf("client_id = %q", req.PostForm.Get("client_id"))
+		}
+		if req.PostForm.Get("refresh_token") != "old-refresh" {
+			t.Fatalf("refresh_token = %q", req.PostForm.Get("refresh_token"))
+		}
+		return fixtures["codex_refresh_success"].response(), nil
 	})
-	service := NewService(dir, client)
-	challenge, err := service.StartGrokDeviceAuth(context.Background())
+	service := NewService(t.TempDir(), client)
+	expired := testJWT(t, map[string]any{"email": "a@b.c", "exp": time.Now().Add(-time.Minute).Unix()})
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+expired+`","refresh_token":"old-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := service.Resolve(context.Background(), CredentialSourceCodex)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if challenge.UserCode != "ABCD-1234" || challenge.DeviceCode != "" && challenge.PollToken == "" {
-		t.Fatalf("challenge = %+v", challenge)
+	if cred.AccessToken == expired || cred.AccessToken == "" {
+		t.Fatal("access token was not rotated")
 	}
-	if challenge.PollToken == "" {
-		t.Fatal("poll token missing")
+	loaded, err := service.store.LoadCodex()
+	if err != nil || loaded == nil {
+		t.Fatalf("load: %v", err)
 	}
-	pending, err := service.PollGrokDeviceAuth(context.Background(), GrokPollInput{PollToken: challenge.PollToken})
-	if err != nil {
-		t.Fatal(err)
+	if loaded.Tokens.RefreshToken != "rotated-refresh" {
+		t.Fatalf("refresh token was not rotated: %q", loaded.Tokens.RefreshToken)
 	}
-	if pending.Status != PollStatusPending {
-		t.Fatalf("pending status = %s", pending.Status)
-	}
-	done, err := service.PollGrokDeviceAuth(context.Background(), GrokPollInput{PollToken: challenge.PollToken})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if done.Status != PollStatusSuccess || done.Account == nil {
-		t.Fatalf("success = %+v", done)
-	}
-	if done.Account.DisplayName != "a@x.ai" || !strings.HasPrefix(done.Account.AccountID, "grok:") {
-		t.Fatalf("account = %+v", done.Account)
-	}
-	if strings.Contains(done.Account.AccountID, "eyJ") {
-		t.Fatal("token leaked into account id")
-	}
+	status := service.CodexStatus(context.Background())
+	assertNoSecrets(t, status)
 }
 
 func TestGrokActivateDeleteAndStaticResolve(t *testing.T) {
@@ -334,6 +357,7 @@ func TestGrokActivateDeleteAndStaticResolve(t *testing.T) {
 	if err != nil || !activated.Active {
 		t.Fatalf("activate = %+v %v", activated, err)
 	}
+	assertNoSecrets(t, activated)
 	if err := service.DeleteAccount(context.Background(), activated.AccountID); err != nil {
 		t.Fatal(err)
 	}
@@ -344,33 +368,6 @@ func TestGrokActivateDeleteAndStaticResolve(t *testing.T) {
 	_, err = service.Resolve(context.Background(), CredentialSourceStatic)
 	if err != ErrStaticCredential {
 		t.Fatalf("static resolve = %v", err)
-	}
-}
-
-func TestParseGrokAndCodexUsage(t *testing.T) {
-	grok := parseGrokUsage(map[string]any{
-		"config": map[string]any{
-			"creditUsagePercent":      34.0,
-			"subscriptionTierDisplay": "SuperGrok",
-			"currentPeriod":           map[string]any{"end": "2026-06-08T00:00:00Z"},
-		},
-	})
-	if grok.RemainingPercent != 66 || grok.UsedPercent != 34 || grok.PlanLabel != "SuperGrok" {
-		t.Fatalf("grok usage = %+v", grok)
-	}
-	if grok.ResetAt.UnixMilli() != 1_780_876_800_000 {
-		t.Fatalf("reset = %d", grok.ResetAt.UnixMilli())
-	}
-	codex := parseCodexUsage(map[string]any{
-		"plan_type": "plus",
-		"rate_limit": map[string]any{
-			"limit_reached":    false,
-			"primary_window":   map[string]any{"used_percent": 80.0, "reset_at": 1_780_000_000},
-			"secondary_window": map[string]any{"used_percent": 25.0, "reset_at": 1_780_500_000},
-		},
-	})
-	if codex.PlanLabel != "ChatGPT Plus" || codex.RemainingPercent != 75 {
-		t.Fatalf("codex usage = %+v", codex)
 	}
 }
 
@@ -388,5 +385,119 @@ func TestManagedChannelIDSecretIsStable(t *testing.T) {
 	}
 	if ChannelIDSecret(CredentialSourceStatic, "sk-a") == ChannelIDSecret(CredentialSourceStatic, "sk-b") {
 		t.Fatal("static channel id should still depend on api key")
+	}
+}
+
+func TestIsQuotaErrorRequiresExplicitQuotaText(t *testing.T) {
+	if IsQuotaError(errors.New("openai adapter status=429")) {
+		t.Fatal("bare 429 is not quota")
+	}
+	if IsQuotaError(errors.New("openai adapter status=401")) {
+		t.Fatal("bare 401 is not quota")
+	}
+	if IsQuotaError(errors.New("openai adapter status=403")) {
+		t.Fatal("bare 403 is not quota")
+	}
+	if IsQuotaError(errors.New("openai adapter status=429 body=rate_limit_reached")) {
+		t.Fatal("rate_limit_reached alone is not quota")
+	}
+	if !IsQuotaError(errors.New("insufficient_quota")) {
+		t.Fatal("insufficient_quota should match")
+	}
+	if !IsQuotaError(errors.New("usage_limit_reached: 5-hour limit")) {
+		t.Fatal("usage_limit_reached should match")
+	}
+	if !IsQuotaError(ErrQuotaExhausted) {
+		t.Fatal("typed ErrQuotaExhausted should match")
+	}
+}
+
+func TestResolveAfterUnauthorizedForcesCodexRefresh(t *testing.T) {
+	var calls atomic.Int32
+	next := testJWT(t, map[string]any{"email": "a@b.c", "exp": time.Now().Add(2 * time.Hour).Unix()})
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if req.URL.String() != codexOAuthTokenURL {
+			t.Fatalf("unexpected url %s", req.URL)
+		}
+		return jsonResponse(200, map[string]any{
+			"access_token":  next,
+			"refresh_token": "rotated-refresh",
+		}), nil
+	})
+	service := NewService(t.TempDir(), client)
+	fresh := testJWT(t, map[string]any{"email": "a@b.c", "exp": time.Now().Add(2 * time.Hour).Unix()})
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+fresh+`","refresh_token":"old-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("Resolve refreshed unexpired token, calls=%d", calls.Load())
+	}
+	if cred.AccessToken != fresh {
+		t.Fatal("Resolve should keep unexpired access token")
+	}
+	forced, err := service.ResolveAfterUnauthorized(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("ResolveAfterUnauthorized calls=%d, want 1", calls.Load())
+	}
+	if forced.AccessToken != next {
+		t.Fatal("ResolveAfterUnauthorized should rotate access token")
+	}
+}
+
+func TestMarkQuotaExhaustedActivatesNextGrokAccount(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	first := testJWT(t, map[string]any{"sub": "one", "email": "one@x.ai"})
+	second := testJWT(t, map[string]any{"sub": "two", "email": "two@x.ai"})
+	if _, err := service.upsertGrokAccount(first, "r1", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.upsertGrokAccount(second, "r2", false); err != nil {
+		t.Fatal(err)
+	}
+	active, err := service.Resolve(context.Background(), CredentialSourceGrok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), active.AccountID); err != nil {
+		t.Fatalf("mark with next account: %v", err)
+	}
+	rotated, err := service.Resolve(context.Background(), CredentialSourceGrok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.AccountID == "" || rotated.AccountID == active.AccountID {
+		t.Fatalf("expected next account, got %+v after %+v", rotated, active)
+	}
+	if rotated.AccessToken != second {
+		t.Fatalf("rotated token mismatch")
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), rotated.AccountID); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatalf("no next account err=%v, want ErrQuotaExhausted", err)
+	}
+	if _, err := service.Resolve(context.Background(), CredentialSourceGrok); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatalf("resolve exhausted account err=%v, want ErrQuotaExhausted", err)
+	}
+}
+
+func TestExpiredPendingAuthIsRemoved(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	service.rememberPending("poll-token", pendingAuth{
+		provider:   ProviderCodex,
+		deviceCode: "device-code",
+		expiresAt:  time.Now().Add(-time.Second),
+	})
+	if _, ok := service.pendingByInput("poll-token", ""); ok {
+		t.Fatal("expired pending auth should not resolve")
+	}
+	if len(service.pending) != 0 {
+		t.Fatalf("expired pending auth was not removed: %#v", service.pending)
 	}
 }

@@ -94,18 +94,28 @@ func (auth storedCodexAuth) status() AccountStatus {
 	} else if !expires.IsZero() && !expires.After(time.Now().UTC()) {
 		state = StateAuthRequired
 	}
+	if state == StateReady && auth.LimitReached {
+		state = StateQuotaExhausted
+	}
 	accountID, displayName, chatgptAccountID := accountIdentity(ProviderCodex, auth.Tokens.AccessToken, auth.Tokens.IDToken)
 	return AccountStatus{
-		AccountID:        accountID,
-		Provider:         ProviderCodex,
-		State:            state,
-		Email:            firstNonEmpty(auth.Email, displayName),
-		DisplayName:      firstNonEmpty(auth.Email, displayName),
-		ChatGPTAccountID: firstNonEmpty(auth.ChatGPTAccountID, chatgptAccountID),
-		LastRefresh:      auth.LastRefresh,
-		ExpiresAt:        expires,
-		HasRefreshToken:  trimSpace(auth.Tokens.RefreshToken) != "",
-		Active:           true,
+		AccountID:               accountID,
+		Provider:                ProviderCodex,
+		State:                   state,
+		Email:                   firstNonEmpty(auth.Email, displayName),
+		DisplayName:             firstNonEmpty(auth.Email, displayName),
+		PlanLabel:               auth.PlanLabel,
+		ChatGPTAccountID:        firstNonEmpty(auth.ChatGPTAccountID, chatgptAccountID),
+		LastRefresh:             auth.LastRefresh,
+		ExpiresAt:               expires,
+		HasRefreshToken:         trimSpace(auth.Tokens.RefreshToken) != "",
+		RemainingPercent:        auth.RemainingPercent,
+		UsedPercent:             auth.UsedPercent,
+		ResetAt:                 timeFromMS(auth.ResetAtMS),
+		SessionRemainingPercent: auth.SessionRemainingPercent,
+		SessionResetAt:          timeFromMS(auth.SessionResetAtMS),
+		LimitReached:            auth.LimitReached,
+		Active:                  true,
 	}
 }
 
@@ -138,7 +148,7 @@ func (service *Service) ImportCodexAuth(ctx context.Context, content []byte) (Ac
 	_ = ctx
 	parsed, err := parseCodexAuthJSON(content)
 	if err != nil {
-		return AccountStatus{Provider: ProviderCodex, State: StateError, Error: err.Error()}, err
+		return AccountStatus{Provider: ProviderCodex, State: StateError, Error: RedactText(err.Error())}, RedactError(err)
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -311,14 +321,17 @@ func (service *Service) PollCodexDeviceAuth(ctx context.Context, input CodexPoll
 	case pollKindSlowDown:
 		return PollResult{Status: PollStatusSlowDown, RetryAfterSeconds: 5}, nil
 	case pollKindExpired:
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusExpired, Error: nestedErrorMessage(parsed, "Device authorization code expired")}, nil
 	case pollKindDenied:
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusAccessDenied, Error: nestedErrorMessage(parsed, "User denied authorization")}, nil
 	case pollKindAuthCode:
 		return service.exchangeCodexAuthCode(ctx, jsonString(parsed, "authorization_code"), jsonString(parsed, "code_verifier"), input.PollToken)
 	case pollKindTokens:
 		return service.commitCodexTokens(ctx, jsonString(parsed, "access_token"), jsonString(parsed, "refresh_token"), jsonString(parsed, "id_token"), input.PollToken)
 	default:
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusError, Error: nestedErrorMessage(parsed, "Codex 设备授权失败")}, nil
 	}
 }

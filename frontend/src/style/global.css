@@ -857,7 +857,11 @@ body,
   color: var(--color-text);
 }
 
-.access-client-icon.is-claude {
+.access-client-icon.is-grok {
+  color: var(--color-text);
+}
+
+.access-client-icon.is-anthropic {
   color: #d97757;
 }
 

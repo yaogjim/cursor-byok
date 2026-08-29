@@ -32,6 +32,8 @@ var sensitiveFieldNames = map[string]struct{}{
 	"key":                {},
 	"password":           {},
 	"passwd":             {},
+	"polltoken":          {},
+	"devicecode":         {},
 	"privatekey":         {},
 	"proxyauthorization": {},
 	"refreshtoken":       {},

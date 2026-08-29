@@ -38,7 +38,7 @@ func RedactText(value string) string {
 	}
 	redacted := bearerRE.ReplaceAllString(value, "Bearer [redacted]")
 	redacted = jwtRE.ReplaceAllString(redacted, "[redacted-jwt]")
-	for _, key := range []string{"access_token", "refresh_token", "id_token", "OPENAI_API_KEY"} {
+	for _, key := range []string{"access_token", "refresh_token", "id_token", "poll_token", "device_code", "OPENAI_API_KEY"} {
 		redacted = redactJSONField(redacted, key)
 	}
 	if looksLikeToken(redacted) {
@@ -125,14 +125,17 @@ func jsonErrorCode(body []byte) string {
 		return code
 	}
 	if nested, ok := parsed["error"].(map[string]any); ok {
-		if code := jsonText(nested["code"]); code != "" {
+		if code := jsonText(nested["code"]); code != "" && !looksLikeToken(code) {
 			return code
 		}
-		if code := jsonText(nested["type"]); code != "" {
+		if code := jsonText(nested["type"]); code != "" && !looksLikeToken(code) {
 			return code
 		}
 	}
-	return jsonText(parsed["error_description"])
+	if desc := jsonText(parsed["error_description"]); desc != "" && !looksLikeToken(desc) {
+		return desc
+	}
+	return ""
 }
 
 func jsonText(value any) string {

@@ -69,13 +69,14 @@ func (service *Service) PollGrokDeviceAuth(ctx context.Context, input GrokPollIn
 		access := jsonString(parsed, "access_token")
 		refresh := jsonString(parsed, "refresh_token")
 		if access == "" {
+			service.forgetPendingByInput(input.PollToken, deviceCode)
 			return PollResult{Status: PollStatusError, Error: "Grok 授权响应缺少 access_token"}, nil
 		}
 		account, saveErr := service.upsertGrokAccount(access, refresh, true)
 		if saveErr != nil {
 			return PollResult{Status: PollStatusError, Error: "保存 Grok 账号失败"}, saveErr
 		}
-		service.forgetPending(input.PollToken)
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		statusDTO := grokAccountStatus(account)
 		return PollResult{Status: PollStatusSuccess, Account: &statusDTO}, nil
 	}
@@ -87,10 +88,13 @@ func (service *Service) PollGrokDeviceAuth(ctx context.Context, input GrokPollIn
 	case "slow_down":
 		return PollResult{Status: PollStatusSlowDown, RetryAfterSeconds: 5}, nil
 	case "expired_token":
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusExpired, Error: firstNonEmpty(desc, "Device authorization code expired")}, nil
 	case "access_denied":
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusAccessDenied, Error: firstNonEmpty(desc, "User denied authorization")}, nil
 	default:
+		service.forgetPendingByInput(input.PollToken, deviceCode)
 		return PollResult{Status: PollStatusError, Error: firstNonEmpty(desc, "OAuth error")}, nil
 	}
 }
@@ -201,6 +205,66 @@ func (service *Service) activeGrokLocked() (storedGrokAccount, bool, error) {
 		}
 	}
 	return storedGrokAccount{}, false, nil
+}
+
+func nextAvailableGrokIndex(accounts []storedGrokAccount, currentIdx int) int {
+	n := len(accounts)
+	if n == 0 {
+		return -1
+	}
+	start := currentIdx
+	if start < 0 || start >= n {
+		start = -1
+	}
+	for offset := 1; offset <= n; offset++ {
+		idx := offset - 1
+		if start >= 0 {
+			idx = (start + offset) % n
+		}
+		account := accounts[idx]
+		if start >= 0 && idx == start {
+			continue
+		}
+		if trimSpace(account.AccessToken) == "" || account.LimitReached {
+			continue
+		}
+		return idx
+	}
+	return -1
+}
+
+func (service *Service) markGrokQuotaExhaustedLocked(accountID string) error {
+	file, err := service.store.LoadGrok()
+	if err != nil {
+		return err
+	}
+	now := nowMS()
+	currentIdx := -1
+	for i := range file.Accounts {
+		if file.Accounts[i].AccountID != accountID {
+			continue
+		}
+		file.Accounts[i].LimitReached = true
+		file.Accounts[i].UpdatedAtMS = now
+		currentIdx = i
+	}
+	if currentIdx < 0 {
+		return nil
+	}
+	nextIdx := nextAvailableGrokIndex(file.Accounts, currentIdx)
+	if nextIdx < 0 {
+		if err := service.store.SaveGrok(file); err != nil {
+			return err
+		}
+		return ErrQuotaExhausted
+	}
+	for i := range file.Accounts {
+		file.Accounts[i].Active = i == nextIdx
+		if file.Accounts[i].Active || i == currentIdx {
+			file.Accounts[i].UpdatedAtMS = now
+		}
+	}
+	return service.store.SaveGrok(file)
 }
 
 func (service *Service) ActivateAccount(ctx context.Context, accountID string) (AccountStatus, error) {

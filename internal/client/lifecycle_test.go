@@ -1,8 +1,10 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 
 	"cursor/internal/backend"
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/cursor"
 )
 
 func TestShutdownForQuitIsIdempotent(t *testing.T) {
@@ -56,7 +59,8 @@ func TestSaveUserConfigDoesNotEnterShutdownCancelPath(t *testing.T) {
 func newLifecycleTestService(t *testing.T) *ProxyService {
 	t.Helper()
 	root := t.TempDir()
-	store := serverconfig.NewStore(filepath.Join(root, "config.yaml"), filepath.Join(root, "logs"))
+	configPath := filepath.Join(root, "config.yaml")
+	store := serverconfig.NewStore(configPath, filepath.Join(root, "logs"))
 	cfg := serverconfig.DefaultConfig()
 	cfg.BackendListenAddr = mustFreeListenAddr(t)
 	cfg.ProxyListenAddr = mustFreeListenAddr(t)
@@ -74,9 +78,59 @@ func newLifecycleTestService(t *testing.T) *ProxyService {
 		_ = host.Stop(context.Background())
 		_ = host.CloseObservability()
 	})
+	settingsPath := filepath.Join(root, "Cursor", "User", "settings.json")
 	return &ProxyService{
-		backendHost: host,
-		store:       store,
+		backendHost:           host,
+		store:                 store,
+		configPath:            configPath,
+		cursorSettingsStore:   cursor.NewUserProxySettingsStore(settingsPath),
+		cursorSettingsOwnerID: "lifecycle-test-owner",
+	}
+}
+
+func TestShutdownForQuitWithoutApplyPreservesCursorSettings(t *testing.T) {
+	service := newLifecycleTestService(t)
+	settingsPath := filepath.Join(filepath.Dir(service.configPath), "Cursor", "User", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const original = "{\n  \"http.proxy\": \"http://127.0.0.1:18080\"\n}\n"
+	if err := os.WriteFile(settingsPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	service.ShutdownForQuit()
+
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != original {
+		t.Fatalf("ShutdownForQuit() changed unowned Cursor settings:\n%s", got)
+	}
+}
+
+func TestClearCursorSettingsDoesNotClearNewOwner(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "Cursor", "User", "settings.json")
+	store := cursor.NewUserProxySettingsStore(settingsPath)
+	if err := store.Apply("http://127.0.0.1:18080", "owner-new"); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	service := &ProxyService{
+		cursorSettingsApplied: true,
+		cursorSettingsStore:   store,
+		cursorSettingsOwnerID: "owner-old",
+	}
+
+	if err := service.ClearCursorSettings(); err != nil {
+		t.Fatalf("ClearCursorSettings() error = %v", err)
+	}
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !bytes.Contains(data, []byte("http://127.0.0.1:18080")) {
+		t.Fatalf("ClearCursorSettings() removed settings owned by a newer instance:\n%s", data)
 	}
 }
 

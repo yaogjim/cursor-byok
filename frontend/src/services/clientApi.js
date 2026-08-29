@@ -265,8 +265,19 @@ export function getModelAdapterTestResults() {
 }
 
 export function fetchModelAdapterModels(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const credentialSource = String(source.credentialSource || "").trim().toLowerCase();
+  const managed = credentialSource === "codex" || credentialSource === "grok";
+  const request = {
+    type: source.type,
+    baseURL: source.baseURL,
+    apiKey: managed ? "" : source.apiKey,
+    credentialSource: credentialSource || "static",
+    customHeadersEnabled: source.customHeadersEnabled,
+    customHeadersJSON: source.customHeadersJSON,
+  };
   return withApiLogging("FetchModelAdapterModels", () =>
-    Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, payload),
+    Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, request),
   );
 }
 

@@ -35,30 +35,56 @@ func (s *ProxyService) ApplyCursorSettings() error {
 		if err := cursor.EnsureCACertInstalled(s.caCertPEM, caCertPath); err != nil {
 			return fmt.Errorf("install ca cert: %w", err)
 		}
-		if err := cursor.SetSystemNodeExtraCACerts(caCertPath); err != nil {
-			return fmt.Errorf("set node extra ca certs: %w", err)
-		}
 	}
 
-	if err := cursor.WriteUserProxySettings(cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr)); err != nil {
+	if s.cursorSettingsStore == nil {
+		return fmt.Errorf("Cursor settings store is not initialized")
+	}
+	if err := s.cursorSettingsStore.Apply(
+		cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr),
+		s.cursorSettingsOwnerID,
+	); err != nil {
 		return err
+	}
+	if goruntime.GOOS == "darwin" {
+		if err := cursor.SetSystemNodeExtraCACerts(caCertPath); err != nil {
+			_, _ = s.cursorSettingsStore.ClearOwned(s.cursorSettingsOwnerID, nil)
+			return fmt.Errorf("set node extra ca certs: %w", err)
+		}
 	}
 	s.setCursorSettingsApplied(true)
 	return nil
 }
 
-// ClearCursorSettings 用于处理与 ClearCursorSettings 相关的逻辑。
+// ClearCursorSettings 仅清理当前实例成功注入且仍持有所有权的 Cursor 设置。
 func (s *ProxyService) ClearCursorSettings() error {
-	if goruntime.GOOS == "darwin" {
-		if err := cursor.ClearSystemNodeExtraCACerts(); err != nil {
-			return err
-		}
+	if s == nil || !s.ownsAppliedCursorSettings() {
+		return nil
 	}
-	if err := cursor.ClearUserProxySettings(); err != nil {
+	if s.cursorSettingsStore == nil {
+		return fmt.Errorf("Cursor settings store is not initialized")
+	}
+	var beforeClear func() error
+	if goruntime.GOOS == "darwin" {
+		beforeClear = cursor.ClearSystemNodeExtraCACerts
+	}
+	cleared, err := s.cursorSettingsStore.ClearOwned(s.cursorSettingsOwnerID, beforeClear)
+	if err != nil {
 		return err
+	}
+	if !cleared {
+		logger.Infof("clearCursorSettings skipped: ownership transferred to another instance")
+		s.setCursorSettingsApplied(false)
+		return nil
 	}
 	s.setCursorSettingsApplied(false)
 	return nil
+}
+
+func (s *ProxyService) ownsAppliedCursorSettings() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cursorSettingsApplied
 }
 
 // GetDeviceID 用于处理与 GetDeviceID 相关的逻辑。

@@ -40,22 +40,32 @@ const clients = computed(() => [
   {
     id: "codex",
     name: "Codex",
-    meta: "深度集成 · 尚未支持",
-    status: "unsupported",
-    supported: false,
+    meta: "ChatGPT 订阅授权",
+    status: "available",
+    supported: true,
     dirty: false,
     icon: "icon-[bxl--openai]",
     iconClass: "is-codex",
   },
   {
-    id: "claude",
-    name: "Claude Code",
+    id: "grok",
+    name: "Grok",
+    meta: "xAI 订阅授权",
+    status: "available",
+    supported: true,
+    dirty: false,
+    icon: "icon-[simple-icons--x]",
+    iconClass: "is-grok",
+  },
+  {
+    id: "anthropic",
+    name: "Anthropic",
     meta: "深度集成 · 尚未支持",
     status: "unsupported",
     supported: false,
     dirty: false,
     icon: "icon-[logos--claude-icon]",
-    iconClass: "is-claude",
+    iconClass: "is-anthropic",
   },
 ]);
 
@@ -148,7 +158,7 @@ function selectClient(client) {
             计划中
           </span>
           <span
-            v-else
+            v-else-if="item.status !== 'available'"
             class="status-pill is-dot"
             :class="{
               'is-ok': item.status === 'running',
@@ -169,7 +179,7 @@ function selectClient(client) {
           </span>
         </button>
         <p class="note plain mt-2">
-          Codex 与 Claude Code 仅作入口占位，不会加载示例账号或发起授权。
+          Codex 与 Grok 在各自页面管理真实订阅授权；Anthropic 暂为接入占位。
         </p>
       </aside>
 
@@ -180,10 +190,13 @@ function selectClient(client) {
       >
         <GatewayCard v-if="activeClient === 'gateway'" />
         <CursorView v-else-if="activeClient === 'cursor'" embedded />
+        <SubscriptionAuthPanel
+          v-else-if="activeClient === 'codex' || activeClient === 'grok'"
+          :key="activeClient"
+          :provider="activeClient"
+        />
         <UnsupportedClientPanel v-else :client="activeClient" />
       </section>
     </div>
-
-    <SubscriptionAuthPanel />
   </div>
 </template>

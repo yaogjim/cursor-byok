@@ -7,26 +7,21 @@ import { computed, ref, watch } from "vue";
 const props = defineProps({
   client: {
     type: String,
-    default: "codex",
+    default: "anthropic",
   },
 });
 
 const copy = {
-  codex: {
-    title: "Codex 接入",
-    saveLabel: "保存 Codex 配置",
-    accountHint: "仅管理多套授权或重新授权现有账号",
-  },
-  claude: {
-    title: "Claude Code 接入",
-    saveLabel: "保存 Claude Code 配置",
+  anthropic: {
+    title: "Anthropic 接入",
+    saveLabel: "保存 Anthropic 配置",
     accountHint: "支持独立套餐或重新授权现有账号",
   },
 };
 
 const modeOptions = [{ label: "深度集成", value: "deep" }];
 const accessMode = ref("deep");
-const panel = computed(() => copy[props.client] || copy.codex);
+const panel = computed(() => copy[props.client] || copy.anthropic);
 
 watch(
   () => props.client,

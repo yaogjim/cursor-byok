@@ -20,6 +20,8 @@ import (
 	modeladapter "cursor/internal/backend/agent/model"
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
+	"cursor/internal/subscriptionauth"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -35,6 +37,10 @@ const (
 	modelAdapterListMaxBodyBytes      = 8 << 20
 	modelAdapterListPageSize          = 1000
 	modelAdapterListMaxPages          = 50
+	defaultCodexModelListURL          = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0"
+	codexModelListOriginator          = "codex_cli_rs"
+	chatgptAccountIDHeader            = "ChatGPT-Account-Id"
+	modelAdapterTestRequestIDPrefix   = "model-adapter-test-"
 )
 
 // modelListProviderRule 收敛各家模型列表接口的协议差异，避免判断散落到多个函数。
@@ -73,6 +79,28 @@ var modelListVersionSegments = map[string]bool{
 	"compatible": true,
 }
 
+var modelListHTTPClient = netproxy.NewHTTPClient(modelAdapterListTimeout)
+
+func defaultModelListHTTPDo(req *http.Request) (*http.Response, error) {
+	return modelListHTTPClient.Do(req)
+}
+
+func defaultResolveModelAdapterCredential(s *ProxyService, ctx context.Context, source subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
+	if s == nil || s.subscriptionAuth == nil {
+		return subscriptionauth.Credential{}, errors.New("订阅认证服务未初始化")
+	}
+	return s.subscriptionAuth.Resolve(ctx, source)
+}
+
+// modelListHTTPDo 仅供测试注入；默认走 netproxy.NewHTTPClient，禁止测试打真实 chatgpt.com。
+var modelListHTTPDo = defaultModelListHTTPDo
+
+// resolveModelAdapterCredential 仅供测试注入；默认走 ProxyService.subscriptionAuth.Resolve。
+var resolveModelAdapterCredential = defaultResolveModelAdapterCredential
+
+// codexModelListURL 仅供测试注入 fake endpoint；生产默认固定 chatgpt.com Codex models 地址。
+var codexModelListURL = defaultCodexModelListURL
+
 type ModelAdapterTestStatus string
 
 const (
@@ -103,6 +131,7 @@ type ModelAdapterModelsRequest struct {
 	Type                 string `json:"type"`
 	BaseURL              string `json:"baseURL"`
 	APIKey               string `json:"apiKey"`
+	CredentialSource     string `json:"credentialSource"`
 	CustomHeadersEnabled bool   `json:"customHeadersEnabled"`
 	CustomHeadersJSON    string `json:"customHeadersJSON"`
 }
@@ -163,10 +192,29 @@ func (s *ProxyService) GetModelAdapterTestResults() []ModelAdapterTestResult {
 }
 
 func (s *ProxyService) FetchModelAdapterModels(input ModelAdapterModelsRequest) (ModelAdapterModelsResult, error) {
-	_ = s
 	provider := strings.ToLower(strings.TrimSpace(input.Type))
 	baseURL := strings.TrimSpace(input.BaseURL)
 	apiKey := strings.TrimSpace(input.APIKey)
+	source := subscriptionauth.NormalizeCredentialSource(input.CredentialSource)
+	if source == "" {
+		return ModelAdapterModelsResult{}, errors.New("credentialSource 仅支持 static、codex 或 grok")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), modelAdapterListTimeout)
+	defer cancel()
+
+	if source == subscriptionauth.CredentialSourceCodex {
+		apiKey, chatgptAccountID, err := resolveManagedModelListCredential(s, ctx, source)
+		if err != nil {
+			return ModelAdapterModelsResult{}, err
+		}
+		models, err := fetchCodexModelList(ctx, apiKey, chatgptAccountID, input)
+		if err != nil {
+			return ModelAdapterModelsResult{}, err
+		}
+		return ModelAdapterModelsResult{Models: models}, nil
+	}
+
 	rule, supported := modelListProviderRules[provider]
 	if !supported {
 		return ModelAdapterModelsResult{}, errors.New("模型类型仅支持 OpenAI 或 Anthropic")
@@ -174,12 +222,15 @@ func (s *ProxyService) FetchModelAdapterModels(input ModelAdapterModelsRequest) 
 	if baseURL == "" {
 		return ModelAdapterModelsResult{}, errors.New("接口地址不能为空")
 	}
-	if apiKey == "" {
+	if source.Managed() {
+		resolvedKey, _, err := resolveManagedModelListCredential(s, ctx, source)
+		if err != nil {
+			return ModelAdapterModelsResult{}, err
+		}
+		apiKey = resolvedKey
+	} else if apiKey == "" {
 		return ModelAdapterModelsResult{}, errors.New("访问密钥不能为空")
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), modelAdapterListTimeout)
-	defer cancel()
 
 	var lastErr error
 	for _, endpoint := range buildModelListEndpointCandidates(rule, baseURL) {
@@ -293,7 +344,7 @@ func requestModelListPayload(
 	req.Header.Set("Accept", "application/json")
 	applyModelListCustomHeaders(req.Header, input)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := modelListHTTPDo(req)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +394,121 @@ func nextModelListCursor(payload any) string {
 	}
 	cursor, _ := object["last_id"].(string)
 	return strings.TrimSpace(cursor)
+}
+
+func resolveManagedModelListCredential(s *ProxyService, ctx context.Context, source subscriptionauth.CredentialSource) (string, string, error) {
+	cred, err := resolveModelAdapterCredential(s, ctx, source)
+	if err != nil {
+		return "", "", err
+	}
+	apiKey := strings.TrimSpace(cred.AccessToken)
+	if apiKey == "" {
+		return "", "", subscriptionauth.ErrAuthRequired
+	}
+	return apiKey, strings.TrimSpace(cred.ChatGPTAccountID), nil
+}
+
+func fetchCodexModelList(ctx context.Context, apiKey string, chatgptAccountID string, input ModelAdapterModelsRequest) ([]string, error) {
+	accountID := strings.TrimSpace(chatgptAccountID)
+	if accountID == "" {
+		return nil, errors.New("Codex 模型列表需要非空 ChatGPT-Account-Id")
+	}
+	endpoint := strings.TrimSpace(codexModelListURL)
+	if endpoint == "" {
+		endpoint = defaultCodexModelListURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("originator", codexModelListOriginator)
+	req.Header.Set(chatgptAccountIDHeader, accountID)
+	req.Header.Set("Accept", "application/json")
+	applyModelListCustomHeaders(req.Header, input)
+
+	resp, err := modelListHTTPDo(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, modelAdapterListMaxBodyBytes))
+	if readErr != nil {
+		return nil, readErr
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(body))
+		if len(message) > modelAdapterTestMaxErrorBodyBytes {
+			message = message[:modelAdapterTestMaxErrorBodyBytes]
+		}
+		if message == "" {
+			message = resp.Status
+		}
+		return nil, fmt.Errorf("读取模型列表失败：%s", message)
+	}
+
+	var payload any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("模型列表响应不是合法 JSON：%w", err)
+	}
+	models := normalizeFetchedModelIDs(extractCodexModelIDs(payload))
+	if len(models) == 0 {
+		return nil, errors.New("模型列表响应中没有可用模型")
+	}
+	return models, nil
+}
+
+func extractCodexModelIDs(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		models := make([]string, 0, len(typed))
+		for _, item := range typed {
+			models = append(models, extractCodexModelIDs(item)...)
+		}
+		return models
+	case map[string]any:
+		for _, key := range []string{"data", "models"} {
+			if child, ok := typed[key]; ok {
+				if _, isList := child.([]any); isList {
+					return extractCodexModelIDs(child)
+				}
+			}
+		}
+		if !codexModelVisibleInAPI(typed) {
+			return nil
+		}
+		if id := firstCodexModelID(typed); id != "" {
+			return []string{id}
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func firstCodexModelID(item map[string]any) string {
+	for _, key := range []string{"id", "name", "slug"} {
+		text, ok := item[key].(string)
+		if !ok {
+			continue
+		}
+		id := strings.TrimSpace(text)
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func codexModelVisibleInAPI(item map[string]any) bool {
+	if supported, ok := item["supported_in_api"].(bool); ok && !supported {
+		return false
+	}
+	visibility, ok := item["visibility"].(string)
+	if ok && strings.TrimSpace(visibility) != "list" {
+		return false
+	}
+	return true
 }
 
 func applyModelListCustomHeaders(header http.Header, input ModelAdapterModelsRequest) {
@@ -460,12 +626,33 @@ func normalizeSingleModelAdapterConfig(adapter serverconfig.ModelAdapterConfig) 
 	return normalized[0], nil
 }
 
+func (s *ProxyService) resolveModelAdapterTestCredentials(ctx context.Context, adapter serverconfig.ModelAdapterConfig) (subscriptionauth.Credential, error) {
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
+	if !source.Managed() {
+		return subscriptionauth.Credential{}, nil
+	}
+	cred, err := resolveModelAdapterCredential(s, ctx, source)
+	if err != nil {
+		return subscriptionauth.Credential{}, err
+	}
+	if strings.TrimSpace(cred.AccessToken) == "" {
+		return subscriptionauth.Credential{}, subscriptionauth.ErrAuthRequired
+	}
+	return cred, nil
+}
+
 func (s *ProxyService) runModelAdapterTest(adapter serverconfig.ModelAdapterConfig, requestHash string) (ModelAdapterTestResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelAdapterTestTimeout)
 	defer cancel()
 
+	cred, err := s.resolveModelAdapterTestCredentials(ctx, adapter)
+	if err != nil {
+		result := buildErroredModelAdapterTestResult(adapter.ID, requestHash, err)
+		return result, err
+	}
+
 	startedAt := time.Now().UTC()
-	metrics, requestErr := s.executeModelAdapterNonStreamingTest(ctx, adapter)
+	metrics, requestErr := s.executeModelAdapterNonStreamingTest(ctx, adapter, cred)
 	if requestErr != nil {
 		result := buildErroredModelAdapterTestResult(adapter.ID, requestHash, requestErr)
 		return result, requestErr
@@ -517,10 +704,10 @@ func (s *ProxyService) runModelAdapterTest(adapter serverconfig.ModelAdapterConf
 	return result, nil
 }
 
-func (s *ProxyService) executeModelAdapterNonStreamingTest(ctx context.Context, adapter serverconfig.ModelAdapterConfig) (*modelAdapterTestMetrics, error) {
+func (s *ProxyService) executeModelAdapterNonStreamingTest(ctx context.Context, adapter serverconfig.ModelAdapterConfig, cred subscriptionauth.Credential) (*modelAdapterTestMetrics, error) {
 	switch strings.TrimSpace(adapter.Type) {
 	case "openai":
-		return s.executeOpenAIStreamingTest(ctx, adapter)
+		return s.executeOpenAIStreamingTest(ctx, adapter, cred)
 	case "anthropic":
 		return s.executeAnthropicStreamingTest(ctx, adapter)
 	default:
@@ -528,12 +715,12 @@ func (s *ProxyService) executeModelAdapterNonStreamingTest(ctx context.Context, 
 	}
 }
 
-func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter serverconfig.ModelAdapterConfig) (*modelAdapterTestMetrics, error) {
+func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter serverconfig.ModelAdapterConfig, cred subscriptionauth.Credential) (*modelAdapterTestMetrics, error) {
 	_ = s
 	metrics := &modelAdapterTestMetrics{}
 	observer := &modelAdapterTestArtifactObserver{}
 	maxTokens := modelAdapterTestConfiguredOpenAIMaxTokens(adapter)
-	requestID := "model-adapter-test-" + buildModelAdapterTestRequestHash(adapter)
+	requestID := modelAdapterTestRequestID(adapter)
 	req := modeladapter.StreamRequest{
 		RequestID:                   requestID,
 		RunID:                       requestID,
@@ -541,7 +728,10 @@ func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter s
 		ModelID:                     strings.TrimSpace(adapter.ID),
 		Provider:                    "openai",
 		BaseURL:                     strings.TrimSpace(adapter.BaseURL),
-		APIKey:                      strings.TrimSpace(adapter.APIKey),
+		APIKey:                      modelAdapterTestRuntimeAPIKey(adapter, cred),
+		CredentialSource:            strings.TrimSpace(adapter.CredentialSource),
+		CredentialID:                strings.TrimSpace(cred.AccountID),
+		ChatGPTAccountID:            strings.TrimSpace(cred.ChatGPTAccountID),
 		ProviderModelID:             strings.TrimSpace(adapter.ModelID),
 		ResolvedChannelID:           strings.TrimSpace(adapter.ID),
 		ResolvedChannelName:         strings.TrimSpace(adapter.DisplayName),
@@ -600,7 +790,7 @@ func (s *ProxyService) executeAnthropicStreamingTest(ctx context.Context, adapte
 	observer := &modelAdapterTestArtifactObserver{}
 	maxTokens := modelAdapterTestConfiguredAnthropicMaxTokens(adapter)
 	thinkingEffort := normalizeModelAdapterTestAnthropicThinkingEffort(adapter.AnthropicThinkingEffort)
-	requestID := "model-adapter-test-" + buildModelAdapterTestRequestHash(adapter)
+	requestID := modelAdapterTestRequestID(adapter)
 	req := modeladapter.StreamRequest{
 		RequestID:                   requestID,
 		RunID:                       requestID,
@@ -839,6 +1029,17 @@ func buildModelAdapterTestErrorSummary(err error) string {
 	}
 }
 
+func modelAdapterTestRequestID(adapter serverconfig.ModelAdapterConfig) string {
+	return modelAdapterTestRequestIDPrefix + buildModelAdapterTestRequestHash(adapter)
+}
+
+func modelAdapterTestRuntimeAPIKey(adapter serverconfig.ModelAdapterConfig, cred subscriptionauth.Credential) string {
+	if token := strings.TrimSpace(cred.AccessToken); token != "" {
+		return token
+	}
+	return strings.TrimSpace(adapter.APIKey)
+}
+
 func estimateBenchmarkTextTokens(text string) int64 {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -858,11 +1059,13 @@ func estimateBenchmarkTextTokens(text string) int64 {
 
 func buildModelAdapterTestCacheKey(adapter serverconfig.ModelAdapterConfig, requestHash string) string {
 	baseURL, baseURLErr := modelchannel.NormalizeBaseURL(adapter.BaseURL)
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
+	secret := strings.TrimSpace(subscriptionauth.ChannelIDSecret(source, adapter.APIKey))
 	if baseURLErr == nil &&
 		strings.TrimSpace(adapter.DisplayName) != "" &&
 		strings.TrimSpace(adapter.ModelID) != "" &&
-		strings.TrimSpace(adapter.APIKey) != "" {
-		return modelchannel.BuildChannelID(baseURL, adapter.ModelID, adapter.APIKey, adapter.DisplayName, modelchannel.NormalizeOpenAIEndpoint(adapter.Type, adapter.OpenAIEndpoint))
+		secret != "" {
+		return modelchannel.BuildChannelID(baseURL, adapter.ModelID, secret, adapter.DisplayName, modelchannel.NormalizeOpenAIEndpoint(adapter.Type, adapter.OpenAIEndpoint))
 	}
 	return "invalid:" + strings.TrimSpace(requestHash)
 }
@@ -873,6 +1076,7 @@ func buildModelAdapterTestRequestHash(adapter serverconfig.ModelAdapterConfig) s
 		source.Type,
 		source.BaseURL,
 		source.APIKey,
+		source.CredentialSource,
 		source.ModelID,
 		source.ReasoningEffort,
 		source.OpenAIEndpoint,
@@ -897,6 +1101,7 @@ type modelAdapterTestHashSource struct {
 	Type                        string
 	BaseURL                     string
 	APIKey                      string
+	CredentialSource            string
 	ModelID                     string
 	ReasoningEffort             string
 	OpenAIEndpoint              string
@@ -921,6 +1126,7 @@ func normalizeModelAdapterTestHashSource(adapter serverconfig.ModelAdapterConfig
 		Type:                        normalizeModelAdapterTestType(adapter.Type),
 		BaseURL:                     baseURL,
 		APIKey:                      strings.TrimSpace(adapter.APIKey),
+		CredentialSource:            string(subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)),
 		ModelID:                     strings.TrimSpace(adapter.ModelID),
 		ReasoningEffort:             normalizeModelAdapterTestProviderReasoning(adapter),
 		OpenAIEndpoint:              modelchannel.NormalizeOpenAIEndpoint(adapter.Type, adapter.OpenAIEndpoint),

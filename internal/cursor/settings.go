@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"cursor/internal/appdata"
 	"cursor/internal/logger"
@@ -117,17 +118,128 @@ func ClearSystemNodeExtraCACerts() error {
 	return nil
 }
 
+// UserProxySettingsStore 负责按实例所有权写入和清理 Cursor 用户代理设置。
+type UserProxySettingsStore struct {
+	settingsPath string
+}
+
+// NewUserProxySettingsStore 创建使用指定 Cursor settings.json 的隔离存储。
+func NewUserProxySettingsStore(settingsPath string) *UserProxySettingsStore {
+	return &UserProxySettingsStore{settingsPath: filepath.Clean(strings.TrimSpace(settingsPath))}
+}
+
+// DefaultUserProxySettingsStore 创建使用当前用户 Cursor settings.json 的存储。
+func DefaultUserProxySettingsStore() (*UserProxySettingsStore, error) {
+	settingsPath, err := resolveCursorSettingsPath()
+	if err != nil {
+		return nil, err
+	}
+	return NewUserProxySettingsStore(settingsPath), nil
+}
+
+// Apply 写入代理设置，并将清理所有权原子转移给 ownerID。
+func (s *UserProxySettingsStore) Apply(proxyURL string, ownerID string) error {
+	if s == nil || strings.TrimSpace(s.settingsPath) == "" || s.settingsPath == "." {
+		return errors.New("Cursor 配置路径为空")
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return errors.New("Cursor 配置所有者为空")
+	}
+	if err := os.MkdirAll(filepath.Dir(s.settingsPath), 0o755); err != nil {
+		return fmt.Errorf("创建 Cursor 配置目录失败: %w", err)
+	}
+	return s.withOwnershipLock(func() error {
+		if err := writeUserProxySettingsAt(s.settingsPath, proxyURL); err != nil {
+			return err
+		}
+		return writeSettingsOwner(s.ownerPath(), ownerID)
+	})
+}
+
+// ClearOwned 仅在 ownerID 仍是最新所有者时执行 beforeClear 并清理代理设置。
+func (s *UserProxySettingsStore) ClearOwned(ownerID string, beforeClear func() error) (bool, error) {
+	if s == nil || strings.TrimSpace(s.settingsPath) == "" || s.settingsPath == "." {
+		return false, errors.New("Cursor 配置路径为空")
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return false, nil
+	}
+	cleared := false
+	err := s.withOwnershipLock(func() error {
+		currentOwner, err := os.ReadFile(s.ownerPath())
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("读取 Cursor 配置所有者失败: %w", err)
+		}
+		if strings.TrimSpace(string(currentOwner)) != ownerID {
+			return nil
+		}
+		if beforeClear != nil {
+			if err := beforeClear(); err != nil {
+				return err
+			}
+		}
+		if err := clearUserProxySettingsAt(s.settingsPath); err != nil {
+			return err
+		}
+		if err := os.Remove(s.ownerPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除 Cursor 配置所有者失败: %w", err)
+		}
+		cleared = true
+		return nil
+	})
+	return cleared, err
+}
+
+func (s *UserProxySettingsStore) ownerPath() string {
+	return s.settingsPath + ".cursor-byok-owner"
+}
+
+func (s *UserProxySettingsStore) withOwnershipLock(fn func() error) error {
+	lockPath := s.ownerPath() + ".lock"
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.Mkdir(lockPath, 0o700)
+		if err == nil {
+			defer os.Remove(lockPath)
+			return fn()
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("锁定 Cursor 配置所有权失败: %w", err)
+		}
+		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(lockPath)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return errors.New("等待 Cursor 配置所有权锁超时")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func writeSettingsOwner(ownerPath string, ownerID string) error {
+	tempPath := ownerPath + ".tmp"
+	if err := os.WriteFile(tempPath, []byte(ownerID+"\n"), 0o600); err != nil {
+		return fmt.Errorf("写入 Cursor 配置所有者失败: %w", err)
+	}
+	if err := os.Rename(tempPath, ownerPath); err != nil {
+		return fmt.Errorf("保存 Cursor 配置所有者失败: %w", err)
+	}
+	return nil
+}
+
 // WriteUserProxySettings 用于处理与 WriteUserProxySettings 相关的逻辑。
-func WriteUserProxySettings(proxyURL string) error {
+func writeUserProxySettingsAt(settingsPath string, proxyURL string) error {
 	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
 		return errors.New("代理地址为空")
 	}
 
-	settingsPath, err := resolveCursorSettingsPath()
-	if err != nil {
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		return fmt.Errorf("创建 Cursor 配置目录失败: %w", err)
 	}
@@ -180,13 +292,8 @@ func WriteUserProxySettings(proxyURL string) error {
 	return nil
 }
 
-// ClearUserProxySettings 用于处理与 ClearUserProxySettings 相关的逻辑。
-func ClearUserProxySettings() error {
-	settingsPath, err := resolveCursorSettingsPath()
-	if err != nil {
-		return err
-	}
-
+// clearUserProxySettingsAt 删除指定 settings.json 中由本程序注入的代理键。
+func clearUserProxySettingsAt(settingsPath string) error {
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

@@ -903,6 +903,46 @@ assert(
   editorSource.includes("currentModelIDOptions"),
   "ModelEditor must keep the current model identifier in the combobox options",
 );
+const refreshModelListFn = extractSourceFunction(editorSource, "refreshModelList");
+assert(refreshModelListFn.includes("credentialSource"), "ModelEditor discovery must send credentialSource");
+assert(
+  refreshModelListFn.includes("isManagedCredentialSource(credentialSource)"),
+  "ModelEditor managed discovery must not require apiKey",
+);
+assert(
+  editorSource.includes("draft.credentialSource")
+    && editorSource.includes("[draft.type, draft.baseURL, draft.apiKey, draft.credentialSource"),
+  "ModelEditor must refetch models when credentialSource changes",
+);
+assert(
+  editorSource.includes("isManagedCredentialSource(draft.credentialSource) || hasKey")
+    || editorSource.includes("isManagedCredentialSource(draft.credentialSource) || String(draft.apiKey || \"\").trim()"),
+  "ModelEditor canFetchModels must allow managed sources without apiKey",
+);
+assert(
+  editorSource.includes('v-if="!isManagedCredential"'),
+  "ModelEditor must hide apiKey input for managed credential sources",
+);
+assert(
+  refreshModelListFn.includes("=== \"codex\"")
+    && refreshModelListFn.includes("isCodex"),
+  "ModelEditor Codex discovery must not require baseURL",
+);
+const fetchAvailableFn = extractSourceFunction(appStateSource, "fetchAvailableModelIDs");
+assert(fetchAvailableFn.includes("credentialSource"), "fetchAvailableModelIDs must pass credentialSource");
+assert(
+  fetchAvailableFn.includes("isManagedCredentialSource(credentialSource) ? \"\" : asString(source.apiKey)"),
+  "fetchAvailableModelIDs must strip apiKey for managed sources",
+);
+assert(
+  appStateSource.includes("isManagedCredentialSource(raw.credentialSource ?? raw.credential_source) ? \"\" : asString(raw.apiKey || raw.key)"),
+  "normalizeModelAdapter must strip managed apiKey before TestModelAdapter",
+);
+const startModelAdapterTestFn = extractSourceFunction(appStateSource, "startModelAdapterTest");
+assert(
+  startModelAdapterTestFn.includes("testModelAdapter(normalized)"),
+  "TestModelAdapter must send normalized adapter including credentialSource",
+);
 const typeChangeHelper = extractSourceFunction(typeChangeSource, "applyModelAdapterTypeChange");
 assert(
   typeChangeHelper.includes("draft.type = nextType")
@@ -1047,6 +1087,12 @@ const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue")
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
 
 const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
+const fetchModelsApiFn = extractSourceFunction(clientApiSource, "fetchModelAdapterModels");
+assert(fetchModelsApiFn.includes("credentialSource"), "clientApi FetchModelAdapterModels must send credentialSource");
+assert(
+  fetchModelsApiFn.includes("managed ? \"\" : source.apiKey"),
+  "clientApi must not send apiKey for managed credential sources",
+);
 const routerSource = readFileSync(path.join(frontendSrc, "router/index.js"), "utf8");
 assert(appStateSource.includes('"/models": "models"'), "models route must map to models section");
 assert(appStateSource.includes("snapshotModelsSection"), "models section must have a dirty snapshot");
@@ -1067,6 +1113,7 @@ assert(editorSource.includes("setModelsEditorDraftDirty"), "ModelEditor must rep
 const accessSource = readFileSync(path.join(frontendSrc, "router/access.js"), "utf8");
 const accessViewSource = readFileSync(path.join(frontendSrc, "views/AccessView.vue"), "utf8");
 const unsupportedSource = readFileSync(path.join(frontendSrc, "views/UnsupportedClientPanel.vue"), "utf8");
+const subscriptionAuthSource = readFileSync(path.join(frontendSrc, "components/SubscriptionAuthPanel.vue"), "utf8");
 const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const layoutSource = readFileSync(path.join(frontendSrc, "layouts/MainLayout.vue"), "utf8");
 const catalogSource = readFileSync(path.join(frontendSrc, "state/modelCatalog.js"), "utf8");
@@ -1078,20 +1125,25 @@ const {
   canonicalizeAccessRoute,
   isAccessTabDirty,
   sameAccessNavigation,
+  ACCESS_CLIENTS,
   ACCESS_CONFIG_SCOPES,
   ACCESS_PATH,
   DEFAULT_ACCESS_CLIENT,
 } = await import("../src/router/access.js");
 const { filterModelAdapters, modelProviderTabs } = await import("../src/state/modelCatalog.js");
 
+assertEqual(ACCESS_CLIENTS, ["gateway", "cursor", "codex", "grok", "anthropic"], "access client order");
 assertEqual(parseAccessClient(""), DEFAULT_ACCESS_CLIENT, "empty access client defaults to gateway");
 assertEqual(parseAccessClient("CURSOR"), "cursor", "access client is case-insensitive");
+assertEqual(parseAccessClient("GROK"), "grok", "grok access client is case-insensitive");
+assertEqual(parseAccessClient("claude"), "anthropic", "legacy claude route maps to anthropic");
 assertEqual(parseAccessClient("nope"), "gateway", "unknown access client falls back to gateway");
 assertEqual(parseAccessClient(["cursor", "gateway"]), "cursor", "array query uses the first client");
 assertEqual(accessClientConfigScope("cursor"), "cursor", "cursor access maps to cursor section");
 assertEqual(accessClientConfigScope("gateway"), "gateway", "gateway access maps to gateway section");
 assertEqual(accessClientConfigScope("codex"), "", "codex has no config section");
-assertEqual(accessClientConfigScope("claude"), "", "claude has no config section");
+assertEqual(accessClientConfigScope("grok"), "", "grok has no config section");
+assertEqual(accessClientConfigScope("anthropic"), "", "anthropic has no config section");
 assertEqual(accessClientConfigScope(["cursor"]), "cursor", "array cursor query maps to cursor section");
 assertEqual(
   accessLeaveConfigScopes(
@@ -1111,11 +1163,11 @@ assertEqual(
 );
 assertEqual(
   accessLeaveConfigScopes(
-    { path: "/access", query: { client: "claude" } },
+    { path: "/access", query: { client: "anthropic" } },
     { path: "/models" },
   ),
   [...ACCESS_CONFIG_SCOPES],
-  "leaving access from claude checks cursor and gateway together",
+  "leaving access from anthropic checks cursor and gateway together",
 );
 assertEqual(
   accessLeaveConfigScopes(
@@ -1204,17 +1256,33 @@ assert(!layoutSource.includes("gatewayEnabled"), "access badge must not count me
 
 assert(accessViewSource.includes("GatewayCard"), "AccessView reuses GatewayCard");
 assert(accessViewSource.includes("CursorView"), "AccessView reuses Cursor features");
-assert(accessViewSource.includes("UnsupportedClientPanel"), "AccessView uses empty unsupported panels");
+assert(accessViewSource.includes("UnsupportedClientPanel"), "AccessView keeps the Anthropic placeholder panel");
+assert(accessViewSource.includes("SubscriptionAuthPanel"), "AccessView renders provider auth inside client panes");
+assert(
+  accessViewSource.includes("activeClient === 'codex' || activeClient === 'grok'")
+    && accessViewSource.includes(':provider="activeClient"'),
+  "Codex and Grok must each render their own subscription auth pane",
+);
+assert(!accessViewSource.includes("<SubscriptionAuthPanel />"), "subscription auth must not remain as a mixed global region");
+assert(subscriptionAuthSource.includes("Codex 接入"), "Codex pane keeps the requested integration heading");
+assert(subscriptionAuthSource.includes("Grok 接入"), "Grok pane has its own integration heading");
+assert(subscriptionAuthSource.includes("导入 auth.json"), "Codex auth.json import stays in the Codex pane");
+assert(subscriptionAuthSource.includes("设备码授权"), "Codex and Grok panes expose device authorization");
 assert(accessViewSource.includes('v-if="activeClient === \'gateway\'"'), "AccessView remounts client panes with v-if");
 assert(!accessViewSource.includes("keep-alive"), "AccessView must not keep-alive client panes");
 assert(accessViewSource.includes("is-embedded-pane"), "cursor pane uses nested overflow layout");
 assert(!accessViewSource.includes('aria-current="page"'), "client list buttons must not use page current");
 assert(accessViewSource.includes("icon-[bxl--openai]"), "Codex uses the OpenAI brand icon");
-assert(accessViewSource.includes("icon-[logos--claude-icon]"), "Claude Code uses the Anthropic brand icon");
+assert(accessViewSource.includes("icon-[simple-icons--x]"), "Grok uses the xAI/X brand icon");
+assert(accessViewSource.includes("icon-[logos--claude-icon]"), "Anthropic uses the Claude brand icon");
 assert(accessViewSource.includes("is-codex"), "Codex icon keeps its brand class");
-assert(accessViewSource.includes("is-claude"), "Claude Code icon keeps its brand class");
-assert(!/example\.(com|org)/.test(accessViewSource), "AccessView must not ship sample accounts");
-assert(!/developer@|team@|personal@|work@/.test(accessViewSource + unsupportedSource), "unsupported panels must not ship sample emails");
+assert(accessViewSource.includes("is-grok"), "Grok icon keeps its brand class");
+assert(accessViewSource.includes("is-anthropic"), "Anthropic icon keeps its brand class");
+const accessLiteralSource = accessViewSource + unsupportedSource + subscriptionAuthSource;
+assert(!/example\.(com|org)/.test(accessLiteralSource), "access UI must not ship sample accounts");
+assert(!/developer@|team@|personal@|work@/.test(accessLiteralSource), "access UI must not ship sample emails");
+assert(!/\beyJ[A-Za-z0-9_-]{8,}\./.test(accessLiteralSource), "access UI must not ship JWT literals");
+assert(!/\bsk-(?:ant-|proj-)?[A-Za-z0-9]{12,}/.test(accessLiteralSource), "access UI must not ship sample API key literals");
 assert(unsupportedSource.includes("添加授权"), "codex/claude keep the screenshot add-auth action");
 assert(unsupportedSource.includes("暂无授权账号"), "codex/claude use empty account state");
 assert(!unsupportedSource.includes("@click"), "codex/claude auth actions stay unwired");
@@ -1310,6 +1378,15 @@ const requiredLocaleSources = new Set([
   "跟随系统",
   "删除模型配置",
   "确定删除「{0}」吗？删除后需要保存本页才会写入配置。",
+  "Codex 接入",
+  "Grok 接入",
+  "Anthropic 接入",
+  "静态 API key",
+  "ChatGPT / Codex 订阅",
+  "Grok 订阅",
+  "导入 auth.json",
+  "设备码授权",
+  "凭据来源",
 ]);
 const zhBySource = new Map(Object.entries(zhMessages).map(([id, source]) => [source, id]));
 for (const source of requiredLocaleSources) {

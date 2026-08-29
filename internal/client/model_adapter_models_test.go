@@ -1,13 +1,22 @@
 package client
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"cursor/internal/subscriptionauth"
+
+	serverconfig "cursor/internal/backend/server/config"
 )
 
 func TestBuildModelListEndpointCandidates(t *testing.T) {
@@ -338,6 +347,8 @@ func TestFetchModelAdapterModelsRejectsInvalidInput(t *testing.T) {
 		{name: "未知类型", request: ModelAdapterModelsRequest{Type: "gemini", BaseURL: "https://x.com", APIKey: "k"}},
 		{name: "缺少地址", request: ModelAdapterModelsRequest{Type: "openai", APIKey: "k"}},
 		{name: "缺少密钥", request: ModelAdapterModelsRequest{Type: "openai", BaseURL: "https://x.com"}},
+		{name: "static 缺少密钥", request: ModelAdapterModelsRequest{Type: "openai", BaseURL: "https://x.com", CredentialSource: "static"}},
+		{name: "非法 credentialSource", request: ModelAdapterModelsRequest{Type: "openai", BaseURL: "https://x.com", APIKey: "k", CredentialSource: "vault"}},
 	}
 
 	service := &ProxyService{}
@@ -347,5 +358,322 @@ func TestFetchModelAdapterModelsRejectsInvalidInput(t *testing.T) {
 				t.Fatal("期望返回错误，实际为 nil")
 			}
 		})
+	}
+}
+
+func TestMain(m *testing.M) {
+	previous := modelListHTTPDo
+	modelListHTTPDo = func(req *http.Request) (*http.Response, error) {
+		if req != nil && req.URL != nil && strings.EqualFold(req.URL.Host, "chatgpt.com") {
+			return nil, errors.New("real chatgpt.com model list request is forbidden in tests")
+		}
+		return previous(req)
+	}
+	code := m.Run()
+	modelListHTTPDo = previous
+	os.Exit(code)
+}
+
+func stubModelListHTTPDo(t *testing.T, doer func(*http.Request) (*http.Response, error)) {
+	t.Helper()
+	previous := modelListHTTPDo
+	modelListHTTPDo = doer
+	t.Cleanup(func() { modelListHTTPDo = previous })
+}
+
+func stubCodexModelListURL(t *testing.T, endpoint string) {
+	t.Helper()
+	previous := codexModelListURL
+	codexModelListURL = endpoint
+	t.Cleanup(func() { codexModelListURL = previous })
+}
+
+func stubModelAdapterCredential(t *testing.T, cred subscriptionauth.Credential, resolveErr error) {
+	stubModelAdapterCredentialForSource(t, "", cred, resolveErr)
+}
+
+func stubModelAdapterCredentialForSource(t *testing.T, want subscriptionauth.CredentialSource, cred subscriptionauth.Credential, resolveErr error) {
+	t.Helper()
+	previous := resolveModelAdapterCredential
+	resolveModelAdapterCredential = func(_ *ProxyService, _ context.Context, source subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
+		if want != "" && source != want {
+			t.Errorf("Resolve source = %q, want %q", source, want)
+		}
+		return cred, resolveErr
+	}
+	t.Cleanup(func() { resolveModelAdapterCredential = previous })
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+func TestFetchModelAdapterModelsCodexUsesFixedURLAndFilters(t *testing.T) {
+	const token = "codex-access-token-secret"
+	var gotURL string
+	var gotAuth string
+	var gotOriginator string
+	var gotAccountID string
+	var gotXAIHeader string
+
+	stubModelAdapterCredentialForSource(t, subscriptionauth.CredentialSourceCodex, subscriptionauth.Credential{
+		AccessToken:      token,
+		ChatGPTAccountID: "acct-fixture",
+	}, nil)
+	stubModelListHTTPDo(t, func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		gotAuth = req.Header.Get("Authorization")
+		gotOriginator = req.Header.Get("originator")
+		gotAccountID = req.Header.Get("ChatGPT-Account-Id")
+		gotXAIHeader = req.Header.Get("x-xai-token-auth")
+		return jsonResponse(http.StatusOK, `{
+			"models": [
+				{"id": "gpt-5.1", "name": "GPT-5.1", "slug": "gpt-5-1", "supported_in_api": true, "visibility": "list"},
+				{"id": "internal-only", "supported_in_api": false, "visibility": "list"},
+				{"id": "hidden-model", "supported_in_api": true, "visibility": "hidden"},
+				{"name": "codex-name-only", "visibility": "list"},
+				{"slug": "codex-slug-only", "visibility": "list"}
+			]
+		}`), nil
+	})
+
+	service := &ProxyService{}
+	result, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "codex",
+	})
+	if err != nil {
+		t.Fatalf("FetchModelAdapterModels 返回错误：%v", err)
+	}
+
+	if gotURL != defaultCodexModelListURL {
+		t.Fatalf("Codex discovery URL = %q, want %q", gotURL, defaultCodexModelListURL)
+	}
+	if gotAuth != "Bearer "+token {
+		t.Fatalf("Authorization = %q, want Bearer <resolved token>", gotAuth)
+	}
+	if gotOriginator != "codex_cli_rs" {
+		t.Fatalf("originator = %q, want codex_cli_rs", gotOriginator)
+	}
+	if gotAccountID != "acct-fixture" {
+		t.Fatalf("ChatGPT-Account-Id = %q, want acct-fixture", gotAccountID)
+	}
+	if gotXAIHeader != "" {
+		t.Fatalf("Codex discovery 不应发送 x-xai-token-auth，实际 = %q", gotXAIHeader)
+	}
+	want := []string{"codex-name-only", "codex-slug-only", "gpt-5.1"}
+	if !reflect.DeepEqual(result.Models, want) {
+		t.Fatalf("Models = %v, want %v", result.Models, want)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(token)) {
+		t.Fatalf("模型列表结果泄漏了临时 token：%s", encoded)
+	}
+}
+
+func TestFetchModelAdapterModelsCodexRequiresInjectedHelper(t *testing.T) {
+	stubModelAdapterCredentialForSource(t, subscriptionauth.CredentialSourceCodex, subscriptionauth.Credential{
+		AccessToken:      "tok",
+		ChatGPTAccountID: "acct-fixture",
+	}, nil)
+	service := &ProxyService{}
+	_, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "codex",
+	})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("未注入 helper 时应拒绝真实 chatgpt.com 请求，实际 = %v", err)
+	}
+}
+
+func TestFetchModelAdapterModelsCodexRequiresAccountID(t *testing.T) {
+	httpCalled := false
+	stubModelAdapterCredentialForSource(t, subscriptionauth.CredentialSourceCodex, subscriptionauth.Credential{
+		AccessToken: "tok",
+	}, nil)
+	stubModelListHTTPDo(t, func(*http.Request) (*http.Response, error) {
+		httpCalled = true
+		return jsonResponse(http.StatusOK, `{"models":[{"id":"gpt-5.1","visibility":"list"}]}`), nil
+	})
+	service := &ProxyService{}
+	_, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "codex",
+	})
+	if httpCalled {
+		t.Fatal("缺少 ChatGPT-Account-Id 时不应发出 HTTP 请求")
+	}
+	if err == nil || !strings.Contains(err.Error(), "ChatGPT-Account-Id") {
+		t.Fatalf("期望非空 ChatGPT-Account-Id 错误，实际 = %v", err)
+	}
+}
+
+func TestFetchModelAdapterModelsCodexUsesInjectedEndpoint(t *testing.T) {
+	const token = "codex-injected-endpoint-token"
+	var gotPath string
+	var gotAuth string
+	var gotOriginator string
+	var gotAccountID string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.String()
+		gotAuth = r.Header.Get("Authorization")
+		gotOriginator = r.Header.Get("originator")
+		gotAccountID = r.Header.Get("ChatGPT-Account-Id")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-injected","supported_in_api":true,"visibility":"list"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	stubCodexModelListURL(t, server.URL+"/backend-api/codex/models?client_version=1.0.0")
+	stubModelAdapterCredentialForSource(t, subscriptionauth.CredentialSourceCodex, subscriptionauth.Credential{
+		AccessToken:      token,
+		ChatGPTAccountID: "acct-injected",
+	}, nil)
+
+	service := &ProxyService{}
+	result, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "codex",
+	})
+	if err != nil {
+		t.Fatalf("FetchModelAdapterModels 返回错误：%v", err)
+	}
+	if gotPath != "/backend-api/codex/models?client_version=1.0.0" {
+		t.Fatalf("注入 endpoint 路径 = %q, want /backend-api/codex/models?client_version=1.0.0", gotPath)
+	}
+	if gotAuth != "Bearer "+token {
+		t.Fatalf("Authorization = %q, want Bearer <resolved token>", gotAuth)
+	}
+	if gotOriginator != "codex_cli_rs" {
+		t.Fatalf("originator = %q, want codex_cli_rs", gotOriginator)
+	}
+	if gotAccountID != "acct-injected" {
+		t.Fatalf("ChatGPT-Account-Id = %q, want acct-injected", gotAccountID)
+	}
+	want := []string{"gpt-injected"}
+	if !reflect.DeepEqual(result.Models, want) {
+		t.Fatalf("Models = %v, want %v", result.Models, want)
+	}
+}
+
+func TestFetchModelAdapterModelsGrokUsesBaseURLWithoutXAIHeader(t *testing.T) {
+	const token = "grok-access-token-secret"
+	var gotPath string
+	var gotAuth string
+	var gotXAIHeader string
+	var gotOriginator string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotXAIHeader = r.Header.Get("x-xai-token-auth")
+		gotOriginator = r.Header.Get("originator")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"grok-4"},{"id":"grok-3"}]}`))
+	}))
+	defer server.Close()
+
+	stubModelAdapterCredentialForSource(t, subscriptionauth.CredentialSourceGrok, subscriptionauth.Credential{AccessToken: token}, nil)
+	service := &ProxyService{}
+	result, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		BaseURL:          server.URL + "/v1",
+		CredentialSource: "grok",
+	})
+	if err != nil {
+		t.Fatalf("FetchModelAdapterModels 返回错误：%v", err)
+	}
+	if gotPath != "/v1/models" {
+		t.Fatalf("Grok 请求路径 = %q, want /v1/models", gotPath)
+	}
+	if gotAuth != "Bearer "+token {
+		t.Fatalf("Authorization = %q, want Bearer <resolved token>", gotAuth)
+	}
+	if gotXAIHeader != "" {
+		t.Fatalf("Grok discovery 不应发送 x-xai-token-auth，实际 = %q", gotXAIHeader)
+	}
+	if gotOriginator != "" {
+		t.Fatalf("Grok discovery 不应发送 originator，实际 = %q", gotOriginator)
+	}
+	want := []string{"grok-3", "grok-4"}
+	if !reflect.DeepEqual(result.Models, want) {
+		t.Fatalf("Models = %v, want %v", result.Models, want)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if bytes.Contains(encoded, []byte(token)) {
+		t.Fatalf("模型列表结果泄漏了临时 token：%s", encoded)
+	}
+}
+
+func TestFetchModelAdapterModelsManagedWithoutResolverFails(t *testing.T) {
+	service := &ProxyService{}
+	_, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		BaseURL:          "https://api.x.ai/v1",
+		CredentialSource: "grok",
+	})
+	if err == nil || !strings.Contains(err.Error(), "订阅认证服务未初始化") {
+		t.Fatalf("期望订阅认证未初始化错误，实际 = %v", err)
+	}
+}
+
+func TestFetchModelAdapterModelsGrokRequiresBaseURL(t *testing.T) {
+	service := &ProxyService{}
+	_, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "grok",
+	})
+	if err == nil || !strings.Contains(err.Error(), "接口地址不能为空") {
+		t.Fatalf("Grok 缺少 baseURL 时期望地址错误，实际 = %v", err)
+	}
+}
+
+func TestExtractCodexModelIDsPrefersIDThenNameThenSlug(t *testing.T) {
+	payload := map[string]any{
+		"models": []any{
+			map[string]any{"id": "id-1", "name": "name-1", "slug": "slug-1", "visibility": "list"},
+			map[string]any{"name": "name-2", "slug": "slug-2", "visibility": "list"},
+			map[string]any{"slug": "slug-3", "visibility": "list"},
+			map[string]any{"id": "dropped", "supported_in_api": false, "visibility": "list"},
+			map[string]any{"id": "not-listed", "visibility": "unlisted"},
+		},
+	}
+	got := normalizeFetchedModelIDs(extractCodexModelIDs(payload))
+	want := []string{"id-1", "name-2", "slug-3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("extractCodexModelIDs = %v, want %v", got, want)
+	}
+}
+
+func TestModelAdapterTestRequestIDUsesQuotaSkipPrefix(t *testing.T) {
+	adapter := serverconfig.ModelAdapterConfig{
+		DisplayName:      "Managed Codex",
+		Type:             "openai",
+		BaseURL:          "https://example.test/v1",
+		CredentialSource: "codex",
+		TooltipData:      "备注",
+		ModelID:          "gpt-5.1",
+	}
+	requestID := modelAdapterTestRequestID(adapter)
+	if !strings.HasPrefix(requestID, modelAdapterTestRequestIDPrefix) {
+		t.Fatalf("requestID = %q, want prefix %q", requestID, modelAdapterTestRequestIDPrefix)
+	}
+	cred := subscriptionauth.Credential{AccessToken: "managed-test-token-secret"}
+	if got := modelAdapterTestRuntimeAPIKey(adapter, cred); got != cred.AccessToken {
+		t.Fatalf("runtime API key = %q, want resolved token", got)
+	}
+	if adapter.APIKey != "" {
+		t.Fatalf("adapter.APIKey 被写回：%q", adapter.APIKey)
 	}
 }

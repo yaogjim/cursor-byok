@@ -120,11 +120,19 @@ const modelOptions = computed(() => availableModelIDs.value.map((modelID) => ({
   value: modelID,
   icon: "icon-[mdi--cube-outline]",
 })));
-const canFetchModels = computed(() => Boolean(
-  draft.type
-  && String(draft.baseURL || "").trim()
-  && (isManagedCredentialSource(draft.credentialSource) || String(draft.apiKey || "").trim()),
-));
+const canFetchModels = computed(() => {
+  const source = String(draft.credentialSource || "").trim().toLowerCase();
+  const hasType = Boolean(draft.type);
+  const hasBaseURL = Boolean(String(draft.baseURL || "").trim());
+  const hasKey = Boolean(String(draft.apiKey || "").trim());
+  if (!hasType) {
+    return false;
+  }
+  if (source === "codex") {
+    return true;
+  }
+  return hasBaseURL && (isManagedCredentialSource(draft.credentialSource) || hasKey);
+});
 const isManagedCredential = computed(() => isManagedCredentialSource(draft.credentialSource));
 const selectedTestAdapter = computed(() => normalizeModelAdapter(draft));
 const currentRequestHash = computed(() => buildModelAdapterTestRequestHash(selectedTestAdapter.value));
@@ -166,7 +174,7 @@ const fieldTips = {
   displayName: "仅用于界面展示，便于你区分不同模型。",
   modelID: "可以直接输入模型标识，或从服务端返回的列表中选择。",
   baseURL: "模型服务的 API 根地址，通常为兼容 OpenAI 或 Anthropic 的接口入口。",
-  apiKey: "调用该模型服务需要使用的访问密钥。订阅认证渠道请改用接入中心下方的上游订阅认证，不要把 token 填到这里。",
+  apiKey: "调用该模型服务需要使用的访问密钥。订阅认证渠道请前往接入中心对应的 Codex 或 Grok 页面管理，不要把 token 填到这里。",
   credentialSource: "静态 API key 使用本页密钥；Codex / Grok 订阅从本机认证副本解析，不会写入 config.yaml。",
   contextWindowTokens: "模型单次可接受的最大上下文 Token 数。留空时使用默认值。",
   reasoningEffort: "仅当模型支持 reasoning_effort 时才选择推理强度；选择“不设置”后，请求不会携带该参数。越高通常越稳，但也可能更慢。",
@@ -192,7 +200,9 @@ function currentModelIDOptions() {
 async function refreshModelList() {
   const baseURL = String(draft.baseURL || "").trim();
   const apiKey = String(draft.apiKey || "").trim();
-  if (!baseURL || !apiKey || !draft.type) {
+  const credentialSource = draft.credentialSource;
+  const isCodex = String(credentialSource || "").trim().toLowerCase() === "codex";
+  if (!draft.type || (!isCodex && !baseURL) || !(isManagedCredentialSource(credentialSource) || apiKey)) {
     modelListRequestSeq.value += 1;
     availableModelIDs.value = currentModelIDOptions();
     modelListLoading.value = false;
@@ -208,7 +218,8 @@ async function refreshModelList() {
     const models = await fetchAvailableModelIDs({
       type: draft.type,
       baseURL,
-      apiKey,
+      apiKey: isManagedCredentialSource(credentialSource) ? "" : apiKey,
+      credentialSource,
       customHeadersEnabled: draft.customHeadersEnabled,
       customHeadersJSON: draft.customHeadersJSON,
     });
@@ -377,12 +388,13 @@ watch(
 );
 
 watch(
-  () => [draft.type, draft.baseURL, draft.apiKey, draft.customHeadersEnabled, draft.customHeadersJSON],
+  () => [draft.type, draft.baseURL, draft.apiKey, draft.credentialSource, draft.customHeadersEnabled, draft.customHeadersJSON],
   () => {
     window.clearTimeout(modelListDebounceTimer);
     const baseURL = String(draft.baseURL || "").trim();
     const apiKey = String(draft.apiKey || "").trim();
-    if (!baseURL || !apiKey) {
+    const isCodex = String(draft.credentialSource || "").trim().toLowerCase() === "codex";
+    if ((!isCodex && !baseURL) || !(isManagedCredentialSource(draft.credentialSource) || apiKey)) {
       modelListRequestSeq.value += 1;
       modelListLoading.value = false;
       availableModelIDs.value = currentModelIDOptions();
@@ -599,7 +611,7 @@ watch(
             />
           </label>
           <p v-else class="note plain md:col-span-2">
-            该渠道使用接入中心下方的上游订阅认证，不会把 token 写入 config.yaml。
+            该渠道使用接入中心对应的 Codex 或 Grok 授权，不会把 token 写入 config.yaml。
           </p>
 
           <label class="flex flex-col gap-1">
