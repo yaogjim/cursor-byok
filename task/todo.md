@@ -21,9 +21,9 @@
 - 用户要求汇总更新情况作为 git 提交说明（版本号 `0.0.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
 - 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.4.md` 对齐到 `0.0.52.4`；保留构建前已有的工作树改动。
 - 本版本新增 Gateway 可用性测试（启动后自动本机 HTTP 探测 `/v1/models`，卡片展示入口状态、模型数量与延迟）、token 复制/轮换改用 Wails 原生剪贴板、极简使用引导；managed Codex 请求体白名单 fail-closed 剥离 `previous_response_id`，static OpenAI 保留原请求体。
-- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 与 `SHA256SUMS` 见下文验证记录（编译完成后回填）。
-- 已提交并 push；未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效（`codesign --verify --deep --strict` OK）；`hdiutil verify` VALID；SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`；`SHA256SUMS` 校验通过。
+- 已提交并 push（提交 `9c4db4f`）；未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release。
 
 **subscription-account-list-modal-fix-20260829** (completed, verified-partial)
 - 修复 Codex/Grok 多账号列表在固定高度卡片中被裁切的问题：账号列表成为独立纵向滚动区，卡片标题和底部操作栏保持可见。

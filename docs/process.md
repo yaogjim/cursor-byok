@@ -159,7 +159,7 @@ Gateway 接入卡片新增「测试可用性」：启动 Gateway 后自动对本
 
 managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_response_id`：该 ID 与签发它的 ChatGPT 账号绑定，托管场景无法验证归属，按 fail-closed 剥离；static OpenAI Responses 保持原请求体不变。回归覆盖 managed 剥离与 static 保留两条路径。订阅模型测试改为可注入的 stream 函数，验证 Codex/Grok 固定上游归一化后凭据元数据正确注入且不写回原 adapter。
 
-验证结果以 `task/todo.md` 的 `macos-build-0.0.52.4-20260829` 为准；构建产物校验信息见该条目。
+验证结果以 `task/todo.md` 的 `macos-build-0.0.52.4-20260829` 为准。使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）；应用短版本与 bundle 版本均为 `0.0.52.4`，最低 macOS `10.15.0`，Mach-O arm64，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`，`SHA256SUMS` 校验通过。已提交（`9c4db4f`）并 push 到 `gateway` 分支。未做 Developer ID 签名或 notarization，未构建 Intel 包，未发布 GitHub Release。
 
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
