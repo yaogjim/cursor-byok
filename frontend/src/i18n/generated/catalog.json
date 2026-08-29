@@ -7,7 +7,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 246,
+          "line": 345,
           "column": 14
         }
       ]
@@ -19,19 +19,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 178,
-          "column": 13
-        }
-      ]
-    },
-    "0121088ad0f8d841": {
-      "source": "已清除 Codex 认证副本",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 154,
+          "line": 216,
           "column": 13
         }
       ]
@@ -55,7 +43,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 134,
+          "line": 149,
           "column": 21
         },
         {
@@ -77,7 +65,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1549,
+          "line": 1562,
           "column": 14
         }
       ]
@@ -101,7 +89,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 228,
+          "line": 266,
           "column": 33
         }
       ]
@@ -127,6 +115,18 @@
           "file": "src/components/ModelEditor.vue",
           "line": 578,
           "column": 21
+        }
+      ]
+    },
+    "03ba6aef490b0543": {
+      "source": "已清除全部 Codex 认证副本",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 253,
+          "column": 13
         }
       ]
     },
@@ -221,7 +221,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 541,
+          "line": 554,
           "column": 14
         }
       ]
@@ -250,12 +250,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 690,
+          "line": 691,
           "column": 15
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 718,
+          "line": 719,
           "column": 15
         }
       ]
@@ -267,7 +267,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 104,
+          "line": 107,
           "column": 12
         }
       ]
@@ -293,18 +293,6 @@
           "file": "src/views/Config.vue",
           "line": 115,
           "column": 1
-        }
-      ]
-    },
-    "06e6cbb9b5f10c0a": {
-      "source": "轮换后旧 token 立即失效。新 token 只会返回这一次，请立即复制。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 117,
-          "column": 14
         }
       ]
     },
@@ -392,7 +380,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 875,
+          "line": 877,
           "column": 25
         }
       ]
@@ -433,7 +421,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 896,
+          "line": 898,
           "column": 1
         }
       ]
@@ -479,18 +467,6 @@
         }
       ]
     },
-    "09efbb5af50af256": {
-      "source": "清除副本",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 361,
-          "column": 77
-        }
-      ]
-    },
     "0a98a48eaaac4175": {
       "source": "测试连接",
       "kind": "text",
@@ -527,7 +503,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 577,
+          "line": 590,
           "column": 14
         }
       ]
@@ -580,7 +556,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 146,
+          "line": 180,
           "column": 21
         },
         {
@@ -604,6 +580,18 @@
           "file": "src/views/Config.vue",
           "line": 281,
           "column": 11
+        }
+      ]
+    },
+    "0e778d78f6fb0a28": {
+      "source": "Gateway token 已轮换，但复制失败：{0}",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 146,
+          "column": 29
         }
       ]
     },
@@ -638,7 +626,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 201,
+          "line": 300,
           "column": 21
         }
       ]
@@ -722,7 +710,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 902,
+          "line": 904,
           "column": 1
         }
       ]
@@ -741,6 +729,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 321,
           "column": 19
+        }
+      ]
+    },
+    "145f5d232cc785f2": {
+      "source": "轮换后旧 token 立即失效，新 token 将自动复制。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 125,
+          "column": 14
         }
       ]
     },
@@ -799,7 +799,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 87,
+          "line": 91,
           "column": 14
         }
       ]
@@ -828,18 +828,6 @@
         }
       ]
     },
-    "165d089ba2a5a16c": {
-      "source": "Gateway token 已轮换，但复制被 WebView 拒绝",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 130,
-          "column": 31
-        }
-      ]
-    },
     "166eff44414383e6": {
       "source": "停止失败",
       "kind": "text",
@@ -847,7 +835,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 153,
+          "line": 189,
           "column": 21
         },
         {
@@ -869,7 +857,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 209,
+          "line": 247,
           "column": 13
         }
       ]
@@ -881,7 +869,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 133,
+          "line": 144,
           "column": 13
         }
       ]
@@ -893,7 +881,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 116,
+          "line": 124,
           "column": 12
         }
       ]
@@ -905,7 +893,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 392,
+          "line": 395,
           "column": 14
         }
       ]
@@ -917,7 +905,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1516,
+          "line": 1529,
           "column": 47
         },
         {
@@ -951,7 +939,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 118,
+          "line": 126,
           "column": 18
         }
       ]
@@ -963,7 +951,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 824,
+          "line": 826,
           "column": 75
         }
       ]
@@ -975,7 +963,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 245,
+          "line": 344,
           "column": 12
         }
       ]
@@ -987,7 +975,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 641,
+          "line": 642,
           "column": 15
         }
       ]
@@ -1047,7 +1035,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 853,
+          "line": 866,
           "column": 10
         }
       ]
@@ -1061,6 +1049,18 @@
           "file": "src/components/CursorAccountCard.vue",
           "line": 208,
           "column": 14
+        }
+      ]
+    },
+    "1c9af1986e83521a": {
+      "source": "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json、sub2api JSON 或设备码授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 80,
+          "column": 5
         }
       ]
     },
@@ -1100,7 +1100,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 301,
+          "line": 350,
           "column": 13
         }
       ]
@@ -1112,7 +1112,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 49,
+          "line": 52,
           "column": 12
         },
         {
@@ -1151,6 +1151,18 @@
         }
       ]
     },
+    "20e4f3ecbe8016a2": {
+      "source": "读取 sub2api 文件失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 210,
+          "column": 21
+        }
+      ]
+    },
     "210bb2a24afb47c2": {
       "source": "广告内容",
       "kind": "text",
@@ -1180,12 +1192,12 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 739,
+          "line": 741,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 418,
+          "line": 421,
           "column": 36
         }
       ]
@@ -1197,7 +1209,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 393,
+          "line": 513,
           "column": 16
         }
       ]
@@ -1221,7 +1233,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 110,
+          "line": 113,
           "column": 12
         }
       ]
@@ -1233,7 +1245,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 225,
+          "line": 324,
           "column": 21
         }
       ]
@@ -1245,7 +1257,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1925,
+          "line": 1938,
           "column": 32
         }
       ]
@@ -1257,22 +1269,22 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 947,
+          "line": 960,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1002,
+          "line": 1015,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 1708,
+          "line": 1721,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 1722,
+          "line": 1735,
           "column": 32
         }
       ]
@@ -1284,13 +1296,25 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 317,
+          "line": 436,
           "column": 47
         },
         {
           "file": "src/views/AccessView.vue",
           "line": 130,
           "column": 36
+        }
+      ]
+    },
+    "23c69071af882b68": {
+      "source": "导入所选账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 611,
+          "column": 1
         }
       ]
     },
@@ -1371,7 +1395,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1507,
+          "line": 1520,
           "column": 12
         }
       ]
@@ -1444,7 +1468,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 580,
+          "line": 593,
           "column": 14
         }
       ]
@@ -1468,7 +1492,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 85,
+          "line": 89,
           "column": 14
         }
       ]
@@ -1492,7 +1516,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 237,
+          "line": 336,
           "column": 21
         }
       ]
@@ -1504,7 +1528,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 156,
+          "line": 255,
           "column": 21
         }
       ]
@@ -1540,7 +1564,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 75,
+          "line": 78,
           "column": 64
         }
       ]
@@ -1552,7 +1576,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 271,
+          "line": 370,
           "column": 21
         }
       ]
@@ -1574,18 +1598,23 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 942,
+          "line": 944,
           "column": 89
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 145,
+          "line": 243,
           "column": 17
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 248,
+          "line": 347,
           "column": 17
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 605,
+          "column": 66
         },
         {
           "file": "src/components/ui/InputModal.vue",
@@ -1619,7 +1648,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1600,
+          "line": 1613,
           "column": 12
         },
         {
@@ -1663,6 +1692,18 @@
         }
       ]
     },
+    "2d83abdf55c24ffd": {
+      "source": "启用并保存 → 启动 Gateway → 将 Base URL 和 Token 填入客户端 → 模型填写上方公开别名。启动后会自动测试入口，也可点击“测试可用性”。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 375,
+          "column": 31
+        }
+      ]
+    },
     "2d89663a2bef8fdf": {
       "source": "状态更新于 {0}:{1}",
       "kind": "template",
@@ -1682,17 +1723,17 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 304,
+          "line": 353,
           "column": 1
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 247,
+          "line": 346,
           "column": 18
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 383,
+          "line": 503,
           "column": 94
         },
         {
@@ -1731,8 +1772,20 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 934,
+          "line": 936,
           "column": 13
+        }
+      ]
+    },
+    "30c51c7ef7df56ce": {
+      "source": "导入 sub2api 账号失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 232,
+          "column": 21
         }
       ]
     },
@@ -1755,7 +1808,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 274,
+          "line": 323,
           "column": 1
         }
       ]
@@ -1767,17 +1820,17 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 561,
+          "line": 574,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 567,
+          "line": 580,
           "column": 16
         },
         {
           "file": "src/state/appState.js",
-          "line": 573,
+          "line": 586,
           "column": 16
         }
       ]
@@ -1825,7 +1878,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 159,
+          "line": 197,
           "column": 13
         }
       ]
@@ -1895,7 +1948,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1589,
+          "line": 1602,
           "column": 14
         }
       ]
@@ -1931,7 +1984,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 119,
+          "line": 134,
           "column": 14
         }
       ]
@@ -2035,6 +2088,18 @@
         }
       ]
     },
+    "3a5040b68abf75f9": {
+      "source": "全选",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 572,
+          "column": 16
+        }
+      ]
+    },
     "3a81c3d9084e7d78": {
       "source": "上游请求的全局超时时间",
       "kind": "text",
@@ -2100,7 +2165,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 103,
+          "line": 106,
           "column": 12
         }
       ]
@@ -2112,7 +2177,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 526,
+          "line": 539,
           "column": 14
         }
       ]
@@ -2131,6 +2196,18 @@
           "file": "src/views/SettingsView.vue",
           "line": 240,
           "column": 16
+        }
+      ]
+    },
+    "3ca06a329886234b": {
+      "source": "导入 {0} sub2api JSON",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 181,
+          "column": 14
         }
       ]
     },
@@ -2221,7 +2298,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1546,
+          "line": 1559,
           "column": 5
         }
       ]
@@ -2245,8 +2322,20 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 337,
+          "line": 390,
           "column": 1
+        }
+      ]
+    },
+    "3f4ebc4aad9793b6": {
+      "source": "已选择",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 603,
+          "column": 68
         }
       ]
     },
@@ -2301,6 +2390,18 @@
         }
       ]
     },
+    "41b8a76f7f74d16e": {
+      "source": "极简使用：",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 375,
+          "column": 17
+        }
+      ]
+    },
     "420e83565eef4d09": {
       "source": "已删除 {0} 个 session，释放 {1}。",
       "kind": "template",
@@ -2330,6 +2431,18 @@
         }
       ]
     },
+    "42734df9a24bc705": {
+      "source": "· 已存在，将更新凭据",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 596,
+          "column": 59
+        }
+      ]
+    },
     "428fb8bfeecf7f91": {
       "source": "异常",
       "kind": "text",
@@ -2337,12 +2450,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 52,
+          "line": 55,
           "column": 12
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 91,
+          "line": 95,
           "column": 14
         },
         {
@@ -2470,7 +2583,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 851,
+          "line": 864,
           "column": 12
         },
         {
@@ -2499,12 +2612,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 591,
+          "line": 592,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 596,
+          "line": 597,
           "column": 15
         }
       ]
@@ -2545,7 +2658,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1564,
+          "line": 1577,
           "column": 43
         }
       ]
@@ -2557,7 +2670,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 538,
+          "line": 551,
           "column": 14
         }
       ]
@@ -2658,7 +2771,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 640,
+          "line": 641,
           "column": 15
         }
       ]
@@ -2672,6 +2785,18 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 156,
           "column": 5
+        }
+      ]
+    },
+    "4c966fe7e21aa203": {
+      "source": "只删除本应用保存的全部 Codex 认证副本，不会修改任何原始 auth.json。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 241,
+          "column": 14
         }
       ]
     },
@@ -2689,6 +2814,18 @@
           "file": "src/views/SettingsView.vue",
           "line": 34,
           "column": 12
+        }
+      ]
+    },
+    "4d243d3d9d63c310": {
+      "source": "项。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 569,
+          "column": 76
         }
       ]
     },
@@ -2723,7 +2860,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 178,
+          "line": 181,
           "column": 12
         }
       ]
@@ -2788,8 +2925,13 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 338,
+          "line": 457,
           "column": 36
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 603,
+          "column": 99
         }
       ]
     },
@@ -2896,12 +3038,24 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 321,
+          "line": 440,
           "column": 71
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 421,
+          "line": 552,
+          "column": 1
+        }
+      ]
+    },
+    "53ab58472060b34e": {
+      "source": "该渠道使用接入中心对应的 Codex 或 Grok 授权，并固定使用对应官方上游地址和协议端点；token 不会写入 config.yaml。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 615,
           "column": 1
         }
       ]
@@ -2915,6 +3069,30 @@
           "file": "src/views/SettingsView.vue",
           "line": 325,
           "column": 36
+        }
+      ]
+    },
+    "542de58a7e894dbd": {
+      "source": "OAuth 账号。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 568,
+          "column": 65
+        }
+      ]
+    },
+    "55201cc993977485": {
+      "source": "刷新账号用量失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 382,
+          "column": 21
         }
       ]
     },
@@ -2935,6 +3113,11 @@
       "kind": "text",
       "placeholders": 0,
       "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 535,
+          "column": 1
+        },
         {
           "file": "src/views/ModelConfig.vue",
           "line": 274,
@@ -2966,12 +3149,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 684,
+          "line": 685,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 712,
+          "line": 713,
           "column": 21
         }
       ]
@@ -2983,7 +3166,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 322,
+          "line": 371,
           "column": 59
         }
       ]
@@ -3036,7 +3219,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 399,
+          "line": 519,
           "column": 47
         }
       ]
@@ -3096,20 +3279,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 395,
+          "line": 398,
           "column": 12
-        }
-      ]
-    },
-    "59cf0d2a2cb29e63": {
-      "source": "管理 Grok / xAI 订阅授权与账号切换",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 78,
-          "column": 5
         }
       ]
     },
@@ -3161,7 +3332,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 45,
+          "line": 48,
           "column": 29
         }
       ]
@@ -3214,8 +3385,8 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 376,
-          "column": 18
+          "line": 103,
+          "column": 12
         }
       ]
     },
@@ -3274,7 +3445,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 186,
+          "line": 224,
           "column": 21
         },
         {
@@ -3303,6 +3474,18 @@
           "file": "src/views/ModelConfig.vue",
           "line": 457,
           "column": 32
+        }
+      ]
+    },
+    "604ec9cdda6e9434": {
+      "source": "选择要导入的 {0} 账号",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 560,
+          "column": 15
         }
       ]
     },
@@ -3388,7 +3571,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 132,
+          "line": 147,
           "column": 13
         }
       ]
@@ -3400,7 +3583,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1595,
+          "line": 1608,
           "column": 14
         }
       ]
@@ -3412,7 +3595,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 54,
+          "line": 57,
           "column": 10
         },
         {
@@ -3441,7 +3624,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 91,
+          "line": 99,
           "column": 21
         },
         {
@@ -3500,7 +3683,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 524,
+          "line": 537,
           "column": 20
         },
         {
@@ -3539,7 +3722,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 411,
+          "line": 414,
           "column": 14
         }
       ]
@@ -3563,7 +3746,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1505,
+          "line": 1518,
           "column": 14
         }
       ]
@@ -3587,7 +3770,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 532,
+          "line": 545,
           "column": 14
         }
       ]
@@ -3655,6 +3838,23 @@
         }
       ]
     },
+    "69495bd7577015b5": {
+      "source": "导入 sub2api",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 420,
+          "column": 1
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 545,
+          "column": 1
+        }
+      ]
+    },
     "6a5e0c5e6f6623f7": {
       "source": "该版本为必要更新，但下载仍需确认。",
       "kind": "text",
@@ -3662,7 +3862,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1538,
+          "line": 1551,
           "column": 9
         }
       ]
@@ -3674,7 +3874,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 609,
+          "line": 610,
           "column": 15
         }
       ]
@@ -3730,17 +3930,17 @@
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 63,
+          "line": 66,
           "column": 34
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 63,
+          "line": 66,
           "column": 52
         },
         {
           "file": "src/state/appState.js",
-          "line": 75,
+          "line": 76,
           "column": 31
         },
         {
@@ -3802,7 +4002,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 219,
+          "line": 257,
           "column": 33
         }
       ]
@@ -3855,7 +4055,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 311,
+          "line": 429,
           "column": 1
         },
         {
@@ -3908,12 +4108,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2054,
+          "line": 2067,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2074,
+          "line": 2087,
           "column": 32
         }
       ]
@@ -3968,6 +4168,18 @@
           "file": "src/components/ModelEditor.vue",
           "line": 426,
           "column": 12
+        }
+      ]
+    },
+    "71e95b289aad1f6a": {
+      "source": "已跳过",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 569,
+          "column": 46
         }
       ]
     },
@@ -4055,7 +4267,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1833,
+          "line": 1846,
           "column": 14
         }
       ]
@@ -4079,7 +4291,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 310,
+          "line": 359,
           "column": 1
         }
       ]
@@ -4103,7 +4315,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 856,
+          "line": 858,
           "column": 25
         }
       ]
@@ -4115,33 +4327,38 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 78,
-          "column": 21
-        },
-        {
-          "file": "src/components/GatewayCard.vue",
           "line": 82,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 101,
+          "line": 87,
           "column": 23
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 105,
-          "column": 23
-        },
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 110,
+          "line": 92,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 130,
+          "line": 109,
           "column": 23
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 113,
+          "column": 23
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 118,
+          "column": 21
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 146,
+          "column": 21
         },
         {
           "file": "src/views/ModelConfig.vue",
@@ -4174,7 +4391,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 195,
+          "line": 294,
           "column": 21
         }
       ]
@@ -4210,7 +4427,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 234,
+          "line": 272,
           "column": 23
         }
       ]
@@ -4222,12 +4439,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 301,
+          "line": 412,
           "column": 1
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 414,
+          "line": 542,
           "column": 1
         }
       ]
@@ -4268,7 +4485,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 326,
+          "line": 445,
+          "column": 1
+        },
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 494,
           "column": 1
         }
       ]
@@ -4280,7 +4502,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 816,
+          "line": 818,
           "column": 13
         }
       ]
@@ -4292,7 +4514,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 89,
+          "line": 93,
           "column": 14
         }
       ]
@@ -4340,7 +4562,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 399,
+          "line": 519,
           "column": 1
         }
       ]
@@ -4363,18 +4585,28 @@
       "placeholders": 0,
       "refs": [
         {
+          "file": "src/components/GatewayCard.vue",
+          "line": 155,
+          "column": 27
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 291,
+          "column": 18
+        },
+        {
           "file": "src/components/ModelAdapterTestCard.vue",
           "line": 44,
           "column": 12
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 944,
+          "line": 946,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 275,
+          "line": 278,
           "column": 12
         },
         {
@@ -4437,7 +4669,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 339,
+          "line": 458,
           "column": 14
         }
       ]
@@ -4449,7 +4681,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 357,
+          "line": 410,
           "column": 1
         },
         {
@@ -4498,6 +4730,18 @@
         }
       ]
     },
+    "7d9ce4d68b294285": {
+      "source": "Gateway 可用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 166,
+          "column": 13
+        }
+      ]
+    },
     "7df7641e5e741346": {
       "source": "缓存读取 /（缓存读取 + 缓存创建 + 非缓存输入）",
       "kind": "text",
@@ -4522,6 +4766,18 @@
         }
       ]
     },
+    "7ebc0c7c5b56f617": {
+      "source": "测试失败：{0}",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 159,
+          "column": 31
+        }
+      ]
+    },
     "7f68ebad19ba6bcd": {
       "source": "检查更新",
       "kind": "text",
@@ -4534,7 +4790,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1570,
+          "line": 1583,
           "column": 16
         }
       ]
@@ -4611,12 +4867,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 93,
+          "line": 97,
           "column": 14
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 406,
+          "line": 526,
           "column": 14
         },
         {
@@ -4645,7 +4901,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 603,
+          "line": 604,
           "column": 21
         }
       ]
@@ -4746,7 +5002,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 650,
+          "line": 651,
           "column": 25
         }
       ]
@@ -4770,13 +5026,18 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 101,
+          "line": 109,
           "column": 31
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 126,
+          "line": 113,
           "column": 31
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 139,
+          "column": 29
         }
       ]
     },
@@ -4804,7 +5065,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1502,
+          "line": 1515,
           "column": 14
         }
       ]
@@ -4900,7 +5161,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 196,
+          "line": 234,
           "column": 34
         },
         {
@@ -4939,18 +5200,6 @@
         }
       ]
     },
-    "8d013702beb4468a": {
-      "source": "该渠道使用接入中心对应的 Codex 或 Grok 授权，不会把 token 写入 config.yaml。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/ModelEditor.vue",
-          "line": 614,
-          "column": 1
-        }
-      ]
-    },
     "8d1de152be6360ce": {
       "source": "有效占比：{0}",
       "kind": "template",
@@ -4960,18 +5209,6 @@
           "file": "src/components/HomeMetricsCard.vue",
           "line": 169,
           "column": 5
-        }
-      ]
-    },
-    "8d43c7751461744d": {
-      "source": "· 剩余",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 378,
-          "column": 54
         }
       ]
     },
@@ -5006,7 +5243,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 221,
+          "line": 320,
           "column": 13
         }
       ]
@@ -5095,8 +5332,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 556,
+          "line": 569,
           "column": 14
+        }
+      ]
+    },
+    "90e01d5899348f77": {
+      "source": "文件中没有可导入的 {0} OAuth 账号",
+      "kind": "template",
+      "placeholders": 1,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 195,
+          "column": 15
         }
       ]
     },
@@ -5119,12 +5368,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 360,
+          "line": 413,
           "column": 14
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 947,
+          "line": 949,
           "column": 12
         },
         {
@@ -5221,7 +5470,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 336,
+          "line": 455,
           "column": 48
         },
         {
@@ -5238,8 +5487,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 733,
+          "line": 746,
           "column": 44
+        }
+      ]
+    },
+    "9351c311f11517b7": {
+      "source": "清除全部 Codex 认证副本",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 240,
+          "column": 12
         }
       ]
     },
@@ -5262,7 +5523,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 633,
+          "line": 634,
           "column": 21
         }
       ]
@@ -5298,7 +5559,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 245,
+          "line": 283,
           "column": 1
         },
         {
@@ -5363,8 +5624,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1566,
+          "line": 1579,
           "column": 16
+        }
+      ]
+    },
+    "983f23ea86b3500c": {
+      "source": "可添加、激活、刷新或删除 Codex 授权账号",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 458,
+          "column": 14
         }
       ]
     },
@@ -5375,12 +5648,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2017,
+          "line": 2030,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2037,
+          "line": 2050,
           "column": 32
         }
       ]
@@ -5392,7 +5665,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 288,
+          "line": 337,
           "column": 1
         }
       ]
@@ -5409,15 +5682,15 @@
         }
       ]
     },
-    "9970736b36ff2b68": {
-      "source": "模型服务的 API 根地址，通常为兼容 OpenAI 或 Anthropic 的接口入口。",
+    "9a0463d886ce0b04": {
+      "source": "测试可用性",
       "kind": "text",
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/ModelEditor.vue",
-          "line": 176,
-          "column": 12
+          "file": "src/components/GatewayCard.vue",
+          "line": 291,
+          "column": 18
         }
       ]
     },
@@ -5493,18 +5766,6 @@
         }
       ]
     },
-    "9c3345812af520d9": {
-      "source": "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json 或设备码授权",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 77,
-          "column": 5
-        }
-      ]
-    },
     "9c41b3a9e12ac994": {
       "source": "思考强度",
       "kind": "text",
@@ -5512,7 +5773,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 698,
+          "line": 699,
           "column": 21
         }
       ]
@@ -5536,7 +5797,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 333,
+          "line": 386,
           "column": 1
         }
       ]
@@ -5548,7 +5809,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1598,
+          "line": 1611,
           "column": 14
         }
       ]
@@ -5606,7 +5867,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 584,
+          "line": 597,
           "column": 14
         }
       ]
@@ -5683,7 +5944,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 550,
+          "line": 563,
           "column": 14
         }
       ]
@@ -5695,12 +5956,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1525,
+          "line": 1538,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1581,
+          "line": 1594,
           "column": 87
         }
       ]
@@ -5712,7 +5973,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 848,
+          "line": 861,
           "column": 12
         }
       ]
@@ -5724,7 +5985,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 271,
+          "line": 320,
           "column": 1
         }
       ]
@@ -5736,12 +5997,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 126,
-          "column": 23
+          "line": 135,
+          "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 135,
+          "line": 139,
           "column": 21
         }
       ]
@@ -5770,8 +6031,20 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 947,
+          "line": 949,
           "column": 12
+        }
+      ]
+    },
+    "a321126697c2fcd8": {
+      "source": "Gateway 测试失败",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 160,
+          "column": 23
         }
       ]
     },
@@ -5782,7 +6055,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1882,
+          "line": 1895,
           "column": 14
         },
         {
@@ -5891,6 +6164,18 @@
         }
       ]
     },
+    "a5f0381e9110f74b": {
+      "source": "已导入 {0} 个 {1} 账号",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 230,
+          "column": 13
+        }
+      ]
+    },
     "a693d69af48bfe48": {
       "source": "保存并测试",
       "kind": "text",
@@ -5898,7 +6183,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 944,
+          "line": 946,
           "column": 12
         }
       ]
@@ -5910,7 +6195,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 109,
+          "line": 112,
           "column": 12
         }
       ]
@@ -5922,7 +6207,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1586,
+          "line": 1599,
           "column": 14
         }
       ]
@@ -5934,7 +6219,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 391,
+          "line": 511,
           "column": 57
         },
         {
@@ -5951,7 +6236,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 905,
+          "line": 907,
           "column": 72
         }
       ]
@@ -5963,7 +6248,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 850,
+          "line": 852,
           "column": 1
         }
       ]
@@ -5980,7 +6265,7 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 620,
+          "line": 621,
           "column": 21
         }
       ]
@@ -5992,7 +6277,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 108,
+          "line": 111,
           "column": 12
         }
       ]
@@ -6060,7 +6345,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 83,
+          "line": 87,
           "column": 14
         }
       ]
@@ -6072,8 +6357,13 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 78,
+          "line": 82,
           "column": 29
+        },
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 87,
+          "column": 31
         }
       ]
     },
@@ -6108,7 +6398,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1564,
+          "line": 1577,
           "column": 54
         }
       ]
@@ -6122,35 +6412,6 @@
           "file": "src/layouts/MainLayout.vue",
           "line": 261,
           "column": 13
-        }
-      ]
-    },
-    "ac43327f9f81928a": {
-      "source": "可导入现有 auth.json 或重新进行设备授权",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 339,
-          "column": 14
-        }
-      ]
-    },
-    "acd98300a886a3d7": {
-      "source": "复制被 WebView 拒绝",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 82,
-          "column": 29
-        },
-        {
-          "file": "src/components/GatewayCard.vue",
-          "line": 105,
-          "column": 31
         }
       ]
     },
@@ -6270,6 +6531,18 @@
         }
       ]
     },
+    "aff5029eb3338510": {
+      "source": "Gateway 未运行",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/state/appState.js",
+          "line": 2104,
+          "column": 32
+        }
+      ]
+    },
     "b0059377f9c041f8": {
       "source": "统计重置正在进行",
       "kind": "text",
@@ -6277,20 +6550,8 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1997,
+          "line": 2010,
           "column": 32
-        }
-      ]
-    },
-    "b0b41bc39065d1bb": {
-      "source": "只删除本应用保存的认证副本，不会修改 ~/.codex/auth.json。",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 143,
-          "column": 14
         }
       ]
     },
@@ -6376,22 +6637,22 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 141,
+          "line": 175,
           "column": 13
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 253,
+          "line": 299,
           "column": 1
         },
         {
           "file": "src/state/appState.js",
-          "line": 2020,
+          "line": 2033,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2057,
+          "line": 2070,
           "column": 32
         },
         {
@@ -6408,7 +6669,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 836,
+          "line": 838,
           "column": 1
         }
       ]
@@ -6420,7 +6681,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 317,
+          "line": 366,
           "column": 34
         }
       ]
@@ -6480,7 +6741,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1539,
+          "line": 1552,
           "column": 9
         }
       ]
@@ -6504,7 +6765,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 639,
+          "line": 640,
           "column": 15
         }
       ]
@@ -6528,7 +6789,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 625,
+          "line": 626,
           "column": 15
         }
       ]
@@ -6540,7 +6801,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 831,
+          "line": 833,
           "column": 21
         }
       ]
@@ -6552,7 +6813,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 726,
+          "line": 727,
           "column": 21
         }
       ]
@@ -6641,7 +6902,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 659,
+          "line": 660,
           "column": 21
         }
       ]
@@ -6653,7 +6914,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 330,
+          "line": 449,
           "column": 1
         }
       ]
@@ -6689,7 +6950,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 144,
+          "line": 242,
           "column": 18
         }
       ]
@@ -6713,7 +6974,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 544,
+          "line": 557,
           "column": 14
         }
       ]
@@ -6785,7 +7046,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 259,
+          "line": 358,
           "column": 21
         },
         {
@@ -6819,7 +7080,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 184,
+          "line": 283,
           "column": 38
         }
       ]
@@ -6872,7 +7133,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 75,
+          "line": 78,
           "column": 51
         }
       ]
@@ -6896,7 +7157,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 281,
+          "line": 330,
           "column": 34
         }
       ]
@@ -6937,7 +7198,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 870,
+          "line": 872,
           "column": 81
         }
       ]
@@ -6954,18 +7215,6 @@
         }
       ]
     },
-    "c8c0c4014f352265": {
-      "source": "清除 Codex 认证副本",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 142,
-          "column": 12
-        }
-      ]
-    },
     "c8c14507b2d37395": {
       "source": "推理强度",
       "kind": "text",
@@ -6973,7 +7222,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 673,
+          "line": 674,
           "column": 21
         }
       ]
@@ -6990,17 +7239,17 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1854,
+          "line": 1867,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 1856,
+          "line": 1869,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 1890,
+          "line": 1903,
           "column": 93
         },
         {
@@ -7063,7 +7312,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1514,
+          "line": 1527,
           "column": 51
         },
         {
@@ -7121,8 +7370,8 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 85,
-          "column": 11
+          "line": 90,
+          "column": 13
         }
       ]
     },
@@ -7145,7 +7394,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 387,
+          "line": 390,
           "column": 12
         }
       ]
@@ -7193,7 +7442,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 357,
+          "line": 483,
           "column": 1
         }
       ]
@@ -7241,7 +7490,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 535,
+          "line": 548,
           "column": 14
         }
       ]
@@ -7253,7 +7502,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 59,
+          "line": 62,
           "column": 7
         }
       ]
@@ -7301,7 +7550,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1808,
+          "line": 1821,
           "column": 14
         },
         {
@@ -7330,12 +7579,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 278,
+          "line": 281,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 308,
+          "line": 311,
           "column": 50
         }
       ]
@@ -7359,7 +7608,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 45,
+          "line": 48,
           "column": 42
         }
       ]
@@ -7371,12 +7620,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 787,
+          "line": 789,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 401,
+          "line": 404,
           "column": 49
         }
       ]
@@ -7405,7 +7654,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1010,
+          "line": 1023,
           "column": 34
         }
       ]
@@ -7446,7 +7695,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 889,
+          "line": 891,
           "column": 81
         }
       ]
@@ -7506,7 +7755,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 355,
+          "line": 481,
           "column": 1
         }
       ]
@@ -7540,12 +7789,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 763,
+          "line": 765,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 422,
+          "line": 425,
           "column": 36
         }
       ]
@@ -7569,7 +7818,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 665,
+          "line": 666,
           "column": 15
         }
       ]
@@ -7605,7 +7854,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 197,
+          "line": 235,
           "column": 33
         }
       ]
@@ -7646,12 +7895,12 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 929,
+          "line": 931,
           "column": 19
         },
         {
           "file": "src/state/appState.js",
-          "line": 331,
+          "line": 334,
           "column": 18
         }
       ]
@@ -7675,7 +7924,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 529,
+          "line": 542,
           "column": 14
         }
       ]
@@ -7687,7 +7936,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1545,
+          "line": 1558,
           "column": 5
         }
       ]
@@ -7699,7 +7948,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 237,
+          "line": 275,
           "column": 1
         },
         {
@@ -7716,8 +7965,8 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 382,
-          "column": 114
+          "line": 501,
+          "column": 1
         }
       ]
     },
@@ -7728,7 +7977,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 360,
+          "line": 413,
           "column": 14
         }
       ]
@@ -7817,7 +8066,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1705,
+          "line": 1718,
           "column": 21
         }
       ]
@@ -7853,7 +8102,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 112,
+          "line": 127,
           "column": 21
         }
       ]
@@ -7867,6 +8116,18 @@
           "file": "src/state/configProjection.js",
           "line": 237,
           "column": 14
+        }
+      ]
+    },
+    "e3c7aee9a4965268": {
+      "source": "模型服务的 API 根地址。选择 Codex 或 Grok 订阅后，系统会固定使用对应的官方上游地址。",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/ModelEditor.vue",
+          "line": 176,
+          "column": 12
         }
       ]
     },
@@ -7937,7 +8198,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 283,
+          "line": 332,
           "column": 36
         }
       ]
@@ -7949,7 +8210,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1540,
+          "line": 1553,
           "column": 34
         }
       ]
@@ -7973,7 +8234,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 108,
+          "line": 116,
           "column": 13
         }
       ]
@@ -7997,7 +8258,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 297,
+          "line": 346,
           "column": 70
         }
       ]
@@ -8093,7 +8354,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1035,
+          "line": 1048,
           "column": 32
         }
       ]
@@ -8153,7 +8414,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 195,
+          "line": 294,
           "column": 67
         }
       ]
@@ -8165,7 +8426,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 184,
+          "line": 283,
           "column": 55
         }
       ]
@@ -8194,7 +8455,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 284,
+          "line": 287,
           "column": 10
         }
       ]
@@ -8223,8 +8484,20 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1568,
+          "line": 1581,
           "column": 16
+        }
+      ]
+    },
+    "ed01d4d85716736d": {
+      "source": "已按当前接入类型过滤，仅展示可导入的",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 568,
+          "column": 1
         }
       ]
     },
@@ -8271,7 +8544,7 @@
       "refs": [
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 810,
+          "line": 812,
           "column": 19
         }
       ]
@@ -8336,7 +8609,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 58,
+          "line": 61,
           "column": 7
         }
       ]
@@ -8365,7 +8638,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 393,
+          "line": 513,
           "column": 16
         }
       ]
@@ -8389,7 +8662,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 225,
+          "line": 263,
           "column": 33
         }
       ]
@@ -8486,6 +8759,18 @@
         }
       ]
     },
+    "f3c68647ea1e7f57": {
+      "source": "管理 Grok / xAI 订阅授权，支持导入 sub2api JSON 或设备码授权",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 81,
+          "column": 5
+        }
+      ]
+    },
     "f3f905f2853a4dba": {
       "source": "基本设置",
       "kind": "text",
@@ -8510,7 +8795,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 408,
+          "line": 411,
           "column": 14
         }
       ]
@@ -8522,7 +8807,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1516,
+          "line": 1529,
           "column": 38
         }
       ]
@@ -8539,6 +8824,18 @@
         }
       ]
     },
+    "f4d4bae588c4c0ff": {
+      "source": "取消全选",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 572,
+          "column": 16
+        }
+      ]
+    },
     "f4f0ead1116b5b62": {
       "source": "启用",
       "kind": "text",
@@ -8551,22 +8848,22 @@
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 747,
+          "line": 749,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 771,
+          "line": 773,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 795,
+          "line": 797,
           "column": 21
         },
         {
           "file": "src/components/ModelEditor.vue",
-          "line": 845,
+          "line": 847,
           "column": 21
         }
       ]
@@ -8709,13 +9006,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 547,
+          "line": 560,
           "column": 14
         },
         {
           "file": "src/state/appState.js",
-          "line": 553,
+          "line": 566,
           "column": 14
+        }
+      ]
+    },
+    "f66490fde04e2dd4": {
+      "source": "入口可用 · {0} 个公开模型 · {1} ms",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/components/GatewayCard.vue",
+          "line": 165,
+          "column": 29
         }
       ]
     },
@@ -8840,7 +9149,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1591,
+          "line": 1604,
           "column": 12
         }
       ]
@@ -8852,7 +9161,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1514,
+          "line": 1527,
           "column": 40
         },
         {
@@ -8876,6 +9185,18 @@
           "file": "src/views/SettingsView.vue",
           "line": 306,
           "column": 36
+        }
+      ]
+    },
+    "fcdd0cb01e3653f9": {
+      "source": "备用",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/components/SubscriptionAuthPanel.vue",
+          "line": 106,
+          "column": 12
         }
       ]
     },

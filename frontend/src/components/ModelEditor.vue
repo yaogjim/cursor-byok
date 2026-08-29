@@ -173,7 +173,7 @@ function ensureAnthropicExtraParamsJSON() {
 const fieldTips = {
   displayName: "仅用于界面展示，便于你区分不同模型。",
   modelID: "可以直接输入模型标识，或从服务端返回的列表中选择。",
-  baseURL: "模型服务的 API 根地址，通常为兼容 OpenAI 或 Anthropic 的接口入口。",
+  baseURL: "模型服务的 API 根地址。选择 Codex 或 Grok 订阅后，系统会固定使用对应的官方上游地址。",
   apiKey: "调用该模型服务需要使用的访问密钥。订阅认证渠道请前往接入中心对应的 Codex 或 Grok 页面管理，不要把 token 填到这里。",
   credentialSource: "静态 API key 使用本页密钥；Codex / Grok 订阅从本机认证副本解析，不会写入 config.yaml。",
   contextWindowTokens: "模型单次可接受的最大上下文 Token 数。留空时使用默认值。",
@@ -581,7 +581,8 @@ watch(
               v-model="draft.baseURL"
               type="text"
               :placeholder="interfacePlaceholder"
-              class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+              :disabled="isManagedCredential"
+              class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-70"
             />
           </label>
 
@@ -611,7 +612,7 @@ watch(
             />
           </label>
           <p v-else class="note plain md:col-span-2">
-            该渠道使用接入中心对应的 Codex 或 Grok 授权，不会把 token 写入 config.yaml。
+            该渠道使用接入中心对应的 Codex 或 Grok 授权，并固定使用对应官方上游地址和协议端点；token 不会写入 config.yaml。
           </p>
 
           <label class="flex flex-col gap-1">
@@ -728,6 +729,7 @@ watch(
             <Select
               v-model="draft.openAIEndpoint"
               :options="openAIEndpointOptions"
+              :disabled="isManagedCredential"
             />
           </label>
         </div>

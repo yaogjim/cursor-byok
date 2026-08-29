@@ -191,6 +191,12 @@ export function stopGatewayService() {
   );
 }
 
+export function testGatewayService() {
+  return withApiLogging("TestGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.TestGateway`),
+  );
+}
+
 export function getLogCaptureStatus() {
   return withApiLogging("GetLogCaptureStatus", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.GetLogCaptureStatus`),
@@ -344,5 +350,27 @@ export function deleteSubscriptionAccount(accountID) {
 export function refreshSubscriptionUsage(provider) {
   return withApiLogging("RefreshSubscriptionUsage", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.RefreshSubscriptionUsage`, provider),
+  );
+}
+
+export function refreshSubscriptionAccountUsage(provider, accountID) {
+  return withApiLogging("RefreshSubscriptionAccountUsage", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RefreshSubscriptionAccountUsage`, provider, accountID),
+  );
+}
+
+export function previewSub2APIImport(path, provider) {
+  return withApiLogging("PreviewSub2APIImport", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PreviewSub2APIImport`, path, provider),
+  );
+}
+
+export function importSub2APIAccounts(path, provider, accountIDs) {
+  return withApiLogging("ImportSub2APIAccounts", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ImportSub2APIAccounts`, {
+      path,
+      provider,
+      accountIds: Array.isArray(accountIDs) ? accountIDs : [],
+    }),
   );
 }

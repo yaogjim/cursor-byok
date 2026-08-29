@@ -2,6 +2,7 @@ package subscriptionauth
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -103,7 +104,7 @@ func (service *Service) Resolve(ctx context.Context, source CredentialSource) (C
 	case CredentialSourceStatic:
 		return Credential{}, ErrStaticCredential
 	case CredentialSourceCodex:
-		auth, err := service.refreshCodex(ctx, false)
+		auth, err := service.refreshCodex(ctx, false, "")
 		if err != nil {
 			if err == ErrAuthRequired {
 				return Credential{}, ErrAuthRequired
@@ -138,11 +139,16 @@ func (service *Service) Resolve(ctx context.Context, source CredentialSource) (C
 	}
 }
 
-func (service *Service) ResolveAfterUnauthorized(ctx context.Context, source CredentialSource) (Credential, error) {
+func (service *Service) ResolveAfterUnauthorized(ctx context.Context, source CredentialSource, credentialID string) (Credential, error) {
 	if NormalizeCredentialSource(string(source)) != CredentialSourceCodex {
 		return service.Resolve(ctx, source)
 	}
-	auth, err := service.refreshCodex(ctx, true)
+	auth, err := service.refreshCodex(ctx, true, credentialID)
+	if errors.Is(err, ErrAuthRequired) {
+		// An explicit OAuth authentication failure makes only the failed account
+		// unavailable; Resolve selects the next usable Codex account.
+		return service.Resolve(ctx, CredentialSourceCodex)
+	}
 	if err != nil {
 		return Credential{}, err
 	}

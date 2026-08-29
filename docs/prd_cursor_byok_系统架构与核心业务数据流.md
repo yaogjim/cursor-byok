@@ -237,6 +237,20 @@ flowchart LR
 | 更新 | [`internal/updater`](../internal/updater) | 手动检查、下载确认、校验、安装确认和临时文件清理 | 不自动下载或跳过用户确认 |
 | Tab relay 服务 | [`cursor-tab-server`](../cursor-tab-server) | 独立 relay，使用 Cursor token 转发 Tab/Cpp/FileSync/Git 相关 RPC 到官方 upstream | 不是根应用内嵌服务，不是用户 BYOK provider |
 
+### 5.1 托管订阅凭据与 Codex 账户池
+
+模型适配器只持久化 `credentialSource=codex|grok`，不保存订阅账户 ID 或运行时 token。`internal/subscriptionauth` 在请求进入 provider adapter 前解析当前激活账户，并仅将实际账户 ID 和 access token 放入当次内存请求；接入页通过脱敏的 `AccountStatus` 管理账户，不接触 token。
+
+Codex 使用版本化的本机私有 `codex-auth.json`。旧 schema v1 单账户文件在首次读取时原子迁移为 schema v2 `accounts[]`，原账户保持激活；第一个新账户自动激活，后续导入或设备授权账户保持备用，重复导入只更新同一账户的凭据并保留其激活与用量状态。用户可在 Codex 接入页列出、激活、逐账户刷新用量和删除账户。
+
+运行时遵循以下边界：
+
+- `Resolve(codex)` 选择唯一激活且可用的账户；没有激活账户时选择第一个可用账户并持久化为 active。
+- 401 只定向刷新原请求的账户。刷新成功后同账户重试一次；OAuth 明确认证失效时只标记该账户 `auth_required`，再选择备用账户。
+- 只有明确 quota 错误且尚未产生模型事件、不是模型测试、共享 fallback budget 仍有余额时，才将失败账户标记为耗尽并切换到下一个可用账户；同一旧账户的重复耗尽信号不得再次推进 active。
+- Codex 周窗口与会话窗口按账户存储。额度账户在已知重置时间到达后恢复候选资格；重置时间未知时通过逐账户刷新用量恢复。认证失效与仍处于额度阻塞期的账户不会被自动选中。
+- 401 刷新和 quota 轮换都只允许一次内部重试；已产生输出后不切换账户，避免重复内容或副作用。
+
 ## 6. 服务生命周期
 
 服务启动链路由控制面发起，核心顺序如下：

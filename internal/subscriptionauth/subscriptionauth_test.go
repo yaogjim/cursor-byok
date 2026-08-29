@@ -66,6 +66,142 @@ func TestParseCodexAuthJSONRejectsUnsupportedBundles(t *testing.T) {
 	assertNoSecrets(t, status)
 }
 
+func TestSub2APIImportFiltersProviderAndImportsSelectedCodexAccounts(t *testing.T) {
+	codexAccessA := testJWT(t, map[string]any{
+		"email":                       "a@example.com",
+		"exp":                         time.Now().Add(time.Hour).Unix(),
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "chatgpt-a", "chatgpt_plan_type": "plus"},
+	})
+	codexAccessB := testJWT(t, map[string]any{
+		"email":                       "b@example.com",
+		"exp":                         time.Now().Add(time.Hour).Unix(),
+		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "chatgpt-b", "chatgpt_plan_type": "pro"},
+	})
+	grokAccess := testJWT(t, map[string]any{"email": "grok@example.com", "sub": "grok-user"})
+	payload, err := json.Marshal(map[string]any{
+		"accounts": []map[string]any{
+			{"name": "Codex A", "platform": "openai", "type": "oauth", "credentials": map[string]any{"access_token": codexAccessA, "refresh_token": "refresh-a", "email": "a@example.com", "plan_type": "plus"}},
+			{"name": "Codex B", "platform": "codex", "type": "oauth", "credentials": map[string]any{"access_token": codexAccessB, "refresh_token": "refresh-b", "email": "b@example.com", "plan_type": "pro"}},
+			{"name": "Grok", "platform": "grok", "type": "oauth", "credentials": map[string]any{"access_token": grokAccess, "refresh_token": "grok-refresh"}},
+			{"name": "Static OpenAI", "platform": "openai", "type": "api_key", "credentials": map[string]any{"access_token": "sk-secret"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sub2api.json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(t.TempDir(), nil)
+	preview, err := service.PreviewSub2APIFile(context.Background(), path, ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Accounts) != 2 || preview.SkippedCount != 2 {
+		t.Fatalf("preview = %+v", preview)
+	}
+	selected := preview.Accounts[1].AccountID
+	result, err := service.ImportSub2APIFile(context.Background(), Sub2APIImportRequest{
+		Path:       path,
+		Provider:   ProviderCodex,
+		AccountIDs: []string{selected},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Accounts) != 1 || result.Accounts[0].AccountID != selected || result.Accounts[0].Email != "b@example.com" {
+		t.Fatalf("result = %+v", result)
+	}
+	statuses, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 1 || statuses[0].Email != "b@example.com" || statuses[0].PlanLabel != "ChatGPT Pro" {
+		t.Fatalf("statuses = %+v", statuses)
+	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, payload) {
+		t.Fatal("source sub2api file was modified")
+	}
+	assertNoSecrets(t, preview)
+	assertNoSecrets(t, result)
+}
+
+func TestSub2APIImportFiltersProviderAndImportsGrokAccount(t *testing.T) {
+	codexAccess := testJWT(t, map[string]any{"email": "codex@example.com", "sub": "codex-user"})
+	grokAccess := testJWT(t, map[string]any{"email": "grok@example.com", "sub": "grok-user"})
+	payload, err := json.Marshal(map[string]any{
+		"accounts": []map[string]any{
+			{"name": "Codex", "platform": "openai", "type": "oauth", "credentials": map[string]any{"access_token": codexAccess, "refresh_token": "codex-refresh"}},
+			{"name": "Grok", "platform": "xai", "type": "oauth", "credentials": map[string]any{"access_token": grokAccess, "refresh_token": "grok-refresh", "email": "grok@example.com"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "sub2api.json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(t.TempDir(), nil)
+	preview, err := service.PreviewSub2APIFile(context.Background(), path, ProviderGrok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Accounts) != 1 || preview.SkippedCount != 1 {
+		t.Fatalf("preview = %+v", preview)
+	}
+	result, err := service.ImportSub2APIFile(context.Background(), Sub2APIImportRequest{
+		Path:       path,
+		Provider:   ProviderGrok,
+		AccountIDs: []string{preview.Accounts[0].AccountID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Accounts) != 1 || result.Accounts[0].Provider != ProviderGrok {
+		t.Fatalf("result = %+v", result)
+	}
+	codexAccounts, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codexAccounts) != 0 {
+		t.Fatalf("unexpected Codex accounts: %+v", codexAccounts)
+	}
+	assertNoSecrets(t, preview)
+	assertNoSecrets(t, result)
+}
+
+func TestSub2APIProvidedFileFiltersCodexAccounts(t *testing.T) {
+	path := "/Users/yaogj/Downloads/sub2api-account-20260829020741.json"
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		t.Skip("provided sub2api fixture is not available")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, skipped, err := parseSub2APIAccounts(content, ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed) != 2 || skipped != 0 {
+		t.Fatalf("parsed=%d skipped=%d", len(parsed), skipped)
+	}
+	for _, account := range parsed {
+		if account.preview.Provider != ProviderCodex || account.preview.Email == "" || account.codex.Tokens.RefreshToken == "" {
+			t.Fatalf("invalid parsed account: %+v", account.preview)
+		}
+	}
+}
+
 func TestImportCodexAuthDoesNotModifySourceFile(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "auth.json")
@@ -440,7 +576,7 @@ func TestResolveAfterUnauthorizedForcesCodexRefresh(t *testing.T) {
 	if cred.AccessToken != fresh {
 		t.Fatal("Resolve should keep unexpired access token")
 	}
-	forced, err := service.ResolveAfterUnauthorized(context.Background(), CredentialSourceCodex)
+	forced, err := service.ResolveAfterUnauthorized(context.Background(), CredentialSourceCodex, cred.AccountID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,6 +620,186 @@ func TestMarkQuotaExhaustedActivatesNextGrokAccount(t *testing.T) {
 	}
 	if _, err := service.Resolve(context.Background(), CredentialSourceGrok); !errors.Is(err, ErrQuotaExhausted) {
 		t.Fatalf("resolve exhausted account err=%v, want ErrQuotaExhausted", err)
+	}
+}
+
+func TestCodexMultiAccountMigrationManagementAndQuotaRotation(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	first := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	second := testJWT(t, map[string]any{"sub": "two", "email": "two@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	legacy := storedCodexAuth{AuthMode: codexAuthMode, Tokens: storedTokenBundle{AccessToken: first, RefreshToken: "first-refresh"}}
+	if err := service.store.writeJSON(service.store.CodexPath(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	secondStatus, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+second+`","refresh_token":"second-refresh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil || len(accounts) != 2 {
+		t.Fatalf("accounts = %#v, %v", accounts, err)
+	}
+	if !accounts[0].Active || secondStatus.Active {
+		t.Fatalf("first account must remain active after import: %#v", accounts)
+	}
+	file, err := service.store.LoadCodexFile()
+	if err != nil || file.SchemaVersion != codexSchemaVersion || len(file.Accounts) != 2 {
+		t.Fatalf("migrated file = %#v, %v", file, err)
+	}
+	if _, err := service.ActivateAccount(context.Background(), secondStatus.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteAccount(context.Background(), secondStatus.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil || len(remaining) != 1 || !remaining[0].Active {
+		t.Fatalf("delete active = %#v, %v", remaining, err)
+	}
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+second+`","refresh_token":"second-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), remaining[0].AccountID); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil || cred.AccountID == remaining[0].AccountID {
+		t.Fatalf("quota rotation = %#v, %v", cred, err)
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), cred.AccountID); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatalf("all accounts exhausted = %v", err)
+	}
+	file, err = service.store.LoadCodexFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range file.Accounts {
+		if codexAccountID(file.Accounts[i]) == remaining[0].AccountID {
+			file.Accounts[i].ResetAtMS = time.Now().Add(-time.Minute).UnixMilli()
+		}
+	}
+	if err := service.store.SaveCodexFile(file); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil || recovered.AccountID != remaining[0].AccountID {
+		t.Fatalf("expired reset should recover account: %#v, %v", recovered, err)
+	}
+}
+
+func TestCodexAccountUsageAndRepeatedImportPreserveAccountState(t *testing.T) {
+	resetAt := time.Now().Add(time.Hour).Unix()
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != codexUsageURL {
+			t.Fatalf("unexpected url %s", req.URL)
+		}
+		return jsonResponse(http.StatusOK, map[string]any{
+			"plan_type": "plus",
+			"rate_limit": map[string]any{
+				"secondary_window": map[string]any{"used_percent": 25, "reset_at": resetAt},
+				"primary_window":   map[string]any{"used_percent": 10, "reset_at": resetAt},
+			},
+		}), nil
+	})
+	service := NewService(t.TempDir(), client)
+	first := testJWT(t, map[string]any{"sub": "one", "exp": time.Now().Add(time.Hour).Unix()})
+	second := testJWT(t, map[string]any{"sub": "two", "exp": time.Now().Add(time.Hour).Unix()})
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+first+`","refresh_token":"first-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	secondStatus, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+second+`","refresh_token":"second-refresh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, err := service.RefreshAccountUsage(context.Background(), ProviderCodex, secondStatus.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.AccountID != secondStatus.AccountID || usage.PlanLabel != "ChatGPT Plus" || usage.RemainingPercent != 75 || usage.SessionRemainingPercent != 90 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	rotatedSecond := testJWT(t, map[string]any{"sub": "two", "exp": time.Now().Add(2 * time.Hour).Unix()})
+	updated, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+rotatedSecond+`","refresh_token":"second-refresh-new"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Active || updated.PlanLabel != "ChatGPT Plus" || updated.RemainingPercent != 75 || updated.SessionRemainingPercent != 90 {
+		t.Fatalf("updated account state = %#v", updated)
+	}
+	accounts, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil || len(accounts) != 2 || !accounts[0].Active || accounts[1].Active {
+		t.Fatalf("accounts = %#v, %v", accounts, err)
+	}
+}
+
+func TestCodexRepeatedQuotaSignalDoesNotAdvancePastCurrentSuccessor(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	for _, subject := range []string{"one", "two", "three"} {
+		token := testJWT(t, map[string]any{"sub": subject, "exp": time.Now().Add(time.Hour).Unix()})
+		if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+token+`","refresh_token":"refresh-`+subject+`"}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), first.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MarkQuotaExhausted(context.Background(), first.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	stillSecond, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AccountID == first.AccountID || stillSecond.AccountID != second.AccountID {
+		t.Fatalf("rotation advanced unexpectedly: first=%s second=%s after-repeat=%s", first.AccountID, second.AccountID, stillSecond.AccountID)
+	}
+}
+
+func TestCodexUnauthorizedRefreshMarksOnlyFailedAccountAndRotates(t *testing.T) {
+	var refreshes []string
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := req.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		refreshes = append(refreshes, req.PostForm.Get("refresh_token"))
+		return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "invalid_grant"}), nil
+	})
+	service := NewService(t.TempDir(), client)
+	first := testJWT(t, map[string]any{"sub": "one", "exp": time.Now().Add(time.Hour).Unix()})
+	second := testJWT(t, map[string]any{"sub": "two", "exp": time.Now().Add(time.Hour).Unix()})
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+first+`","refresh_token":"first-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+second+`","refresh_token":"second-refresh"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.Resolve(context.Background(), CredentialSourceCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := service.ResolveAfterUnauthorized(context.Background(), CredentialSourceCodex, failed.AccountID)
+	if err != nil || rotated.AccountID == failed.AccountID {
+		t.Fatalf("unauthorized rotation = %#v, %v", rotated, err)
+	}
+	if len(refreshes) != 1 || refreshes[0] != "first-refresh" {
+		t.Fatalf("targeted refreshes = %#v", refreshes)
+	}
+	accounts, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range accounts {
+		if account.AccountID == failed.AccountID && account.State != StateAuthRequired {
+			t.Fatalf("failed account state = %#v", account)
+		}
 	}
 }
 

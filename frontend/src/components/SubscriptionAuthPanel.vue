@@ -1,17 +1,20 @@
 <script setup>
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
+import ContentModal from "@/components/ui/ContentModal.vue";
 import { useMessage } from "@/composables/useMessage";
 import { showModal } from "@/composables/useModal";
 import {
   activateSubscriptionAccount,
   clearCodexAuth,
   deleteSubscriptionAccount,
-  getCodexAuthStatus,
   importCodexAuth,
+  importSub2APIAccounts,
   listSubscriptionAccounts,
   pollCodexDeviceAuth,
   pollGrokDeviceAuth,
+  previewSub2APIImport,
+  refreshSubscriptionAccountUsage,
   refreshSubscriptionUsage,
   startCodexDeviceAuth,
   startGrokDeviceAuth,
@@ -31,10 +34,15 @@ const props = defineProps({
 const message = useMessage();
 const busy = ref(false);
 const lastError = ref("");
-const codexStatus = ref({ state: "missing", provider: "codex" });
+const codexAccounts = ref([]);
 const grokAccounts = ref([]);
 const deviceChallenge = ref(null);
 const deviceProvider = ref("");
+const sub2apiOpen = ref(false);
+const sub2apiPath = ref("");
+const sub2apiAccounts = ref([]);
+const sub2apiSelected = ref([]);
+const sub2apiSkippedCount = ref(0);
 let pollTimer = null;
 
 const JSON_FILE_FILTER = [{ DisplayName: "JSON", Pattern: "*.json" }];
@@ -63,19 +71,15 @@ function asAccount(value) {
   };
 }
 
-const grokActive = computed(() => grokAccounts.value.find((item) => item.active) || null);
-const codexReady = computed(() => codexStatus.value.state === "ready");
 const isCodex = computed(() => props.provider === "codex");
-const accountCount = computed(() => {
-  if (isCodex.value) {
-    return codexStatus.value.state === "missing" ? 0 : 1;
-  }
-  return grokAccounts.value.length;
-});
+const accounts = computed(() => isCodex.value ? codexAccounts.value : grokAccounts.value);
+const activeAccount = computed(() => accounts.value.find((item) => item.active) || null);
+const accountCount = computed(() => accounts.value.length);
 const panelTitle = computed(() => isCodex.value ? "Codex 接入" : "Grok 接入");
 const panelSubtitle = computed(() => isCodex.value
-  ? "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json 或设备码授权"
-  : "管理 Grok / xAI 订阅授权与账号切换");
+  ? "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json、sub2api JSON 或设备码授权"
+  : "管理 Grok / xAI 订阅授权，支持导入 sub2api JSON 或设备码授权");
+const selectedSub2APICount = computed(() => sub2apiSelected.value.length);
 
 function stateLabel(state) {
   switch (state) {
@@ -94,6 +98,16 @@ function stateLabel(state) {
   }
 }
 
+function accountStateLabel(account) {
+  if (account?.active && account.state === "ready") {
+    return "当前使用";
+  }
+  if (!account?.active && account?.state === "ready") {
+    return "备用";
+  }
+  return stateLabel(account?.state);
+}
+
 function showActionError(title, error) {
   lastError.value = String(error || title);
   message(`${title}：${lastError.value}`);
@@ -101,11 +115,12 @@ function showActionError(title, error) {
 
 async function refreshAll() {
   try {
+    const providerAccounts = await listSubscriptionAccounts(props.provider);
+    const normalized = Array.isArray(providerAccounts) ? providerAccounts.map(asAccount) : [];
     if (isCodex.value) {
-      codexStatus.value = asAccount(await getCodexAuthStatus());
+      codexAccounts.value = normalized;
     } else {
-      const grok = await listSubscriptionAccounts("grok");
-      grokAccounts.value = Array.isArray(grok) ? grok.map(asAccount) : [];
+      grokAccounts.value = normalized;
     }
     lastError.value = "";
   } catch (error) {
@@ -127,8 +142,8 @@ async function handleImportCodex() {
       return;
     }
     busy.value = true;
-    const status = await importCodexAuth(path);
-    codexStatus.value = asAccount(status);
+    await importCodexAuth(path);
+    await refreshAll();
     message("已导入 Codex 认证副本，未修改原始 auth.json");
   } catch (error) {
     showActionError("导入失败", toUserError(error));
@@ -137,10 +152,93 @@ async function handleImportCodex() {
   }
 }
 
+function resetSub2APIImport() {
+  sub2apiOpen.value = false;
+  sub2apiPath.value = "";
+  sub2apiAccounts.value = [];
+  sub2apiSelected.value = [];
+  sub2apiSkippedCount.value = 0;
+}
+
+function closeSub2APIImport() {
+  if (busy.value) {
+    return;
+  }
+  resetSub2APIImport();
+}
+
+function toggleAllSub2APIAccounts() {
+  if (sub2apiSelected.value.length === sub2apiAccounts.value.length) {
+    sub2apiSelected.value = [];
+    return;
+  }
+  sub2apiSelected.value = sub2apiAccounts.value.map((account) => account.accountId);
+}
+
+async function handlePreviewSub2API() {
+  try {
+    const path = await Dialogs.OpenFile({
+      Title: `导入 ${isCodex.value ? "Codex" : "Grok"} sub2api JSON`,
+      Filters: JSON_FILE_FILTER,
+      CanChooseFiles: true,
+      CanChooseDirectories: false,
+      AllowsMultipleSelection: false,
+      AllowsOtherFiletypes: false,
+    });
+    if (!path) {
+      return;
+    }
+    busy.value = true;
+    const preview = await previewSub2APIImport(path, props.provider);
+    const candidates = Array.isArray(preview?.accounts) ? preview.accounts : [];
+    if (candidates.length === 0) {
+      message(`文件中没有可导入的 ${isCodex.value ? "Codex" : "Grok"} OAuth 账号`);
+      return;
+    }
+    sub2apiPath.value = path;
+    sub2apiAccounts.value = candidates.map((account) => ({
+      accountId: String(account?.accountId || ""),
+      name: String(account?.name || ""),
+      email: String(account?.email || ""),
+      planLabel: String(account?.planLabel || ""),
+      alreadyExists: Boolean(account?.alreadyExists),
+    }));
+    sub2apiSelected.value = sub2apiAccounts.value.map((account) => account.accountId);
+    sub2apiSkippedCount.value = Number(preview?.skippedCount || 0);
+    sub2apiOpen.value = true;
+  } catch (error) {
+    showActionError("读取 sub2api 文件失败", toUserError(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleImportSub2API() {
+  if (!sub2apiPath.value || sub2apiSelected.value.length === 0) {
+    return;
+  }
+  try {
+    busy.value = true;
+    const result = await importSub2APIAccounts(
+      sub2apiPath.value,
+      props.provider,
+      sub2apiSelected.value,
+    );
+    const importedCount = Array.isArray(result?.accounts) ? result.accounts.length : 0;
+    await refreshAll();
+    resetSub2APIImport();
+    message(`已导入 ${importedCount} 个 ${isCodex.value ? "Codex" : "Grok"} 账号`);
+  } catch (error) {
+    showActionError("导入 sub2api 账号失败", toUserError(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function handleClearCodex() {
   const confirmed = await showModal({
-    title: "清除 Codex 认证副本",
-    content: "只删除本应用保存的认证副本，不会修改 ~/.codex/auth.json。",
+    title: "清除全部 Codex 认证副本",
+    content: "只删除本应用保存的全部 Codex 认证副本，不会修改任何原始 auth.json。",
     confirmText: "清除",
     cancelText: "取消",
     showCancel: true,
@@ -150,8 +248,9 @@ async function handleClearCodex() {
   }
   try {
     busy.value = true;
-    codexStatus.value = asAccount(await clearCodexAuth());
-    message("已清除 Codex 认证副本");
+    await clearCodexAuth();
+    await refreshAll();
+    message("已清除全部 Codex 认证副本");
   } catch (error) {
     showActionError("清除失败", toUserError(error));
   } finally {
@@ -274,6 +373,18 @@ async function handleRefreshUsage(provider) {
   }
 }
 
+async function handleRefreshAccountUsage(accountID) {
+  try {
+    busy.value = true;
+    await refreshSubscriptionAccountUsage("codex", accountID);
+    await refreshAll();
+  } catch (error) {
+    showActionError("刷新账号用量失败", toUserError(error));
+  } finally {
+    busy.value = false;
+  }
+}
+
 onMounted(() => {
   void refreshAll();
 });
@@ -290,26 +401,34 @@ onUnmounted(() => {
         <h2 class="subscription-access-title">{{ panelTitle }}</h2>
         <p class="subscription-access-subtitle">{{ panelSubtitle }}</p>
       </div>
-      <Button
-        v-if="isCodex"
-        variant="primary"
-        class="shrink-0"
-        :disabled="busy"
-        @click="handleImportCodex"
-      >
-        <span class="icon-[mdi--file-import-outline] text-[15px]" aria-hidden="true" />
-        导入 auth.json
-      </Button>
-      <Button
-        v-else
-        variant="primary"
-        class="shrink-0"
-        :disabled="busy"
-        @click="handleStartDevice('grok')"
-      >
-        <span class="icon-[mdi--plus] text-[15px]" aria-hidden="true" />
-        添加授权
-      </Button>
+      <div class="flex shrink-0 gap-2">
+        <Button
+          v-if="isCodex"
+          variant="primary"
+          :disabled="busy"
+          @click="handleImportCodex"
+        >
+          <span class="icon-[mdi--file-import-outline] text-[15px]" aria-hidden="true" />
+          导入 auth.json
+        </Button>
+        <Button
+          variant="default"
+          :disabled="busy"
+          @click="handlePreviewSub2API"
+        >
+          <span class="icon-[mdi--account-multiple-plus-outline] text-[15px]" aria-hidden="true" />
+          导入 sub2api
+        </Button>
+        <Button
+          v-if="!isCodex"
+          variant="primary"
+          :disabled="busy"
+          @click="handleStartDevice('grok')"
+        >
+          <span class="icon-[mdi--plus] text-[15px]" aria-hidden="true" />
+          添加授权
+        </Button>
+      </div>
     </div>
 
     <Card :padded="false" class="subscription-mode-card">
@@ -320,7 +439,7 @@ onUnmounted(() => {
         </div>
         <Button :disabled="busy" @click="handleStartDevice(provider)">设备码授权</Button>
         <Button
-          :disabled="busy || (isCodex ? !codexReady : !grokActive)"
+          :disabled="busy || !activeAccount || activeAccount.state === 'auth_required'"
           @click="handleRefreshUsage(provider)"
         >
           刷新用量
@@ -336,35 +455,13 @@ onUnmounted(() => {
         <h3 class="subscription-account-title">订阅授权</h3>
         <p class="subscription-account-subtitle">
           <span>{{ accountCount }} 个账号</span>
-          {{ isCodex ? "可导入现有 auth.json 或重新进行设备授权" : "可添加、激活或删除 Grok 授权账号" }}
+          {{ isCodex ? "可添加、激活、刷新或删除 Codex 授权账号" : "可添加、激活或删除 Grok 授权账号" }}
         </p>
       </div>
 
-      <div v-if="isCodex && accountCount" class="flex flex-1 flex-col justify-center gap-3 px-7 py-6">
-        <div class="flex items-center justify-between gap-3">
-          <div class="min-w-0">
-            <div class="truncate text-sm font-semibold text-[var(--color-text)]">
-              {{ codexStatus.email || codexStatus.displayName || "ChatGPT / Codex" }}
-            </div>
-            <div class="mt-1 text-xs text-[var(--color-text-secondary)]">
-              {{ stateLabel(codexStatus.state) }}
-              <span v-if="codexStatus.planLabel"> · {{ codexStatus.planLabel }}</span>
-              <span v-if="codexStatus.chatgptAccountId"> · {{ codexStatus.chatgptAccountId }}</span>
-            </div>
-            <div v-if="codexReady" class="mt-1 text-xs text-[var(--color-text-secondary)]">
-              剩余 {{ Math.round(codexStatus.remainingPercent) }}%
-              <span v-if="codexStatus.sessionResetAt">
-                · 会话剩余 {{ Math.round(codexStatus.sessionRemainingPercent) }}%
-              </span>
-            </div>
-          </div>
-          <Button variant="text" :disabled="busy" @click="handleClearCodex">清除副本</Button>
-        </div>
-      </div>
-
-      <ul v-else-if="!isCodex && grokAccounts.length" class="flex flex-1 flex-col gap-2 px-7 py-6">
+      <ul v-if="accounts.length" class="subscription-account-list">
         <li
-          v-for="account in grokAccounts"
+          v-for="account in accounts"
           :key="account.accountId"
           class="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3"
         >
@@ -373,13 +470,36 @@ onUnmounted(() => {
               {{ account.displayName || account.email || account.accountId }}
             </div>
             <div class="mt-1 text-xs text-[var(--color-text-secondary)]">
-              {{ account.active ? "当前使用" : stateLabel(account.state) }}
+              {{ accountStateLabel(account) }}
               <span v-if="account.planLabel"> · {{ account.planLabel }}</span>
-              <span v-if="account.remainingPercent"> · 剩余 {{ Math.round(account.remainingPercent) }}%</span>
+              <span v-if="isCodex && account.chatgptAccountId"> · {{ account.chatgptAccountId }}</span>
+            </div>
+            <div
+              v-if="account.planLabel || account.resetAt || account.sessionResetAt || account.remainingPercent > 0"
+              class="mt-1 text-xs text-[var(--color-text-secondary)]"
+            >
+              剩余 {{ Math.round(account.remainingPercent) }}%
+              <span v-if="isCodex && account.sessionResetAt">
+                · 会话剩余 {{ Math.round(account.sessionRemainingPercent) }}%
+              </span>
             </div>
           </div>
           <div class="flex shrink-0 gap-2">
-            <Button variant="text" :disabled="busy || account.active" @click="handleActivate(account.accountId)">激活</Button>
+            <Button
+              v-if="isCodex"
+              variant="text"
+              :disabled="busy || account.state === 'auth_required'"
+              @click="handleRefreshAccountUsage(account.accountId)"
+            >
+              刷新用量
+            </Button>
+            <Button
+              variant="text"
+              :disabled="busy || account.active || account.state !== 'ready'"
+              @click="handleActivate(account.accountId)"
+            >
+              激活
+            </Button>
             <Button variant="text" :disabled="busy" @click="handleDelete(account.accountId)">删除</Button>
           </div>
         </li>
@@ -403,15 +523,26 @@ onUnmounted(() => {
 
       <div class="subscription-account-footer">
         <span class="config-action-status">
-          {{ isCodex ? stateLabel(codexStatus.state) : (grokActive ? stateLabel(grokActive.state) : "未配置") }}
+          {{ activeAccount ? stateLabel(activeAccount.state) : "未配置" }}
         </span>
         <div class="config-action-buttons">
+          <Button
+            v-if="isCodex && accountCount"
+            variant="text"
+            :disabled="busy"
+            @click="handleClearCodex"
+          >
+            清除全部
+          </Button>
           <Button
             v-if="isCodex"
             :disabled="busy"
             @click="handleImportCodex"
           >
             导入 auth.json
+          </Button>
+          <Button :disabled="busy" @click="handlePreviewSub2API">
+            导入 sub2api
           </Button>
           <Button
             variant="primary"
@@ -423,5 +554,65 @@ onUnmounted(() => {
         </div>
       </div>
     </Card>
+
+    <ContentModal
+      :open="sub2apiOpen"
+      :title="`选择要导入的 ${isCodex ? 'Codex' : 'Grok'} 账号`"
+      size="lg"
+      :close-disabled="busy"
+      @close="closeSub2APIImport"
+    >
+      <div class="flex h-full min-h-0 flex-col bg-[var(--color-surface)]">
+        <div class="flex items-center justify-between border-b border-[var(--color-border)] px-5 py-3">
+          <p class="text-sm text-[var(--color-text-secondary)]">
+            已按当前接入类型过滤，仅展示可导入的 {{ isCodex ? "Codex" : "Grok" }} OAuth 账号。
+            <span v-if="sub2apiSkippedCount">已跳过 {{ sub2apiSkippedCount }} 项。</span>
+          </p>
+          <Button variant="text" :disabled="busy" @click="toggleAllSub2APIAccounts">
+            {{ selectedSub2APICount === sub2apiAccounts.length ? "取消全选" : "全选" }}
+          </Button>
+        </div>
+        <ul class="min-h-0 flex-1 space-y-2 overflow-y-auto p-5">
+          <li
+            v-for="account in sub2apiAccounts"
+            :key="account.accountId"
+            class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-soft)] p-3"
+          >
+            <label class="flex cursor-pointer items-start gap-3">
+              <input
+                v-model="sub2apiSelected"
+                type="checkbox"
+                :value="account.accountId"
+                :disabled="busy"
+                class="mt-0.5 size-4 accent-[var(--color-primary)]"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm font-semibold text-[var(--color-text)]">
+                  {{ account.name || account.email || account.accountId }}
+                </span>
+                <span class="mt-1 block truncate text-xs text-[var(--color-text-secondary)]">
+                  {{ account.email || account.accountId }}
+                  <template v-if="account.planLabel"> · {{ account.planLabel }}</template>
+                  <template v-if="account.alreadyExists"> · 已存在，将更新凭据</template>
+                </span>
+              </span>
+            </label>
+          </li>
+        </ul>
+        <div class="flex items-center justify-between border-t border-[var(--color-border)] px-5 py-4">
+          <span class="text-xs text-[var(--color-text-secondary)]">已选择 {{ selectedSub2APICount }} 个账号</span>
+          <div class="flex gap-2">
+            <Button :disabled="busy" @click="closeSub2APIImport">取消</Button>
+            <Button
+              variant="primary"
+              :disabled="busy || selectedSub2APICount === 0"
+              @click="handleImportSub2API"
+            >
+              导入所选账号
+            </Button>
+          </div>
+        </div>
+      </div>
+    </ContentModal>
   </div>
 </template>

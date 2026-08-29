@@ -57,7 +57,7 @@ func parseCodexAuthJSON(content []byte) (storedCodexAuth, error) {
 	accountID := firstNonEmpty(jsonString(raw, "chatgpt_account_id", "chatgptAccountId", "account_id"), chatgptAccountIDFromToken(access))
 	email := firstNonEmpty(jsonString(raw, "email"), emailFromToken(idToken, access))
 	return storedCodexAuth{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: codexSchemaVersion,
 		AuthMode:      codexAuthMode,
 		LastRefresh:   lastRefresh,
 		Tokens: storedTokenBundle{
@@ -89,9 +89,11 @@ func parseTime(value string) (time.Time, error) {
 func (auth storedCodexAuth) status() AccountStatus {
 	expires := jwtExpiresAt(auth.Tokens.AccessToken)
 	state := StateReady
-	if trimSpace(auth.Tokens.AccessToken) == "" {
+	if auth.AuthRequired {
+		state = StateAuthRequired
+	} else if trimSpace(auth.Tokens.AccessToken) == "" {
 		state = StateMissing
-	} else if !expires.IsZero() && !expires.After(time.Now().UTC()) {
+	} else if !expires.IsZero() && !expires.After(time.Now().UTC()) && trimSpace(auth.Tokens.RefreshToken) == "" {
 		state = StateAuthRequired
 	}
 	if state == StateReady && auth.LimitReached {
@@ -115,7 +117,7 @@ func (auth storedCodexAuth) status() AccountStatus {
 		SessionRemainingPercent: auth.SessionRemainingPercent,
 		SessionResetAt:          timeFromMS(auth.SessionResetAtMS),
 		LimitReached:            auth.LimitReached,
-		Active:                  true,
+		Active:                  auth.Active,
 	}
 }
 
@@ -144,6 +146,92 @@ func (auth storedCodexAuth) needsRefresh(now time.Time) bool {
 	return now.Sub(auth.LastRefresh) >= codexStaleRefreshWindow
 }
 
+func (service *Service) listCodexStatusesLocked() ([]AccountStatus, error) {
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return nil, err
+	}
+	if restoreExpiredCodexQuota(file.Accounts, time.Now().UTC()) {
+		if err := service.store.SaveCodexFile(file); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]AccountStatus, 0, len(file.Accounts))
+	for _, account := range file.Accounts {
+		out = append(out, account.status())
+	}
+	return out, nil
+}
+
+func (service *Service) activateCodexLocked(accountID string) (AccountStatus, error) {
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return AccountStatus{Provider: ProviderCodex, State: StateError}, err
+	}
+	now := time.Now().UTC()
+	restored := restoreExpiredCodexQuota(file.Accounts, now)
+	for i := range file.Accounts {
+		if codexAccountID(file.Accounts[i]) != accountID {
+			continue
+		}
+		if !codexAccountAvailable(file.Accounts[i], now) {
+			if restored {
+				if err := service.store.SaveCodexFile(file); err != nil {
+					return AccountStatus{Provider: ProviderCodex, State: StateError}, err
+				}
+			}
+			if file.Accounts[i].LimitReached {
+				return file.Accounts[i].status(), ErrQuotaExhausted
+			}
+			return file.Accounts[i].status(), ErrAuthRequired
+		}
+		for j := range file.Accounts {
+			file.Accounts[j].Active = j == i
+		}
+		if err := service.store.SaveCodexFile(file); err != nil {
+			return AccountStatus{Provider: ProviderCodex, State: StateError}, err
+		}
+		return file.Accounts[i].status(), nil
+	}
+	if restored {
+		if err := service.store.SaveCodexFile(file); err != nil {
+			return AccountStatus{Provider: ProviderCodex, State: StateError}, err
+		}
+	}
+	return AccountStatus{Provider: ProviderCodex, State: StateMissing}, errors.New("Codex 账号不存在")
+}
+
+func (service *Service) deleteCodexLocked(accountID string) error {
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return err
+	}
+	kept := make([]storedCodexAuth, 0, len(file.Accounts))
+	deleted := false
+	deletedActive := false
+	for _, account := range file.Accounts {
+		if codexAccountID(account) == accountID {
+			deleted = true
+			deletedActive = account.Active
+			continue
+		}
+		kept = append(kept, account)
+	}
+	if !deleted {
+		return errors.New("Codex 账号不存在")
+	}
+	if deletedActive {
+		for i := range kept {
+			if codexAccountAvailable(kept[i], time.Now().UTC()) {
+				kept[i].Active = true
+				break
+			}
+		}
+	}
+	file.Accounts = kept
+	return service.store.SaveCodexFile(file)
+}
+
 func (service *Service) ImportCodexAuth(ctx context.Context, content []byte) (AccountStatus, error) {
 	_ = ctx
 	parsed, err := parseCodexAuthJSON(content)
@@ -154,6 +242,15 @@ func (service *Service) ImportCodexAuth(ctx context.Context, content []byte) (Ac
 	defer service.mu.Unlock()
 	if err := service.store.SaveCodex(parsed); err != nil {
 		return AccountStatus{Provider: ProviderCodex, State: StateError, Error: "保存 Codex 认证副本失败"}, err
+	}
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return AccountStatus{Provider: ProviderCodex, State: StateError, Error: "读取 Codex 认证副本失败"}, err
+	}
+	for _, account := range file.Accounts {
+		if codexAccountID(account) == codexAccountID(parsed) {
+			return account.status(), nil
+		}
 	}
 	return parsed.status(), nil
 }
@@ -212,11 +309,203 @@ func (service *Service) loadCodexLocked() (*storedCodexAuth, error) {
 	return service.store.LoadCodex()
 }
 
-func (service *Service) refreshCodex(ctx context.Context, force bool) (*storedCodexAuth, error) {
+func (service *Service) selectCodexLocked(credentialID string, requireAvailable bool) (*storedCodexAuth, error) {
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	changed := restoreExpiredCodexQuota(file.Accounts, now)
+	requested := trimSpace(credentialID)
+	selected := -1
+	for i := range file.Accounts {
+		accountID, _, _ := accountIdentity(ProviderCodex, file.Accounts[i].Tokens.AccessToken, file.Accounts[i].Tokens.IDToken)
+		if requested != "" && accountID == requested {
+			selected = i
+			break
+		}
+	}
+	if selected < 0 && requested == "" {
+		for i := range file.Accounts {
+			if file.Accounts[i].Active && codexAccountAvailable(file.Accounts[i], now) {
+				selected = i
+				break
+			}
+		}
+		if selected < 0 {
+			for i := range file.Accounts {
+				if codexAccountAvailable(file.Accounts[i], now) {
+					selected = i
+					break
+				}
+			}
+		}
+	}
+	if selected < 0 {
+		if changed {
+			if err := service.store.SaveCodexFile(file); err != nil {
+				return nil, err
+			}
+		}
+		for _, account := range file.Accounts {
+			if account.LimitReached {
+				return nil, ErrQuotaExhausted
+			}
+		}
+		return nil, ErrAuthRequired
+	}
+	if requireAvailable && !codexAccountAvailable(file.Accounts[selected], now) {
+		return nil, ErrAuthRequired
+	}
+	if requested == "" {
+		for i := range file.Accounts {
+			nextActive := i == selected
+			if file.Accounts[i].Active != nextActive {
+				file.Accounts[i].Active = nextActive
+				changed = true
+			}
+		}
+	}
+	if changed {
+		if err := service.store.SaveCodexFile(file); err != nil {
+			return nil, err
+		}
+	}
+	account := file.Accounts[selected]
+	return &account, nil
+}
+
+func codexQuotaResetAt(account storedCodexAuth) time.Time {
+	reset := timeFromMS(account.ResetAtMS)
+	sessionReset := timeFromMS(account.SessionResetAtMS)
+	latest := time.Time{}
+	if account.RemainingPercent <= 0 && !reset.IsZero() {
+		latest = reset
+	}
+	if account.SessionRemainingPercent <= 0 && !sessionReset.IsZero() && (latest.IsZero() || sessionReset.After(latest)) {
+		latest = sessionReset
+	}
+	if !latest.IsZero() {
+		return latest
+	}
+	if reset.IsZero() || (!sessionReset.IsZero() && sessionReset.After(reset)) {
+		return sessionReset
+	}
+	return reset
+}
+
+func restoreExpiredCodexQuota(accounts []storedCodexAuth, now time.Time) bool {
+	changed := false
+	for i := range accounts {
+		reset := codexQuotaResetAt(accounts[i])
+		if accounts[i].LimitReached && !reset.IsZero() && !reset.After(now) {
+			accounts[i].LimitReached = false
+			changed = true
+		}
+	}
+	return changed
+}
+
+func codexAccountAvailable(account storedCodexAuth, now time.Time) bool {
+	if account.AuthRequired || trimSpace(account.Tokens.AccessToken) == "" {
+		return false
+	}
+	if account.LimitReached {
+		return false
+	}
+	return true
+}
+
+func codexAccountID(account storedCodexAuth) string {
+	accountID, _, _ := accountIdentity(ProviderCodex, account.Tokens.AccessToken, account.Tokens.IDToken)
+	return accountID
+}
+
+func (service *Service) markCodexQuotaExhaustedLocked(accountID string) error {
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	current := -1
+	alreadyExhausted := false
+	for i := range file.Accounts {
+		if codexAccountID(file.Accounts[i]) == accountID {
+			current = i
+			alreadyExhausted = file.Accounts[i].LimitReached
+			file.Accounts[i].LimitReached = true
+			break
+		}
+	}
+	if current < 0 {
+		return nil
+	}
+	if !file.Accounts[current].Active {
+		if alreadyExhausted {
+			return nil
+		}
+		return service.store.SaveCodexFile(file)
+	}
+	next := -1
+	for offset := 1; offset <= len(file.Accounts); offset++ {
+		idx := (current + offset) % len(file.Accounts)
+		if idx != current && codexAccountAvailable(file.Accounts[idx], now) {
+			next = idx
+			break
+		}
+	}
+	if next < 0 {
+		if err := service.store.SaveCodexFile(file); err != nil {
+			return err
+		}
+		return ErrQuotaExhausted
+	}
+	for i := range file.Accounts {
+		file.Accounts[i].Active = i == next
+	}
+	return service.store.SaveCodexFile(file)
+}
+
+func (service *Service) markCodexAuthRequired(accountID string) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return err
+	}
+	for i := range file.Accounts {
+		if codexAccountID(file.Accounts[i]) == accountID {
+			file.Accounts[i].AuthRequired = true
+			break
+		}
+	}
+	return service.store.SaveCodexFile(file)
+}
+
+func (service *Service) replaceCodexAccount(accountID string, next storedCodexAuth) error {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	file, err := service.store.LoadCodexFile()
+	if err != nil {
+		return err
+	}
+	for i := range file.Accounts {
+		if codexAccountID(file.Accounts[i]) != accountID {
+			continue
+		}
+		next.Active = file.Accounts[i].Active
+		next.AuthRequired = false
+		file.Accounts[i] = next
+		return service.store.SaveCodexFile(file)
+	}
+	return ErrAuthRequired
+}
+
+func (service *Service) refreshCodex(ctx context.Context, force bool, credentialID string) (*storedCodexAuth, error) {
 	service.codexRefreshMu.Lock()
 	defer service.codexRefreshMu.Unlock()
 	service.mu.Lock()
-	auth, err := service.loadCodexLocked()
+	auth, err := service.selectCodexLocked(credentialID, credentialID == "")
 	service.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -242,6 +531,9 @@ func (service *Service) refreshCodex(ctx context.Context, force bool) (*storedCo
 	access := jsonString(parsed, "access_token")
 	if status >= 400 || access == "" {
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
+			if markErr := service.markCodexAuthRequired(codexAccountID(*auth)); markErr != nil {
+				return nil, markErr
+			}
 			return nil, ErrAuthRequired
 		}
 		return nil, httpStatusError("Codex token refresh", status, body)
@@ -257,9 +549,7 @@ func (service *Service) refreshCodex(ctx context.Context, force bool) (*storedCo
 	next.LastRefresh = time.Now().UTC()
 	next.ChatGPTAccountID = firstNonEmpty(next.ChatGPTAccountID, chatgptAccountIDFromToken(access))
 	next.Email = firstNonEmpty(next.Email, emailFromToken(next.Tokens.IDToken, access))
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	if err := service.store.SaveCodex(next); err != nil {
+	if err := service.replaceCodexAccount(codexAccountID(*auth), next); err != nil {
 		return auth, err
 	}
 	return &next, nil
@@ -364,7 +654,7 @@ func (service *Service) commitCodexTokens(ctx context.Context, access string, re
 		return PollResult{Status: PollStatusError, Error: "Codex 设备授权未返回 refresh_token"}, nil
 	}
 	auth := storedCodexAuth{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: codexSchemaVersion,
 		AuthMode:      codexAuthMode,
 		LastRefresh:   time.Now().UTC(),
 		Tokens: storedTokenBundle{
@@ -377,12 +667,22 @@ func (service *Service) commitCodexTokens(ctx context.Context, access string, re
 	}
 	service.mu.Lock()
 	err := service.store.SaveCodex(auth)
+	status := auth.status()
+	if err == nil {
+		if file, loadErr := service.store.LoadCodexFile(); loadErr == nil {
+			for _, account := range file.Accounts {
+				if codexAccountID(account) == codexAccountID(auth) {
+					status = account.status()
+					break
+				}
+			}
+		}
+	}
 	service.mu.Unlock()
 	if err != nil {
 		return PollResult{Status: PollStatusError, Error: "保存 Codex 认证副本失败"}, err
 	}
 	service.forgetPending(pollToken)
-	status := auth.status()
 	return PollResult{Status: PollStatusSuccess, Account: &status}, nil
 }
 

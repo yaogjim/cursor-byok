@@ -51,6 +51,7 @@ import {
   stopProxyService,
   startGatewayService,
   stopGatewayService,
+  testGatewayService,
   testModelAdapter,
   fetchModelAdapterModels,
   copyGatewayToken as copyGatewayTokenApi,
@@ -80,6 +81,8 @@ export const ANTHROPIC_THINKING_EFFORT_DEFAULT = "xhigh";
 export const OPENAI_ENDPOINT_RESPONSES = "/v1/responses";
 export const OPENAI_ENDPOINT_CHAT_COMPLETIONS = "/v1/chat/completions";
 export const OPENAI_ENDPOINT_CUSTOM = "/custom";
+export const CODEX_SUBSCRIPTION_BASE_URL = "https://chatgpt.com/backend-api/codex/responses";
+export const GROK_SUBSCRIPTION_BASE_URL = "https://api.x.ai/v1";
 export const OPENAI_EXTRA_PARAMS_DEFAULT_JSON = `{
   "service_tier": "priority"
 }`;
@@ -435,6 +438,16 @@ export function normalizeModelAdapter(source) {
   const normalizedOpenAIEndpoint = normalizeOpenAIEndpoint(
     raw.openAIEndpoint ?? raw.openaiEndpoint ?? raw.open_ai_endpoint ?? raw.endpoint,
   );
+  const normalizedCredentialSource = normalizeCredentialSource(raw.credentialSource ?? raw.credential_source);
+  let normalizedBaseURL = normalizeBaseURL(raw.baseURL || raw.url);
+  let effectiveOpenAIEndpoint = normalizedOpenAIEndpoint;
+  if (normalizedType === "openai" && normalizedCredentialSource === "codex") {
+    normalizedBaseURL = CODEX_SUBSCRIPTION_BASE_URL;
+    effectiveOpenAIEndpoint = OPENAI_ENDPOINT_RESPONSES;
+  } else if (normalizedType === "openai" && normalizedCredentialSource === "grok") {
+    normalizedBaseURL = GROK_SUBSCRIPTION_BASE_URL;
+    effectiveOpenAIEndpoint = OPENAI_ENDPOINT_CHAT_COMPLETIONS;
+  }
   const openAIExtraParamsEnabled = normalizedType === "openai"
     ? asBoolean(raw.openAIExtraParamsEnabled ?? raw.openaiExtraParamsEnabled ?? raw.open_ai_extra_params_enabled)
     : false;
@@ -454,13 +467,13 @@ export function normalizeModelAdapter(source) {
     sort: asPositiveInteger(raw.sort),
     displayName: asString(raw.displayName || raw.name),
     type: SUPPORTED_MODEL_ADAPTER_TYPES.has(normalizedType) ? normalizedType : "",
-    baseURL: normalizeBaseURL(raw.baseURL || raw.url),
-    apiKey: isManagedCredentialSource(raw.credentialSource ?? raw.credential_source) ? "" : asString(raw.apiKey || raw.key),
-    credentialSource: normalizeCredentialSource(raw.credentialSource ?? raw.credential_source),
+    baseURL: normalizedBaseURL,
+    apiKey: isManagedCredentialSource(normalizedCredentialSource) ? "" : asString(raw.apiKey || raw.key),
+    credentialSource: normalizedCredentialSource,
     tooltipData: asString(raw.tooltipData),
     modelID: asString(raw.modelID),
     reasoningEffort: normalizedReasoningEffort,
-    openAIEndpoint: normalizedType === "openai" ? normalizedOpenAIEndpoint : "",
+    openAIEndpoint: normalizedType === "openai" ? effectiveOpenAIEndpoint : "",
     openAIExtraParamsEnabled,
     openAIExtraParamsJSON,
     customHeadersEnabled,
@@ -2083,6 +2096,19 @@ export async function stopGateway() {
     return { ok: false, error: toUserError(error) };
   } finally {
     appState.gatewayBusy = false;
+  }
+}
+
+export async function testGateway() {
+  if (!appState.gatewayRunning) {
+    return { ok: false, error: "Gateway 未运行" };
+  }
+  try {
+    const result = await testGatewayService();
+    return { ok: true, result, error: "" };
+  } catch (error) {
+    await syncServiceState().catch(() => {});
+    return { ok: false, error: toUserError(error) };
   }
 }
 

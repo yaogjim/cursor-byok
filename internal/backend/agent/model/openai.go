@@ -2382,7 +2382,8 @@ func applyOpenAIRequestHeaders(httpReq *http.Request, req StreamRequest, request
 
 func isCodexResponsesAllowedKey(key string) bool {
 	switch key {
-	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "previous_response_id", "truncation":
+	// previous_response_id 与签发它的 ChatGPT 账号绑定；managed Codex 无法验证归属，因此不允许透传。
+	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "truncation":
 		return true
 	default:
 		return false

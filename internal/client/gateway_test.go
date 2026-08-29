@@ -37,12 +37,22 @@ func TestStartAndStopGatewayWithoutCursorRuntime(t *testing.T) {
 	if !state.GatewayRunning || state.BackendRunning || state.ProxyRunning || state.CursorSettingsApplied {
 		t.Fatalf("independent start state = %#v", state)
 	}
+	testResult, err := service.TestGateway()
+	if err != nil {
+		t.Fatalf("TestGateway() error = %v", err)
+	}
+	if testResult.ListenAddr != listenAddr || testResult.ModelCount != 0 || testResult.LatencyMS < 0 {
+		t.Fatalf("TestGateway() = %#v", testResult)
+	}
 	stopped, err := service.StopGateway()
 	if err != nil {
 		t.Fatalf("StopGateway() error = %v", err)
 	}
 	if stopped.GatewayRunning || stopped.BackendRunning || stopped.ProxyRunning || stopped.CursorSettingsApplied {
 		t.Fatalf("independent stop state = %#v", stopped)
+	}
+	if _, err := service.TestGateway(); err == nil || !strings.Contains(err.Error(), "未运行") {
+		t.Fatalf("TestGateway() after stop error = %v", err)
 	}
 }
 

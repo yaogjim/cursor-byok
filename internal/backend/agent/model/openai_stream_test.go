@@ -492,16 +492,27 @@ func TestFilterCodexResponsesBodyWhitelist(t *testing.T) {
 	if _, ok := body["service_tier"]; ok {
 		t.Fatal("service_tier should be dropped")
 	}
-	for _, key := range []string{"model", "input", "instructions", "stream", "include", "tools", "reasoning", "previous_response_id", "store"} {
+	if _, ok := body["previous_response_id"]; ok {
+		t.Fatal("managed Codex previous_response_id should be dropped")
+	}
+	for _, key := range []string{"model", "input", "instructions", "stream", "include", "tools", "reasoning", "store"} {
 		if _, ok := body[key]; !ok {
 			t.Fatalf("missing allowed key %s", key)
 		}
 	}
 
-	platform := map[string]any{"model": "gpt-5.4", "max_output_tokens": 4096, "prompt_cache_key": "cursor-byok"}
+	platform := map[string]any{
+		"model":                "gpt-5.4",
+		"max_output_tokens":    4096,
+		"prompt_cache_key":     "cursor-byok",
+		"previous_response_id": "resp_static",
+	}
 	filterCodexResponsesBody(platform, StreamRequest{CredentialSource: "static"}, "https://api.openai.com/v1/responses")
 	if platform["max_output_tokens"] != 4096 {
 		t.Fatalf("static openai body changed: %#v", platform)
+	}
+	if platform["previous_response_id"] != "resp_static" {
+		t.Fatalf("static openai previous_response_id changed: %#v", platform)
 	}
 	if _, ok := platform["store"]; ok {
 		t.Fatalf("static openai body should not gain store: %#v", platform)

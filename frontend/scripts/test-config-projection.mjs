@@ -935,8 +935,24 @@ assert(
   "fetchAvailableModelIDs must strip apiKey for managed sources",
 );
 assert(
-  appStateSource.includes("isManagedCredentialSource(raw.credentialSource ?? raw.credential_source) ? \"\" : asString(raw.apiKey || raw.key)"),
+  appStateSource.includes("isManagedCredentialSource(normalizedCredentialSource) ? \"\" : asString(raw.apiKey || raw.key)"),
   "normalizeModelAdapter must strip managed apiKey before TestModelAdapter",
+);
+assert(
+  appStateSource.includes("normalizedCredentialSource === \"codex\"")
+    && appStateSource.includes("normalizedBaseURL = CODEX_SUBSCRIPTION_BASE_URL")
+    && appStateSource.includes("effectiveOpenAIEndpoint = OPENAI_ENDPOINT_RESPONSES"),
+  "normalizeModelAdapter must pin Codex subscriptions to the official Responses endpoint",
+);
+assert(
+  appStateSource.includes("normalizedCredentialSource === \"grok\"")
+    && appStateSource.includes("normalizedBaseURL = GROK_SUBSCRIPTION_BASE_URL")
+    && appStateSource.includes("effectiveOpenAIEndpoint = OPENAI_ENDPOINT_CHAT_COMPLETIONS"),
+  "normalizeModelAdapter must pin Grok subscriptions to the official chat completions endpoint",
+);
+assert(
+  editorSource.includes(':disabled="isManagedCredential"'),
+  "ModelEditor must prevent managed subscription endpoints from being edited",
 );
 const startModelAdapterTestFn = extractSourceFunction(appStateSource, "startModelAdapterTest");
 assert(
@@ -1082,11 +1098,19 @@ assert(!appStateSource.includes("gatewayToken:"), "localStorage cache must not i
 const gatewayCardSource = readFileSync(path.join(frontendSrc, "components/GatewayCard.vue"), "utf8");
 assert(gatewayCardSource.includes("copyGatewayToken"), "GatewayCard must copy via explicit API");
 assert(gatewayCardSource.includes("rotateGatewayToken"), "GatewayCard must rotate via explicit API");
+assert(gatewayCardSource.includes('import { Clipboard } from "@wailsio/runtime"'), "GatewayCard must use the native Wails clipboard");
+assert(gatewayCardSource.includes("await Clipboard.SetText(text)"), "GatewayCard clipboard writes must await the native API");
+assert(!gatewayCardSource.includes("copy-text-to-clipboard"), "GatewayCard must not use DOM clipboard fallbacks");
+assert(gatewayCardSource.includes("handleGatewayTest"), "GatewayCard must expose a Gateway availability test");
+assert(gatewayCardSource.includes("await handleGatewayTest()"), "Gateway start must automatically test availability");
+assert(gatewayCardSource.includes("极简使用"), "GatewayCard must include minimal usage instructions");
 assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must not store token in appState");
 const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
 
 const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
+assert(clientApiSource.includes("TestGateway"), "client API must expose Gateway availability testing");
+assert(appStateSource.includes("testGatewayService"), "appState must call the Gateway availability API");
 const fetchModelsApiFn = extractSourceFunction(clientApiSource, "fetchModelAdapterModels");
 assert(fetchModelsApiFn.includes("credentialSource"), "clientApi FetchModelAdapterModels must send credentialSource");
 assert(
@@ -1268,6 +1292,21 @@ assert(subscriptionAuthSource.includes("Codex 接入"), "Codex pane keeps the re
 assert(subscriptionAuthSource.includes("Grok 接入"), "Grok pane has its own integration heading");
 assert(subscriptionAuthSource.includes("导入 auth.json"), "Codex auth.json import stays in the Codex pane");
 assert(subscriptionAuthSource.includes("设备码授权"), "Codex and Grok panes expose device authorization");
+assert(subscriptionAuthSource.includes('listSubscriptionAccounts(props.provider)'), "Codex and Grok panes must both load account lists");
+assert(subscriptionAuthSource.includes('v-for="account in accounts"'), "subscription panes must render managed account lists");
+assert(subscriptionAuthSource.includes("refreshSubscriptionAccountUsage"), "Codex accounts must support account-specific usage refresh");
+assert(subscriptionAuthSource.includes("导入 sub2api"), "Codex and Grok panes must expose sub2api import");
+assert(subscriptionAuthSource.includes("sub2apiSelected"), "sub2api import must let users select accounts");
+assert(subscriptionAuthSource.includes("resetSub2APIImport();"), "successful sub2api import must close and reset the selection modal while busy");
+const sub2apiImportHandler = extractSourceFunction(subscriptionAuthSource, "handleImportSub2API");
+assert(sub2apiImportHandler.includes("resetSub2APIImport();"), "sub2api success path must reset the modal directly");
+assert(!sub2apiImportHandler.includes("closeSub2APIImport();"), "sub2api success path must not use the busy-guarded manual close handler");
+assert(subscriptionAuthSource.includes('class="subscription-account-list"'), "managed account list must use its scroll container class");
+assert(subscriptionAuthSource.includes("已按当前接入类型过滤"), "sub2api selection must explain provider filtering");
+assert(subscriptionAuthSource.includes("当前使用"), "subscription account list must show the active account");
+assert(clientApiSource.includes("RefreshSubscriptionAccountUsage"), "client API must expose account-specific usage refresh");
+assert(clientApiSource.includes("PreviewSub2APIImport"), "client API must expose provider-filtered sub2api preview");
+assert(clientApiSource.includes("ImportSub2APIAccounts"), "client API must expose selected sub2api import");
 assert(accessViewSource.includes('v-if="activeClient === \'gateway\'"'), "AccessView remounts client panes with v-if");
 assert(!accessViewSource.includes("keep-alive"), "AccessView must not keep-alive client panes");
 assert(accessViewSource.includes("is-embedded-pane"), "cursor pane uses nested overflow layout");

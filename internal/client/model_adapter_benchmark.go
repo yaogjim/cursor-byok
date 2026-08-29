@@ -98,6 +98,11 @@ var modelListHTTPDo = defaultModelListHTTPDo
 // resolveModelAdapterCredential 仅供测试注入；默认走 ProxyService.subscriptionAuth.Resolve。
 var resolveModelAdapterCredential = defaultResolveModelAdapterCredential
 
+// streamModelAdapterTestOpenAI 仅供测试注入；默认走真实 OpenAI adapter。
+var streamModelAdapterTestOpenAI = func(ctx context.Context, req modeladapter.StreamRequest, sink func(modeladapter.ModelEvent) error) error {
+	return modeladapter.NewOpenAIAdapter().Stream(ctx, req, sink)
+}
+
 // codexModelListURL 仅供测试注入 fake endpoint；生产默认固定 chatgpt.com Codex models 地址。
 var codexModelListURL = defaultCodexModelListURL
 
@@ -749,7 +754,7 @@ func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter s
 		Observer:                    observer,
 		ProviderStreamIdleTimeout:   modelAdapterTestTimeout,
 	}
-	err := modeladapter.NewOpenAIAdapter().Stream(ctx, req, func(event modeladapter.ModelEvent) error {
+	err := streamModelAdapterTestOpenAI(ctx, req, func(event modeladapter.ModelEvent) error {
 		now := time.Now().UTC()
 		switch event.Kind {
 		case modeladapter.ModelEventKindTextDelta:

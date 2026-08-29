@@ -174,16 +174,33 @@ func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req Str
 	}
 	switch source {
 	case subscriptionauth.CredentialSourceCodex:
-		if !isUnauthorizedHTTPStatus(err) {
+		if isUnauthorizedHTTPStatus(err) {
+			cred, resolveErr := router.credentials.ResolveAfterUnauthorized(ctx, source, req.CredentialID)
+			if resolveErr != nil {
+				return StreamRequest{}, false, resolveErr
+			}
+			next, applyErr := applyCredentialToRequest(req, cred)
+			if applyErr != nil {
+				return StreamRequest{}, false, applyErr
+			}
+			return next, true, nil
+		}
+		if isModelAdapterTestRequest(req) || !subscriptionauth.IsQuotaError(err) {
 			return StreamRequest{}, false, nil
 		}
-		cred, resolveErr := router.credentials.ResolveAfterUnauthorized(ctx, source)
-		if resolveErr != nil {
-			return StreamRequest{}, false, resolveErr
+		if markErr := router.credentials.MarkQuotaExhausted(ctx, req.CredentialID); markErr != nil {
+			if errors.Is(markErr, subscriptionauth.ErrQuotaExhausted) {
+				return StreamRequest{}, false, markErr
+			}
+			return StreamRequest{}, false, nil
+		}
+		cred, resolveErr := router.credentials.Resolve(ctx, source)
+		if resolveErr != nil || strings.TrimSpace(cred.AccountID) == "" || strings.TrimSpace(cred.AccountID) == strings.TrimSpace(req.CredentialID) {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
 		}
 		next, applyErr := applyCredentialToRequest(req, cred)
 		if applyErr != nil {
-			return StreamRequest{}, false, applyErr
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
 		}
 		return next, true, nil
 	case subscriptionauth.CredentialSourceGrok:

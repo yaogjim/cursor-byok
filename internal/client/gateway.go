@@ -2,7 +2,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -195,6 +199,64 @@ func (s *ProxyService) CopyGatewayToken() (string, error) {
 		return "", errors.New("尚未生成 Gateway token")
 	}
 	return token, nil
+}
+
+type GatewayTestResult struct {
+	ListenAddr string `json:"listenAddr"`
+	ModelCount int    `json:"modelCount"`
+	LatencyMS  int64  `json:"latencyMs"`
+}
+
+func (s *ProxyService) TestGateway() (GatewayTestResult, error) {
+	if s == nil {
+		return GatewayTestResult{}, errors.New("配置服务未初始化")
+	}
+	listenAddr, running, lastError := s.snapshotGateway()
+	if !running || strings.TrimSpace(listenAddr) == "" {
+		return GatewayTestResult{}, errors.New(firstNonEmptyGatewayError(lastError, "Gateway 未运行"))
+	}
+	cfg, err := s.LoadUserConfig()
+	if err != nil {
+		return GatewayTestResult{}, err
+	}
+	token := strings.TrimSpace(cfg.Gateway.Token)
+	if token == "" {
+		return GatewayTestResult{}, errors.New("尚未生成 Gateway token")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	requestURL := "http://" + listenAddr + "/v1/models"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return GatewayTestResult{}, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	startedAt := time.Now()
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 3 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return GatewayTestResult{}, fmt.Errorf("Gateway 连接失败: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return GatewayTestResult{}, fmt.Errorf("读取 Gateway 响应失败: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return GatewayTestResult{}, fmt.Errorf("Gateway 返回 HTTP %d", response.StatusCode)
+	}
+	var payload struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return GatewayTestResult{}, fmt.Errorf("Gateway 响应格式无效: %w", err)
+	}
+	return GatewayTestResult{
+		ListenAddr: listenAddr,
+		ModelCount: len(payload.Data),
+		LatencyMS:  time.Since(startedAt).Milliseconds(),
+	}, nil
 }
 
 func (s *ProxyService) RotateGatewayToken() (string, error) {

@@ -16,15 +16,18 @@ import {
   rotateGatewayToken,
   startGateway,
   stopGateway,
+  testGateway,
   toUserError,
 } from "@/state/appState";
 import { DEFAULT_GATEWAY_LISTEN_ADDR, gatewayPublicModelInvalid } from "@/state/configProjection";
-import copyTextToClipboard from "copy-text-to-clipboard";
+import { Clipboard } from "@wailsio/runtime";
 import { computed, ref } from "vue";
 
 const message = useMessage();
 const gatewayDirty = computed(() => configSectionDirty.gateway);
 const scopeOpen = ref(false);
+const gatewayTestBusy = ref(false);
+const gatewayTestText = ref("");
 
 const adapterOptions = computed(() =>
   (appState.modelAdapters || []).map((adapter) => ({
@@ -64,12 +67,13 @@ function showActionError(title, error) {
   message(`${title}：${detail}`);
 }
 
-function copyTokenValue(token) {
+async function copyTokenValue(token) {
   const text = String(token || "").trim();
   if (!text) {
     return false;
   }
-  return Boolean(copyTextToClipboard(text));
+  await Clipboard.SetText(text);
+  return true;
 }
 
 async function handleCopyBaseURL() {
@@ -78,11 +82,15 @@ async function handleCopyBaseURL() {
     showActionError("复制失败", "Base URL 不可用");
     return;
   }
-  if (!copyTokenValue(text)) {
-    showActionError("复制失败", "复制被 WebView 拒绝");
-    return;
+  try {
+    if (!await copyTokenValue(text)) {
+      showActionError("复制失败", "Base URL 不可用");
+      return;
+    }
+    message("Base URL 已复制");
+  } catch (error) {
+    showActionError("复制失败", toUserError(error));
   }
-  message("Base URL 已复制");
 }
 
 async function persistGateway() {
@@ -101,8 +109,8 @@ async function handleCopyToken() {
       showActionError("复制失败", "尚未生成 Gateway token");
       return;
     }
-    if (!copyTokenValue(token)) {
-      showActionError("复制失败", "复制被 WebView 拒绝");
+    if (!await copyTokenValue(token)) {
+      showActionError("复制失败", "尚未生成 Gateway token");
       return;
     }
     message("Gateway token 已复制");
@@ -114,25 +122,51 @@ async function handleCopyToken() {
 async function handleRotateToken() {
   const confirmed = await showModal({
     title: "轮换 Gateway token",
-    content: "轮换后旧 token 立即失效。新 token 只会返回这一次，请立即复制。",
+    content: "轮换后旧 token 立即失效，新 token 将自动复制。",
     confirmText: "确认轮换",
   });
   if (!confirmed) {
     return;
   }
+  let token = "";
   try {
-    const token = await rotateGatewayToken();
-    if (!token) {
-      showActionError("轮换失败", "尚未生成 Gateway token");
-      return;
-    }
-    if (!copyTokenValue(token)) {
-      showActionError("复制失败", "Gateway token 已轮换，但复制被 WebView 拒绝");
-      return;
-    }
-    message("Gateway token 已轮换并复制");
+    token = await rotateGatewayToken();
   } catch (error) {
     showActionError("轮换失败", toUserError(error));
+    return;
+  }
+  if (!token) {
+    showActionError("轮换失败", "尚未生成 Gateway token");
+    return;
+  }
+  try {
+    await copyTokenValue(token);
+    message("Gateway token 已轮换并复制");
+  } catch (error) {
+    showActionError("复制失败", `Gateway token 已轮换，但复制失败：${toUserError(error)}`);
+  }
+}
+
+async function handleGatewayTest() {
+  if (gatewayTestBusy.value) {
+    return false;
+  }
+  gatewayTestBusy.value = true;
+  gatewayTestText.value = "测试中...";
+  try {
+    const outcome = await testGateway();
+    if (!outcome.ok) {
+      gatewayTestText.value = `测试失败：${outcome.error}`;
+      showActionError("Gateway 测试失败", outcome.error);
+      return false;
+    }
+    const modelCount = Number(outcome.result?.modelCount || 0);
+    const latencyMS = Math.max(0, Number(outcome.result?.latencyMs || 0));
+    gatewayTestText.value = `入口可用 · ${modelCount} 个公开模型 · ${latencyMS} ms`;
+    message("Gateway 可用");
+    return true;
+  } finally {
+    gatewayTestBusy.value = false;
   }
 }
 
@@ -144,14 +178,18 @@ async function handleGatewayStart() {
   const result = await startGateway();
   if (!result.ok) {
     showActionError("启动失败", result.error);
+    return;
   }
+  await handleGatewayTest();
 }
 
 async function handleGatewayStop() {
   const result = await stopGateway();
   if (!result.ok) {
     showActionError("停止失败", result.error);
+    return;
   }
+  gatewayTestText.value = "";
 }
 
 function addPublicModel() {
@@ -239,10 +277,18 @@ async function handleReloadGateway() {
             <Button
               v-else
               class="btn-sm btn-risk"
-              :disabled="appState.gatewayBusy"
+              :disabled="appState.gatewayBusy || gatewayTestBusy"
               @click="handleGatewayStop"
             >
               停止 Gateway
+            </Button>
+            <Button
+              v-if="appState.gatewayRunning"
+              class="btn-sm"
+              :disabled="appState.gatewayBusy || gatewayTestBusy"
+              @click="handleGatewayTest"
+            >
+              {{ gatewayTestBusy ? "测试中..." : "测试可用性" }}
             </Button>
             <span class="card-sub !mt-0">{{ gatewayIntentText }}</span>
           </div>
@@ -254,6 +300,9 @@ async function handleReloadGateway() {
           </span>
           <span v-else-if="appState.gatewayLastError" class="field-h text-[var(--color-error-text)]">
             {{ appState.gatewayLastError }}
+          </span>
+          <span v-else-if="gatewayTestText" class="field-h">
+            {{ gatewayTestText }}
           </span>
         </div>
       </div>
@@ -320,6 +369,10 @@ async function handleReloadGateway() {
           </div>
         </div>
         <Button class="btn-sm" @click="handleCopyBaseURL">复制 Base URL</Button>
+      </div>
+
+      <div class="note plain">
+        <strong>极简使用：</strong>启用并保存 → 启动 Gateway → 将 Base URL 和 Token 填入客户端 → 模型填写上方公开别名。启动后会自动测试入口，也可点击“测试可用性”。
       </div>
 
       <div class="ui-collapse" :class="{ 'is-open': scopeOpen }">

@@ -960,6 +960,18 @@ body,
   min-height: 320px;
   flex: 1 1 auto;
   flex-direction: column;
+  overflow: hidden;
+}
+
+.subscription-account-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px 28px;
 }
 
 .subscription-account-head {

@@ -129,6 +129,38 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 本轮只调整前端信息架构、提示、品牌样式、语言目录和路由门禁，不修改认证协议、凭据存储或模型请求链路。验证通过：`npm run build --prefix frontend`、`node frontend/scripts/test-config-projection.mjs`、`node --test frontend/src/router/access.test.js`（5/5）。构建只有既有 chunk-size warning；未重新打包 macOS DMG，未做真实 Wails 窗口点击，因此状态为 `verified-partial`。
 
+### 0.17 Codex 多账户管理与安全轮换
+
+2026-08-29 按用户确认策略实现 Codex 多账户池，同时保持模型配置只选择 `credentialSource=codex`、不绑定具体账户。`codex-auth.json` 从旧单账户结构兼容迁移为版本化 `accounts[]`；第一个账户自动激活，后续新增账户作为备用，重复导入同一账户更新凭据但保留激活、套餐和用量状态。Codex 接入页改为真实账户列表，支持激活、逐账户刷新双窗口用量、删除和清除全部副本。
+
+运行时 401 定向刷新原请求账户；刷新确认失效后只将该账户标记为需要重新授权，再选择备用账户。明确 quota 错误只在零模型输出、非模型测试且共享 retry budget 可用时幂等标记失败账户、切换下一可用账户并重试一次；同一旧账户的并发重复信号不会把 active 从 B 继续推进到 C。已知额度重置时间到达后账户恢复候选资格。固定 Codex 上游、`ChatGPT-Account-Id`、请求体白名单和 token 不写配置的边界保持不变。
+
+验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、`node frontend/scripts/test-config-projection.mjs` 和 `npm run build --prefix frontend`。已重新生成并核验包含本功能的 Apple Silicon macOS `0.0.52.2` DMG：应用版本 `0.0.52.2`、Mach-O arm64、最低 macOS `10.15.0`、codesign 有效、`hdiutil verify` VALID；产物 23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。未使用真实订阅 token 请求外部 Codex，未做 Wails 窗口视觉点击，因此交付保持 `verified-partial`。
+### 0.18 sub2api 账号选择导入与用量刷新桥接
+
+2026-08-29 根据 Codex 接入页运行截图修复逐账户用量刷新绑定缺失，并为 Codex/Grok 接入页增加 sub2api JSON 导入。导入流程先在后端按当前页面 provider 过滤：Codex 接受 `openai/codex + oauth`，Grok 接受 `grok/xai/x.ai + oauth`，同时要求 access token 与 refresh token；随后前端弹出候选账号列表供多选，只导入用户选择且属于当前页面类型的账号。源文件保持只读，凭据只进入应用私有账号池，重复账号更新原记录且后续导入不抢占当前激活账号。
+
+验证通过：订阅认证 Go 测试（包含用户提供 sub2api 文件的只读解析、provider 过滤、选择导入和源文件不变）、Wails bindings 生成、前端配置投影和生产构建。Wails 生成结果确认公开了 `RefreshSubscriptionAccountUsage`、`PreviewSub2APIImport` 与 `ImportSub2APIAccounts`；桥接包完整测试因大型生成文件编译超过两分钟后终止。未使用真实外部订阅请求，未做 Wails 窗口点击，因此状态为 `verified-partial`。
+
+### 0.19 本地编译 macOS v0.0.52.3
+
+2026-08-29 按用户要求将版本号升到 `0.0.52.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布。
+
+使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物为 `bin/release/0.0.52.3/cursor-byok-0.0.52.3-macos-arm64.dmg`（24,019,575 bytes）。挂载后 Info.plist 版本为 `0.0.52.3`，可执行文件为 Mach-O arm64 且最低 macOS `10.15.0`，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`。本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+### 0.20 订阅账号列表滚动与 sub2api 弹窗关闭修复
+
+2026-08-29 根据 `0.0.52.3` 运行截图修复两个前端问题：Codex/Grok 账号列表在固定高度授权卡片中改为独立纵向滚动区，标题和底部操作栏保持可见；sub2api 确认导入成功后直接重置并关闭选择弹窗，不再调用会被 `busy=true` 拦截的手动关闭函数。验证结果以 `task/todo.md` 的 `subscription-account-list-modal-fix-20260829` 为准；未重新打包 macOS DMG。
+
+### 0.21 Gateway 可用性测试与 managed Codex 请求体边界
+
+2026-08-29 本轮在上一轮 0.0.52.3 功能基础上补齐两处改动，随 0.0.52.4 提交。
+
+Gateway 接入卡片新增「测试可用性」：启动 Gateway 后自动对本机入口执行一次真实 HTTP 探测（`GET /v1/models`，带 Bearer token），返回监听地址、公开模型数量与毫秒延迟；卡片状态区实时显示入口可用性与极简使用引导，token 复制/轮换改走 Wails 原生剪贴板 `Clipboard.SetText` 并等待写入结果，失败给出可读错误。桥接层新增 `TestGateway`、`RefreshSubscriptionAccountUsage`、`PreviewSub2APIImport` 与 `ImportSub2APIAccounts` 绑定。
+
+managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_response_id`：该 ID 与签发它的 ChatGPT 账号绑定，托管场景无法验证归属，按 fail-closed 剥离；static OpenAI Responses 保持原请求体不变。回归覆盖 managed 剥离与 static 保留两条路径。订阅模型测试改为可注入的 stream 函数，验证 Codex/Grok 固定上游归一化后凭据元数据正确注入且不写回原 adapter。
+
+验证结果以 `task/todo.md` 的 `macos-build-0.0.52.4-20260829` 为准；构建产物校验信息见该条目。
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -310,6 +342,12 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 
 ### 2. 按时间索引
+
+- **2026-08-29**：实现 Codex 多账户管理与安全轮换。模型配置仍只选择 Codex 凭据来源；旧单账户私有文件兼容迁移为账户池，接入页支持激活、逐账户用量和删除。401 定向刷新失败后切换备用账户，明确 quota 仅在零输出安全窗口内幂等轮换并单次重试。自动化验证范围见 `task/todo.md`；未使用真实 token、未做 Wails 视觉点击或发布包重构建。
+
+- **2026-08-29**：完成 `v0.0.52.2` Apple Silicon macOS 本地构建，产物为 `bin/release/0.0.52.2/cursor-byok-0.0.52.2-macos-arm64.dmg`；版本元数据与发布说明已对齐，DMG 校验、版本、架构、签名和 SHA-256 已核验。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+
+- **2026-08-29**：修复订阅模型测试沿用用户填写接口地址的问题。Codex 订阅统一使用 ChatGPT Codex Responses 官方上游，Grok 订阅统一使用 xAI 官方上游；前后端保存、重载和测试采用同一归一化规则，订阅模式下接口地址与协议端点只读。后端端点、Codex 请求协议、客户端测试链路、前端投影和生产构建通过；未使用用户真实 token 请求外部上游，未重新打包 macOS 安装包。
 
 - **2026-08-29**：完成 `v0.0.52.1` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，带版本号的产物位于 `bin/release/0.0.52.1/cursor-byok-0.0.52.1-macos-arm64.dmg`；已核验 `0.0.52.1` 版本、arm64 架构、adhoc 签名、DMG 完整性和 SHA-256。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 

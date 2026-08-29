@@ -137,3 +137,33 @@ func (s *ProxyService) RefreshSubscriptionUsage(provider string) (subscriptionau
 	defer cancel()
 	return service.RefreshUsage(ctx, subscriptionauth.ProviderKind(provider))
 }
+
+func (s *ProxyService) RefreshSubscriptionAccountUsage(provider string, accountID string) (subscriptionauth.UsageSnapshot, error) {
+	service := s.subscriptionAuthService()
+	if service == nil {
+		return subscriptionauth.UsageSnapshot{}, fmt.Errorf("订阅认证服务未初始化")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return service.RefreshAccountUsage(ctx, subscriptionauth.ProviderKind(provider), accountID)
+}
+
+func (s *ProxyService) PreviewSub2APIImport(path string, provider string) (subscriptionauth.Sub2APIImportPreview, error) {
+	service := s.subscriptionAuthService()
+	if service == nil {
+		return subscriptionauth.Sub2APIImportPreview{}, fmt.Errorf("订阅认证服务未初始化")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return service.PreviewSub2APIFile(ctx, path, subscriptionauth.ProviderKind(provider))
+}
+
+func (s *ProxyService) ImportSub2APIAccounts(request subscriptionauth.Sub2APIImportRequest) (subscriptionauth.Sub2APIImportResult, error) {
+	service := s.subscriptionAuthService()
+	if service == nil {
+		return subscriptionauth.Sub2APIImportResult{}, fmt.Errorf("订阅认证服务未初始化")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return service.ImportSub2APIFile(ctx, request)
+}

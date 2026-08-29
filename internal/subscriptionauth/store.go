@@ -11,20 +11,28 @@ import (
 )
 
 const (
-	schemaVersion  = 1
-	dirPermission  = 0o700
-	filePermission = 0o600
-	codexFileName  = "codex-auth.json"
-	grokFileName   = "grok-accounts.json"
-	codexAuthMode  = "chatgpt"
+	schemaVersion      = 1
+	codexSchemaVersion = 2
+	dirPermission      = 0o700
+	filePermission     = 0o600
+	codexFileName      = "codex-auth.json"
+	grokFileName       = "grok-accounts.json"
+	codexAuthMode      = "chatgpt"
 )
 
 type FileStore struct {
 	dir string
 }
 
+type storedCodexFile struct {
+	SchemaVersion int               `json:"schema_version"`
+	Accounts      []storedCodexAuth `json:"accounts"`
+}
+
 type storedCodexAuth struct {
-	SchemaVersion           int               `json:"schema_version"`
+	Active                  bool              `json:"active"`
+	AuthRequired            bool              `json:"auth_required"`
+	SchemaVersion           int               `json:"schema_version,omitempty"`
 	AuthMode                string            `json:"auth_mode"`
 	LastRefresh             time.Time         `json:"last_refresh"`
 	Tokens                  storedTokenBundle `json:"tokens"`
@@ -196,28 +204,107 @@ func (store *FileStore) readJSON(path string, dest any) error {
 	return nil
 }
 
-func (store *FileStore) LoadCodex() (*storedCodexAuth, error) {
-	var auth storedCodexAuth
-	err := store.readJSON(store.CodexPath(), &auth)
+func (store *FileStore) LoadCodexFile() (storedCodexFile, error) {
+	var file storedCodexFile
+	err := store.readJSON(store.CodexPath(), &file)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return storedCodexFile{SchemaVersion: codexSchemaVersion, Accounts: []storedCodexAuth{}}, nil
 	}
+	if err != nil {
+		return storedCodexFile{}, err
+	}
+	if file.Accounts != nil {
+		file.SchemaVersion = codexSchemaVersion
+		return file, nil
+	}
+
+	// schema v1 stored one account at the document root. Read it again as the
+	// legacy shape and keep its credentials unchanged while migrating in memory.
+	var legacy storedCodexAuth
+	if err := store.readJSON(store.CodexPath(), &legacy); err != nil {
+		return storedCodexFile{}, err
+	}
+	file = storedCodexFile{SchemaVersion: codexSchemaVersion, Accounts: []storedCodexAuth{}}
+	if trimSpace(legacy.Tokens.AccessToken) != "" {
+		legacy.Active = true
+		legacy.AuthRequired = false
+		legacy.SchemaVersion = 0
+		file.Accounts = append(file.Accounts, legacy)
+	}
+	if err := store.SaveCodexFile(file); err != nil {
+		return storedCodexFile{}, err
+	}
+	return file, nil
+}
+
+func (store *FileStore) SaveCodexFile(file storedCodexFile) error {
+	file.SchemaVersion = codexSchemaVersion
+	if file.Accounts == nil {
+		file.Accounts = []storedCodexAuth{}
+	}
+	for i := range file.Accounts {
+		file.Accounts[i].SchemaVersion = 0
+		if trimSpace(file.Accounts[i].AuthMode) == "" {
+			file.Accounts[i].AuthMode = codexAuthMode
+		}
+		file.Accounts[i].UpdatedAt = time.Now().UTC()
+	}
+	return store.writeJSON(store.CodexPath(), file)
+}
+
+func (store *FileStore) LoadCodex() (*storedCodexAuth, error) {
+	file, err := store.LoadCodexFile()
 	if err != nil {
 		return nil, err
 	}
-	if trimSpace(auth.Tokens.AccessToken) == "" {
-		return nil, nil
+	for _, account := range file.Accounts {
+		if account.Active && trimSpace(account.Tokens.AccessToken) != "" {
+			copy := account
+			return &copy, nil
+		}
 	}
-	return &auth, nil
+	for _, account := range file.Accounts {
+		if trimSpace(account.Tokens.AccessToken) != "" {
+			copy := account
+			return &copy, nil
+		}
+	}
+	return nil, nil
 }
 
 func (store *FileStore) SaveCodex(auth storedCodexAuth) error {
-	auth.SchemaVersion = schemaVersion
-	if trimSpace(auth.AuthMode) == "" {
-		auth.AuthMode = codexAuthMode
+	file, err := store.LoadCodexFile()
+	if err != nil {
+		return err
 	}
-	auth.UpdatedAt = time.Now().UTC()
-	return store.writeJSON(store.CodexPath(), auth)
+	accountID, _, _ := accountIdentity(ProviderCodex, auth.Tokens.AccessToken, auth.Tokens.IDToken)
+	updated := false
+	for i := range file.Accounts {
+		existingID, _, _ := accountIdentity(ProviderCodex, file.Accounts[i].Tokens.AccessToken, file.Accounts[i].Tokens.IDToken)
+		if existingID != accountID {
+			continue
+		}
+		existing := file.Accounts[i]
+		auth.Active = existing.Active
+		auth.AuthRequired = false
+		auth.PlanLabel = firstNonEmpty(auth.PlanLabel, existing.PlanLabel)
+		auth.RemainingPercent = existing.RemainingPercent
+		auth.UsedPercent = existing.UsedPercent
+		auth.ResetAtMS = existing.ResetAtMS
+		auth.SessionRemainingPercent = existing.SessionRemainingPercent
+		auth.SessionResetAtMS = existing.SessionResetAtMS
+		auth.LimitReached = existing.LimitReached
+		auth.ChatGPTAccountID = firstNonEmpty(auth.ChatGPTAccountID, existing.ChatGPTAccountID)
+		auth.Email = firstNonEmpty(auth.Email, existing.Email)
+		file.Accounts[i] = auth
+		updated = true
+		break
+	}
+	if !updated {
+		auth.Active = len(file.Accounts) == 0
+		file.Accounts = append(file.Accounts, auth)
+	}
+	return store.SaveCodexFile(file)
 }
 
 func (store *FileStore) ClearCodex() error {

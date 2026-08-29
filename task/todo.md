@@ -17,6 +17,55 @@
 
 ### ✅ 最近完成
 
+**macos-build-0.0.52.4-20260829** (completed, verified)
+- 用户要求汇总更新情况作为 git 提交说明（版本号 `0.0.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.4.md` 对齐到 `0.0.52.4`；保留构建前已有的工作树改动。
+- 本版本新增 Gateway 可用性测试（启动后自动本机 HTTP 探测 `/v1/models`，卡片展示入口状态、模型数量与延迟）、token 复制/轮换改用 Wails 原生剪贴板、极简使用引导；managed Codex 请求体白名单 fail-closed 剥离 `previous_response_id`，static OpenAI 保留原请求体。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 与 `SHA256SUMS` 见下文验证记录（编译完成后回填）。
+- 已提交并 push；未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release。
+
+**subscription-account-list-modal-fix-20260829** (completed, verified-partial)
+- 修复 Codex/Grok 多账号列表在固定高度卡片中被裁切的问题：账号列表成为独立纵向滚动区，卡片标题和底部操作栏保持可见。
+- 修复 sub2api 确认导入后选择弹窗未关闭的问题：成功路径不再调用受 `busy` 状态保护的手动关闭函数，而是直接重置并关闭弹窗状态。
+- 验证：前端配置投影门禁覆盖滚动容器和成功关闭路径，生产构建与 `git diff --check` 通过；未做真实 Wails 窗口点击，未重新打包 DMG。
+
+**macos-build-0.0.52.3-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.3`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.3.md` 对齐到 `0.0.52.3`；保留构建前已有的工作树改动。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.3/cursor-byok-0.0.52.3-macos-arm64.dmg`（24,019,575 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.3`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`；`SHA256SUMS` 校验通过。
+- 本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**codex-previous-response-stateless-boundary-20260829** (completed, verified)
+- Managed Codex ChatGPT Responses 在请求体白名单边界一律剥离 `previous_response_id`，无法验证引用所属账号时 fail-closed；static OpenAI Responses 保持原请求体不变。
+- 当前正常 Codex 请求发送完整 `input`，生产路径目前不生成 `RequestBodyOverride` / `previous_response_id`；回归覆盖 managed Codex 删除与 static Responses 保留，未创建提交。
+
+**subscription-sub2api-import-20260829** (completed, verified-partial)
+- 修复 Codex 单账户“刷新用量”调用了未绑定 Wails 方法的问题：桥接层补齐 `RefreshSubscriptionAccountUsage` 转发。
+- Codex 与 Grok 接入页增加 sub2api JSON 导入入口；后端先按当前页面类型过滤 OAuth 账号，前端弹窗展示候选账号并允许多选后导入。Codex 仅接受 `openai/codex + oauth`，Grok 仅接受 `grok/xai/x.ai + oauth`，其他平台、认证类型或缺少 access/refresh token 的项目跳过。
+- 导入只读取源文件并写入本应用私有凭据池；重复账号更新原账号，Codex/Grok 都不因后续导入抢占当前激活账号。
+- 验证：订阅认证 Go 测试（包含用户提供 sub2api 文件的只读解析、provider 过滤、选择导入和源文件不变）、Wails bindings 生成、前端配置投影和生产构建通过；桥接包完整测试因大型生成文件编译超过两分钟后终止，未使用真实外部订阅请求，未做 Wails 窗口点击。
+
+**codex-multi-account-rotation-20260829** (completed, verified-partial)
+- Codex 已升级为兼容旧单账户文件的多账户池；模型配置仍只保存 `credentialSource=codex`，第一个账户自动激活，后续账户作为备用，重复导入更新原账户。
+- 已实现逐账户激活、删除、双窗口用量、401 定向刷新和零输出明确配额错误下的幂等轮换；并发重复失败不会连续跳过备用账户。
+- 验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、前端配置投影测试和生产构建。
+- 已重新生成并核验包含本功能的 Apple Silicon macOS `0.0.52.2` DMG：23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`；未使用真实 Codex token，未做 Wails 窗口点击，未创建提交。
+
+**macos-build-0.0.52.2-20260829** (completed, superseded)
+- 用户要求编译 Apple Silicon macOS `0.0.52.2`。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.2.md` 对齐到 `0.0.52.2`，发布说明补充订阅模型测试端点修复；保留构建前已有的工作树改动。
+- 已重新生成包含当前 Codex 多账户功能的安装包，旧产物校验已被新产物取代：`bin/release/0.0.52.2/cursor-byok-0.0.52.2-macos-arm64.dmg`（23,070,403 bytes），SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.2`；最低 macOS `10.15.0`；Mach-O arm64；codesign 校验有效；`hdiutil verify` VALID；`SHA256SUMS` 校验通过。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**subscription-model-endpoint-normalization-20260829** (completed, verified-partial)
+- 根因：模型测试只把订阅 token 注入请求，却继续使用模型配置中的接口地址；当 Codex 配置填写本应用 Gateway 入站地址 `127.0.0.1:18091/v1` 时，请求带 ChatGPT token 回到本地 Gateway，而不是发往 Codex Responses 上游。
+- 修复：OpenAI 类型的 Codex 订阅固定归一化为 `https://chatgpt.com/backend-api/codex/responses` + `/v1/responses`；Grok 订阅固定归一化为 `https://api.x.ai/v1` + `/v1/chat/completions`。前后端保存、重载和测试使用同一规则，订阅模式下接口地址和端点不再允许编辑；静态 API key 配置保持自定义地址行为。
+- 验证：后端 Codex/Grok 端点归一化测试、Codex Responses 请求头/请求体测试、客户端订阅模型测试链路、前端配置投影和生产构建通过；未使用用户真实 token 请求外部上游，未重新打包 macOS 安装包。
+
 **macos-build-0.0.52.1-20260829** (completed, verified)
 - 用户要求编译 Apple Silicon macOS `0.0.52.1`，并直接在 `bin/release` 下创建版本目录和带版本号的产物。
 - 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.1.md` 对齐到 `0.0.52.1`；保留构建前已有的工作树改动。

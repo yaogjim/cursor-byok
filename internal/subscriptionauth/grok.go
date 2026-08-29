@@ -274,14 +274,9 @@ func (service *Service) ActivateAccount(ctx context.Context, accountID string) (
 		return AccountStatus{State: StateError, Error: "账号 ID 不能为空"}, errors.New("账号 ID 不能为空")
 	}
 	if strings.HasPrefix(trimmed, string(ProviderCodex)+":") {
-		status := service.CodexStatus(ctx)
-		if status.AccountID != trimmed && status.State != StateMissing {
-			return status, nil
-		}
-		if status.State == StateMissing {
-			return status, errors.New("Codex 账号不存在")
-		}
-		return status, nil
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		return service.activateCodexLocked(trimmed)
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
@@ -322,7 +317,12 @@ func (service *Service) DeleteAccount(ctx context.Context, accountID string) err
 	if trimmed == "" {
 		return errors.New("账号 ID 不能为空")
 	}
-	if strings.HasPrefix(trimmed, string(ProviderCodex)+":") || trimmed == string(ProviderCodex) {
+	if strings.HasPrefix(trimmed, string(ProviderCodex)+":") {
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		return service.deleteCodexLocked(trimmed)
+	}
+	if trimmed == string(ProviderCodex) {
 		return service.ClearCodexAuth(ctx)
 	}
 	service.mu.Lock()
@@ -354,19 +354,19 @@ func (service *Service) DeleteAccount(ctx context.Context, accountID string) err
 }
 
 func (service *Service) ListAccounts(ctx context.Context, provider ProviderKind) ([]AccountStatus, error) {
+	_ = ctx
 	switch provider {
 	case ProviderCodex, "":
-		status := service.CodexStatus(ctx)
+		service.mu.Lock()
+		codex, err := service.listCodexStatusesLocked()
+		service.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
 		if provider == ProviderCodex {
-			if status.State == StateMissing {
-				return []AccountStatus{}, nil
-			}
-			return []AccountStatus{status}, nil
+			return codex, nil
 		}
-		accounts := []AccountStatus{}
-		if status.State != StateMissing {
-			accounts = append(accounts, status)
-		}
+		accounts := append([]AccountStatus{}, codex...)
 		service.mu.Lock()
 		grok, err := service.listGrokLocked()
 		service.mu.Unlock()

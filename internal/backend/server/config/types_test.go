@@ -120,6 +120,49 @@ func testModelAdapter(displayName string, sortValue int) ModelAdapterConfig {
 	}
 }
 
+func TestNormalizeModelAdapterConfigsPinsManagedSubscriptionEndpoints(t *testing.T) {
+	tests := []struct {
+		name               string
+		credentialSource   string
+		wantBaseURL        string
+		wantOpenAIEndpoint string
+	}{
+		{
+			name:               "codex",
+			credentialSource:   "codex",
+			wantBaseURL:        "https://chatgpt.com/backend-api/codex/responses",
+			wantOpenAIEndpoint: "/v1/responses",
+		},
+		{
+			name:               "grok",
+			credentialSource:   "grok",
+			wantBaseURL:        "https://api.x.ai/v1",
+			wantOpenAIEndpoint: "/v1/chat/completions",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := testModelAdapter(test.name, 1)
+			adapter.BaseURL = "http://127.0.0.1:18091/v1"
+			adapter.APIKey = "must-not-persist"
+			adapter.CredentialSource = test.credentialSource
+			adapter.OpenAIEndpoint = "/v1/responses"
+
+			adapters, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+			if err != nil {
+				t.Fatalf("NormalizeModelAdapterConfigs returned error: %v", err)
+			}
+			got := adapters[0]
+			if got.BaseURL != test.wantBaseURL || got.OpenAIEndpoint != test.wantOpenAIEndpoint {
+				t.Fatalf("managed endpoint = %q %q, want %q %q", got.BaseURL, got.OpenAIEndpoint, test.wantBaseURL, test.wantOpenAIEndpoint)
+			}
+			if got.APIKey != "" {
+				t.Fatalf("managed api key persisted: %q", got.APIKey)
+			}
+		})
+	}
+}
+
 func TestNormalizeModelAdapterConfigsPreservesLegacyArrayOrder(t *testing.T) {
 	adapters, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{
 		testModelAdapter("first", 0),

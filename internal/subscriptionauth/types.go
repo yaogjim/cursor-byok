@@ -24,6 +24,11 @@ const (
 )
 
 const (
+	CodexResponsesURL = "https://chatgpt.com/backend-api/codex/responses"
+	GrokAPIBaseURL    = "https://api.x.ai/v1"
+)
+
+const (
 	StateMissing        = "missing"
 	StateReady          = "ready"
 	StateAuthRequired   = "auth_required"
@@ -93,6 +98,32 @@ type UsageSnapshot struct {
 	UpdatedAt               time.Time    `json:"updatedAt"`
 }
 
+type Sub2APIAccountPreview struct {
+	AccountID     string       `json:"accountId"`
+	Provider      ProviderKind `json:"provider"`
+	Name          string       `json:"name,omitempty"`
+	Email         string       `json:"email,omitempty"`
+	PlanLabel     string       `json:"planLabel,omitempty"`
+	AlreadyExists bool         `json:"alreadyExists"`
+}
+
+type Sub2APIImportPreview struct {
+	Provider     ProviderKind            `json:"provider"`
+	Accounts     []Sub2APIAccountPreview `json:"accounts"`
+	SkippedCount int                     `json:"skippedCount"`
+}
+
+type Sub2APIImportRequest struct {
+	Path       string       `json:"path"`
+	Provider   ProviderKind `json:"provider"`
+	AccountIDs []string     `json:"accountIds"`
+}
+
+type Sub2APIImportResult struct {
+	Provider ProviderKind    `json:"provider"`
+	Accounts []AccountStatus `json:"accounts"`
+}
+
 type GrokDeviceCode struct {
 	PollToken               string `json:"pollToken,omitempty"`
 	DeviceCode              string `json:"-"`
@@ -135,7 +166,7 @@ type PollResult struct {
 // CredentialResolver maps a model channel credential source to a runtime token.
 type CredentialResolver interface {
 	Resolve(ctx context.Context, source CredentialSource) (Credential, error)
-	ResolveAfterUnauthorized(ctx context.Context, source CredentialSource) (Credential, error)
+	ResolveAfterUnauthorized(ctx context.Context, source CredentialSource, credentialID string) (Credential, error)
 	MarkQuotaExhausted(ctx context.Context, credentialID string) error
 	RefreshUsage(ctx context.Context, provider ProviderKind) (UsageSnapshot, error)
 }

@@ -250,38 +250,42 @@ func (service *Service) RefreshUsage(ctx context.Context, provider ProviderKind)
 		}
 		return usage, nil
 	case ProviderCodex:
-		auth, err := service.refreshCodex(ctx, false)
-		if err != nil {
-			return UsageSnapshot{}, err
-		}
-		usage, err := service.fetchCodexUsage(ctx, auth.Tokens.AccessToken)
-		if err != nil {
-			return UsageSnapshot{}, err
-		}
-		status := auth.status()
-		usage.AccountID = status.AccountID
-		next := *auth
-		next.PlanLabel = usage.PlanLabel
-		next.RemainingPercent = usage.RemainingPercent
-		next.UsedPercent = usage.UsedPercent
-		if !usage.ResetAt.IsZero() {
-			next.ResetAtMS = usage.ResetAt.UnixMilli()
-		}
-		next.SessionRemainingPercent = usage.SessionRemainingPercent
-		if !usage.SessionResetAt.IsZero() {
-			next.SessionResetAtMS = usage.SessionResetAt.UnixMilli()
-		}
-		next.LimitReached = usage.LimitReached
-		service.mu.Lock()
-		saveErr := service.store.SaveCodex(next)
-		service.mu.Unlock()
-		if saveErr != nil {
-			return usage, saveErr
-		}
-		return usage, nil
+		return service.RefreshAccountUsage(ctx, ProviderCodex, "")
 	default:
 		return UsageSnapshot{}, safeErrorf("unsupported subscription provider")
 	}
+}
+
+func (service *Service) RefreshAccountUsage(ctx context.Context, provider ProviderKind, accountID string) (UsageSnapshot, error) {
+	if provider != ProviderCodex {
+		return UsageSnapshot{}, safeErrorf("account-specific usage lookup is only supported for Codex")
+	}
+	auth, err := service.refreshCodex(ctx, false, trimSpace(accountID))
+	if err != nil {
+		return UsageSnapshot{}, err
+	}
+	usage, err := service.fetchCodexUsage(ctx, auth.Tokens.AccessToken)
+	if err != nil {
+		return UsageSnapshot{}, err
+	}
+	status := auth.status()
+	usage.AccountID = status.AccountID
+	next := *auth
+	next.PlanLabel = usage.PlanLabel
+	next.RemainingPercent = usage.RemainingPercent
+	next.UsedPercent = usage.UsedPercent
+	if !usage.ResetAt.IsZero() {
+		next.ResetAtMS = usage.ResetAt.UnixMilli()
+	}
+	next.SessionRemainingPercent = usage.SessionRemainingPercent
+	if !usage.SessionResetAt.IsZero() {
+		next.SessionResetAtMS = usage.SessionResetAt.UnixMilli()
+	}
+	next.LimitReached = usage.LimitReached
+	if err := service.replaceCodexAccount(status.AccountID, next); err != nil {
+		return usage, err
+	}
+	return usage, nil
 }
 
 func IsQuotaError(err error) bool {
@@ -313,7 +317,9 @@ func (service *Service) MarkQuotaExhausted(ctx context.Context, credentialID str
 		return errors.New("credential id is empty")
 	}
 	if strings.HasPrefix(trimmed, string(ProviderCodex)+":") {
-		return nil
+		service.mu.Lock()
+		defer service.mu.Unlock()
+		return service.markCodexQuotaExhaustedLocked(trimmed)
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()

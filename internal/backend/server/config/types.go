@@ -331,6 +331,16 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 		if source.Managed() {
 			next.APIKey = ""
 		}
+		if next.Type == "openai" {
+			switch source {
+			case subscriptionauth.CredentialSourceCodex:
+				next.BaseURL = subscriptionauth.CodexResponsesURL
+				next.OpenAIEndpoint = modelchannel.OpenAIEndpointResponses
+			case subscriptionauth.CredentialSourceGrok:
+				next.BaseURL = subscriptionauth.GrokAPIBaseURL
+				next.OpenAIEndpoint = modelchannel.OpenAIEndpointChatCompletions
+			}
+		}
 		switch {
 		case next.DisplayName == "":
 			return nil, nil, errors.New("模型适配器 displayName 不能为空")

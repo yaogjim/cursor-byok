@@ -31,11 +31,17 @@ type ModelAdapterModelsRequest = client.ModelAdapterModelsRequest
 // ModelAdapterModelsResult 定义模型列表查询结果。
 type ModelAdapterModelsResult = client.ModelAdapterModelsResult
 
+// GatewayTestResult 定义本机 Gateway 可用性检查结果。
+type GatewayTestResult = client.GatewayTestResult
+
 // CursorAccountStatus 是可安全展示给桌面前端的独立 Cursor 账号状态。
 type CursorAccountStatus = client.CursorAccountStatus
 
 type SubscriptionAccountStatus = subscriptionauth.AccountStatus
 type SubscriptionUsageSnapshot = subscriptionauth.UsageSnapshot
+type Sub2APIImportPreview = subscriptionauth.Sub2APIImportPreview
+type Sub2APIImportRequest = subscriptionauth.Sub2APIImportRequest
+type Sub2APIImportResult = subscriptionauth.Sub2APIImportResult
 type GrokDeviceCode = subscriptionauth.GrokDeviceCode
 type GrokPollInput = subscriptionauth.GrokPollInput
 type CodexDeviceCode = subscriptionauth.CodexDeviceCode
@@ -226,6 +232,18 @@ func (s *ProxyService) RefreshSubscriptionUsage(provider string) (SubscriptionUs
 	return s.core.RefreshSubscriptionUsage(provider)
 }
 
+func (s *ProxyService) RefreshSubscriptionAccountUsage(provider string, accountID string) (SubscriptionUsageSnapshot, error) {
+	return s.core.RefreshSubscriptionAccountUsage(provider, accountID)
+}
+
+func (s *ProxyService) PreviewSub2APIImport(path string, provider string) (Sub2APIImportPreview, error) {
+	return s.core.PreviewSub2APIImport(path, provider)
+}
+
+func (s *ProxyService) ImportSub2APIAccounts(request Sub2APIImportRequest) (Sub2APIImportResult, error) {
+	return s.core.ImportSub2APIAccounts(request)
+}
+
 // TestModelAdapter 用于处理与 TestModelAdapter 相关的逻辑。
 func (s *ProxyService) TestModelAdapter(adapter ModelAdapterConfig) (ModelAdapterTestResult, error) {
 	return s.core.TestModelAdapter(adapter)
@@ -297,6 +315,11 @@ func (s *ProxyService) ShutdownForQuitFrom(initiator string) {
 // CopyGatewayToken 仅通过显式复制接口返回 Gateway token。
 func (s *ProxyService) CopyGatewayToken() (string, error) {
 	return s.core.CopyGatewayToken()
+}
+
+// TestGateway 通过真实的本机 HTTP 请求验证 Gateway 监听、鉴权与模型列表接口。
+func (s *ProxyService) TestGateway() (GatewayTestResult, error) {
+	return s.core.TestGateway()
 }
 
 // RotateGatewayToken 轮换 Gateway token，并只把新 token 返回给这次调用。

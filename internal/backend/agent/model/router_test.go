@@ -218,7 +218,7 @@ func (stub *stubCredentialResolver) Resolve(context.Context, subscriptionauth.Cr
 	}, nil
 }
 
-func (stub *stubCredentialResolver) ResolveAfterUnauthorized(context.Context, subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
+func (stub *stubCredentialResolver) ResolveAfterUnauthorized(_ context.Context, _ subscriptionauth.CredentialSource, _ string) (subscriptionauth.Credential, error) {
 	stub.refreshN++
 	token := stub.refreshTok
 	if token == "" {
@@ -451,6 +451,42 @@ func TestRouterManagedCodexUnauthorizedSharesFallbackBudget(t *testing.T) {
 	}
 }
 
+func TestRouterManagedCodexRotatesOnQuotaError(t *testing.T) {
+	var auths []string
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		auths = append(auths, strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer "))
+		if hits == 1 {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":{"code":"usage_limit_reached","message":"5-hour limit reached"}}`)
+			return
+		}
+		writeOpenAIChatSSE(writer, "ok")
+	}))
+	defer server.Close()
+
+	creds := &stubCredentialResolver{
+		resolveSeq: []subscriptionauth.Credential{
+			{Provider: subscriptionauth.ProviderCodex, AccountID: "codex:one", AccessToken: "tok-a"},
+			{Provider: subscriptionauth.ProviderCodex, AccountID: "codex:two", AccessToken: "tok-b"},
+		},
+	}
+	router := newManagedTestRouter(t, server, creds, "codex")
+	if err := router.Stream(context.Background(), StreamRequest{ModelID: "channel-managed"}, func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if hits != 2 || len(creds.quotaCalls) != 1 || creds.quotaCalls[0] != "codex:one" {
+		t.Fatalf("hits=%d quota calls=%#v", hits, creds.quotaCalls)
+	}
+	if creds.refreshN != 0 {
+		t.Fatalf("quota rotation must not refresh, got %d", creds.refreshN)
+	}
+	if len(auths) != 2 || auths[0] != "tok-a" || auths[1] != "tok-b" {
+		t.Fatalf("authorization tokens = %#v", auths)
+	}
+}
+
 func TestRouterManagedGrokRotatesOnQuotaError(t *testing.T) {
 	var auths []string
 	hits := 0
@@ -553,6 +589,29 @@ func TestRouterManagedGrokSuppressesModelAdapterTest(t *testing.T) {
 	}
 	if len(creds.quotaCalls) != 0 {
 		t.Fatalf("quota calls = %#v, want none", creds.quotaCalls)
+	}
+}
+
+func TestRouterManagedCodexSuppressesModelAdapterQuotaRotation(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(writer, `{"error":{"code":"insufficient_quota"}}`)
+	}))
+	defer server.Close()
+
+	creds := &stubCredentialResolver{token: "tok-a", accountID: "codex:one"}
+	router := newManagedTestRouter(t, server, creds, "codex")
+	err := router.Stream(context.Background(), StreamRequest{
+		ModelID:   "channel-managed",
+		RequestID: "model-adapter-test-abc",
+	}, func(ModelEvent) error { return nil })
+	if err == nil {
+		t.Fatal("expected quota error to surface without rotation")
+	}
+	if hits != 1 || len(creds.quotaCalls) != 0 {
+		t.Fatalf("hits=%d quota calls=%#v", hits, creds.quotaCalls)
 	}
 }
 
