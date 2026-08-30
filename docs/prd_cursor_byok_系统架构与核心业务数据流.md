@@ -1746,6 +1746,14 @@ continuation 不是原请求 retry：对 Cursor 而言该 turn 尚未 terminal �
 | `close_cause` | `eof` / `unexpected_eof` / `reset` / `tls` / `idle_timeout` / `context_canceled` / `deadline` / `stream_decode` / `http_status` |
 | `partial_boundary` | 截断停在哪一类内容之后，例如 `none` / `text` / `reasoning` / `partial_tool` / `completed_tool` / `checkpoint` |
 
+**2026-08-30 流截断细化合同**：
+
+- 诊断字段扩展为 `http_protocol`、`content_encoding`、`auto_decompressed`、`content_length`、`connection_observed`、`connection_reused`、`connection_was_idle`、`raw_byte_count`、`last_error_type`、`last_sse_event_type`、`last_sse_event_id_hash`、`last_sse_sequence`、`last_response_status` 与 `stream_recovery_attempts`。重试后只投影最终 attempt 的连接/协议/编码字段，同时保留累计恢复次数；response ID 只允许不可逆短哈希。
+- OpenAI Responses 的成功终态只有 `[DONE]` 或标准 `response.completed`；`response.failed`、`response.cancelled/canceled`、`response.incomplete` 和显式 `error` 是 Provider 协议终态，不得归为 transport EOF 或进入自动恢复。Anthropic 对应成功终态为 `message_stop`，显式 `error` 使用同一 Provider 终态分类。未知类终态事件即使携带 `response.status=completed` 也不得猜成成功。
+- 零事件流恢复必须同时满足 `raw_byte_count=0`、未发布任何 `ModelEvent`、context 未取消、未恢复过且错误属于 typed EOF/unexpected EOF/TCP reset/HTTP/2 stream reset/GOAWAY 白名单；最多新增一次同渠道请求，并受现有 attempt/wait 预算约束。任何原始字节都会禁止原请求重放，避免跨响应拼接半个 SSE frame。
+- automatic-continuation 只接受可恢复的 `StreamTruncatedError`；明确 Provider 终态、语法错误、4xx、取消和 deadline 直接抑制。§14.17.3 的默认关闭及工具、副作用、checkpoint、pending interaction、subagent child、Gateway Chat/Responses 门禁保持不变。
+- HTTP/1.1、禁用压缩、禁用连接复用和绕过显式代理只能作为默认关闭的单变量 Transport 实验；环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` 的允许值为 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`，未知或组合值回退 `auto`。`direct` 不能绕过操作系统 TUN。没有真实 A/B 数据前不得改变默认 Transport 策略。
+
 保留现有 `error_category` 以兼容分析器。stall 由有效内容 idle watchdog 判定；shell/tool stall 不得混入 provider stream stall。完成只由 completion marker 判定。
 
 **canonical identity**：每条 attempt 事件必须有稳定的 `provider`、`model`、`model_call_id`、`attempt`/`channel_attempt`。不得从错误字符串解析身份。parent/child 用 `continued_from_model_call_id` 关联。

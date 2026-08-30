@@ -404,6 +404,25 @@ func TestOpenAIChatPreEventEOFRetriesAndDeadlineDoesNot(t *testing.T) {
 			t.Fatalf("err=%v hits=%d, want nil/2", err, hits)
 		}
 	})
+	t.Run("stops after one zero-byte retry", func(t *testing.T) {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			hits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+		}))
+		defer server.Close()
+		diagnostics := &StreamDiagnostics{}
+		adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID: "request-1", ModelCallID: "model-call-1", BaseURL: server.URL, APIKey: "test-key",
+			ProviderModelID: "gpt-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128,
+			StreamDiagnostics: diagnostics,
+		}, func(ModelEvent) error { return nil })
+		assertOpenAIStreamTruncated(t, err, "")
+		if hits != 2 || diagnostics.Snapshot().StreamRecoveryAttempts != 1 {
+			t.Fatalf("hits=%d diagnostics=%#v, want 2 requests/1 recovery", hits, diagnostics.Snapshot())
+		}
+	})
 	t.Run("deadline does not retry", func(t *testing.T) {
 		hits := 0
 		ctx, cancel := context.WithCancel(context.Background())
@@ -624,5 +643,80 @@ func TestOpenAIStaticResponsesKeepsClaudeUAAndExtraParams(t *testing.T) {
 	}
 	if requestBody["service_tier"] != "fast" {
 		t.Fatalf("static extra params dropped: %#v", requestBody)
+	}
+}
+
+func runOpenAIResponsesFixture(t *testing.T, body string) (error, StreamDiagnosticsSnapshot) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, body)
+	}))
+	defer server.Close()
+	diagnostics := &StreamDiagnostics{}
+	adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:         "fixture-request",
+		RunID:             "fixture-run",
+		ModelCallID:       "fixture-call",
+		BaseURL:           server.URL,
+		APIKey:            "test-key",
+		ProviderModelID:   "gpt-test",
+		OpenAIEndpoint:    "/v1/responses",
+		Messages:          []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:         128,
+		StreamDiagnostics: diagnostics,
+	}, func(ModelEvent) error { return nil })
+	return err, diagnostics.Snapshot()
+}
+
+func TestOpenAIResponsesCompletedEventWithoutDoneSucceeds(t *testing.T) {
+	err, snapshot := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.completed\",\"sequence_number\":9,\"response\":{\"id\":\"resp-1\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+	if err != nil {
+		t.Fatalf("completed event followed by EOF failed: %v", err)
+	}
+	if snapshot.LastSSEEventType != "response.completed" || snapshot.LastSSESequence != 9 || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("terminal diagnostics = %#v", snapshot)
+	}
+}
+
+func TestOpenAIResponsesCRLFAndMultilineData(t *testing.T) {
+	body := "data: {\"type\":\"response.completed\",\r\ndata: \"response\":{\"id\":\"resp-2\",\"status\":\"completed\",\"output_text\":\"done\"}}\r\n\r\n"
+	if err, snapshot := runOpenAIResponsesFixture(t, body); err != nil {
+		t.Fatalf("CRLF multiline event failed: %v diagnostics=%#v", err, snapshot)
+	}
+}
+
+func TestOpenAIResponsesExplicitTerminalStatusesAreNotTransportErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		event  string
+		status string
+	}{
+		{name: "failed", event: `{"type":"response.failed","response":{"id":"resp-f","status":"failed","error":{"message":"upstream rejected"}}}`, status: "failed"},
+		{name: "cancelled", event: `{"type":"response.cancelled","response":{"id":"resp-c","status":"cancelled"}}`, status: "cancelled"},
+		{name: "incomplete", event: `{"type":"response.incomplete","response":{"id":"resp-i","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`, status: "incomplete"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err, snapshot := runOpenAIResponsesFixture(t, "data: "+test.event+"\n\n")
+			var terminal *ProviderTerminalStatusError
+			if !errors.As(err, &terminal) || terminal.Status != test.status {
+				t.Fatalf("err=%v terminal=%#v", err, terminal)
+			}
+			if ClassifyProviderError(err) != ProviderErrorTerminal || snapshot.CloseCause != StreamCloseCauseProviderTerminal {
+				t.Fatalf("classification=%q diagnostics=%#v", ClassifyProviderError(err), snapshot)
+			}
+		})
+	}
+}
+
+func TestOpenAIResponsesUnknownTerminalLikeEventStillTruncates(t *testing.T) {
+	err, snapshot := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.future_terminal\",\"response\":{\"id\":\"resp-u\",\"status\":\"completed\"}}\n\n")
+	var truncated *StreamTruncatedError
+	if !errors.As(err, &truncated) {
+		t.Fatalf("err=%v, want truncated", err)
+	}
+	if snapshot.LastSSEEventType != "response.future_terminal" || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("diagnostics=%#v", snapshot)
 	}
 }

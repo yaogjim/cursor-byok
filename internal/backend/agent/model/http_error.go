@@ -24,6 +24,7 @@ const (
 	ProviderErrorContextCanceled   = "context_canceled"
 	ProviderErrorStreamDecode      = "stream_decode"
 	ProviderErrorStreamIdleTimeout = "stream_idle_timeout"
+	ProviderErrorTerminal          = "provider_terminal"
 	// ProviderErrorRequestBuild 表示请求序列化/构建阶段失败，此类错误禁止跨渠道 fallback。
 	ProviderErrorRequestBuild = "request_build"
 	// ProviderErrorCapacityUnavailable 表示物理上游组在固定短超时内没有空闲槽。
@@ -100,6 +101,30 @@ type StreamTruncatedError struct {
 	Provider         string
 	Err              error
 	RawBytesObserved bool
+}
+
+// ProviderTerminalStatusError 表示上游通过协议事件明确报告 failed/cancelled/incomplete。
+// 它不是 HTTP transport 错误，也不得触发 EOF 恢复。
+type ProviderTerminalStatusError struct {
+	Provider string
+	Status   string
+	Message  string
+}
+
+func (err *ProviderTerminalStatusError) Error() string {
+	if err == nil {
+		return "provider terminal status"
+	}
+	provider := firstNonEmptyString(strings.TrimSpace(err.Provider), "provider")
+	status := firstNonEmptyString(strings.TrimSpace(err.Status), "failed")
+	if message := strings.TrimSpace(err.Message); message != "" {
+		return fmt.Sprintf("%s terminal status=%s: %s", provider, status, limitSanitizedErrorText(message))
+	}
+	return fmt.Sprintf("%s terminal status=%s", provider, status)
+}
+
+func (err *ProviderTerminalStatusError) Category() string {
+	return ProviderErrorTerminal
 }
 
 // CapacityUnavailableError 表示在固定 2 秒等待内无法获得上游组并发槽。
@@ -243,6 +268,10 @@ func ClassifyProviderError(err error) string {
 	}
 	if isProviderStreamIdleTimeout(err) {
 		return ProviderErrorStreamIdleTimeout
+	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) && terminal != nil {
+		return ProviderErrorTerminal
 	}
 	var truncated *StreamTruncatedError
 	if errors.As(err, &truncated) && truncated != nil {

@@ -7,15 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"cursor/internal/audit"
+
+	"golang.org/x/net/http2"
 )
 
 func instantRetry() providerRetry {
@@ -1337,5 +1341,85 @@ func TestProviderRetryWaitZeroDoesNotFallBackToDefaultWait(t *testing.T) {
 	}
 	if len(delays) != 0 {
 		t.Fatalf("slept %v, want none", delays)
+	}
+}
+
+func TestZeroEventStreamRetryAllowlist(t *testing.T) {
+	resetErr := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "plain EOF", err: newStreamTruncatedError("openai", io.EOF), want: true},
+		{name: "unexpected EOF", err: newStreamTruncatedError("openai", io.ErrUnexpectedEOF), want: true},
+		{name: "connection reset", err: newStreamTruncatedError("openai", resetErr), want: true},
+		{name: "HTTP2 stream reset", err: newStreamTruncatedError("openai", http2.StreamError{StreamID: 1, Code: http2.ErrCodeInternal}), want: true},
+		{name: "HTTP2 GOAWAY", err: newStreamTruncatedError("openai", http2.GoAwayError{LastStreamID: 1, ErrCode: http2.ErrCodeInternal}), want: true},
+		{name: "missing marker after clean EOF", err: newStreamTruncatedError("openai", nil), want: true},
+		{name: "context canceled", err: newStreamTruncatedError("openai", context.Canceled), want: false},
+		{name: "deadline", err: newStreamTruncatedError("openai", context.DeadlineExceeded), want: false},
+		{name: "HTTP 400", err: &HTTPStatusError{StatusCode: http.StatusBadRequest}, want: false},
+		{name: "authentication", err: &HTTPStatusError{StatusCode: http.StatusUnauthorized}, want: false},
+		{name: "quota", err: &HTTPStatusError{StatusCode: http.StatusTooManyRequests}, want: false},
+		{name: "provider terminal", err: &ProviderTerminalStatusError{Provider: "openai", Status: "failed"}, want: false},
+		{name: "JSON syntax", err: &json.SyntaxError{}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsRetryableZeroEventStreamError(test.err); got != test.want {
+				t.Fatalf("IsRetryableZeroEventStreamError(%T) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunStreamWithZeroEventRecoverySafetyBoundary(t *testing.T) {
+	t.Run("retries exactly once and keeps final diagnostics", func(t *testing.T) {
+		diagnostics := &StreamDiagnostics{}
+		calls := 0
+		err := runStreamWithZeroEventRecovery(context.Background(), StreamRequest{StreamDiagnostics: diagnostics}, func(ModelEvent) error { return nil }, func(_ context.Context, req StreamRequest, _ func(ModelEvent) error) error {
+			calls++
+			if calls == 1 {
+				req.StreamDiagnostics.RecordHTTPResponse(&http.Response{StatusCode: http.StatusOK, Proto: "HTTP/2.0", Header: http.Header{"Content-Encoding": []string{"gzip"}}, ContentLength: -1}, 1, time.Now())
+				req.StreamDiagnostics.RecordConnection(true, true)
+				return newStreamTruncatedError("openai", io.ErrUnexpectedEOF)
+			}
+			if req.StreamRecoveryAttempt != 1 || req.FallbackMaxAttempts != 1 {
+				t.Fatalf("recovery request = %#v", req)
+			}
+			req.StreamDiagnostics.RecordHTTPResponse(&http.Response{StatusCode: http.StatusOK, Proto: "HTTP/1.1", Header: make(http.Header), ContentLength: -1}, 1, time.Now())
+			req.StreamDiagnostics.RecordConnection(false, false)
+			return newStreamTruncatedError("openai", io.EOF)
+		})
+		if err == nil || calls != 2 {
+			t.Fatalf("err=%v calls=%d, want error/2", err, calls)
+		}
+		snapshot := diagnostics.Snapshot()
+		if snapshot.StreamRecoveryAttempts != 1 || snapshot.HTTPProtocol != "HTTP/1.1" || snapshot.ContentEncoding != "identity" || snapshot.ConnectionReused {
+			t.Fatalf("final diagnostics = %#v", snapshot)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		prepare func(*StreamDiagnostics, func(ModelEvent) error)
+	}{
+		{name: "raw bytes observed", prepare: func(diagnostics *StreamDiagnostics, _ func(ModelEvent) error) { diagnostics.RecordBytes(1, time.Now()) }},
+		{name: "model event observed", prepare: func(_ *StreamDiagnostics, sink func(ModelEvent) error) {
+			_ = sink(ModelEvent{Kind: ModelEventKindTextDelta})
+		}},
+	} {
+		t.Run(test.name+" prevents retry", func(t *testing.T) {
+			diagnostics := &StreamDiagnostics{}
+			calls := 0
+			err := runStreamWithZeroEventRecovery(context.Background(), StreamRequest{StreamDiagnostics: diagnostics}, func(ModelEvent) error { return nil }, func(_ context.Context, _ StreamRequest, sink func(ModelEvent) error) error {
+				calls++
+				test.prepare(diagnostics, sink)
+				return newStreamTruncatedError("openai", io.ErrUnexpectedEOF)
+			})
+			if err == nil || calls != 1 || diagnostics.Snapshot().StreamRecoveryAttempts != 0 {
+				t.Fatalf("err=%v calls=%d diagnostics=%#v", err, calls, diagnostics.Snapshot())
+			}
+		})
 	}
 }

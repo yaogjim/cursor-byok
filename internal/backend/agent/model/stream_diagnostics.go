@@ -2,29 +2,36 @@ package modeladapter
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/http2"
 )
 
 const (
-	StreamCloseCauseEOF             = "eof"
-	StreamCloseCauseUnexpectedEOF   = "unexpected_eof"
-	StreamCloseCauseReset           = "reset"
-	StreamCloseCauseTLS             = "tls"
-	StreamCloseCauseIdleTimeout     = "idle_timeout"
-	StreamCloseCauseContextCanceled = "context_canceled"
-	StreamCloseCauseDeadline        = "deadline"
-	StreamCloseCauseStreamDecode    = "stream_decode"
-	StreamCloseCauseHTTPStatus      = "http_status"
-	StreamCloseCauseUnknown         = "unknown"
-	StreamCloseCauseNotRecorded     = "not_recorded"
+	StreamCloseCauseEOF              = "eof"
+	StreamCloseCauseUnexpectedEOF    = "unexpected_eof"
+	StreamCloseCauseReset            = "reset"
+	StreamCloseCauseTLS              = "tls"
+	StreamCloseCauseIdleTimeout      = "idle_timeout"
+	StreamCloseCauseContextCanceled  = "context_canceled"
+	StreamCloseCauseDeadline         = "deadline"
+	StreamCloseCauseStreamDecode     = "stream_decode"
+	StreamCloseCauseProviderTerminal = "provider_terminal"
+	StreamCloseCauseHTTPStatus       = "http_status"
+	StreamCloseCauseUnknown          = "unknown"
+	StreamCloseCauseNotRecorded      = "not_recorded"
 
 	TransportOutcomeStarted   = "started"
 	TransportOutcomeSucceeded = "succeeded"
@@ -52,8 +59,22 @@ type StreamDiagnostics struct {
 	closeCause             string
 	httpStatus             int
 	httpAttempt            int
-	transportOutcome       string
+	httpProtocol           string
+	contentEncoding        string
+	autoDecompressed       bool
+	contentLength          int64
+	connectionReused       bool
+	connectionWasIdle      bool
+	connectionObserved     bool
 	rawBytes               bool
+	rawByteCount           int64
+	lastErrorType          string
+	lastSSEEventType       string
+	lastSSEEventIDHash     string
+	lastSSESequence        int64
+	lastResponseStatus     string
+	streamRecoveryAttempts int
+	transportOutcome       string
 }
 
 // StreamDiagnosticsSnapshot 是 StreamDiagnostics 的只读拷贝。
@@ -66,8 +87,22 @@ type StreamDiagnosticsSnapshot struct {
 	CloseCause             string
 	HTTPStatus             int
 	HTTPAttempt            int
-	TransportOutcome       string
+	HTTPProtocol           string
+	ContentEncoding        string
+	AutoDecompressed       bool
+	ContentLength          int64
+	ConnectionReused       bool
+	ConnectionWasIdle      bool
+	ConnectionObserved     bool
 	RawBytesObserved       bool
+	RawByteCount           int64
+	LastErrorType          string
+	LastSSEEventType       string
+	LastSSEEventIDHash     string
+	LastSSESequence        int64
+	LastResponseStatus     string
+	StreamRecoveryAttempts int
+	TransportOutcome       string
 }
 
 func (d *StreamDiagnostics) RecordHeader(status, attempt int, at time.Time) {
@@ -95,6 +130,97 @@ func (d *StreamDiagnostics) RecordHeader(status, attempt int, at time.Time) {
 	}
 }
 
+// RecordHTTPResponse 记录不含 header 值正文的安全传输元数据。
+func (d *StreamDiagnostics) RecordHTTPResponse(resp *http.Response, attempt int, at time.Time) {
+	if d == nil || resp == nil {
+		return
+	}
+	d.RecordHeader(resp.StatusCode, attempt, at)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.httpProtocol = strings.TrimSpace(resp.Proto)
+	d.contentEncoding = strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	if d.contentEncoding == "" {
+		if resp.Uncompressed {
+			d.contentEncoding = "gzip"
+		} else {
+			d.contentEncoding = "identity"
+		}
+	}
+	d.autoDecompressed = resp.Uncompressed
+	d.contentLength = resp.ContentLength
+}
+
+// RecordConnection 记录当前 HTTP attempt 实际取得连接时的复用状态。
+func (d *StreamDiagnostics) RecordConnection(reused, wasIdle bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.connectionReused = reused
+	d.connectionWasIdle = wasIdle
+	d.connectionObserved = true
+}
+
+// RecordSSEEvent 只保存协议元数据；response ID 仅保留不可逆短哈希。
+func (d *StreamDiagnostics) RecordSSEEvent(eventType, responseID string, sequence int64, responseStatus string) {
+	if d == nil {
+		return
+	}
+	eventType = strings.TrimSpace(eventType)
+	responseID = strings.TrimSpace(responseID)
+	responseStatus = strings.TrimSpace(responseStatus)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if eventType != "" {
+		d.lastSSEEventType = eventType
+	}
+	if responseID != "" {
+		sum := sha256.Sum256([]byte(responseID))
+		d.lastSSEEventIDHash = fmt.Sprintf("%x", sum[:6])
+	}
+	if sequence > 0 {
+		d.lastSSESequence = sequence
+	}
+	if responseStatus != "" {
+		d.lastResponseStatus = responseStatus
+	}
+}
+
+// BeginStreamRecoveryAttempt 清空 attempt 级观测，同时保留累计恢复次数。
+func (d *StreamDiagnostics) BeginStreamRecoveryAttempt() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.streamRecoveryAttempts++
+	d.headerAt = time.Time{}
+	d.firstByteAt = time.Time{}
+	d.lastByteAt = time.Time{}
+	d.bodyEndAt = time.Time{}
+	d.lastEffectiveContentAt = time.Time{}
+	d.closeCause = ""
+	d.httpStatus = 0
+	d.httpAttempt = 0
+	d.httpProtocol = ""
+	d.contentEncoding = ""
+	d.autoDecompressed = false
+	d.contentLength = 0
+	d.connectionReused = false
+	d.connectionWasIdle = false
+	d.connectionObserved = false
+	d.rawBytes = false
+	d.rawByteCount = 0
+	d.lastErrorType = ""
+	d.lastSSEEventType = ""
+	d.lastSSEEventIDHash = ""
+	d.lastSSESequence = 0
+	d.lastResponseStatus = ""
+	d.transportOutcome = TransportOutcomeStarted
+}
+
 func (d *StreamDiagnostics) RecordBytes(n int, at time.Time) {
 	if d == nil || n <= 0 {
 		return
@@ -110,6 +236,7 @@ func (d *StreamDiagnostics) RecordBytes(n int, at time.Time) {
 	}
 	d.lastByteAt = at
 	d.rawBytes = true
+	d.rawByteCount += int64(n)
 }
 
 func (d *StreamDiagnostics) RecordBodyEnd(at time.Time) {
@@ -150,6 +277,7 @@ func (d *StreamDiagnostics) RecordClose(err error) {
 		return
 	}
 	d.closeCause = PreferCloseCause(d.closeCause, cause)
+	d.lastErrorType = deepestErrorType(err)
 	d.transportOutcome = applyTransportOnClose(d.transportOutcome, cause)
 }
 
@@ -176,8 +304,22 @@ func (d *StreamDiagnostics) Snapshot() StreamDiagnosticsSnapshot {
 		CloseCause:             closeCause,
 		HTTPStatus:             d.httpStatus,
 		HTTPAttempt:            d.httpAttempt,
-		TransportOutcome:       transport,
+		HTTPProtocol:           d.httpProtocol,
+		ContentEncoding:        d.contentEncoding,
+		AutoDecompressed:       d.autoDecompressed,
+		ContentLength:          d.contentLength,
+		ConnectionReused:       d.connectionReused,
+		ConnectionWasIdle:      d.connectionWasIdle,
+		ConnectionObserved:     d.connectionObserved,
 		RawBytesObserved:       d.rawBytes,
+		RawByteCount:           d.rawByteCount,
+		LastErrorType:          d.lastErrorType,
+		LastSSEEventType:       d.lastSSEEventType,
+		LastSSEEventIDHash:     d.lastSSEEventIDHash,
+		LastSSESequence:        d.lastSSESequence,
+		LastResponseStatus:     d.lastResponseStatus,
+		StreamRecoveryAttempts: d.streamRecoveryAttempts,
+		TransportOutcome:       transport,
 	}
 }
 
@@ -206,7 +348,7 @@ func closeCauseRank(cause string) int {
 		return 80
 	case StreamCloseCauseUnexpectedEOF:
 		return 70
-	case StreamCloseCauseHTTPStatus:
+	case StreamCloseCauseHTTPStatus, StreamCloseCauseProviderTerminal:
 		return 65
 	case StreamCloseCauseStreamDecode:
 		return 50
@@ -270,10 +412,14 @@ func ClassifyStreamCloseCause(err error) string {
 	if errors.As(err, &httpErr) && httpErr != nil {
 		return StreamCloseCauseHTTPStatus
 	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) && terminal != nil {
+		return StreamCloseCauseProviderTerminal
+	}
 	if isTypedTLSError(err) {
 		return StreamCloseCauseTLS
 	}
-	if isTypedResetError(err) {
+	if isTypedResetError(err) || isTypedHTTP2ResetError(err) {
 		return StreamCloseCauseReset
 	}
 	if errors.Is(err, io.ErrUnexpectedEOF) {
@@ -296,6 +442,21 @@ func ClassifyStreamCloseCause(err error) string {
 		return StreamCloseCauseNotRecorded
 	}
 	return StreamCloseCauseUnknown
+}
+
+func deepestErrorType(err error) string {
+	if err == nil {
+		return ""
+	}
+	current := err
+	for {
+		next := errors.Unwrap(current)
+		if next == nil || next == current {
+			break
+		}
+		current = next
+	}
+	return fmt.Sprintf("%T", current)
 }
 
 func isTypedTLSError(err error) bool {
@@ -331,6 +492,22 @@ func isTypedTLSError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func isTypedHTTP2ResetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var streamErr http2.StreamError
+	if errors.As(err, &streamErr) {
+		return true
+	}
+	var goAway http2.GoAwayError
+	if errors.As(err, &goAway) {
+		return true
+	}
+	var connectionErr http2.ConnectionError
+	return errors.As(err, &connectionErr)
 }
 
 func isTypedResetError(err error) bool {

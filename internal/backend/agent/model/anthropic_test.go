@@ -96,6 +96,63 @@ func TestAnthropicNormalCompletionStillSucceeds(t *testing.T) {
 	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 1)
 }
 
+func TestAnthropicCRLFMultilineAndTerminalAtEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: message_stop\r\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\r\n")
+		_, _ = fmt.Fprint(writer, "data: \"message_stop\"}")
+	}))
+	defer server.Close()
+
+	diagnostics := &StreamDiagnostics{}
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	events := make([]ModelEvent, 0, 1)
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID: "request-1", RunID: "run-1", ModelCallID: "model-call-1", BaseURL: server.URL,
+		APIKey: "test-key", ProviderModelID: "claude-test", Messages: []Message{{Role: "user", Content: "hello"}},
+		MaxTokens: 128, StreamDiagnostics: diagnostics,
+	}, func(event ModelEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CRLF multiline terminal-at-EOF failed: %v", err)
+	}
+	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+	snapshot := diagnostics.Snapshot()
+	if snapshot.LastSSEEventType != "message_stop" || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("terminal diagnostics = %#v", snapshot)
+	}
+}
+
+func TestAnthropicExplicitErrorIsProviderTerminalAndDoesNotRetry(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: error\ndata: {\"type\":\"error\",\"request_id\":\"req-secret\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")
+	}))
+	defer server.Close()
+
+	diagnostics := &StreamDiagnostics{}
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	req := anthropicTestRequest(server.URL)
+	req.StreamDiagnostics = diagnostics
+	err := adapter.Stream(context.Background(), req, func(ModelEvent) error { return nil })
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Status != "failed" || hits != 1 {
+		t.Fatalf("err=%v terminal=%#v hits=%d", err, terminal, hits)
+	}
+	snapshot := diagnostics.Snapshot()
+	if ClassifyProviderError(err) != ProviderErrorTerminal || snapshot.CloseCause != StreamCloseCauseProviderTerminal || snapshot.LastResponseStatus != "failed" {
+		t.Fatalf("classification=%q diagnostics=%#v", ClassifyProviderError(err), snapshot)
+	}
+	if snapshot.LastSSEEventIDHash == "" || strings.Contains(snapshot.LastSSEEventIDHash, "req-secret") {
+		t.Fatalf("request ID was not safely hashed: %#v", snapshot)
+	}
+}
+
 func collectAnthropicStreamEvents(t *testing.T, server *httptest.Server) ([]ModelEvent, error) {
 	t.Helper()
 	adapter := &AnthropicAdapter{client: server.Client()}

@@ -6,7 +6,14 @@
 
 ### 🎯 Active Work Package
 
-当前无进行中的工作包；下一项工作需由 Pending Work 队列重新确认后启动。
+**gateway-provider-stream-truncation-20260830** (in_progress, verified-partial)
+- 已完成共享 Provider HTTP 流观测第一阶段：`provider_stream_finished` 可投影最终 HTTP attempt 的协议、编码/自动解压、连接复用、原始字节数、最后 SSE 事件元数据、typed close cause 和累计零字节恢复次数；response ID 仅保存短哈希，不落完整正文或凭据。
+- 已完成 OpenAI Responses 与 Anthropic 终态收口：支持 Responses CRLF、多行 `data:`、最后事件后立即 EOF；`[DONE]`、`response.completed`、`message_stop` 成功，failed/cancelled/incomplete/显式 error 为协议终态，无合法 marker 的 EOF 保持 `StreamTruncatedError`。
+- 已完成零 provider 字节且零 `ModelEvent` 的同渠道单次恢复；typed EOF、unexpected EOF、TCP reset、HTTP/2 stream reset/GOAWAY 在预算内最多新增一次请求。任意原始字节、模型事件、4xx、认证/配额、JSON 语法错误、取消、deadline 或明确协议终态均不重放。
+- 既有纯文本 checkpoint continuation 保持默认关闭、每 turn 一次及工具/checkpoint/pending interaction/subagent/Gateway 路径禁用；本轮只增加“非瞬时截断错误禁止续写”，未扩大部分输出恢复范围。
+- 已增加默认关闭的 Provider-only Transport 单变量实验：环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` 支持 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`；未知或组合值回退 `auto`。`direct` 只绕过显式 HTTP/SOCKS 代理，不能绕过操作系统 TUN。
+- 验证：`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。额外的 `go test -count=1 ./internal/...` 中，受影响包均通过，但完整命令被两个外部 CLI smoke 阻断：Codex 临时插件目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；未修改产品代码绕过环境问题。
+- 待完成：按单变量实际运行并比较缺失终态率、零字节 reset 率与延迟；Cursor→Gateway 边界故障注入；确认无重复工具副作用后再评估是否扩大纯文本 continuation。HTTP/1.1 不作为默认修复，full/provider 日志采样后必须降级。
 
 ### ⏸️ 暂停工作包
 
@@ -16,6 +23,14 @@
 - 条件：提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界
 
 ### ✅ 最近完成
+
+**macos-build-0.0.52.5-20260830** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.5`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.5.md` 对齐到 `0.0.52.5`；保留构建前已有的工作树改动。
+- 本版本包含共享 Provider 流截断第一阶段治理：OpenAI/Anthropic 终态收口、零输出安全恢复、最终 attempt 观测字段、`CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` Transport 单变量实验。
+- 首次尝试误用 Go 1.26.3 且缓存被清空，在 8GB 内存/swap 压力下大文件编译停滞；改用 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后完成 `task build`，产物 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.5`；二进制注入版本 `0.0.52.5`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`；`SHA256SUMS` 校验通过。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
 
 **access-ui-screenshot-feedback-20260830** (completed, verified-partial)
 - 按截图精简 Codex/Grok 接入页：删除标题下的冗余说明，把“订阅授权”、账号数和操作说明合并到同一标题行，移除账号卡片底部重复的导入与设备码授权按钮，保留顶部入口和“清除全部”。

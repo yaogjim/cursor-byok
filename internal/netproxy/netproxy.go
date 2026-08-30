@@ -1,6 +1,7 @@
 package netproxy
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,6 +20,13 @@ import (
 const (
 	proxyCacheTTL     = time.Second
 	alwaysNoProxyList = "localhost,127.0.0.1,::1"
+
+	ProviderTransportProfileEnv             = "CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE"
+	ProviderTransportProfileAuto            = "auto"
+	ProviderTransportProfileHTTP1           = "http1"
+	ProviderTransportProfileNoCompression   = "no_compression"
+	ProviderTransportProfileFreshConnection = "fresh_connection"
+	ProviderTransportProfileDirect          = "direct"
 )
 
 var (
@@ -44,6 +52,68 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 		Transport: NewTransport(nil),
 		Timeout:   timeout,
 	}
+}
+
+// NewProviderHTTPClient creates a Provider-only client with one optional,
+// default-off transport experiment selected by CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE.
+// The profile is read when the client is built, so changing it requires rebuilding
+// the adapter/client (normally an application restart).
+func NewProviderHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: NewProviderTransport(nil, os.Getenv(ProviderTransportProfileEnv)),
+		Timeout:   timeout,
+	}
+}
+
+// NormalizeProviderTransportProfile returns a stable allowlisted profile.
+// Unknown values fail closed to auto instead of silently combining experiments.
+func NormalizeProviderTransportProfile(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ProviderTransportProfileHTTP1:
+		return ProviderTransportProfileHTTP1
+	case ProviderTransportProfileNoCompression:
+		return ProviderTransportProfileNoCompression
+	case ProviderTransportProfileFreshConnection:
+		return ProviderTransportProfileFreshConnection
+	case ProviderTransportProfileDirect:
+		return ProviderTransportProfileDirect
+	default:
+		return ProviderTransportProfileAuto
+	}
+}
+
+// NewProviderTransport applies exactly one Provider transport experiment.
+// direct bypasses explicit HTTP/SOCKS proxy resolution only; an OS TUN can still
+// intercept the resulting connection.
+func NewProviderTransport(base *http.Transport, profile string) *http.Transport {
+	transport := NewTransport(base)
+	switch NormalizeProviderTransportProfile(profile) {
+	case ProviderTransportProfileHTTP1:
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		transport.Protocols = protocols
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+		tlsConfig := &tls.Config{}
+		if transport.TLSClientConfig != nil {
+			tlsConfig = transport.TLSClientConfig.Clone()
+		}
+		nextProtos := make([]string, 0, len(tlsConfig.NextProtos))
+		for _, protocol := range tlsConfig.NextProtos {
+			if protocol != "h2" {
+				nextProtos = append(nextProtos, protocol)
+			}
+		}
+		tlsConfig.NextProtos = nextProtos
+		transport.TLSClientConfig = tlsConfig
+	case ProviderTransportProfileNoCompression:
+		transport.DisableCompression = true
+	case ProviderTransportProfileFreshConnection:
+		transport.DisableKeepAlives = true
+	case ProviderTransportProfileDirect:
+		transport.Proxy = nil
+	}
+	return transport
 }
 
 // NewTransport clones the given transport and installs proxy resolution on it.

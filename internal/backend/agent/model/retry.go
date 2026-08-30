@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync"
@@ -233,6 +234,50 @@ func doProviderRequestWithAudit(
 	return doProviderRequest(ctx, client, provider, requestID, modelCallID, buildRequest, observer, defaultProviderRetry())
 }
 
+func runStreamWithZeroEventRecovery(
+	ctx context.Context,
+	req StreamRequest,
+	sink func(ModelEvent) error,
+	streamOnce func(context.Context, StreamRequest, func(ModelEvent) error) error,
+) error {
+	if streamOnce == nil {
+		return errors.New("provider stream function is unavailable")
+	}
+	modelEventObserved := false
+	wrappedSink := func(event ModelEvent) error {
+		modelEventObserved = true
+		return sink(event)
+	}
+	err := streamOnce(ctx, req, wrappedSink)
+	if err == nil || modelEventObserved || req.StreamRecoveryAttempt >= 1 || ctx.Err() != nil || !IsRetryableZeroEventStreamError(err) {
+		return err
+	}
+	maxAttempts := applyStreamRequestRetry(providerRetry{}, req).maxAttempts
+	if req.StreamDiagnostics != nil {
+		snapshot := req.StreamDiagnostics.Snapshot()
+		if snapshot.RawBytesObserved || snapshot.RawByteCount > 0 || snapshot.StreamRecoveryAttempts >= 1 || snapshot.HTTPAttempt >= maxAttempts {
+			return err
+		}
+		req.StreamDiagnostics.BeginStreamRecoveryAttempt()
+	}
+	req.StreamRecoveryAttempt++
+	// 第二轮内部禁止再次扩大 HTTP 重试；恢复总量严格限制为一次新请求。
+	req.FallbackMaxAttempts = 1
+	return streamOnce(ctx, req, sink)
+}
+
+func attachStreamHTTPTrace(request *http.Request, diagnostics *StreamDiagnostics) *http.Request {
+	if request == nil || diagnostics == nil {
+		return request
+	}
+	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			diagnostics.RecordConnection(info.Reused, info.WasIdle)
+		},
+	}
+	return request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
+}
+
 func doProviderRequest(
 	ctx context.Context,
 	client *http.Client,
@@ -276,6 +321,7 @@ func doProviderRequest(
 			return nil, err
 		}
 
+		httpReq = attachStreamHTTPTrace(httpReq, retry.diagnostics)
 		startedAt := time.Now()
 		targetHost := ""
 		endpointKind := "custom"
@@ -302,7 +348,7 @@ func doProviderRequest(
 		resp, err := client.Do(httpReq)
 		outcome := classifyAttempt(err, resp, attempt, retry.maxAttempts)
 		if resp != nil {
-			retry.diagnostics.RecordHeader(resp.StatusCode, attempt, retry.now())
+			retry.diagnostics.RecordHTTPResponse(resp, attempt, retry.now())
 		}
 		var delay time.Duration
 		if outcome.retryable {
@@ -399,12 +445,13 @@ type retryingStreamBody struct {
 	observer     *audit.Observer
 	retry        providerRetry
 
-	mu       sync.Mutex
-	body     io.ReadCloser
-	state    providerRetryState
-	canRetry func() bool
-	rawBytes bool
-	closed   bool
+	mu                     sync.Mutex
+	body                   io.ReadCloser
+	state                  providerRetryState
+	canRetry               func() bool
+	rawBytes               bool
+	streamRecoveryAttempts int
+	closed                 bool
 }
 
 func newRetryingStreamBody(ctx context.Context, client *http.Client, provider, requestID, modelCallID string, buildRequest func(context.Context) (*http.Request, error), body io.ReadCloser, state providerRetryState, observer *audit.Observer, retry providerRetry, canRetry func() bool) io.ReadCloser {
@@ -492,7 +539,7 @@ func (body *retryingStreamBody) recordStreamHeader(resp *http.Response, attempt 
 	if body == nil || resp == nil {
 		return
 	}
-	body.retry.diagnostics.RecordHeader(resp.StatusCode, attempt, body.retryNow())
+	body.retry.diagnostics.RecordHTTPResponse(resp, attempt, body.retryNow())
 }
 
 func recordNon2xxHTTPStatusClose(diagnostics *StreamDiagnostics, resp *http.Response) {
@@ -509,7 +556,30 @@ func recordNon2xxHTTPStatusClose(diagnostics *StreamDiagnostics, resp *http.Resp
 }
 
 func isRetryableStreamReadError(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || isTypedResetError(err) || isTypedHTTP2ResetError(err)
+}
+
+// IsRecoverableTruncatedStreamError 只接受明确的瞬时流关闭；协议语法和显式终态不在白名单内。
+func IsRecoverableTruncatedStreamError(err error) bool {
+	if err == nil || isContextDoneError(err) || isProviderStreamIdleTimeout(err) {
+		return false
+	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) {
+		return false
+	}
+	var truncated *StreamTruncatedError
+	if !errors.As(err, &truncated) || truncated == nil {
+		return false
+	}
+	if truncated.Err == nil {
+		return true
+	}
+	return isRetryableStreamReadError(truncated.Err)
+}
+
+func IsRetryableZeroEventStreamError(err error) bool {
+	return IsRecoverableTruncatedStreamError(err)
 }
 
 func (body *retryingStreamBody) activeBody() (io.ReadCloser, error) {
@@ -588,10 +658,23 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 		body.recordDecision(retryDecisionNoRetryStreamEvent, truncatedErr)
 		return truncatedErr
 	}
+	if body.streamRecoveryAttempts >= 1 {
+		body.mu.Unlock()
+		body.recordDecision(retryDecisionNoRetryStreamExhausted, truncatedErr)
+		return truncatedErr
+	}
 	if body.state.attempt >= body.retry.maxAttempts {
 		body.mu.Unlock()
 		body.recordDecision(retryDecisionNoRetryStreamExhausted, truncatedErr)
 		return truncatedErr
+	}
+	// Zero-byte stream recovery gets exactly one new provider request. HTTP
+	// status/transport retries that happened before the first 2xx response do
+	// not consume this allowance, while errors from the recovery request cannot
+	// recursively expand it.
+	body.streamRecoveryAttempts++
+	if recoveryMax := body.state.attempt + 1; body.retry.maxAttempts > recoveryMax {
+		body.retry.maxAttempts = recoveryMax
 	}
 	delay, canWait := body.retry.retryWait(body.state.attempt, nil, body.state.waited)
 	if !canWait || !body.retry.reserveFallbackWait(delay) {
@@ -612,6 +695,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 	body.mu.Lock()
 	body.state.waited += delay
 	body.mu.Unlock()
+	body.retry.diagnostics.BeginStreamRecoveryAttempt()
 
 	for {
 		body.mu.Lock()
@@ -636,6 +720,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			body.recordRequestBuildFailure(err)
 			return err
 		}
+		request = attachStreamHTTPTrace(request, body.retry.diagnostics)
 		startedAt := time.Now()
 		endpoint, targetHost, canaryMatched := body.recordRequest(request)
 		if !body.retry.consumeFallbackAttempt() {

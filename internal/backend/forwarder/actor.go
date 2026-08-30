@@ -582,9 +582,23 @@ func applyProviderStreamDiagnostics(stats *ProviderStreamStats, diagnostics *mod
 	if snap.HTTPStatus > 0 && (strings.TrimSpace(stats.HTTPStatus) == "" || stats.HTTPStatus == "not_recorded") {
 		stats.HTTPStatus = fmt.Sprintf("%d", snap.HTTPStatus)
 	}
-	if snap.HTTPAttempt > 0 && stats.HTTPAttempt < 1 {
+	if snap.HTTPAttempt > 0 {
 		stats.HTTPAttempt = snap.HTTPAttempt
 	}
+	stats.HTTPProtocol = snap.HTTPProtocol
+	stats.ContentEncoding = snap.ContentEncoding
+	stats.AutoDecompressed = snap.AutoDecompressed
+	stats.ContentLength = snap.ContentLength
+	stats.ConnectionReused = snap.ConnectionReused
+	stats.ConnectionWasIdle = snap.ConnectionWasIdle
+	stats.ConnectionObserved = snap.ConnectionObserved
+	stats.RawByteCount = snap.RawByteCount
+	stats.LastErrorType = snap.LastErrorType
+	stats.LastSSEEventType = snap.LastSSEEventType
+	stats.LastSSEEventIDHash = snap.LastSSEEventIDHash
+	stats.LastSSESequence = snap.LastSSESequence
+	stats.LastResponseStatus = snap.LastResponseStatus
+	stats.StreamRecoveryAttempts = snap.StreamRecoveryAttempts
 	if snap.TransportOutcome != "" {
 		stats.TransportOutcome = snap.TransportOutcome
 	}
@@ -685,7 +699,14 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 		"model_call_id": modelCallID, "provider_pass": stats.Attempt,
 		"status":       providerProtocolStatus(stats.ProtocolFinalStatus),
 		"http_attempt": providerHTTPAttemptField(stats.HTTPAttempt), "http_status": firstNonEmpty(stats.HTTPStatus, "not_recorded"),
-		"provider": firstNonEmpty(stats.Provider, "unknown"), "model": firstNonEmpty(stats.Model, "unknown"), "attribution": firstNonEmpty(stats.Attribution, "unknown"),
+		"http_protocol": firstNonEmpty(stats.HTTPProtocol, "not_recorded"), "content_encoding": firstNonEmpty(stats.ContentEncoding, "not_recorded"),
+		"auto_decompressed": stats.AutoDecompressed, "content_length": stats.ContentLength,
+		"connection_observed": stats.ConnectionObserved, "connection_reused": stats.ConnectionReused, "connection_was_idle": stats.ConnectionWasIdle,
+		"raw_byte_count": stats.RawByteCount, "last_error_type": firstNonEmpty(stats.LastErrorType, "not_recorded"),
+		"last_sse_event_type": firstNonEmpty(stats.LastSSEEventType, "not_recorded"), "last_sse_event_id_hash": firstNonEmpty(stats.LastSSEEventIDHash, "not_recorded"),
+		"last_sse_sequence": stats.LastSSESequence, "last_response_status": firstNonEmpty(stats.LastResponseStatus, "not_recorded"),
+		"stream_recovery_attempts": stats.StreamRecoveryAttempts,
+		"provider":                 firstNonEmpty(stats.Provider, "unknown"), "model": firstNonEmpty(stats.Model, "unknown"), "attribution": firstNonEmpty(stats.Attribution, "unknown"),
 		"completion_marker": stats.CompletionMarker, "model_event_count": stats.ModelEventCount,
 		"chunk_count": stats.ChunkCount, "visible_text_bytes": stats.VisibleTextBytes,
 		"reasoning_bytes": stats.ReasoningBytes, "partial_tool_count": stats.PartialToolCount,

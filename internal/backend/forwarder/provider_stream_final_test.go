@@ -459,6 +459,29 @@ func TestProviderStreamDiagnosticsRawBytesVersusEffectiveContent(t *testing.T) {
 	}
 }
 
+func TestProviderStreamDiagnosticsProjectsFinalRecoveryAttempt(t *testing.T) {
+	stats := ProviderStreamStats{Attempt: 1, HTTPAttempt: 1, ProtocolFinalStatus: "streaming"}
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHTTPResponse(&http.Response{
+		StatusCode: http.StatusOK, Proto: "HTTP/2.0", Header: http.Header{"Content-Encoding": []string{"gzip"}}, ContentLength: -1,
+	}, 1, time.Now())
+	diag.RecordConnection(true, true)
+	diag.BeginStreamRecoveryAttempt()
+	diag.RecordHTTPResponse(&http.Response{
+		StatusCode: http.StatusOK, Proto: "HTTP/1.1", Header: make(http.Header), ContentLength: -1,
+	}, 2, time.Now())
+	diag.RecordConnection(false, false)
+	diag.RecordBytes(8, time.Now())
+
+	applyProviderStreamDiagnostics(&stats, diag, &modeladapter.StreamTruncatedError{Err: io.ErrUnexpectedEOF}, false)
+	if stats.HTTPAttempt != 2 || stats.HTTPProtocol != "HTTP/1.1" || stats.ContentEncoding != "identity" {
+		t.Fatalf("final attempt transport metadata = %#v", stats)
+	}
+	if stats.ConnectionReused || stats.ConnectionWasIdle || !stats.ConnectionObserved || stats.RawByteCount != 8 || stats.StreamRecoveryAttempts != 1 {
+		t.Fatalf("final attempt diagnostics = %#v", stats)
+	}
+}
+
 func TestProviderStreamDiagnosticsIdleTimeoutAndMissingMarker(t *testing.T) {
 	service, stream, capture := providerTerminalCaptureFixture(t)
 	diag := &modeladapter.StreamDiagnostics{}

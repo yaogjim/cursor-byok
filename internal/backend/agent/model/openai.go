@@ -177,10 +177,70 @@ func (parser *openAIThinkTagParser) Flush() []openAIContentPart {
 	}}
 }
 
+func splitOpenAISSEData(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	consumed := 0
+	for {
+		blockEnd, separatorLength := nextSSEBlock(data)
+		if blockEnd < 0 {
+			if !atEOF || len(data) == 0 {
+				return consumed, nil, nil
+			}
+			blockEnd = len(data)
+			separatorLength = 0
+		}
+		block := data[:blockEnd]
+		step := blockEnd + separatorLength
+		payload, ok := sseDataPayload(block)
+		consumed += step
+		if ok {
+			return consumed, payload, nil
+		}
+		if step == 0 || step >= len(data) {
+			return consumed, nil, nil
+		}
+		data = data[step:]
+	}
+}
+
+func nextSSEBlock(data []byte) (int, int) {
+	lf := bytes.Index(data, []byte("\n\n"))
+	crlf := bytes.Index(data, []byte("\r\n\r\n"))
+	switch {
+	case lf < 0:
+		if crlf < 0 {
+			return -1, 0
+		}
+		return crlf, 4
+	case crlf < 0 || lf < crlf:
+		return lf, 2
+	default:
+		return crlf, 4
+	}
+}
+
+func sseDataPayload(block []byte) ([]byte, bool) {
+	normalized := strings.ReplaceAll(string(block), "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	dataLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		value := strings.TrimPrefix(line, "data:")
+		value = strings.TrimPrefix(value, " ")
+		dataLines = append(dataLines, value)
+	}
+	if len(dataLines) == 0 {
+		return nil, false
+	}
+	return []byte(strings.Join(dataLines, "\n")), true
+}
+
 // NewOpenAIAdapter 创建一个 OpenAI 兼容适配器。
 func NewOpenAIAdapter() *OpenAIAdapter {
 	return &OpenAIAdapter{
-		client: netproxy.NewHTTPClient(0),
+		client: netproxy.NewProviderHTTPClient(0),
 	}
 }
 
@@ -411,6 +471,13 @@ func ProviderURLHasEndpoint(baseURL string, endpoints ...string) bool {
 
 // Stream 发送 OpenAI 兼容流式请求，并解析统一模型事件。
 func (adapter *OpenAIAdapter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	if req.StreamDiagnostics == nil {
+		req.StreamDiagnostics = &StreamDiagnostics{}
+	}
+	return runStreamWithZeroEventRecovery(ctx, req, sink, adapter.streamOnce)
+}
+
+func (adapter *OpenAIAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("openai base url is empty")
@@ -559,9 +626,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		} `json:"function"`
 	}
 	type openAIChunk struct {
-		Type      string `json:"type"`
-		RequestID string `json:"request_id"`
-		Error     *struct {
+		Type           string `json:"type"`
+		RequestID      string `json:"request_id"`
+		SequenceNumber int64  `json:"sequence_number"`
+		Error          *struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
 			Code    string `json:"code"`
@@ -710,6 +778,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
@@ -773,19 +842,19 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
+	scanner.Split(splitOpenAISSEData)
 	for scanner.Scan() {
-		rawLine := scanner.Text()
-		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine(rawLine)+"\n")
-		line := strings.TrimSpace(rawLine)
-		if line == "" || !strings.HasPrefix(line, "data:") {
+		payloadLine := strings.TrimSpace(scanner.Text())
+		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine("data: "+payloadLine)+"\n\n")
+		if payloadLine == "" {
 			continue
 		}
 		if firstEventAt.IsZero() {
 			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
-		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
@@ -803,6 +872,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		if err := json.Unmarshal([]byte(payloadLine), &chunk); err != nil {
 			return fail(err)
 		}
+		req.StreamDiagnostics.RecordSSEEvent(firstNonEmptyString(chunk.Type, "chat.completion.chunk"), chunk.RequestID, chunk.SequenceNumber, "")
 		if strings.TrimSpace(chunk.Type) == "error" || chunk.Error != nil {
 			return fail(errorFromChunk(chunk))
 		}
@@ -823,6 +893,9 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			continue
 		}
 		choice := chunk.Choices[0]
+		if choice.FinishReason != nil {
+			req.StreamDiagnostics.RecordSSEEvent(firstNonEmptyString(chunk.Type, "chat.completion.chunk"), chunk.RequestID, chunk.SequenceNumber, strings.TrimSpace(*choice.FinishReason))
+		}
 		if strings.TrimSpace(chunk.Model) != "" {
 			currentModel = strings.TrimSpace(chunk.Model)
 		}
@@ -1108,6 +1181,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	type openAIResponsesStreamEvent struct {
 		Type            string                     `json:"type"`
 		RequestID       string                     `json:"request_id"`
+		SequenceNumber  int64                      `json:"sequence_number"`
 		Delta           string                     `json:"delta"`
 		Arguments       string                     `json:"arguments"`
 		PartialImageB64 string                     `json:"partial_image_b64"`
@@ -1269,6 +1343,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
@@ -1511,31 +1586,31 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			return nil
 		}
 	}
-	errorFromEvent := func(event openAIResponsesStreamEvent) error {
+	errorFromEvent := func(event openAIResponsesStreamEvent, status string) error {
+		message := ""
 		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
-			return fmt.Errorf("openai responses stream error %s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
+			message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
+		} else if event.Response != nil && event.Response.Error != nil && strings.TrimSpace(event.Response.Error.Message) != "" {
+			message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
 		}
-		if event.Response != nil && event.Response.Error != nil && strings.TrimSpace(event.Response.Error.Message) != "" {
-			return fmt.Errorf("openai responses stream error %s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
-		}
-		return fmt.Errorf("openai responses stream failed")
+		return &ProviderTerminalStatusError{Provider: "openai responses", Status: status, Message: message}
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
+	scanner.Split(splitOpenAISSEData)
 	for scanner.Scan() {
-		rawLine := scanner.Text()
-		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine(rawLine)+"\n")
-		line := strings.TrimSpace(rawLine)
-		if line == "" || !strings.HasPrefix(line, "data:") {
+		payloadLine := strings.TrimSpace(scanner.Text())
+		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine("data: "+payloadLine)+"\n\n")
+		if payloadLine == "" {
 			continue
 		}
 		if firstEventAt.IsZero() {
 			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
-		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
@@ -1563,6 +1638,13 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		if err := json.Unmarshal([]byte(payloadLine), &event); err != nil {
 			return fail(err)
 		}
+		responseID := ""
+		responseStatus := ""
+		if event.Response != nil {
+			responseID = event.Response.ID
+			responseStatus = event.Response.Status
+		}
+		req.StreamDiagnostics.RecordSSEEvent(event.Type, firstNonEmptyString(responseID, event.RequestID), event.SequenceNumber, responseStatus)
 		if event.Response != nil {
 			if strings.TrimSpace(event.Response.Model) != "" {
 				currentModel = strings.TrimSpace(event.Response.Model)
@@ -1679,10 +1761,15 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 					finishReason = strings.TrimSpace(event.Response.IncompleteDetails.Reason)
 				}
 			}
+			if strings.TrimSpace(event.Type) == "response.incomplete" {
+				return fail(&ProviderTerminalStatusError{Provider: "openai responses", Status: "incomplete", Message: finishReason})
+			}
 			turnFinishedPending = true
 			sawCompletionMarker = true
 		case "response.failed", "error":
-			return fail(errorFromEvent(event))
+			return fail(errorFromEvent(event, "failed"))
+		case "response.cancelled", "response.canceled":
+			return fail(&ProviderTerminalStatusError{Provider: "openai responses", Status: "cancelled"})
 		}
 	}
 	if err := scanner.Err(); err != nil {

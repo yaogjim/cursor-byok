@@ -146,7 +146,7 @@ func (parser *anthropicThinkTagParser) Flush() []anthropicContentPart {
 // NewAnthropicAdapter 创建一个 Anthropic 兼容适配器。
 func NewAnthropicAdapter() *AnthropicAdapter {
 	return &AnthropicAdapter{
-		client: netproxy.NewHTTPClient(0),
+		client: netproxy.NewProviderHTTPClient(0),
 	}
 }
 
@@ -207,6 +207,13 @@ func anthropicProviderSystemBlocks(systemParts []string) []map[string]any {
 
 // Stream 发送 Messages 流式请求，并解析统一模型事件。
 func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	if req.StreamDiagnostics == nil {
+		req.StreamDiagnostics = &StreamDiagnostics{}
+	}
+	return runStreamWithZeroEventRecovery(ctx, req, sink, adapter.streamOnce)
+}
+
+func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("anthropic base url is empty")
@@ -415,6 +422,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
@@ -524,8 +532,9 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	}
 	errorFromEvent := func(event anthropicEvent) error {
 		finishReason = "error"
+		parts := make([]string, 0, 4)
+		message := "anthropic provider error"
 		if event.Error != nil {
-			parts := make([]string, 0, 4)
 			if value := strings.TrimSpace(event.Error.Type); value != "" {
 				parts = append(parts, "type="+value)
 			}
@@ -535,17 +544,14 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			if value := strings.TrimSpace(event.RequestID); value != "" {
 				parts = append(parts, "request_id="+value)
 			}
-			if message := strings.TrimSpace(event.Error.Message); message != "" {
-				if len(parts) > 0 {
-					return fmt.Errorf("anthropic provider error %s: %s", strings.Join(parts, " "), message)
-				}
-				return fmt.Errorf("anthropic provider error: %s", message)
-			}
 			if len(parts) > 0 {
-				return fmt.Errorf("anthropic provider error %s", strings.Join(parts, " "))
+				message += " " + strings.Join(parts, " ")
+			}
+			if detail := strings.TrimSpace(event.Error.Message); detail != "" {
+				message += ": " + detail
 			}
 		}
-		return fmt.Errorf("anthropic provider error")
+		return &ProviderTerminalStatusError{Provider: "anthropic", Status: "failed", Message: message}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -559,6 +565,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		payloadLine := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
 		if strings.TrimSpace(payloadLine) == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			return nil
 		}
@@ -567,6 +574,14 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		if err := json.Unmarshal([]byte(payloadLine), &event); err != nil {
 			return err
 		}
+		eventType := firstNonEmptyString(event.Type, currentEvent)
+		responseStatus := ""
+		if currentEvent == "message_stop" || eventType == "message_stop" {
+			responseStatus = "completed"
+		} else if currentEvent == "error" || eventType == "error" {
+			responseStatus = "failed"
+		}
+		req.StreamDiagnostics.RecordSSEEvent(eventType, event.RequestID, int64(event.Index), responseStatus)
 		if currentEvent == "error" || strings.TrimSpace(event.Type) == "error" {
 			return errorFromEvent(event)
 		}

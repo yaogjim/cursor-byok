@@ -327,6 +327,20 @@ type ProviderStreamStats struct {
 	Attempt                  int
 	HTTPAttempt              int
 	HTTPStatus               string
+	HTTPProtocol             string
+	ContentEncoding          string
+	AutoDecompressed         bool
+	ContentLength            int64
+	ConnectionReused         bool
+	ConnectionWasIdle        bool
+	ConnectionObserved       bool
+	RawByteCount             int64
+	LastErrorType            string
+	LastSSEEventType         string
+	LastSSEEventIDHash       string
+	LastSSESequence          int64
+	LastResponseStatus       string
+	StreamRecoveryAttempts   int
 	Attribution              string
 	CompletionMarker         bool
 	ModelEventCount          int

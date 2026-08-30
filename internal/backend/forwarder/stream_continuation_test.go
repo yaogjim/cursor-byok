@@ -507,6 +507,24 @@ func TestStreamContinuationBlocksCancel(t *testing.T) {
 	}
 }
 
+func TestStreamContinuationBlocksExplicitProviderTerminal(t *testing.T) {
+	service, stream, provider, capture := continuationFixture(t, true)
+	prepareTruncatedParent(t, service, stream, "failed partial")
+	terminal := &modeladapter.ProviderTerminalStatusError{Provider: "openai", Status: "failed", Message: "rejected"}
+	_ = service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true, Err: terminal})
+	if provider.requestCount() != 0 {
+		t.Fatal("explicit provider terminal spawned a continuation")
+	}
+	if countCapturedEvent(capture, "stream_continuation_suppressed") == 0 {
+		t.Fatal("missing non-recoverable continuation suppression event")
+	}
+	captured := capturedEventByName(t, capture, "stream_continuation_suppressed")
+	payload, _ := captured.Payload.Data.(map[string]any)
+	if payload["reason"] != continuationReasonNonRecoverable {
+		t.Fatalf("suppression reason = %#v, want %q", payload["reason"], continuationReasonNonRecoverable)
+	}
+}
+
 func TestStreamContinuationBlocksSubagentAndGateway(t *testing.T) {
 	service, stream, provider, _ := continuationFixture(t, true)
 	stream.mu.Lock()

@@ -35,6 +35,7 @@ const (
 	continuationReasonDeadline             = "deadline"
 	continuationReasonContextCanceled      = "context_canceled"
 	continuationReasonSubagentChild        = "subagent_child"
+	continuationReasonNonRecoverable       = "non_recoverable_error"
 	continuationReasonGatewayPath          = "gateway_chat_or_responses"
 	continuationReasonNonRunSSE            = "non_run_sse"
 	continuationReasonTurnDeadline         = "total_deadline"
@@ -389,6 +390,13 @@ func (service *Service) trySpawnStreamContinuation(
 	}
 	settings := service.streamContinuationSettings()
 	if !settings.Enabled {
+		return false, nil
+	}
+	if !modeladapter.IsRecoverableTruncatedStreamError(payload.Err) {
+		service.logStreamContinuationEvent(stream, "stream_continuation_suppressed", map[string]any{
+			"model_call_id": strings.TrimSpace(modelCallID),
+			"reason":        continuationReasonNonRecoverable,
+		})
 		return false, nil
 	}
 

@@ -134,6 +134,22 @@ func TestRecordHeader2xxDoesNotTreat5xxAsTransportSuccess(t *testing.T) {
 	}
 }
 
+func TestRecordHTTPResponsePreservesAutomaticGzipMetadata(t *testing.T) {
+	t.Parallel()
+	diag := &StreamDiagnostics{}
+	diag.RecordHTTPResponse(&http.Response{
+		StatusCode:    http.StatusOK,
+		Proto:         "HTTP/2.0",
+		Header:        make(http.Header),
+		Uncompressed:  true,
+		ContentLength: -1,
+	}, 1, time.Now())
+	snap := diag.Snapshot()
+	if snap.HTTPProtocol != "HTTP/2.0" || snap.ContentEncoding != "gzip" || !snap.AutoDecompressed || snap.ContentLength != -1 {
+		t.Fatalf("automatic gzip metadata = %#v", snap)
+	}
+}
+
 func TestPrior2xxSucceededDoesNotLingerAfterLaterHTTPFailure(t *testing.T) {
 	t.Parallel()
 	diag := &StreamDiagnostics{}

@@ -90,6 +90,19 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 流诊断补齐 header/首末字节/body 结束、close cause、partial boundary 和 transport outcome；observability rotation 只由存储设置触发，退出先 drain、超时再取消并记录原因和结果；SCM/FSSync/checkpoint/client TLS 预期噪声降级，真实 provider/5xx/timeout/upstream TLS 失败保持 ERROR；fallback `_fbN` 不再污染业务 `model_call_id`，成功解码 Bidi 不再误标 `decode_error`。相关 package 定向 test/vet、日志分析器测试、`git diff --check` 与根模块构建通过。真实 Cursor 多段 continuation 和真实 TCP RST/TLS 故障注入未执行，故不得标 accepted。
 
+### 0.12 Provider 流截断根治（第一阶段完成，Transport A/B 与真实注入待补）
+
+2026-08-30 已完成共享 Provider 流读取路径的第一阶段治理，`delivery_status=verified-partial`，未提交、未推送、未发布。故障证据表明 OpenAI/Anthropic 都可能在 HTTP 200 和正常输出后以 `unexpected_eof` 结束，优先共同故障面是 Gateway→Provider 的共享 HTTP Transport 与公共流读取路径，而不是 Cursor 客户端解码器或上下文硬上限。
+
+- 观测：最终 HTTP attempt 记录协议版本、Content-Encoding/Go 自动解压、Content-Length、连接复用/idle、原始字节数、首末字节、底层 typed error、最后 SSE 事件类型、response ID 短哈希、sequence/status 和累计零字节恢复次数；这些字段投影到 provider/turn terminal，不记录正文、工具参数或 Authorization。
+- 协议：OpenAI Responses 支持 CRLF、空行事件边界、多行 `data:` 与最后事件后直接 EOF；`[DONE]`/`response.completed`、Anthropic `message_stop` 为成功终态，failed/cancelled/incomplete/显式 error 为独立 Provider 协议终态；未见合法终态的 EOF 保持 truncated，未知类终态事件不会被猜成成功。
+- 恢复：只有零 provider 字节、零 `ModelEvent` 且属于 typed EOF/unexpected EOF/TCP reset/HTTP/2 reset/GOAWAY 白名单时，才在同渠道最多新增一次请求并受现有 attempt/wait 预算约束。读到任意字节或事件后禁止原请求重放；4xx、认证/配额、语法错误、取消、deadline 和明确协议终态不重试。
+- continuation：既有 checkpoint continuation 的开关、单次预算、工具/副作用/checkpoint/pending interaction/subagent/Gateway 路径门禁不变；新增非瞬时截断错误抑制，避免显式 Provider 终态进入纯文本续写。本阶段没有扩大部分输出自动恢复。
+- Transport A/B：OpenAI/Anthropic Provider 客户端新增环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE`，允许互斥的 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`。未知值或组合值 fail-closed 回到 `auto`；`direct` 只绕过显式 HTTP/SOCKS proxy，不能绕过操作系统 TUN。HTTP/1.1 的真实 TLS 协商已有自动测试，但没有真实截断率数据。
+- 验证：无缓存 netproxy/model/forwarder 定向回归、`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。确定性 fixture 覆盖 completed-at-EOF、failed/cancelled/incomplete、CRLF/多行 data、缺失终态、plain/unexpected EOF、TCP reset、HTTP/2 reset/GOAWAY、一次上限、raw bytes/model event/取消/4xx 抑制、最终 attempt diagnostics 重置/投影及 HTTP/1 实际协商。额外完整 `go test -count=1 ./internal/...` 的受影响包均通过，但命令最终被两个外部 CLI smoke 阻断：Codex 临时插件 clone 目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；没有为通过测试而修改产品逻辑。
+
+仍待完成：按 `auto`、`no_compression`、`fresh_connection`、`http1`、`direct` 顺序做真实单变量网络采样；Cursor→Gateway 断连与 Provider 截断边界注入；full/provider 日志采样后降回 basic。当前不得宣称真实网络截断率已下降或默认 Transport 策略已经确定。
+
 ### 0.10 模型页保存身份变更（自动化复现与修复通过，视觉未点）
 
 2026-08-28 修复模型管理页编辑后保存失败。用户截图两类症状：`模型适配器 providerFallback.primaryChannelID 引用了不存在的渠道 "dce4005402c60e65"`，以及切换 OpenAI/Anthropic 后 `模型 1 的模型标识不能为空`。任务证据见 `task/todo.md` 的 `model-save-identity-remap-20260828`。
@@ -342,6 +355,8 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 
 ### 2. 按时间索引
+
+- **2026-08-30**：完成 `v0.0.52.5` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，产物归档为 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。构建首次因误用 Go 1.26.3 且清空编译缓存，在 8GB 内存/swap 压力下大型生成文件 `aiserver_v1.connect.go` 编译停滞；改用项目 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后成功。已核验 `0.0.52.5` 版本（Info.plist 与二进制注入）、arm64 架构、adhoc 签名、`hdiutil verify` 与 SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
 - **2026-08-29**：实现 Codex 多账户管理与安全轮换。模型配置仍只选择 Codex 凭据来源；旧单账户私有文件兼容迁移为账户池，接入页支持激活、逐账户用量和删除。401 定向刷新失败后切换备用账户，明确 quota 仅在零输出安全窗口内幂等轮换并单次重试。自动化验证范围见 `task/todo.md`；未使用真实 token、未做 Wails 视觉点击或发布包重构建。
 
