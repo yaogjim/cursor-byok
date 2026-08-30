@@ -1599,6 +1599,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
 	scanner.Split(splitOpenAISSEData)
+responsesScan:
 	for scanner.Scan() {
 		payloadLine := strings.TrimSpace(scanner.Text())
 		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine("data: "+payloadLine)+"\n\n")
@@ -1766,6 +1767,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			}
 			turnFinishedPending = true
 			sawCompletionMarker = true
+			break responsesScan
 		case "response.failed", "error":
 			return fail(errorFromEvent(event, "failed"))
 		case "response.cancelled", "response.canceled":

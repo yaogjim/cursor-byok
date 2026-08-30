@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "0.0.52.5"
+		"file_version": "0.0.52.6"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "0.0.52.5",
+			"ProductVersion": "0.0.52.6",
 			"CompanyName": "Gateway-byok",
 			"FileDescription": "Gateway-byok",
 			"LegalCopyright": "© 2026, Gateway-byok",

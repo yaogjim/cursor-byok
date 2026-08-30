@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestOpenAIResponsesRequestsReasoningSummary(t *testing.T) {
@@ -225,6 +228,44 @@ func TestOpenAIResponsesScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
 	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
 }
 
+func TestOpenAIResponsesCompletedIgnoresTrailingUnexpectedEOF(t *testing.T) {
+	payload := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Ls","arguments":"{\"path\":\".\"}","status":"completed"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp-1","model":"gpt-test","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Ls","arguments":"{\"path\":\".\"}","status":"completed"}]}}`,
+		"",
+	}, "\n\n")
+	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload+"\n", io.ErrUnexpectedEOF)}
+	events, err := collectOpenAIStreamEvents(t, adapter, "/v1/responses")
+	if err != nil {
+		t.Fatalf("completed response failed on trailing unexpected EOF: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+}
+
+func TestOpenAIResponsesCompletedReturnsBeforeBodyCloses(t *testing.T) {
+	payload := `data: {"type":"response.completed","response":{"id":"resp-1","model":"gpt-test","status":"completed","output_text":"done"}}` + "\n\n"
+	reader := newBlockingAfterReader(payload)
+	adapter := &OpenAIAdapter{client: &http.Client{Transport: streamBodyRoundTripper{body: reader}}}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := collectOpenAIStreamEvents(t, adapter, "/v1/responses")
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("completed response failed before body close: %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = reader.Close()
+		<-result
+		t.Fatal("completed response waited for the provider body to close")
+	}
+}
+
 func TestOpenAIChatCompletionsEOFWithoutFinishMarker(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
@@ -347,6 +388,47 @@ func (reader *errorAfterReader) Read(p []byte) (int, error) {
 }
 
 func (reader *errorAfterReader) Close() error { return nil }
+
+type streamBodyRoundTripper struct {
+	body io.ReadCloser
+}
+
+func (transport streamBodyRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       transport.body,
+		Request:    request,
+	}, nil
+}
+
+type blockingAfterReader struct {
+	data      []byte
+	release   chan struct{}
+	closeOnce sync.Once
+}
+
+func newBlockingAfterReader(payload string) *blockingAfterReader {
+	return &blockingAfterReader{
+		data:    []byte(payload),
+		release: make(chan struct{}),
+	}
+}
+
+func (reader *blockingAfterReader) Read(p []byte) (int, error) {
+	if len(reader.data) > 0 {
+		n := copy(p, reader.data)
+		reader.data = reader.data[n:]
+		return n, nil
+	}
+	<-reader.release
+	return 0, io.EOF
+}
+
+func (reader *blockingAfterReader) Close() error {
+	reader.closeOnce.Do(func() { close(reader.release) })
+	return nil
+}
 
 func assertOpenAIStreamTruncated(t *testing.T, err error, wantSubstring string) {
 	t.Helper()

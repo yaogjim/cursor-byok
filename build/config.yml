@@ -8,7 +8,7 @@ info:
   description: "Gateway-byok"
   copyright: "© 2026, Gateway-byok"
   comments: "Gateway-byok"
-  version: "0.0.52.5"
+  version: "0.0.52.6"
 
 dev_mode:
   root_path: .

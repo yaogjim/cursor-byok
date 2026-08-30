@@ -9,11 +9,19 @@
 **gateway-provider-stream-truncation-20260830** (in_progress, verified-partial)
 - 已完成共享 Provider HTTP 流观测第一阶段：`provider_stream_finished` 可投影最终 HTTP attempt 的协议、编码/自动解压、连接复用、原始字节数、最后 SSE 事件元数据、typed close cause 和累计零字节恢复次数；response ID 仅保存短哈希，不落完整正文或凭据。
 - 已完成 OpenAI Responses 与 Anthropic 终态收口：支持 Responses CRLF、多行 `data:`、最后事件后立即 EOF；`[DONE]`、`response.completed`、`message_stop` 成功，failed/cancelled/incomplete/显式 error 为协议终态，无合法 marker 的 EOF 保持 `StreamTruncatedError`。
+- 已修复实测事故中 `response.completed` 后继续等待连接关闭的问题：Responses 在完成最终内容和工具投影后立即进入统一收尾，不再被终态后的 `unexpected_eof` 覆盖为 `stream_decode`；回归覆盖连接不关闭、终态后异常 EOF、工具与 turn 完成事件仅发布一次。独立的连续 HTTP 502 保持既有三次 attempt 边界，本轮不扩大重试，也不执行 Transport A/B。
 - 已完成零 provider 字节且零 `ModelEvent` 的同渠道单次恢复；typed EOF、unexpected EOF、TCP reset、HTTP/2 stream reset/GOAWAY 在预算内最多新增一次请求。任意原始字节、模型事件、4xx、认证/配额、JSON 语法错误、取消、deadline 或明确协议终态均不重放。
 - 既有纯文本 checkpoint continuation 保持默认关闭、每 turn 一次及工具/checkpoint/pending interaction/subagent/Gateway 路径禁用；本轮只增加“非瞬时截断错误禁止续写”，未扩大部分输出恢复范围。
 - 已增加默认关闭的 Provider-only Transport 单变量实验：环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` 支持 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`；未知或组合值回退 `auto`。`direct` 只绕过显式 HTTP/SOCKS 代理，不能绕过操作系统 TUN。
 - 验证：`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。额外的 `go test -count=1 ./internal/...` 中，受影响包均通过，但完整命令被两个外部 CLI smoke 阻断：Codex 临时插件目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；未修改产品代码绕过环境问题。
 - 待完成：按单变量实际运行并比较缺失终态率、零字节 reset 率与延迟；Cursor→Gateway 边界故障注入；确认无重复工具副作用后再评估是否扩大纯文本 continuation。HTTP/1.1 不作为默认修复，full/provider 日志采样后必须降级。
+
+**upstream-p0-p1-safe-port-20260830** (in_progress)
+- 范围：仅在现有 Go/Wails 架构内移植上游行为规格与回归测试，不引入 Rust/Tauri、SQLite、会话架构迁移、WebFetch 全文缓存或未经 benchmark 的观测批处理。
+- [in_progress] `token-anchor`：以最近一次成功 Provider 调用的真实输入上下文 token 为压缩锚点；先覆盖多次工具循环不得累计误判，再做最小实现。
+- [pending] `ttfr`：保留首字节与首模型事件语义，独立记录首个有效文本、思考或有效工具调用响应时间（TTFR）。
+- [pending] `tool-sse-regression`：补未知/已移除工具和 SSE done/cancel/failure 终态竞态测试；仅在测试证明真实缺陷时修改核心实现。
+- [pending] `verification`：运行 forwarder/model 定向测试、race、vet 与格式检查，记录验证证据；不 commit、不 push。
 
 ### ⏸️ 暂停工作包
 
