@@ -47,6 +47,9 @@ const publicModelCount = computed(() =>
 const gatewayIntentText = computed(() =>
   appState.gatewayEnabled ? "配置意图：已启用" : "配置意图：未启用",
 );
+const gatewayStartDisabled = computed(() =>
+  appState.gatewayBusy || appState.configSaving || !appState.gatewayEnabled || gatewayDirty.value,
+);
 const gatewayStatusText = computed(() => {
   if (appState.gatewayRunning) {
     return "运行中";
@@ -267,8 +270,9 @@ async function handleReloadGateway() {
           <div class="row-inline min-h-10">
             <Button
               v-if="!appState.gatewayRunning"
+              :variant="gatewayStartDisabled ? 'default' : 'primary'"
               class="btn-sm"
-              :disabled="appState.gatewayBusy || appState.configSaving || !appState.gatewayEnabled || gatewayDirty"
+              :disabled="gatewayStartDisabled"
               :title="!appState.gatewayEnabled || gatewayDirty ? '需先启用并保存配置' : ''"
               @click="handleGatewayStart"
             >

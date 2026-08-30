@@ -1096,6 +1096,7 @@ assert(appStateSource.includes("tokenConfigured"), "appState must project tokenC
 assert(!appStateSource.includes("token: normalized.gateway.token"), "serializeConfigPayload must not write gateway token");
 assert(!appStateSource.includes("gatewayToken:"), "localStorage cache must not include gatewayToken");
 const gatewayCardSource = readFileSync(path.join(frontendSrc, "components/GatewayCard.vue"), "utf8");
+const isWindowsSource = readFileSync(path.join(frontendSrc, "utils/isWindows.js"), "utf8");
 assert(gatewayCardSource.includes("copyGatewayToken"), "GatewayCard must copy via explicit API");
 assert(gatewayCardSource.includes("rotateGatewayToken"), "GatewayCard must rotate via explicit API");
 assert(gatewayCardSource.includes('import { Clipboard } from "@wailsio/runtime"'), "GatewayCard must use the native Wails clipboard");
@@ -1103,8 +1104,13 @@ assert(gatewayCardSource.includes("await Clipboard.SetText(text)"), "GatewayCard
 assert(!gatewayCardSource.includes("copy-text-to-clipboard"), "GatewayCard must not use DOM clipboard fallbacks");
 assert(gatewayCardSource.includes("handleGatewayTest"), "GatewayCard must expose a Gateway availability test");
 assert(gatewayCardSource.includes("await handleGatewayTest()"), "Gateway start must automatically test availability");
+assert(
+  gatewayCardSource.includes(":variant=\"gatewayStartDisabled ? 'default' : 'primary'\""),
+  "Gateway start must use the primary color only while clickable",
+);
 assert(gatewayCardSource.includes("极简使用"), "GatewayCard must include minimal usage instructions");
 assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must not store token in appState");
+assert(isWindowsSource.includes("try {") && isWindowsSource.includes("catch {"), "standalone Vite previews must survive missing Wails platform detection");
 const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
 
@@ -1138,6 +1144,7 @@ const accessSource = readFileSync(path.join(frontendSrc, "router/access.js"), "u
 const accessViewSource = readFileSync(path.join(frontendSrc, "views/AccessView.vue"), "utf8");
 const unsupportedSource = readFileSync(path.join(frontendSrc, "views/UnsupportedClientPanel.vue"), "utf8");
 const subscriptionAuthSource = readFileSync(path.join(frontendSrc, "components/SubscriptionAuthPanel.vue"), "utf8");
+const globalStyleSource = readFileSync(path.join(frontendSrc, "style/global.css"), "utf8");
 const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const layoutSource = readFileSync(path.join(frontendSrc, "layouts/MainLayout.vue"), "utf8");
 const catalogSource = readFileSync(path.join(frontendSrc, "state/modelCatalog.js"), "utf8");
@@ -1290,6 +1297,18 @@ assert(
 assert(!accessViewSource.includes("<SubscriptionAuthPanel />"), "subscription auth must not remain as a mixed global region");
 assert(subscriptionAuthSource.includes("Codex 接入"), "Codex pane keeps the requested integration heading");
 assert(subscriptionAuthSource.includes("Grok 接入"), "Grok pane has its own integration heading");
+assert(!subscriptionAuthSource.includes("panelSubtitle"), "subscription pane must omit the redundant integration subtitle");
+assert(
+  globalStyleSource.includes(".subscription-account-head {\n  display: flex;\n  align-items: baseline;"),
+  "subscription account count and description must share the title row",
+);
+const subscriptionFooterStart = subscriptionAuthSource.indexOf('<div class="subscription-account-footer">');
+const subscriptionFooterEnd = subscriptionAuthSource.indexOf("</Card>", subscriptionFooterStart);
+const subscriptionFooterSource = subscriptionAuthSource.slice(subscriptionFooterStart, subscriptionFooterEnd);
+assert(subscriptionFooterStart >= 0 && subscriptionFooterEnd > subscriptionFooterStart, "subscription pane must keep its account footer");
+assert(!subscriptionFooterSource.includes("导入 auth.json"), "account footer must not duplicate auth.json import");
+assert(!subscriptionFooterSource.includes("导入 sub2api"), "account footer must not duplicate sub2api import");
+assert(!subscriptionFooterSource.includes("设备码授权"), "account footer must not duplicate device authorization");
 assert(subscriptionAuthSource.includes("导入 auth.json"), "Codex auth.json import stays in the Codex pane");
 assert(subscriptionAuthSource.includes("设备码授权"), "Codex and Grok panes expose device authorization");
 assert(subscriptionAuthSource.includes('listSubscriptionAccounts(props.provider)'), "Codex and Grok panes must both load account lists");

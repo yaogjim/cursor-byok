@@ -7,7 +7,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 345,
+          "line": 342,
           "column": 14
         }
       ]
@@ -19,7 +19,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 216,
+          "line": 219,
           "column": 13
         }
       ]
@@ -43,7 +43,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 149,
+          "line": 146,
           "column": 21
         },
         {
@@ -89,7 +89,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 266,
+          "line": 269,
           "column": 33
         }
       ]
@@ -125,7 +125,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 253,
+          "line": 250,
           "column": 13
         }
       ]
@@ -556,7 +556,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 180,
+          "line": 183,
           "column": 21
         },
         {
@@ -590,7 +590,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 146,
+          "line": 149,
           "column": 29
         }
       ]
@@ -626,7 +626,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 300,
+          "line": 297,
           "column": 21
         }
       ]
@@ -739,7 +739,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 125,
+          "line": 128,
           "column": 14
         }
       ]
@@ -799,7 +799,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 91,
+          "line": 88,
           "column": 14
         }
       ]
@@ -835,7 +835,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 189,
+          "line": 192,
           "column": 21
         },
         {
@@ -857,7 +857,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 247,
+          "line": 250,
           "column": 13
         }
       ]
@@ -869,7 +869,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 144,
+          "line": 147,
           "column": 13
         }
       ]
@@ -881,7 +881,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 124,
+          "line": 127,
           "column": 12
         }
       ]
@@ -939,7 +939,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 126,
+          "line": 129,
           "column": 18
         }
       ]
@@ -963,7 +963,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 344,
+          "line": 341,
           "column": 12
         }
       ]
@@ -1052,18 +1052,6 @@
         }
       ]
     },
-    "1c9af1986e83521a": {
-      "source": "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json、sub2api JSON 或设备码授权",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 80,
-          "column": 5
-        }
-      ]
-    },
     "1e238093b79b3165": {
       "source": "留空时默认 65536",
       "kind": "text",
@@ -1100,7 +1088,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 350,
+          "line": 354,
           "column": 13
         }
       ]
@@ -1112,7 +1100,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 52,
+          "line": 55,
           "column": 12
         },
         {
@@ -1158,7 +1146,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 210,
+          "line": 207,
           "column": 21
         }
       ]
@@ -1209,7 +1197,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 513,
+          "line": 509,
           "column": 16
         }
       ]
@@ -1245,7 +1233,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 324,
+          "line": 321,
           "column": 21
         }
       ]
@@ -1296,7 +1284,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 436,
+          "line": 432,
           "column": 47
         },
         {
@@ -1313,7 +1301,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 611,
+          "line": 588,
           "column": 1
         }
       ]
@@ -1492,7 +1480,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 89,
+          "line": 86,
           "column": 14
         }
       ]
@@ -1516,7 +1504,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 336,
+          "line": 333,
           "column": 21
         }
       ]
@@ -1528,7 +1516,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 255,
+          "line": 252,
           "column": 21
         }
       ]
@@ -1576,7 +1564,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 370,
+          "line": 367,
           "column": 21
         }
       ]
@@ -1603,17 +1591,17 @@
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 243,
+          "line": 240,
           "column": 17
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 347,
+          "line": 344,
           "column": 17
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 605,
+          "line": 582,
           "column": 66
         },
         {
@@ -1699,7 +1687,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 375,
+          "line": 379,
           "column": 31
         }
       ]
@@ -1723,17 +1711,17 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 353,
+          "line": 357,
           "column": 1
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 346,
+          "line": 343,
           "column": 18
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 503,
+          "line": 499,
           "column": 94
         },
         {
@@ -1784,7 +1772,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 232,
+          "line": 229,
           "column": 21
         }
       ]
@@ -1808,7 +1796,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 323,
+          "line": 327,
           "column": 1
         }
       ]
@@ -1878,7 +1866,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 197,
+          "line": 200,
           "column": 13
         }
       ]
@@ -1984,7 +1972,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 134,
+          "line": 131,
           "column": 14
         }
       ]
@@ -2095,7 +2083,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 572,
+          "line": 549,
           "column": 16
         }
       ]
@@ -2206,7 +2194,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 181,
+          "line": 178,
           "column": 14
         }
       ]
@@ -2322,7 +2310,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 390,
+          "line": 394,
           "column": 1
         }
       ]
@@ -2334,7 +2322,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 603,
+          "line": 580,
           "column": 68
         }
       ]
@@ -2397,7 +2385,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 375,
+          "line": 379,
           "column": 17
         }
       ]
@@ -2438,7 +2426,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 596,
+          "line": 573,
           "column": 59
         }
       ]
@@ -2450,12 +2438,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 55,
+          "line": 58,
           "column": 12
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 95,
+          "line": 92,
           "column": 14
         },
         {
@@ -2795,7 +2783,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 241,
+          "line": 238,
           "column": 14
         }
       ]
@@ -2824,7 +2812,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 569,
+          "line": 546,
           "column": 76
         }
       ]
@@ -2925,12 +2913,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 457,
+          "line": 453,
           "column": 36
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 603,
+          "line": 580,
           "column": 99
         }
       ]
@@ -3038,13 +3026,8 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 440,
+          "line": 436,
           "column": 71
-        },
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 552,
-          "column": 1
         }
       ]
     },
@@ -3079,7 +3062,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 568,
+          "line": 545,
           "column": 65
         }
       ]
@@ -3091,7 +3074,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 382,
+          "line": 379,
           "column": 21
         }
       ]
@@ -3115,7 +3098,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 535,
+          "line": 530,
           "column": 1
         },
         {
@@ -3166,7 +3149,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 371,
+          "line": 375,
           "column": 59
         }
       ]
@@ -3219,7 +3202,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 519,
+          "line": 515,
           "column": 47
         }
       ]
@@ -3385,7 +3368,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 103,
+          "line": 100,
           "column": 12
         }
       ]
@@ -3445,7 +3428,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 224,
+          "line": 227,
           "column": 21
         },
         {
@@ -3484,7 +3467,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 560,
+          "line": 537,
           "column": 15
         }
       ]
@@ -3571,7 +3554,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 147,
+          "line": 144,
           "column": 13
         }
       ]
@@ -3595,7 +3578,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 57,
+          "line": 60,
           "column": 10
         },
         {
@@ -3624,7 +3607,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 99,
+          "line": 102,
           "column": 21
         },
         {
@@ -3845,12 +3828,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 420,
-          "column": 1
-        },
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 545,
+          "line": 416,
           "column": 1
         }
       ]
@@ -3930,12 +3908,12 @@
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 66,
+          "line": 69,
           "column": 34
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 66,
+          "line": 69,
           "column": 52
         },
         {
@@ -4002,7 +3980,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 257,
+          "line": 260,
           "column": 33
         }
       ]
@@ -4055,7 +4033,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 429,
+          "line": 425,
           "column": 1
         },
         {
@@ -4178,7 +4156,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 569,
+          "line": 546,
           "column": 46
         }
       ]
@@ -4291,7 +4269,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 359,
+          "line": 363,
           "column": 1
         }
       ]
@@ -4327,37 +4305,37 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 82,
+          "line": 85,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 87,
+          "line": 90,
           "column": 23
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 92,
+          "line": 95,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 109,
+          "line": 112,
           "column": 23
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 113,
+          "line": 116,
           "column": 23
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 118,
+          "line": 121,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 146,
+          "line": 149,
           "column": 21
         },
         {
@@ -4391,7 +4369,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 294,
+          "line": 291,
           "column": 21
         }
       ]
@@ -4427,7 +4405,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 272,
+          "line": 276,
           "column": 23
         }
       ]
@@ -4439,12 +4417,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 412,
-          "column": 1
-        },
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 542,
+          "line": 408,
           "column": 1
         }
       ]
@@ -4485,12 +4458,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 445,
+          "line": 441,
           "column": 1
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 494,
+          "line": 490,
           "column": 1
         }
       ]
@@ -4514,7 +4487,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 93,
+          "line": 90,
           "column": 14
         }
       ]
@@ -4562,7 +4535,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 519,
+          "line": 515,
           "column": 1
         }
       ]
@@ -4586,12 +4559,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 155,
+          "line": 158,
           "column": 27
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 291,
+          "line": 295,
           "column": 18
         },
         {
@@ -4669,7 +4642,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 458,
+          "line": 454,
           "column": 14
         }
       ]
@@ -4681,7 +4654,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 410,
+          "line": 414,
           "column": 1
         },
         {
@@ -4737,7 +4710,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 166,
+          "line": 169,
           "column": 13
         }
       ]
@@ -4773,7 +4746,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 159,
+          "line": 162,
           "column": 31
         }
       ]
@@ -4867,12 +4840,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 97,
+          "line": 94,
           "column": 14
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 526,
+          "line": 522,
           "column": 14
         },
         {
@@ -5026,17 +4999,17 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 109,
+          "line": 112,
           "column": 31
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 113,
+          "line": 116,
           "column": 31
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 139,
+          "line": 142,
           "column": 29
         }
       ]
@@ -5161,7 +5134,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 234,
+          "line": 237,
           "column": 34
         },
         {
@@ -5243,7 +5216,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 320,
+          "line": 317,
           "column": 13
         }
       ]
@@ -5344,7 +5317,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 195,
+          "line": 192,
           "column": 15
         }
       ]
@@ -5368,7 +5341,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 413,
+          "line": 417,
           "column": 14
         },
         {
@@ -5470,7 +5443,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 455,
+          "line": 451,
           "column": 48
         },
         {
@@ -5499,7 +5472,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 240,
+          "line": 237,
           "column": 12
         }
       ]
@@ -5559,7 +5532,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 283,
+          "line": 287,
           "column": 1
         },
         {
@@ -5636,7 +5609,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 458,
+          "line": 454,
           "column": 14
         }
       ]
@@ -5665,7 +5638,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 337,
+          "line": 341,
           "column": 1
         }
       ]
@@ -5689,7 +5662,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 291,
+          "line": 295,
           "column": 18
         }
       ]
@@ -5797,7 +5770,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 386,
+          "line": 390,
           "column": 1
         }
       ]
@@ -5985,7 +5958,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 320,
+          "line": 324,
           "column": 1
         }
       ]
@@ -5997,12 +5970,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 135,
+          "line": 138,
           "column": 21
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 139,
+          "line": 142,
           "column": 21
         }
       ]
@@ -6043,7 +6016,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 160,
+          "line": 163,
           "column": 23
         }
       ]
@@ -6171,7 +6144,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 230,
+          "line": 227,
           "column": 13
         }
       ]
@@ -6219,7 +6192,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 511,
+          "line": 507,
           "column": 57
         },
         {
@@ -6345,7 +6318,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 87,
+          "line": 84,
           "column": 14
         }
       ]
@@ -6357,12 +6330,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 82,
+          "line": 85,
           "column": 29
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 87,
+          "line": 90,
           "column": 31
         }
       ]
@@ -6637,12 +6610,12 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 175,
+          "line": 178,
           "column": 13
         },
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 299,
+          "line": 303,
           "column": 1
         },
         {
@@ -6681,7 +6654,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 366,
+          "line": 370,
           "column": 34
         }
       ]
@@ -6914,7 +6887,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 449,
+          "line": 445,
           "column": 1
         }
       ]
@@ -6950,7 +6923,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 242,
+          "line": 239,
           "column": 18
         }
       ]
@@ -7046,7 +7019,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 358,
+          "line": 355,
           "column": 21
         },
         {
@@ -7080,7 +7053,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 283,
+          "line": 280,
           "column": 38
         }
       ]
@@ -7157,7 +7130,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 330,
+          "line": 334,
           "column": 34
         }
       ]
@@ -7370,7 +7343,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 90,
+          "line": 93,
           "column": 13
         }
       ]
@@ -7442,7 +7415,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 483,
+          "line": 479,
           "column": 1
         }
       ]
@@ -7502,7 +7475,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 62,
+          "line": 65,
           "column": 7
         }
       ]
@@ -7755,7 +7728,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 481,
+          "line": 477,
           "column": 1
         }
       ]
@@ -7854,7 +7827,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 235,
+          "line": 238,
           "column": 33
         }
       ]
@@ -7948,7 +7921,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 275,
+          "line": 279,
           "column": 1
         },
         {
@@ -7965,7 +7938,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 501,
+          "line": 497,
           "column": 1
         }
       ]
@@ -7977,7 +7950,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 413,
+          "line": 417,
           "column": 14
         }
       ]
@@ -8102,7 +8075,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 127,
+          "line": 124,
           "column": 21
         }
       ]
@@ -8198,7 +8171,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 332,
+          "line": 336,
           "column": 36
         }
       ]
@@ -8234,7 +8207,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 116,
+          "line": 119,
           "column": 13
         }
       ]
@@ -8258,7 +8231,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 346,
+          "line": 350,
           "column": 70
         }
       ]
@@ -8414,7 +8387,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 294,
+          "line": 291,
           "column": 67
         }
       ]
@@ -8426,7 +8399,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 283,
+          "line": 280,
           "column": 55
         }
       ]
@@ -8496,7 +8469,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 568,
+          "line": 545,
           "column": 1
         }
       ]
@@ -8609,7 +8582,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 61,
+          "line": 64,
           "column": 7
         }
       ]
@@ -8638,7 +8611,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 513,
+          "line": 509,
           "column": 16
         }
       ]
@@ -8662,7 +8635,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 263,
+          "line": 266,
           "column": 33
         }
       ]
@@ -8759,18 +8732,6 @@
         }
       ]
     },
-    "f3c68647ea1e7f57": {
-      "source": "管理 Grok / xAI 订阅授权，支持导入 sub2api JSON 或设备码授权",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 81,
-          "column": 5
-        }
-      ]
-    },
     "f3f905f2853a4dba": {
       "source": "基本设置",
       "kind": "text",
@@ -8831,7 +8792,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 572,
+          "line": 549,
           "column": 16
         }
       ]
@@ -9023,7 +8984,7 @@
       "refs": [
         {
           "file": "src/components/GatewayCard.vue",
-          "line": 165,
+          "line": 168,
           "column": 29
         }
       ]
@@ -9195,7 +9156,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 106,
+          "line": 103,
           "column": 12
         }
       ]

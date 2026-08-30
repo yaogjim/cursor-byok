@@ -76,9 +76,6 @@ const accounts = computed(() => isCodex.value ? codexAccounts.value : grokAccoun
 const activeAccount = computed(() => accounts.value.find((item) => item.active) || null);
 const accountCount = computed(() => accounts.value.length);
 const panelTitle = computed(() => isCodex.value ? "Codex 接入" : "Grok 接入");
-const panelSubtitle = computed(() => isCodex.value
-  ? "管理 ChatGPT / Codex 订阅授权，支持导入 auth.json、sub2api JSON 或设备码授权"
-  : "管理 Grok / xAI 订阅授权，支持导入 sub2api JSON 或设备码授权");
 const selectedSub2APICount = computed(() => sub2apiSelected.value.length);
 
 function stateLabel(state) {
@@ -399,7 +396,6 @@ onUnmounted(() => {
     <div class="subscription-access-head">
       <div class="min-w-0">
         <h2 class="subscription-access-title">{{ panelTitle }}</h2>
-        <p class="subscription-access-subtitle">{{ panelSubtitle }}</p>
       </div>
       <div class="flex shrink-0 gap-2">
         <Button
@@ -525,33 +521,14 @@ onUnmounted(() => {
         <span class="config-action-status">
           {{ activeAccount ? stateLabel(activeAccount.state) : "未配置" }}
         </span>
-        <div class="config-action-buttons">
-          <Button
-            v-if="isCodex && accountCount"
-            variant="text"
-            :disabled="busy"
-            @click="handleClearCodex"
-          >
-            清除全部
-          </Button>
-          <Button
-            v-if="isCodex"
-            :disabled="busy"
-            @click="handleImportCodex"
-          >
-            导入 auth.json
-          </Button>
-          <Button :disabled="busy" @click="handlePreviewSub2API">
-            导入 sub2api
-          </Button>
-          <Button
-            variant="primary"
-            :disabled="busy"
-            @click="handleStartDevice(provider)"
-          >
-            设备码授权
-          </Button>
-        </div>
+        <Button
+          v-if="isCodex && accountCount"
+          variant="text"
+          :disabled="busy"
+          @click="handleClearCodex"
+        >
+          清除全部
+        </Button>
       </div>
     </Card>
 

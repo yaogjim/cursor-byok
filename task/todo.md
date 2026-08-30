@@ -17,6 +17,12 @@
 
 ### ✅ 最近完成
 
+**access-ui-screenshot-feedback-20260830** (completed, verified-partial)
+- 按截图精简 Codex/Grok 接入页：删除标题下的冗余说明，把“订阅授权”、账号数和操作说明合并到同一标题行，移除账号卡片底部重复的导入与设备码授权按钮，保留顶部入口和“清除全部”。
+- Gateway“启动 Gateway”按钮仅在可点击时使用与保存按钮一致的主色高亮；禁用时保持默认弱化样式。
+- 修复独立 Vite 预览空白页：平台检测缺少 Wails 后端时回退为非 Windows，避免顶层导入失败阻断 Vue 挂载；桌面后端能力在独立预览中仍不可用。
+- 验证：前端配置投影门禁和生产构建通过；Playwright 在 `http://127.0.0.1:4173/#/access?client=codex` 确认页面可挂载并显示调整后的授权布局。独立 Vite 预览仍会因没有 Wails 后端产生 `/wails/runtime` 404 和业务调用错误，未做真实 Wails 桌面窗口点击。
+
 **macos-build-0.0.52.4-20260829** (completed, verified)
 - 用户要求汇总更新情况作为 git 提交说明（版本号 `0.0.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
 - 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.4.md` 对齐到 `0.0.52.4`；保留构建前已有的工作树改动。
