@@ -13,6 +13,45 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestNormalizeConfigDefaultsSubagentRescheduleDisabled(t *testing.T) {
+	config, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if config.SubagentReschedule.Enabled {
+		t.Fatal("missing subagentReschedule must remain disabled")
+	}
+	if SubagentRescheduleMaxAttempts != 3 {
+		t.Fatalf("SubagentRescheduleMaxAttempts = %d, want 3", SubagentRescheduleMaxAttempts)
+	}
+}
+
+func TestNormalizeConfigPreservesSubagentRescheduleEnabled(t *testing.T) {
+	config, err := NormalizeConfig(Config{
+		SubagentReschedule: SubagentRescheduleConfig{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if !config.SubagentReschedule.Enabled {
+		t.Fatal("explicit subagentReschedule.enabled=true was not preserved")
+	}
+}
+
+func TestSubagentRescheduleYAMLOldConfigDefaultsDisabled(t *testing.T) {
+	var config Config
+	if err := yaml.Unmarshal([]byte("backendListenAddr: 127.0.0.1:18090\nproxyListenAddr: 127.0.0.1:18080\n"), &config); err != nil {
+		t.Fatalf("unmarshal old config: %v", err)
+	}
+	normalized, err := NormalizeConfig(config)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.SubagentReschedule.Enabled {
+		t.Fatal("old config without subagentReschedule must remain disabled")
+	}
+}
+
 func TestNormalizeConfigMigratesLegacyLogFlag(t *testing.T) {
 	legacyFull := true
 	full, err := NormalizeConfig(Config{LegacyLog: &legacyFull})

@@ -2082,6 +2082,8 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 			if _, createErr := service.subagentRuns.CreateRun(identity); createErr != nil {
 				return service.completePreDispatchToolError(stream, invocation, startedToolCall, startedToolCall != nil, startedEmitted, fmt.Errorf("subagent persist failed before dispatch: %w", createErr))
 			}
+			// attempts.json remains an unconnected foundation until a stable Cursor
+			// fixture proves typed parent/run/attempt/exec correlation.
 			pendingExec.SubagentRunID = runID
 		}
 		stream.mu.Lock()

@@ -16,6 +16,17 @@
 - 验证：`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。额外的 `go test -count=1 ./internal/...` 中，受影响包均通过，但完整命令被两个外部 CLI smoke 阻断：Codex 临时插件目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；未修改产品代码绕过环境问题。
 - 待完成：按单变量实际运行并比较缺失终态率、零字节 reset 率与延迟；Cursor→Gateway 边界故障注入；确认无重复工具副作用后再评估是否扩大纯文本 continuation。HTTP/1.1 不作为默认修复，full/provider 日志采样后必须降级。
 
+**subagent-readonly-reschedule-20260830** (blocked, foundation-partial)
+- 真实 Cursor fixture 核查结论：当前生产链没有可稳定关联 parent/run/child/attempt/terminal 的 typed failure producer，也没有消费完整证据并驱动 relaunch 的 consumer；禁止按时间窗口或错误文本推断，runtime relaunch 必须保持 blocked。
+- 已冻结未来兼容边界：顶层 `subagentReschedule.enabled` 默认关闭，旧配置缺失关闭；首版仅 readonly Task，总计最多 3 attempts。Settings 固定禁用，前端保存强制 `false`，当前配置不触发自动重调度。
+- [completed] `config-contract`：正式配置类型、默认关闭和旧配置兼容；显式 true 仅保留未来合同，不代表当前运行时消费。
+- [completed] `attempt-ledger-foundation`：`attempts.json` 版本化 ledger、原子写入/读取及 attempt 身份基础已落地；不等于存在可靠触发证据或在线 relaunch。
+- [completed] `policy-foundation`：readonly-only、最多 3 attempts、typed evidence fail-closed 的策略基础与回归已落地；无稳定 typed 关联时结论只能是 suppressed/blocked。
+- [completed] `settings-design`：Settings 禁用占位、默认 false 投影及四状态机、重启、回滚和费用边界文档。
+- [blocked] `runtime-wiring`：生产 settings source 与在线 relaunch 不接线；等待稳定 typed producer/consumer 合同成立后另行实施。
+- [blocked] `typed-fixture`：等待真实 Cursor 提供可稳定关联的 typed failure fixture，覆盖错误、取消、断连、重启与 `resume_agent_id`。
+- [pending] `online-relaunch`：只有 typed fixture 解阻并证明 parent 单次结果、attempt 独立 usage/费用后才能进入；当前不得声称解决。
+
 **upstream-p0-p1-safe-port-20260830** (completed, verified)
 - 范围保持隔离：仅在现有 Go/Wails 架构内移植行为规格与回归测试，未引入 Rust/Tauri、SQLite、会话架构迁移、WebFetch 全文缓存或观测批处理。
 - [completed] `token-anchor`：自动压缩锚点改为最近一次成功 Provider 调用的 `InputTokens + CacheReadTokens + CacheWriteTokens`，不含输出 token、不跨调用累计；覆盖大输出、缓存读写、后续调用覆盖和 partial usage 场景。

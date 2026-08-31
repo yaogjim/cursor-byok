@@ -27,6 +27,10 @@ var (
 		"close_cause": {}, "partial_boundary": {}, "transport_outcome": {},
 		"completion_marker": {}, "http_status": {},
 		"artifact_model_call_id": {}, "fallback_channel_index": {}, "payload_bytes": {},
+		"failure_class": {}, "failure_origin": {}, "reschedule_decision": {}, "reschedule_suppressed_reason": {},
+		"attempts_used": {}, "attempts_remaining": {}, "last_event_sequence": {}, "last_event_at": {},
+		"bytes_received": {}, "events_received": {}, "completion_marker_seen": {},
+		"terminal_prepare_state": {}, "terminal_commit_state": {},
 	}
 )
 

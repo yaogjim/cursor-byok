@@ -4,9 +4,11 @@ import dayjs from "dayjs";
 import {
   buildClientPreferencesFromState,
   buildObservabilityConfigFromState,
+  buildSubagentRescheduleConfigFromState,
   DEFAULT_PROVIDER_FALLBACK,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
   normalizeObservabilityConfig,
+  normalizeSubagentRescheduleConfig,
   normalizeProviderFallback,
   normalizeMaxConcurrentRequests,
   prepareModelAdaptersForPersist,
@@ -665,6 +667,7 @@ function normalizeConfig(source) {
     updates: {
       checkOnStartup: asBoolean(updates.checkOnStartup),
     },
+    subagentReschedule: normalizeSubagentRescheduleConfig(raw.subagentReschedule),
     lastAgentModelHash: asString(raw.lastAgentModelHash),
     gateway: normalizeGatewayConfig(raw.gateway),
   };
@@ -687,6 +690,7 @@ function serializeConfigPayload(normalized) {
     appearance: normalized.appearance,
     advertising: normalized.advertising,
     updates: normalized.updates,
+    subagentReschedule: normalized.subagentReschedule,
     lastAgentModelHash: normalized.lastAgentModelHash,
     gateway: {
       enabled: normalized.gateway.enabled,
@@ -718,6 +722,7 @@ function buildConfigPayloadFromState(source = appState) {
     appearance: preferences.appearance,
     advertising: preferences.advertising,
     updates: preferences.updates,
+    subagentReschedule: buildSubagentRescheduleConfigFromState(source),
     lastAgentModelHash: source.lastAgentModelHash,
     gateway: {
       enabled: source.gatewayEnabled,
@@ -777,6 +782,7 @@ function snapshotSettingsSection(source = appState) {
     appearanceTheme: normalizeTheme(source.appearanceTheme),
     advertisingEnabled: Boolean(source.advertisingEnabled),
     updateCheckOnStartup: Boolean(source.updateCheckOnStartup),
+    subagentRescheduleEnabled: Boolean(source.subagentRescheduleEnabled),
   });
 }
 
@@ -826,6 +832,7 @@ function applyConfigSectionSnapshot(scope, raw) {
     appState.appearanceTheme = normalizeTheme(parsed.appearanceTheme);
     appState.advertisingEnabled = Boolean(parsed.advertisingEnabled);
     appState.updateCheckOnStartup = Boolean(parsed.updateCheckOnStartup);
+    appState.subagentRescheduleEnabled = Boolean(parsed.subagentRescheduleEnabled);
   }
 }
 
@@ -937,6 +944,7 @@ function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = ""
   appState.appearanceTheme = normalized.appearance.theme;
   appState.advertisingEnabled = normalized.advertising.enabled;
   appState.updateCheckOnStartup = normalized.updates.checkOnStartup;
+  appState.subagentRescheduleEnabled = normalized.subagentReschedule.enabled;
   appState.gatewayEnabled = normalized.gateway.enabled;
   appState.gatewayListenAddr = normalized.gateway.listenAddr;
   appState.gatewayTokenConfigured = normalized.gateway.tokenConfigured;
@@ -1261,6 +1269,7 @@ export const appState = reactive({
   effectiveAppearanceTheme: resolveEffectiveTheme(cachedConfig.appearance.theme, false),
   advertisingEnabled: cachedConfig.advertising.enabled,
   updateCheckOnStartup: cachedConfig.updates.checkOnStartup,
+  subagentRescheduleEnabled: cachedConfig.subagentReschedule.enabled,
 
   serviceRunning: asBoolean(cachedState.serviceRunning),
   backendRunning: asBoolean(cachedState.backendRunning),

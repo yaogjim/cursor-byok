@@ -20,6 +20,9 @@ type Event struct {
 	HTTPRequestID       string         `json:"http_request_id,omitempty"`
 	CursorRequestID     string         `json:"cursor_request_id,omitempty"`
 	ConversationID      string         `json:"conversation_id,omitempty"`
+	SubagentRunID       string         `json:"subagent_run_id,omitempty"`
+	SubagentAttemptID   string         `json:"subagent_attempt_id,omitempty"`
+	SubagentAttemptNo   int            `json:"subagent_attempt_no,omitempty"`
 	TurnID              string         `json:"turn_id,omitempty"`
 	TurnSequence        uint64         `json:"turn_sequence,omitempty"`
 	ModelCallID         string         `json:"model_call_id,omitempty"`

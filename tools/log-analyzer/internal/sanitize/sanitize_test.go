@@ -159,6 +159,28 @@ func TestAllowlistedFieldsKeepsProviderFallbackBudgetFacts(t *testing.T) {
 	}
 }
 
+func TestAllowlistedFieldsKeepsAttemptPolicyFacts(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"failure_class": "transport_interrupted", "failure_origin": "provider_stream",
+		"reschedule_decision": "reschedule", "reschedule_suppressed_reason": "not_recorded",
+		"attempts_used": 2, "attempts_remaining": 1, "last_event_sequence": 17,
+		"last_event_at": "2026-08-30T10:00:00Z", "bytes_received": 4096, "events_received": 17,
+		"completion_marker_seen": false, "close_cause": "unexpected_eof",
+		"terminal_prepare_state": "prepared", "terminal_commit_state": "not_recorded",
+		"prompt": "secret", "task_args": "secret", "result": "secret", "transcript": "secret", "error": "complete error",
+	})
+	for _, key := range []string{"failure_class", "failure_origin", "reschedule_decision", "reschedule_suppressed_reason", "attempts_used", "attempts_remaining", "last_event_sequence", "last_event_at", "bytes_received", "events_received", "completion_marker_seen", "close_cause", "terminal_prepare_state", "terminal_commit_state"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("attempt policy field %q dropped: %#v", key, fields)
+		}
+	}
+	for _, key := range []string{"prompt", "task_args", "result", "transcript", "error"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("sensitive field %q retained: %#v", key, fields)
+		}
+	}
+}
+
 func TestPathStripsQueryFragmentAndKeepsDeterministicShape(t *testing.T) {
 	cases := []struct {
 		in, want string

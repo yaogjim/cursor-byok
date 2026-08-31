@@ -31,10 +31,11 @@ var cryptoRandRead = cryptorand.Read
 var fallbackRunIDCounter atomic.Uint64
 
 const (
-	subagentStoreDirName   = "_subagents"
-	subagentRunFileName    = "run.json"
-	subagentResultFileName = "result.json"
-	subagentCorruptDirName = "_corrupt"
+	subagentStoreDirName     = "_subagents"
+	subagentRunFileName      = "run.json"
+	subagentResultFileName   = "result.json"
+	subagentAttemptsFileName = "attempts.json"
+	subagentCorruptDirName   = "_corrupt"
 )
 
 // SubagentRunStore 管理 historyRoot/_subagents/<run_id>/ 下的版本化持久状态。
@@ -88,6 +89,10 @@ func (s *SubagentRunStore) runPath(runID string) string {
 // resultPath 返回 result.json 路径。
 func (s *SubagentRunStore) resultPath(runID string) string {
 	return filepath.Join(s.runDir(runID), subagentResultFileName)
+}
+
+func (s *SubagentRunStore) attemptsPath(runID string) string {
+	return filepath.Join(s.runDir(runID), subagentAttemptsFileName)
 }
 
 // acquireRunLock 获取指定 run 的进程内互斥锁。
@@ -409,6 +414,194 @@ func (s *SubagentRunStore) LoadResult(runID string) (*SubagentResultEnvelope, er
 	return s.loadResultLocked(runID)
 }
 
+var (
+	errSubagentAttemptStale  = errors.New("subagent_attempt_stale")
+	errSubagentAttemptBudget = errors.New("subagent_attempt_budget_exhausted")
+)
+
+// CreateInitialAttempt creates attempts.json independently from run.json.
+func (s *SubagentRunStore) CreateInitialAttempt(runID string, safety SubagentSafetySnapshot) (*SubagentAttemptsRecord, error) {
+	if s == nil {
+		return nil, fmt.Errorf("subagent store is nil")
+	}
+	runID = strings.TrimSpace(runID)
+	if err := validateSubagentRunID(runID); err != nil {
+		return nil, err
+	}
+	release := s.acquireRunLock(runID)
+	defer release()
+	if existing, err := s.loadAttemptsLocked(runID); err != nil || existing != nil {
+		return existing, err
+	}
+	now := time.Now().UTC()
+	attemptID := GenerateSubagentRunID()
+	record := &SubagentAttemptsRecord{
+		SchemaVersion:   subagentAttemptsSchemaVersion,
+		SubagentRunID:   runID,
+		Version:         1,
+		MaxAttempts:     SubagentMaxTotalAttempts,
+		ActiveAttemptID: attemptID,
+		Safety:          safety,
+		Attempts: []SubagentAttemptRecord{{
+			AttemptID: attemptID,
+			AttemptNo: 1,
+			Status:    SubagentAttemptCreated,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}},
+		UpdatedAt: now,
+	}
+	if err := s.writeAttemptsLocked(runID, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func (s *SubagentRunStore) LoadAttempts(runID string) (*SubagentAttemptsRecord, error) {
+	if s == nil {
+		return nil, nil
+	}
+	release := s.acquireRunLock(strings.TrimSpace(runID))
+	defer release()
+	return s.loadAttemptsLocked(strings.TrimSpace(runID))
+}
+
+// BindAttempt records transport IDs after the physical child message is built.
+func (s *SubagentRunStore) BindAttempt(runID string, prevVersion int64, attemptID, execID string, messageID uint32) (*SubagentAttemptsRecord, error) {
+	return s.updateAttempts(runID, prevVersion, func(record *SubagentAttemptsRecord) error {
+		attempt, err := activeSubagentAttempt(record, attemptID)
+		if err != nil {
+			return err
+		}
+		if attempt.Status != SubagentAttemptCreated && attempt.Status != SubagentAttemptBound {
+			return fmt.Errorf("cannot bind attempt in status %s", attempt.Status)
+		}
+		execID = strings.TrimSpace(execID)
+		if execID == "" || messageID == 0 {
+			return fmt.Errorf("exec_id and message_id are required")
+		}
+		if attempt.Status == SubagentAttemptBound && (attempt.ExecID != execID || attempt.MessageID != messageID) {
+			return fmt.Errorf("attempt binding conflict")
+		}
+		attempt.ExecID, attempt.MessageID, attempt.Status = execID, messageID, SubagentAttemptBound
+		return nil
+	})
+}
+
+func (s *SubagentRunStore) RecordAttemptFailure(runID string, prevVersion int64, failure SubagentTypedFailure) (*SubagentAttemptsRecord, error) {
+	return s.updateAttempts(runID, prevVersion, func(record *SubagentAttemptsRecord) error {
+		attempt, err := activeSubagentAttempt(record, failure.AttemptID)
+		if err != nil {
+			return err
+		}
+		if attempt.Status != SubagentAttemptBound && attempt.Status != SubagentAttemptFailureRecorded {
+			return fmt.Errorf("attempt cannot record failure from status %s", attempt.Status)
+		}
+		if strings.TrimSpace(failure.SubagentRunID) != record.SubagentRunID || strings.TrimSpace(failure.ExecID) == "" || strings.TrimSpace(failure.ExecID) != attempt.ExecID || !isAllowedSubagentFailureKind(failure.Kind) {
+			return fmt.Errorf("typed failure correlation is incomplete")
+		}
+		if failure.ObservedAt.IsZero() {
+			failure.ObservedAt = time.Now().UTC()
+		}
+		copyFailure := failure
+		attempt.Failure = &copyFailure
+		attempt.Status = SubagentAttemptFailureRecorded
+		return nil
+	})
+}
+
+// SupersedeAttempt consumes one budget slot and creates a new active attempt.
+func (s *SubagentRunStore) SupersedeAttempt(runID string, prevVersion int64, attemptID string) (*SubagentAttemptsRecord, error) {
+	return s.updateAttempts(runID, prevVersion, func(record *SubagentAttemptsRecord) error {
+		attempt, err := activeSubagentAttempt(record, attemptID)
+		if err != nil {
+			return err
+		}
+		if attempt.Status != SubagentAttemptFailureRecorded {
+			return fmt.Errorf("attempt must have typed failure before supersede")
+		}
+		if len(record.Attempts) >= record.MaxAttempts {
+			return errSubagentAttemptBudget
+		}
+		attempt.Status = SubagentAttemptSuperseded
+		now := time.Now().UTC()
+		nextID := GenerateSubagentRunID()
+		record.Attempts = append(record.Attempts, SubagentAttemptRecord{AttemptID: nextID, AttemptNo: len(record.Attempts) + 1, Status: SubagentAttemptCreated, CreatedAt: now, UpdatedAt: now})
+		record.ActiveAttemptID = nextID
+		return nil
+	})
+}
+
+// PrepareTerminalForAttempt is an unconnected attempts.json-local fence only.
+// It is not a complete handoff transaction: attempts.json and result.json/run.json
+// are separate atomic files, so calling this before PrepareTerminal leaves a crash
+// window and cannot prove cross-file ordering. Production must not call it until a
+// stable Cursor fixture exists and the coordinator closes that transaction gap.
+// Within attempts.json, a late result from a superseded child fails closed.
+func (s *SubagentRunStore) PrepareTerminalForAttempt(runID string, prevVersion int64, attemptID string) (*SubagentAttemptsRecord, error) {
+	return s.updateAttempts(runID, prevVersion, func(record *SubagentAttemptsRecord) error {
+		attempt, err := activeSubagentAttempt(record, attemptID)
+		if err != nil {
+			return err
+		}
+		if attempt.Status == SubagentAttemptTerminalPrepared {
+			return nil
+		}
+		if attempt.Status != SubagentAttemptBound && attempt.Status != SubagentAttemptFailureRecorded {
+			return fmt.Errorf("attempt cannot prepare terminal from status %s", attempt.Status)
+		}
+		attempt.Status = SubagentAttemptTerminalPrepared
+		return nil
+	})
+}
+
+func (s *SubagentRunStore) updateAttempts(runID string, prevVersion int64, mutate func(*SubagentAttemptsRecord) error) (*SubagentAttemptsRecord, error) {
+	if s == nil {
+		return nil, fmt.Errorf("subagent store is nil")
+	}
+	runID = strings.TrimSpace(runID)
+	release := s.acquireRunLock(runID)
+	defer release()
+	record, err := s.loadAttemptsLocked(runID)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, fmt.Errorf("attempts record not found for %s", runID)
+	}
+	if record.Version != prevVersion {
+		return nil, fmt.Errorf("attempts version conflict: expected %d got %d", prevVersion, record.Version)
+	}
+	if err := mutate(record); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	for i := range record.Attempts {
+		if record.Attempts[i].AttemptID == record.ActiveAttemptID {
+			record.Attempts[i].UpdatedAt = now
+		}
+	}
+	record.Version++
+	record.UpdatedAt = now
+	if err := s.writeAttemptsLocked(runID, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+func activeSubagentAttempt(record *SubagentAttemptsRecord, attemptID string) (*SubagentAttemptRecord, error) {
+	attemptID = strings.TrimSpace(attemptID)
+	if record == nil || attemptID == "" || record.ActiveAttemptID != attemptID {
+		return nil, errSubagentAttemptStale
+	}
+	for i := range record.Attempts {
+		if record.Attempts[i].AttemptID == attemptID {
+			return &record.Attempts[i], nil
+		}
+	}
+	return nil, errSubagentAttemptStale
+}
+
 // ScanRecovery 扫描所有 runs，并在单写者约束下完成必要的恢复分类状态更新：
 //   - dispatched/running/backgrounded → 转 awaiting_client_resume（禁止重派）
 //   - terminal_prepared/awaiting_parent_resume → 返回等待 parent commit 重试
@@ -578,6 +771,30 @@ func (s *SubagentRunStore) loadRunLocked(runID string) (*SubagentRunRecord, erro
 	return &record, nil
 }
 
+func (s *SubagentRunStore) loadAttemptsLocked(runID string) (*SubagentAttemptsRecord, error) {
+	data, err := os.ReadFile(s.attemptsPath(runID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read attempts record: %w", err)
+	}
+	var record SubagentAttemptsRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, fmt.Errorf("decode attempts record %s: %w", runID, err)
+	}
+	if record.SchemaVersion != subagentAttemptsSchemaVersion || record.SubagentRunID != runID || record.MaxAttempts != SubagentMaxTotalAttempts {
+		return nil, fmt.Errorf("invalid attempts record contract for %s", runID)
+	}
+	if record.Checksum == "" || record.Checksum != computeAttemptsChecksum(&record) {
+		return nil, fmt.Errorf("attempts record checksum mismatch for %s", runID)
+	}
+	if len(record.Attempts) == 0 || len(record.Attempts) > record.MaxAttempts {
+		return nil, fmt.Errorf("invalid attempts count for %s", runID)
+	}
+	return &record, nil
+}
+
 func (s *SubagentRunStore) loadResultLocked(runID string) (*SubagentResultEnvelope, error) {
 	data, err := os.ReadFile(s.resultPath(runID))
 	if err != nil {
@@ -605,6 +822,14 @@ func (s *SubagentRunStore) loadResultLocked(runID string) (*SubagentResultEnvelo
 		return nil, fmt.Errorf("result envelope checksum mismatch for %s: stored=%s computed=%s", runID, envelope.Checksum, expected)
 	}
 	return &envelope, nil
+}
+
+func (s *SubagentRunStore) writeAttemptsLocked(runID string, record *SubagentAttemptsRecord) error {
+	if err := os.MkdirAll(s.runDir(runID), 0o700); err != nil {
+		return fmt.Errorf("mkdir run dir: %w", err)
+	}
+	record.Checksum = computeAttemptsChecksum(record)
+	return writeSubagentJSONAtomic(s.attemptsPath(runID), record, 0o600)
 }
 
 func (s *SubagentRunStore) writeRunLocked(runID string, record *SubagentRunRecord) error {
@@ -760,6 +985,20 @@ func closeSubagentTempFile(file *os.File) error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	return nil
+}
+
+func computeAttemptsChecksum(record *SubagentAttemptsRecord) string {
+	if record == nil {
+		return ""
+	}
+	clone := *record
+	clone.Checksum = ""
+	data, err := json.Marshal(clone)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // computeRunRecordChecksum 返回记录（Checksum 字段置零）的 sha256 十六进制。

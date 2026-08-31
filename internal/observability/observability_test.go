@@ -21,6 +21,8 @@ func TestWithCorrelationMergesAndNormalizesStableIdentifiers(t *testing.T) {
 		ParentModelCallID:    " parent-model-1 ",
 		ParentToolCallID:     " parent-tool-1 ",
 		SubagentRunID:        " run-1 ",
+		SubagentAttemptID:    " attempt-2 ",
+		SubagentAttemptNo:    2,
 		ChildConversationID:  " child-1 ",
 		AgentID:              " agent-1 ",
 		ProviderPass:         2,
@@ -39,7 +41,7 @@ func TestWithCorrelationMergesAndNormalizesStableIdentifiers(t *testing.T) {
 	if got.RootConversationID != "root-1" || got.ParentConversationID != "parent-1" || got.ParentModelCallID != "parent-model-1" || got.ParentToolCallID != "parent-tool-1" {
 		t.Fatalf("parent correlation was not preserved: %+v", got)
 	}
-	if got.SubagentRunID != "run-1" || got.ChildConversationID != "child-1" || got.AgentID != "agent-1" {
+	if got.SubagentRunID != "run-1" || got.SubagentAttemptID != "attempt-2" || got.SubagentAttemptNo != 2 || got.ChildConversationID != "child-1" || got.AgentID != "agent-1" {
 		t.Fatalf("subagent correlation was not preserved: %+v", got)
 	}
 	if got.ConversationID != "conversation-1" || got.ModelCallID != "model-1" || got.ProviderPass != 2 || got.HTTPAttempt != 3 {
@@ -55,6 +57,8 @@ func TestApplyCorrelationIncludesSubagentAndAttemptFields(t *testing.T) {
 		ParentModelCallID:    "parent-model-1",
 		ParentToolCallID:     "parent-tool-1",
 		SubagentRunID:        "run-1",
+		SubagentAttemptID:    "attempt-4",
+		SubagentAttemptNo:    4,
 		ChildConversationID:  "child-1",
 		AgentID:              "agent-1",
 		ProviderPass:         2,
@@ -63,7 +67,7 @@ func TestApplyCorrelationIncludesSubagentAndAttemptFields(t *testing.T) {
 	if event.RootConversationID != "root-1" || event.ParentConversationID != "parent-1" || event.ParentModelCallID != "parent-model-1" || event.ParentToolCallID != "parent-tool-1" {
 		t.Fatalf("event parent correlation = %+v", event)
 	}
-	if event.SubagentRunID != "run-1" || event.ChildConversationID != "child-1" || event.AgentID != "agent-1" || event.ProviderPass != 2 || event.HTTPAttempt != 4 {
+	if event.SubagentRunID != "run-1" || event.SubagentAttemptID != "attempt-4" || event.SubagentAttemptNo != 4 || event.ChildConversationID != "child-1" || event.AgentID != "agent-1" || event.ProviderPass != 2 || event.HTTPAttempt != 4 {
 		t.Fatalf("event subagent correlation = %+v", event)
 	}
 }

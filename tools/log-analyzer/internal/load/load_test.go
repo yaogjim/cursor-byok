@@ -227,6 +227,37 @@ func TestIntoWorkspaceRejectsOversizedEventLine(t *testing.T) {
 	}
 }
 
+func TestIntoWorkspacePersistsAttemptCorrelationAndPolicyFields(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(`{"schema_version":2,"timestamp":"2026-08-30T10:00:00Z","sequence":1,"app_session_id":"s","trace_id":"trace-attempt","subagent_run_id":"run-logical","subagent_attempt_id":"attempt-2","subagent_attempt_no":2,"layer":"runtime","event":"subagent_attempt_finished","fields":{"failure_class":"transport_interrupted","failure_origin":"provider_stream","reschedule_decision":"reschedule","reschedule_suppressed_reason":"not_recorded","attempts_used":2,"attempts_remaining":1,"last_event_sequence":17,"last_event_at":"2026-08-30T10:00:00Z","bytes_received":4096,"events_received":17,"completion_marker_seen":false,"close_cause":"unexpected_eof","terminal_prepare_state":"prepared","terminal_commit_state":"not_recorded","prompt":"secret","task_args":"secret","result":"secret","transcript":"secret","error":"complete error"}}`+"\n"))
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	correlation := queryStrings(t, ws.DBPath(), `SELECT subagent_run_id || ':' || subagent_attempt_id || ':' || subagent_attempt_no FROM events WHERE dataset_id = ?`, currentID)
+	assertStrings(t, correlation, []string{"run-logical:attempt-2:2"})
+	payloads := queryStrings(t, ws.DBPath(), `SELECT safe_fields_json FROM events WHERE dataset_id = ?`, currentID)
+	if len(payloads) != 1 {
+		t.Fatalf("safe fields rows = %#v", payloads)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal([]byte(payloads[0]), &fields); err != nil {
+		t.Fatalf("decode safe fields: %v", err)
+	}
+	for _, key := range []string{"failure_class", "failure_origin", "reschedule_decision", "reschedule_suppressed_reason", "attempts_used", "attempts_remaining", "last_event_sequence", "last_event_at", "bytes_received", "events_received", "completion_marker_seen", "close_cause", "terminal_prepare_state", "terminal_commit_state"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("attempt field %q dropped: %#v", key, fields)
+		}
+	}
+	for _, key := range []string{"prompt", "task_args", "result", "transcript", "error"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("sensitive field %q retained: %#v", key, fields)
+		}
+	}
+}
+
 func TestIntoWorkspaceKeepsMitmFieldsAndDropsSecrets(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(`{"schema_version":2,"timestamp":"2026-03-14T00:00:00Z","sequence":1,"app_session_id":"s","layer":"mitm","event":"connect_decided","fields":{"authorization":"Bearer sk","query":"token=1","body":"{}","cookie":"a=b","header":"x","token":"t","key":"k","host":"api2.cursor.sh:443","connection_id":"conn-1","traffic_class":"unknown","action":"mitm","tls_role":"server","path":"/aiserver.v1.BidiService/Run?token=sk-secret"}}`+"\n"))

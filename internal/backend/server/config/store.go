@@ -253,6 +253,7 @@ func (store *Store) SaveSystemSettings(_ context.Context, cfg Config) (Config, e
 	merged.Appearance = cfg.Appearance
 	merged.Advertising = cfg.Advertising
 	merged.Updates = cfg.Updates
+	merged.SubagentReschedule = cfg.SubagentReschedule
 	normalized, err := NormalizeConfig(merged)
 	if err != nil {
 		return Config{}, err

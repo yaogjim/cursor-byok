@@ -60,6 +60,10 @@ func (service *Service) appendSubagentToolResultIdempotent(
 	}
 	runID := strings.TrimSpace(pending.SubagentRunID)
 
+	// attempts fencing is intentionally not part of this production handoff.
+	// Stable Cursor fixture evidence is required before attempt IDs can safely
+	// fence a logical run; the standalone attempts API must not alter this path.
+
 	// 快速路径：已 parent_committed / acknowledged → 幂等返回。
 	record, err := service.subagentRuns.LoadRun(runID)
 	if err != nil {

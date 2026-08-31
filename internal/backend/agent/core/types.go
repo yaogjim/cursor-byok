@@ -257,6 +257,10 @@ type PendingExec struct {
 	// SubagentRunID 是 Task 派发前生成的稳定运行标识符，贯通整个 subagent 生命周期。
 	// 非 subagent exec 保持空值；缺失时保持 unknown，不按时间推断。
 	SubagentRunID string
+	// SubagentAttemptID identifies one physical child execution within the logical run.
+	SubagentAttemptID string
+	// SubagentAttemptNo is one-based and is capped by the durable attempt budget.
+	SubagentAttemptNo int
 }
 
 // PendingInteraction 表示一条尚未收口的交互桥记录。

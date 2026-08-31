@@ -58,6 +58,9 @@ const (
 	DefaultStreamContinuationOverlapWindowChars = 2048
 	MinStreamContinuationOverlapWindowChars     = 64
 	MaxStreamContinuationOverlapWindowChars     = 8192
+
+	// SubagentRescheduleMaxAttempts 是首版 Task 重调度的固定总尝试次数（含首次尝试）。
+	SubagentRescheduleMaxAttempts = 3
 )
 
 type ModelAdapterConfig struct {
@@ -167,6 +170,13 @@ type StreamContinuationConfig struct {
 	OverlapWindowChars   int  `json:"overlapWindowChars,omitempty" yaml:"overlapWindowChars,omitempty"`
 }
 
+// SubagentRescheduleConfig 控制只读 Task 在安全证据充分时重启新 child。
+// 旧配置缺失时保持关闭；首版固定 readonly-only、总计最多 3 attempts，
+// 不开放这些边界为用户参数。
+type SubagentRescheduleConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
 type Config struct {
 	LegacyLog                 *bool                    `json:"-" yaml:"log,omitempty"`
 	Observability             ObservabilityConfig      `json:"observability" yaml:"observability"`
@@ -182,6 +192,7 @@ type Config struct {
 	LastAgentModelHash        string                   `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
 	Gateway                   GatewayConfig            `json:"gateway" yaml:"gateway"`
 	StreamContinuation        StreamContinuationConfig `json:"streamContinuation,omitempty" yaml:"streamContinuation,omitempty"`
+	SubagentReschedule        SubagentRescheduleConfig `json:"subagentReschedule,omitempty" yaml:"subagentReschedule,omitempty"`
 }
 
 func DefaultConfig() Config {
@@ -265,6 +276,7 @@ func normalizeConfig(input Config, previousAdapters []ModelAdapterConfig) (Confi
 	output.Gateway = normalizedGateway
 	output.LastAgentModelHash = rewriteChannelID(strings.TrimSpace(input.LastAgentModelHash), remap)
 	output.StreamContinuation = normalizeStreamContinuationConfig(input.StreamContinuation)
+	output.SubagentReschedule.Enabled = input.SubagentReschedule.Enabled
 	return output, nil
 }
 

@@ -18,6 +18,24 @@ export const DEFAULT_CLIENT_PREFERENCES = Object.freeze({
   updates: { checkOnStartup: false },
 });
 
+export const DEFAULT_SUBAGENT_RESCHEDULE = Object.freeze({
+  enabled: false,
+});
+
+export function normalizeSubagentRescheduleConfig(_source) {
+  // Runtime relaunch 尚无稳定 typed failure 关联。前端投影固定关闭，
+  // 避免加载或保存未来兼容字段时误启用当前未接线能力。
+  return {
+    enabled: DEFAULT_SUBAGENT_RESCHEDULE.enabled,
+  };
+}
+
+export function buildSubagentRescheduleConfigFromState(_source = {}) {
+  return {
+    enabled: DEFAULT_SUBAGENT_RESCHEDULE.enabled,
+  };
+}
+
 export const DEFAULT_PROVIDER_FALLBACK = Object.freeze({
   enabled: false,
   primaryChannelID: "",

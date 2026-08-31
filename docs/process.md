@@ -7,6 +7,12 @@
 
 ## 一、待完成的内容
 
+### 0.0 Cursor Subagent 只读重调度基础设施
+
+2026-08-30 已完成默认关闭的基础切片，当前状态为 `blocked, foundation-partial`。仓库新增未来兼容的 `subagentReschedule.enabled` 配置（旧配置缺失或 UI 保存均为 false）、禁用的 Settings 占位、`attempts.json` 版本化 ledger/CAS API、仅接受 typed `stream_decode` / `stream_idle_timeout` 的 readonly/3-attempt fail-closed policy，以及 attempt 级 observability 和日志分析器投影。上述 attempt ledger、policy 和 fencing API尚未接入生产 Task 生命周期，不改变现有 subagent 派发和 durable handoff。
+
+真实 Cursor 证据核查未找到能把 child provider typed terminal 稳定关联到 parent `subagent_run_id + attempt_id + exec_id` 的 producer/consumer 合同；现有错误结果仍主要压平为自由文本。根据已批准安全门，本轮没有按错误文本或时间窗口猜测，没有启用在线 relaunch，也没有在 backend 重启后自动重派。解阻仍需 Cursor fixture/API 在同一权威链路回显 physical attempt correlation 与 typed failure；在此之前不得宣称自动恢复已解决。定向 Go、race、20 次并发重复、vet、前端配置投影/build、日志分析器 test/race/vet 和补丁格式检查已通过；完整 backend 回归仅一次命中既有 observability 时序测试抖动，目标测试单独重复 3 次通过。
+
 ### 0.1 198 远程 CLI 使用本机 18090（方案 A）
 
 已完成（2026-08-24）。用户确认远端 `cursor-cli` 容器用 Docker `--network host` 消费本机 `127.0.0.1:18090`。本机用公钥登录 `jandar@172.16.23.198`，LaunchAgent `com.yaogj.cursor198-18090-tunnel` 维持 `ssh -N -R 127.0.0.1:18090:127.0.0.1:18090`；未开本机远程登录，未改绑 18080/18090。验证：远端与容器内 `/healthz` 均为 `ok`；`agent models` 与本机 `CURSOR_API_ENDPOINT=http://127.0.0.1:18090` 的 21 个模型 ID 完全一致；本机 `127.0.0.1:18080`/`18090` 仍由原 Cursor 进程监听。未转发 18080。Mac 休眠后隧道会断，唤醒后 LaunchAgent KeepAlive 会重连。逐步操作、非官方 `auth.json` 会话复用、安装与代理细节见 [`docs/ops_198_cursor_cli_session_reuse.md`](ops_198_cursor_cli_session_reuse.md)。

@@ -168,6 +168,8 @@ func TestProviderHTTPContextSharesStoredCorrelation(t *testing.T) {
 		ParentConversationID: "parent-1",
 		ParentToolCallID:     "parent-tool-1",
 		SubagentRunID:        "run-1",
+		SubagentAttemptID:    "attempt-2",
+		SubagentAttemptNo:    2,
 		ChildConversationID:  "conversation-1",
 		AgentID:              "agent-1",
 		TurnID:               "conversation-1:4",
@@ -190,7 +192,7 @@ func TestProviderHTTPContextSharesStoredCorrelation(t *testing.T) {
 	if got.RootConversationID != "root-1" || got.ParentConversationID != "parent-1" || got.ParentModelCallID != "parent-model-1" || got.ParentToolCallID != "parent-tool-1" {
 		t.Fatalf("provider parent correlation = %+v", got)
 	}
-	if got.SubagentRunID != "run-1" || got.ChildConversationID != "conversation-1" || got.AgentID != "agent-1" || got.ProviderPass != 2 || got.HTTPAttempt != 3 {
+	if got.SubagentRunID != "run-1" || got.SubagentAttemptID != "attempt-2" || got.SubagentAttemptNo != 2 || got.ChildConversationID != "conversation-1" || got.AgentID != "agent-1" || got.ProviderPass != 2 || got.HTTPAttempt != 3 {
 		t.Fatalf("provider subagent correlation = %+v", got)
 	}
 	empty := debug.contextWithRequestCorrelation(context.Background(), "unknown-request", "", "")

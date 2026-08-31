@@ -10,7 +10,85 @@ import (
 	"time"
 )
 
-const subagentContractSchemaVersion = 1
+const (
+	subagentContractSchemaVersion = 1
+	subagentAttemptsSchemaVersion = 1
+	// SubagentMaxTotalAttempts is the logical-run budget, including the initial attempt.
+	SubagentMaxTotalAttempts = 3
+)
+
+// SubagentAttemptStatus is the durable lifecycle of one physical child attempt.
+type SubagentAttemptStatus string
+
+const (
+	SubagentAttemptCreated          SubagentAttemptStatus = "created"
+	SubagentAttemptBound            SubagentAttemptStatus = "bound"
+	SubagentAttemptFailureRecorded  SubagentAttemptStatus = "failure_recorded"
+	SubagentAttemptSuperseded       SubagentAttemptStatus = "superseded"
+	SubagentAttemptTerminalPrepared SubagentAttemptStatus = "terminal_prepared"
+)
+
+// SubagentFailureKind is deliberately typed. Cursor error text must never be
+// converted into one of these values.
+type SubagentFailureKind string
+
+const (
+	SubagentFailureUnknown           SubagentFailureKind = "unknown"
+	SubagentFailureStreamDecode      SubagentFailureKind = "stream_decode"
+	SubagentFailureStreamIdleTimeout SubagentFailureKind = "stream_idle_timeout"
+)
+
+func isAllowedSubagentFailureKind(kind SubagentFailureKind) bool {
+	switch kind {
+	case SubagentFailureStreamDecode, SubagentFailureStreamIdleTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// SubagentTypedFailure is supplied by a trusted sidecar producer. Correlation
+// fields are mandatory so policy can fail closed instead of guessing linkage.
+type SubagentTypedFailure struct {
+	SubagentRunID string              `json:"subagent_run_id"`
+	AttemptID     string              `json:"attempt_id"`
+	ExecID        string              `json:"exec_id"`
+	Kind          SubagentFailureKind `json:"kind"`
+	ObservedAt    time.Time           `json:"observed_at"`
+}
+
+// SubagentSafetySnapshot freezes the dispatch-time facts used by retry policy.
+type SubagentSafetySnapshot struct {
+	Readonly    bool `json:"readonly"`
+	HasResumeID bool `json:"has_resume_id"`
+	SameProcess bool `json:"same_process"`
+}
+
+// SubagentAttemptRecord identifies one physical child execution. The logical
+// run ID remains stable while AttemptID, ExecID, and MessageID change.
+type SubagentAttemptRecord struct {
+	AttemptID string                `json:"attempt_id"`
+	AttemptNo int                   `json:"attempt_no"`
+	Status    SubagentAttemptStatus `json:"status"`
+	ExecID    string                `json:"exec_id,omitempty"`
+	MessageID uint32                `json:"message_id,omitempty"`
+	Failure   *SubagentTypedFailure `json:"failure,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
+}
+
+// SubagentAttemptsRecord is the independent attempts.json schema sidecar.
+type SubagentAttemptsRecord struct {
+	SchemaVersion   int                     `json:"schema_version"`
+	SubagentRunID   string                  `json:"subagent_run_id"`
+	Version         int64                   `json:"version"`
+	MaxAttempts     int                     `json:"max_attempts"`
+	ActiveAttemptID string                  `json:"active_attempt_id"`
+	Safety          SubagentSafetySnapshot  `json:"safety"`
+	Attempts        []SubagentAttemptRecord `json:"attempts"`
+	UpdatedAt       time.Time               `json:"updated_at"`
+	Checksum        string                  `json:"checksum"`
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // 终态类别
@@ -85,11 +163,11 @@ func isTerminalRunStatus(s SubagentRunStatus) bool {
 type SubagentHandoffState string
 
 const (
-	SubagentHandoffNone                SubagentHandoffState = ""
-	SubagentHandoffPrepared            SubagentHandoffState = "prepared"
-	SubagentHandoffParentCommitted     SubagentHandoffState = "parent_committed"
+	SubagentHandoffNone            SubagentHandoffState = ""
+	SubagentHandoffPrepared        SubagentHandoffState = "prepared"
+	SubagentHandoffParentCommitted SubagentHandoffState = "parent_committed"
 	SubagentHandoffAwaitingResume  SubagentHandoffState = "awaiting_parent_resume"
-	SubagentHandoffAcknowledged   SubagentHandoffState = "acknowledged"
+	SubagentHandoffAcknowledged    SubagentHandoffState = "acknowledged"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────

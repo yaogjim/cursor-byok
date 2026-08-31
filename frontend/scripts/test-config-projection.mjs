@@ -4,12 +4,15 @@ import { fileURLToPath } from "node:url";
 import {
   buildClientPreferencesFromState,
   buildObservabilityConfigFromState,
+  buildSubagentRescheduleConfigFromState,
+  DEFAULT_SUBAGENT_RESCHEDULE,
   DEFAULT_PROVIDER_FALLBACK,
   formatFallbackBudgetInput,
   isLogicalRoutingAdapter,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
   normalizeClientPreferences,
   normalizeObservabilityConfig,
+  normalizeSubagentRescheduleConfig,
   normalizeProviderFallback,
   parseFallbackBudgetInput,
   prepareModelAdaptersForPersist,
@@ -122,6 +125,33 @@ const expectedProjectedObservability = {
   maxDiskMB: 2048,
 };
 assertEqual(projectedObservability, expectedProjectedObservability, "observability projection mismatch");
+
+assertEqual(DEFAULT_SUBAGENT_RESCHEDULE, { enabled: false }, "subagent reschedule default");
+assertEqual(
+  normalizeSubagentRescheduleConfig(undefined),
+  { enabled: false },
+  "old config without subagentReschedule must stay disabled",
+);
+assertEqual(
+  normalizeSubagentRescheduleConfig({ enabled: true }),
+  { enabled: false },
+  "blocked frontend projection must ignore future enabled config",
+);
+assertEqual(
+  buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true }),
+  { enabled: false },
+  "blocked UI save must never enable subagent reschedule",
+);
+assertEqual(
+  Object.keys(buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true })),
+  ["enabled"],
+  "subagent reschedule must not expose first-release parameters",
+);
+assertEqual(
+  buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true }).enabled,
+  false,
+  "subagent reschedule persist projection must stay disabled",
+);
 
 // ── providerFallback 归一化 / 预算合同 ──
 
@@ -857,6 +887,7 @@ const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"),
 const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapterTypeChange.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
+const settingsRescheduleSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
 
 assert(projectionSource.endsWith("\n"), "configProjection.js must end with a trailing newline");
@@ -893,6 +924,24 @@ assert(
   !appStateSource.includes("upstreamCapacityGroupKey")
     && !projectionSource.includes("upstreamCapacityGroupKey"),
   "frontend must not persist derived capacity group keys",
+);
+assert(
+  appStateSource.includes("subagentReschedule: buildSubagentRescheduleConfigFromState(source)")
+    && appStateSource.includes("subagentRescheduleEnabled: cachedConfig.subagentReschedule.enabled")
+    && appStateSource.includes("appState.subagentRescheduleEnabled = normalized.subagentReschedule.enabled"),
+  "appState must load, project, and apply subagentReschedule.enabled",
+);
+assert(
+  settingsRescheduleSource.includes("等待 Cursor 提供可稳定关联的 typed failure fixture")
+    && settingsRescheduleSource.includes("当前配置不触发自动重调度")
+    && settingsRescheduleSource.includes(":enabled=\"false\"")
+    && /description="等待 Cursor[^"]+"[\s\S]*:enabled="false"[\s\S]*disabled/.test(settingsRescheduleSource)
+    && settingsRescheduleSource.includes("只读 Task")
+    && settingsRescheduleSource.includes("总计最多 3 次尝试")
+    && settingsRescheduleSource.includes("新 child 不是原地 resume")
+    && settingsRescheduleSource.includes("Backend 重启后不自动恢复")
+    && settingsRescheduleSource.includes("可能增加模型费用"),
+  "Settings must remain disabled and explain the typed fixture blocker",
 );
 assert(editorSource.includes("applyModelAdapterTypeChange"), "ModelEditor must use the shared type-change helper");
 assert(

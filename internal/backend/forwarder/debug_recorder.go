@@ -324,6 +324,13 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 	correlation.ParentModelCallID = firstNonEmpty(correlation.ParentModelCallID, debugString(rawEvent, "parent_model_call_id"), stored.ParentModelCallID)
 	correlation.ParentToolCallID = firstNonEmpty(correlation.ParentToolCallID, debugString(rawEvent, "parent_tool_call_id"), stored.ParentToolCallID)
 	correlation.SubagentRunID = firstNonEmpty(correlation.SubagentRunID, debugString(rawEvent, "subagent_run_id"), stored.SubagentRunID)
+	correlation.SubagentAttemptID = firstNonEmpty(correlation.SubagentAttemptID, debugString(rawEvent, "subagent_attempt_id"), stored.SubagentAttemptID)
+	if correlation.SubagentAttemptNo == 0 {
+		correlation.SubagentAttemptNo = int(readInt64Value(rawEvent["subagent_attempt_no"]))
+	}
+	if correlation.SubagentAttemptNo == 0 {
+		correlation.SubagentAttemptNo = stored.SubagentAttemptNo
+	}
 	correlation.ChildConversationID = firstNonEmpty(correlation.ChildConversationID, debugString(rawEvent, "child_conversation_id"), stored.ChildConversationID)
 	correlation.AgentID = firstNonEmpty(correlation.AgentID, debugString(rawEvent, "agent_id"), stored.AgentID)
 	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
@@ -413,7 +420,7 @@ func (recorder *debugRecorder) recordCapture(ctx context.Context, requestID stri
 		}
 	}
 	fields := make(map[string]any)
-	for _, key := range append([]string{"append_seqno", "byte_len", "client_kind", "data_len", "payload_bytes", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "ttfr_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome", "continued_from_model_call_id", "continuation_index", "reason", "skip_reason", "missing_blob_keys", "missing_blob_key_count", "artifact_model_call_id", "fallback_channel_index"}, append(streamDiagnosticFieldKeys(), turnDiagnosticFieldKeys()...)...) {
+	for _, key := range append([]string{"append_seqno", "byte_len", "client_kind", "data_len", "payload_bytes", "direction", "kind", "message_case", "finish_reason", "ttft_ms", "ttfr_ms", "first_event_at", "duration_ms", "provider_pass", "http_attempt", "http_status", "provider", "model", "attribution", "completion_marker", "model_event_count", "chunk_count", "visible_text_bytes", "reasoning_bytes", "partial_tool_count", "completed_tool_count", "dispatched_tool_count", "tool_dispatch_state", "downstream_published", "potential_side_effect", "retryable", "retry_reason", "retry_suppression_reason", "protocol_final_status", "model_call_final_status", "failure_stage", "error_category", "error_summary", "business_outcome", "continued_from_model_call_id", "continuation_index", "reason", "skip_reason", "missing_blob_keys", "missing_blob_key_count", "artifact_model_call_id", "fallback_channel_index", "failure_class", "failure_origin", "reschedule_decision", "reschedule_suppressed_reason", "attempts_used", "attempts_remaining", "last_event_sequence", "last_event_at", "bytes_received", "events_received", "completion_marker_seen", "close_cause", "terminal_prepare_state", "terminal_commit_state"}, append(streamDiagnosticFieldKeys(), turnDiagnosticFieldKeys()...)...) {
 		if value, ok := rawEvent[key]; ok {
 			fields[key] = value
 		} else if value, ok := payloadFields[key]; ok {
@@ -682,6 +689,10 @@ func (recorder *debugRecorder) contextWithRequestCorrelation(ctx context.Context
 	correlation.ParentToolCallID = firstNonEmpty(correlation.ParentToolCallID, stored.ParentToolCallID)
 	correlation.ToolCallID = firstNonEmpty(correlation.ToolCallID, stored.ToolCallID)
 	correlation.SubagentRunID = firstNonEmpty(correlation.SubagentRunID, stored.SubagentRunID)
+	correlation.SubagentAttemptID = firstNonEmpty(correlation.SubagentAttemptID, stored.SubagentAttemptID)
+	if correlation.SubagentAttemptNo == 0 {
+		correlation.SubagentAttemptNo = stored.SubagentAttemptNo
+	}
 	correlation.ChildConversationID = firstNonEmpty(correlation.ChildConversationID, stored.ChildConversationID)
 	correlation.AgentID = firstNonEmpty(correlation.AgentID, stored.AgentID)
 	correlation.TurnID = firstNonEmpty(correlation.TurnID, stored.TurnID)
@@ -694,7 +705,7 @@ func (recorder *debugRecorder) contextWithRequestCorrelation(ctx context.Context
 	if correlation.HTTPAttempt == 0 {
 		correlation.HTTPAttempt = stored.HTTPAttempt
 	}
-	if correlation.TraceID == "" && correlation.CursorRequestID == "" && correlation.ConversationID == "" && correlation.ModelCallID == "" && correlation.ToolCallID == "" && correlation.RootConversationID == "" && correlation.ParentConversationID == "" && correlation.SubagentRunID == "" && correlation.TurnID == "" {
+	if correlation.TraceID == "" && correlation.CursorRequestID == "" && correlation.ConversationID == "" && correlation.ModelCallID == "" && correlation.ToolCallID == "" && correlation.RootConversationID == "" && correlation.ParentConversationID == "" && correlation.SubagentRunID == "" && correlation.SubagentAttemptID == "" && correlation.TurnID == "" {
 		return ctx
 	}
 	return observability.WithCorrelation(ctx, correlation)

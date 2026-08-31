@@ -39,7 +39,7 @@ const settingsSaveLabel = computed(() => {
   if (appState.configSaving) {
     return "保存中...";
   }
-  return settingsPanel.value === "logs" ? "保存日志设置" : "保存基本设置";
+  return settingsPanel.value === "logs" ? "保存日志设置" : "保存设置";
 });
 
 function showActionError(title, error) {
@@ -350,9 +350,19 @@ onMounted(async () => {
         <div class="flex items-start justify-between gap-3">
           <div>
             <h2 class="card-title">网络与请求</h2>
-            <div class="card-sub">上游请求链路配置</div>
+            <div class="card-sub">上游请求与只读 Task 恢复策略</div>
           </div>
-          <span class="badge-soon">计划中</span>
+        </div>
+        <div class="setting-row is-planned" inert>
+          <Switch
+            compact
+            :show-state="false"
+            class="w-full"
+            label="只读 Task 中断后重启新子代理（等待 typed fixture）"
+            description="等待 Cursor 提供可稳定关联的 typed failure fixture；当前配置不触发自动重调度。未来仅适用于只读 Task，总计最多 3 次尝试；新 child 不是原地 resume，Backend 重启后不自动恢复，且可能增加模型费用。"
+            :enabled="false"
+            disabled
+          />
         </div>
         <div class="setting-row is-planned" inert>
           <div>
@@ -374,6 +384,22 @@ onMounted(async () => {
             <div class="text-xs text-[var(--color-text-muted)]">仅用于开发或自签名证书</div>
           </div>
           <button type="button" class="relative inline-flex h-[22px] w-[40px] shrink-0 rounded-full bg-[var(--color-border-strong)] opacity-55" disabled aria-label="跳过 SSL 验证，计划中" />
+        </div>
+      </div>
+      <div class="config-action-bar">
+        <span
+          class="config-action-status"
+          :class="configSectionDirty.settings ? 'is-dirty' : ''"
+        >
+          {{ configSectionStatusText("settings") }}
+        </span>
+        <div class="config-action-buttons spread">
+          <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadConfig">
+            重新加载
+          </Button>
+          <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.settings" @click="handleSaveConfig">
+            {{ settingsSaveLabel }}
+          </Button>
         </div>
       </div>
     </Card>

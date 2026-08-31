@@ -702,3 +702,25 @@ checkpoint blob / FSSync skip 是 `degraded`，不是 turn 失败；turn 仍可�
 - 自动门禁：524 零输出可 retry/fallback、输出后/工具后/checkpoint 后/取消后抑制、500/529 不回归；continuation 默认关闭、安全门 fail-closed、父子独立计费与去重；typed HTTP 状态不降级；`IsRetryable` 与动作一致；相关 package 的 test/race/vet 与 `git diff --check`。
 - 不得把默认开启 continuation、真实 Cursor 多段 assistant 兼容或源站性能改善写成已交付，除非有对应运行证据。
 - 切片可独立回滚：还原 524 allowlist、关闭 continuation、回退诊断字段或严重性投影，均不得放松 post-output replay gate，也不得改写 §10.5 / P0 / P1 既有合同。
+
+### 10.16 只读 Task 重调度决策
+
+首版新增顶层正式配置：
+
+```yaml
+subagentReschedule:
+  enabled: false
+```
+
+- 默认关闭；旧配置缺失等同 `enabled: false`，无需磁盘迁移。该字段仅作为未来兼容合同保留；当前生产运行时不消费它，也不接线自动重调度。
+- Settings 只显示禁用占位，前端投影和保存固定写入 `false`，防止用户开启无效能力。
+- 只允许 readonly Task；总计最多 3 attempts（首次 + 最多两次重启），该边界固定，不开放参数。
+- 每个后续 attempt 都是新 child relaunch，不是原 child 原地 resume，也不复用 `resume_agent_id`。
+- Backend 重启不会自动恢复或重派 child；未终结 run 仍转为 `awaiting_client_resume`。
+- 启用可能产生额外模型调用与费用，Settings 必须完整展示上述边界。
+
+恢复决策必须区分四个独立状态机：Provider HTTP retry 只处理单次模型调用的 HTTP attempts；stream continuation 只处理已有文本后的新模型调用续写；`resume_agent_id` 只表示 Cursor 显式恢复既有 agent；Task relaunch 才创建新的 child attempt。四者不得共享计数、混用身份或用其中一个名称包装另一个动作。
+
+只有 typed evidence 能稳定关联 parent tool call、subagent run、child/agent identity、attempt 与终态，且证明 Task 为 readonly、前一 child 已结束、无 mutation/tool side effect 时，才允许重启。真实 fixture 核查已确认当前生产链没有稳定 typed failure producer，也没有可消费该关联并安全决策 relaunch 的 consumer；现有零散字段或错误文本不能替代该合同。因此当前状态是 `blocked`：关联不稳定、证据缺失或冲突时一律 fail closed，配置保持默认关闭且运行时不接线。
+
+`attempts.json` 是该逻辑 Task 的 attempt ledger 与回滚边界：关闭开关后停止创建新 attempt，但保留既有 ledger、run/result 和 parent history 供审计；回滚不得删除已完成 child、重写结果或把未终结 run 自动重派。真实 Cursor 的 readonly Task relaunch、取消、断连和 resume fixture 仍是完成证据缺口，在补齐前不得把运行时重调度写成已解决或默认启用。

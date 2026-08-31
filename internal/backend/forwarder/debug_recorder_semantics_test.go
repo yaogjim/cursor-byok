@@ -151,6 +151,34 @@ func TestLogProviderArtifactKeepsCanonicalModelCallID(t *testing.T) {
 	}
 }
 
+func TestDebugRecorderAllowlistsAttemptPolicyFields(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	policyFields := map[string]any{
+		"failure_class": "transport_interrupted", "failure_origin": "provider_stream",
+		"reschedule_decision": "reschedule", "reschedule_suppressed_reason": "not_recorded",
+		"attempts_used": 2, "attempts_remaining": 1, "last_event_sequence": 17,
+		"last_event_at": "2026-08-30T10:00:00Z", "bytes_received": 4096, "events_received": 17,
+		"completion_marker_seen": false, "close_cause": "unexpected_eof",
+		"terminal_prepare_state": "prepared", "terminal_commit_state": "not_recorded",
+		"prompt": "must-not-record", "task_args": "must-not-record", "result": "must-not-record",
+		"transcript": "must-not-record", "error": "complete error must not record",
+	}
+	recorder.LogRuntime(context.Background(), "request-1", "conversation-1", "subagent_attempt_finished", policyFields)
+	captured := capture.onlyCapture(t)
+	if !reflect.DeepEqual(captured.Event.Fields, map[string]any{
+		"failure_class": "transport_interrupted", "failure_origin": "provider_stream",
+		"reschedule_decision": "reschedule", "reschedule_suppressed_reason": "not_recorded",
+		"attempts_used": 2, "attempts_remaining": 1, "last_event_sequence": 17,
+		"last_event_at": "2026-08-30T10:00:00Z", "bytes_received": 4096, "events_received": 17,
+		"completion_marker_seen": false, "close_cause": "unexpected_eof",
+		"terminal_prepare_state": "prepared", "terminal_commit_state": "not_recorded",
+	}) {
+		t.Fatalf("attempt policy fields = %#v", captured.Event.Fields)
+	}
+}
+
 func TestWorkspacePathsFromIntent(t *testing.T) {
 	intent := InboundIntent{RequestContext: &agentv1.RequestContext{Env: &agentv1.RequestContextEnv{
 		WorkspacePaths: []string{"/workspace/a", "/workspace/b"},

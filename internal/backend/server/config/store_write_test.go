@@ -121,6 +121,7 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 	stale.Advertising.Enabled = false
 	stale.Routing.Mode = "local"
 	stale.Observability.Mode = "full"
+	stale.SubagentReschedule.Enabled = true
 	stale.ModelAdapters = []ModelAdapterConfig{testModelAdapter("ch-b", 1)}
 	stale.Gateway.Enabled = true
 	stale.Gateway.Token = ""
@@ -180,7 +181,7 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveSystemSettings() error = %v", err)
 	}
-	if savedSettings.Appearance.Theme != "light" || savedSettings.Advertising.Enabled || savedSettings.Observability.Mode != "full" {
+	if savedSettings.Appearance.Theme != "light" || savedSettings.Advertising.Enabled || savedSettings.Observability.Mode != "full" || !savedSettings.SubagentReschedule.Enabled {
 		t.Fatalf("settings section not saved: %+v", savedSettings)
 	}
 	if savedSettings.Routing.Mode != "local" || !savedSettings.Gateway.Enabled || savedSettings.Gateway.Token != got.Gateway.Token {

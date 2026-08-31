@@ -1841,6 +1841,39 @@ continuation 不是原请求 retry：对 Cursor 而言该 turn 尚未 terminal �
 - **阻塞缺口**：无实施阻塞缺口。真实 Cursor 多段 assistant 兼容与源站耗时不阻塞编码，但阻塞“默认开启 / 性能已修复”的完成声明。
 - **最终 verdict**：`Design Readiness=approved`。可进入 `task/todo.md` 工作包的实施切片；本轮不得改代码。
 
+### 14.18 DESIGN-SUBAGENT-RESCHEDULE-001：只读 Task 新 child 重调度
+
+#### 14.18.1 配置与固定产品边界
+
+`config.yaml` 顶层 `subagentReschedule.enabled` 是未来兼容开关，默认 `false`，旧配置缺失仍关闭。真实 fixture 核查后，当前生产运行时不消费该开关，也不接线自动 relaunch；Settings 只显示固定禁用占位，前端保存强制为 `false`。未来若解除阻塞，首版仍只接受 readonly Task，总计最多 3 attempts；readonly 与 attempt 上限是代码常量，不是可配置参数。
+
+#### 14.18.2 四个独立状态机
+
+以下状态机拥有不同身份、预算和终态，必须分别建模：
+
+1. **Provider HTTP retry**：`http_attempt_started -> response_headers/transport_error -> completed/exhausted`。它保持同一 provider/model call，只重发 HTTP，不创建 Task child。
+2. **Stream continuation**：`partial_persisted -> continuation_eligible -> new_model_call -> completed/partial_failed`。它在已有输出后创建新的模型调用，不是 HTTP retry，也不是 Task relaunch。
+3. **`resume_agent_id`**：`awaiting_client_resume -> cursor_resume_bound -> running -> terminal`。它只在 Cursor 提供可验证的既有 agent 身份时恢复绑定；Backend 不自行生成 resume 信号。
+4. **Task relaunch**：`attempt_terminal -> evidence_eligible -> child_relaunched -> terminal/exhausted`。每次生成新的 child/agent identity，逻辑 Task identity 不变；总计到第 3 次 attempt 后必须 `exhausted`。
+
+四者不能共享 attempt 字段、互相递归触发或把 relaunch 描述成原地 resume。一个请求可以在不同层先后经历多个状态机，但每次动作必须记录明确的 `recovery_kind` 和对应 identity。
+
+#### 14.18.3 Typed evidence 与 fail-closed 门禁
+
+Task relaunch 仅在 typed evidence 稳定关联 `parent_tool_call_id`、`subagent_run_id`、逻辑 Task、前后 attempt、child conversation/agent ID、readonly mode 与 terminal category 时允许。还必须证明前一 child 已终结、没有 mutation、没有可见工具副作用、没有未提交 handoff。
+
+真实 Cursor fixture 核查已确认：当前生产链没有能稳定产出上述关联的 typed failure producer，也没有消费完整证据并驱动在线 relaunch 的 consumer。现有 terminal、错误文本或时间邻近关系均不足以建立安全关联。因此本状态机当前为 `blocked`，运行时不得接线；任何字段缺失、来源冲突、只能靠时间窗口或错误字符串推断，均进入 `suppressed`，不启动新 child，配置与 UI 均保持关闭。
+
+#### 14.18.4 `attempts.json`、重启与回滚
+
+每个逻辑 Task 的 `attempts.json` 只保存版本化 attempt ledger、稳定关联、eligibility evidence 摘要与终态，不复制敏感 prompt/result 正文。写入采用原子替换，并与既有 run/result handoff 分工：ledger 证明“尝试过什么”，run/result 仍是 child 终态和 parent 交接事实源。
+
+回滚边界是关闭 `subagentReschedule.enabled`：停止创建新 attempts，保留已写 ledger 和既有 parent history；不得删除或改写已完成 attempt，不得回滚已提交 tool result。Backend 重启后，未终结 attempt 仍为 `awaiting_client_resume`，不会因为开关开启而自动 relaunch；只有后续可验证的 Cursor resume/bind 才能推进原 run。
+
+#### 14.18.5 证据缺口与完成门禁
+
+配置、前端投影、attempt ledger/policy foundation 和文档落地只证明静态基础合同成立，不证明 Task relaunch 运行时已接线。当前生产 verdict 为 `blocked`。必须先补齐真实 Cursor readonly Task 的稳定 typed failure producer/consumer，以及成功、错误、取消、断连、Backend 重启、`resume_agent_id` 与新 child relaunch fixture，并证明 parent 只收到一次最终结果、费用/usage 按 attempt 独立记录后，才能进入 online relaunch 实施和验收；在此之前不得把能力标记为已解决。
+
 后续任何实现、合并或重构都必须保护以下不变量：
 
 1. `context.json` 是 provider replay 的唯一会话事实源；`state.json` 不保存可投射正文。
