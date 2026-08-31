@@ -16,12 +16,12 @@
 - 验证：`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。额外的 `go test -count=1 ./internal/...` 中，受影响包均通过，但完整命令被两个外部 CLI smoke 阻断：Codex 临时插件目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；未修改产品代码绕过环境问题。
 - 待完成：按单变量实际运行并比较缺失终态率、零字节 reset 率与延迟；Cursor→Gateway 边界故障注入；确认无重复工具副作用后再评估是否扩大纯文本 continuation。HTTP/1.1 不作为默认修复，full/provider 日志采样后必须降级。
 
-**upstream-p0-p1-safe-port-20260830** (in_progress)
-- 范围：仅在现有 Go/Wails 架构内移植上游行为规格与回归测试，不引入 Rust/Tauri、SQLite、会话架构迁移、WebFetch 全文缓存或未经 benchmark 的观测批处理。
-- [in_progress] `token-anchor`：以最近一次成功 Provider 调用的真实输入上下文 token 为压缩锚点；先覆盖多次工具循环不得累计误判，再做最小实现。
-- [pending] `ttfr`：保留首字节与首模型事件语义，独立记录首个有效文本、思考或有效工具调用响应时间（TTFR）。
-- [pending] `tool-sse-regression`：补未知/已移除工具和 SSE done/cancel/failure 终态竞态测试；仅在测试证明真实缺陷时修改核心实现。
-- [pending] `verification`：运行 forwarder/model 定向测试、race、vet 与格式检查，记录验证证据；不 commit、不 push。
+**upstream-p0-p1-safe-port-20260830** (completed, verified)
+- 范围保持隔离：仅在现有 Go/Wails 架构内移植行为规格与回归测试，未引入 Rust/Tauri、SQLite、会话架构迁移、WebFetch 全文缓存或观测批处理。
+- [completed] `token-anchor`：自动压缩锚点改为最近一次成功 Provider 调用的 `InputTokens + CacheReadTokens + CacheWriteTokens`，不含输出 token、不跨调用累计；覆盖大输出、缓存读写、后续调用覆盖和 partial usage 场景。
+- [completed] `ttfr`：保留网络首字节、首模型事件和最后有效内容的既有语义，独立记录首个有效文本、思考或结构有效工具事件时间，并投影 `first_effective_content_at` / `ttfr_ms` 到脱敏观测链路。
+- [completed] `tool-sse-regression`：未知/已移除工具回归覆盖 started、失败结果、completed 和 checkpoint 闭环；终态竞态测试发现并修复 `Cancel` / `Fail` 可覆盖既有终态及重复发布 End 的缺陷，late cancel 在写入 metadata/stats 前短路。未为未知工具引入空 `ToolCall` 持久化。
+- [completed] `verification`：独立审查后修复上述终态缺陷；`go test -count=1 ./internal/backend/agent/model ./internal/backend/forwarder`、`go test -race -count=1 ./internal/backend/forwarder`、`go vet ./internal/backend/agent/model ./internal/backend/forwarder`、日志分析器 sanitize 测试和 `git diff --check` 通过；未 commit、未 push。
 
 ### ⏸️ 暂停工作包
 

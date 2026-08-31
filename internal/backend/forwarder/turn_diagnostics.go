@@ -49,6 +49,7 @@ func streamDiagnosticFieldKeys() []string {
 		"last_byte_at",
 		"body_end_at",
 		"last_effective_content_at",
+		"first_effective_content_at",
 		"close_cause",
 		"partial_boundary",
 		"transport_outcome",

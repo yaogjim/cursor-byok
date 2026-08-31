@@ -41,10 +41,6 @@ func (snapshot turnUsageSnapshot) promptTokensTotal() int64 {
 		nonNegativeInt64(snapshot.CacheWriteTokens)
 }
 
-func (snapshot turnUsageSnapshot) requestTokensTotal() int64 {
-	return snapshot.promptTokensTotal() + nonNegativeInt64(snapshot.OutputTokens)
-}
-
 func (service *Service) importConversationState(item *ConversationFile, state *agentv1.ConversationStateStructure, prefetchedBlobs []*agentv1.PreFetchedBlob) ([]HistoryEntry, error) {
 	if item == nil || state == nil {
 		return nil, nil
@@ -259,7 +255,7 @@ func (service *Service) updateConversationTokenState(stream *ActiveStream, conve
 			item.TokenDetailsMaxTokens = projectedConversationMaxTokens
 		}
 		if finalizeAutoCompaction {
-			updateConversationAutoCompactionState(item, usage.requestTokensTotal(), autoCompactionReserveTokens, modelCallID, now)
+			updateConversationAutoCompactionState(item, promptTokensTotal, autoCompactionReserveTokens, modelCallID, now)
 		}
 		return nil
 	})

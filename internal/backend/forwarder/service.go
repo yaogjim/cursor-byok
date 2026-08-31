@@ -917,6 +917,12 @@ func (service *Service) handleCancelIntent(intent InboundIntent) error {
 	if !ok || stream == nil {
 		return fmt.Errorf("request is not active: %s", intent.RequestID)
 	}
+	stream.mu.Lock()
+	terminal := isTerminalStreamStatus(stream.Status)
+	stream.mu.Unlock()
+	if terminal {
+		return nil
+	}
 	hasCheckpoint := checkpointConversationInitialized(stream)
 	if hasCheckpoint {
 		preservedInterruptedOutput, err := service.persistInterruptedProviderOutput(stream)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cursor/gen/agentv1"
+	runtimecore "cursor/internal/backend/agent/core"
 	modeladapter "cursor/internal/backend/agent/model"
 	"cursor/internal/observability"
 )
@@ -447,14 +448,14 @@ func TestProviderStreamDiagnosticsRawBytesVersusEffectiveContent(t *testing.T) {
 	diag.RecordHeader(http.StatusOK, 1, time.Now())
 	diag.RecordBytes(8, time.Now())
 	applyProviderStreamDiagnostics(&stats, diag, &modeladapter.StreamTruncatedError{}, false)
-	if stats.FirstByteAt.IsZero() || !stats.LastEffectiveContentAt.IsZero() {
+	if stats.FirstByteAt.IsZero() || !stats.LastEffectiveContentAt.IsZero() || !stats.FirstEffectiveContentAt.IsZero() {
 		t.Fatalf("raw bytes must not invent effective content: %#v", stats)
 	}
 	if stats.PartialBoundary != modeladapter.PartialBoundaryNone {
 		t.Fatalf("raw-only partial_boundary = %q", stats.PartialBoundary)
 	}
 	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "hi", OccurredAt: time.Now()})
-	if stats.LastEffectiveContentAt.IsZero() || stats.PartialBoundary != modeladapter.PartialBoundaryText {
+	if stats.LastEffectiveContentAt.IsZero() || stats.FirstEffectiveContentAt.IsZero() || stats.PartialBoundary != modeladapter.PartialBoundaryText {
 		t.Fatalf("text delta did not record effective content: %#v", stats)
 	}
 }
@@ -781,4 +782,140 @@ func capturedEventByName(t *testing.T, capture *debugRecorderTestCapture, eventN
 	}
 	t.Fatalf("missing captured event %q", eventName)
 	return observability.Capture{}
+}
+
+func TestObserveProviderModelEventRecordsFirstEffectiveAfterInvalidEvents(t *testing.T) {
+	started := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	invalidAt := started.Add(10 * time.Millisecond)
+	effectiveAt := started.Add(40 * time.Millisecond)
+	laterAt := started.Add(80 * time.Millisecond)
+	stats := ProviderStreamStats{StartedAt: started}
+
+	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "", OccurredAt: invalidAt})
+	if !stats.FirstEventAt.Equal(invalidAt.UTC()) {
+		t.Fatalf("FirstEventAt = %v, want first any event %v", stats.FirstEventAt, invalidAt.UTC())
+	}
+	if stats.LastEffectiveContentAt.IsZero() {
+		t.Fatal("empty text delta must still record LastEffectiveContentAt")
+	}
+	if !stats.FirstEffectiveContentAt.IsZero() {
+		t.Fatalf("empty text delta must not record FirstEffectiveContentAt: %#v", stats)
+	}
+
+	for _, event := range []modeladapter.ModelEvent{
+		{Kind: modeladapter.ModelEventKindThinkingDelta, Text: "", OccurredAt: invalidAt.Add(time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindThinkingCompleted, OccurredAt: invalidAt.Add(2 * time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindTurnFinished, OccurredAt: invalidAt.Add(3 * time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindProviderError, OccurredAt: invalidAt.Add(4 * time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindPartialToolCall, OccurredAt: invalidAt.Add(5 * time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindToolCallDelta, ToolCallID: "tool-1", OccurredAt: invalidAt.Add(6 * time.Millisecond)},
+		{Kind: modeladapter.ModelEventKindToolLikeCompleted, OccurredAt: invalidAt.Add(7 * time.Millisecond)},
+	} {
+		observeProviderModelEvent(&stats, event)
+	}
+	if !stats.FirstEffectiveContentAt.IsZero() {
+		t.Fatalf("invalid events invented FirstEffectiveContentAt: %#v", stats)
+	}
+	if !stats.FirstEventAt.Equal(invalidAt.UTC()) {
+		t.Fatalf("FirstEventAt mutated by later invalid events: %v", stats.FirstEventAt)
+	}
+
+	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "hello", OccurredAt: effectiveAt})
+	if !stats.FirstEffectiveContentAt.Equal(effectiveAt.UTC()) {
+		t.Fatalf("FirstEffectiveContentAt = %v, want first valid event %v", stats.FirstEffectiveContentAt, effectiveAt.UTC())
+	}
+
+	observeProviderModelEvent(&stats, modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindThinkingDelta, Text: "think", OccurredAt: laterAt})
+	if !stats.FirstEffectiveContentAt.Equal(effectiveAt.UTC()) {
+		t.Fatalf("FirstEffectiveContentAt overwritten: %v", stats.FirstEffectiveContentAt)
+	}
+	if !stats.LastEffectiveContentAt.Equal(laterAt.UTC()) {
+		t.Fatalf("LastEffectiveContentAt = %v, want last content %v", stats.LastEffectiveContentAt, laterAt.UTC())
+	}
+}
+
+func TestObserveProviderModelEventEffectiveContentKinds(t *testing.T) {
+	at := time.Date(2026, 8, 30, 12, 0, 0, 40_000_000, time.UTC)
+	cases := []modeladapter.ModelEvent{
+		{Kind: modeladapter.ModelEventKindTextDelta, Text: "x", OccurredAt: at},
+		{Kind: modeladapter.ModelEventKindThinkingDelta, Text: "y", OccurredAt: at},
+		{Kind: modeladapter.ModelEventKindPartialToolCall, ToolCallID: "tool-1", ToolCall: &agentv1.ToolCall{}, OccurredAt: at},
+		{Kind: modeladapter.ModelEventKindToolCallDelta, ToolCallID: "tool-1", ToolCallDelta: &agentv1.ToolCallDelta{}, OccurredAt: at},
+		{Kind: modeladapter.ModelEventKindToolLikeCompleted, ToolInvocation: &runtimecore.ToolInvocation{CallID: "tool-1"}, OccurredAt: at},
+	}
+	for _, event := range cases {
+		stats := ProviderStreamStats{}
+		observeProviderModelEvent(&stats, event)
+		if stats.FirstEffectiveContentAt.IsZero() {
+			t.Fatalf("kind %s did not record first effective content: %#v", event.Kind, stats)
+		}
+		if event.Kind == modeladapter.ModelEventKindToolCallDelta && !stats.LastEffectiveContentAt.IsZero() {
+			t.Fatalf("tool call delta must not change LastEffectiveContentAt: %#v", stats)
+		}
+	}
+}
+
+func TestProviderTerminalFieldsProjectIndependentTTFR(t *testing.T) {
+	started := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	firstEvent := started.Add(10 * time.Millisecond)
+	firstByte := started.Add(5 * time.Millisecond)
+	firstEffective := started.Add(40 * time.Millisecond)
+	lastEffective := started.Add(80 * time.Millisecond)
+	fields := providerTerminalFields("call-1", ProviderStreamStats{
+		StartedAt:               started,
+		FirstEventAt:            firstEvent,
+		FirstByteAt:             firstByte,
+		FirstEffectiveContentAt: firstEffective,
+		LastEffectiveContentAt:  lastEffective,
+		FinishedAt:              started.Add(100 * time.Millisecond),
+	})
+	if fields["ttft_ms"] != nil {
+		t.Fatalf("provider terminal must not project adapter ttft_ms: %#v", fields)
+	}
+	if fields["first_event_at"] != firstEvent.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("first_event_at = %#v", fields["first_event_at"])
+	}
+	if fields["first_byte_at"] != firstByte.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("first_byte_at = %#v", fields["first_byte_at"])
+	}
+	if fields["last_effective_content_at"] != lastEffective.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("last_effective_content_at = %#v", fields["last_effective_content_at"])
+	}
+	if fields["first_effective_content_at"] != firstEffective.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("first_effective_content_at = %#v", fields["first_effective_content_at"])
+	}
+	if fields["ttfr_ms"] != int64(40) {
+		t.Fatalf("ttfr_ms = %#v, want 40", fields["ttfr_ms"])
+	}
+
+	missing := providerTerminalFields("call-1", ProviderStreamStats{StartedAt: started, FirstEventAt: firstEvent, FirstByteAt: firstByte})
+	if missing["first_effective_content_at"] != "not_recorded" || missing["ttfr_ms"] != "not_recorded" {
+		t.Fatalf("missing ttfr must stay not_recorded: %#v", missing)
+	}
+	if missing["first_event_at"] != firstEvent.UTC().Format(time.RFC3339Nano) || missing["first_byte_at"] != firstByte.UTC().Format(time.RFC3339Nano) {
+		t.Fatalf("existing timeline fields regressed: %#v", missing)
+	}
+
+	clamped := providerTerminalFields("call-1", ProviderStreamStats{
+		StartedAt:               firstEffective,
+		FirstEffectiveContentAt: started,
+	})
+	if clamped["ttfr_ms"] != int64(0) {
+		t.Fatalf("negative ttfr_ms = %#v, want 0", clamped["ttfr_ms"])
+	}
+}
+
+func TestProviderStreamDiagnosticsDoNotCopyAdapterEffectiveIntoFirstEffective(t *testing.T) {
+	stats := ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming"}
+	diag := &modeladapter.StreamDiagnostics{}
+	diag.RecordHeader(http.StatusOK, 1, time.Now())
+	diag.RecordBytes(8, time.Now())
+	diag.MarkEffectiveContent()
+	applyProviderStreamDiagnostics(&stats, diag, &modeladapter.StreamTruncatedError{}, false)
+	if stats.FirstByteAt.IsZero() || stats.LastEffectiveContentAt.IsZero() {
+		t.Fatalf("adapter diagnostics should copy first byte and last effective: %#v", stats)
+	}
+	if !stats.FirstEffectiveContentAt.IsZero() {
+		t.Fatalf("adapter last effective must not invent FirstEffectiveContentAt: %#v", stats)
+	}
 }

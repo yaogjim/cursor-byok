@@ -479,6 +479,9 @@ func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.Mo
 	if stats.FirstEventAt.IsZero() {
 		stats.FirstEventAt = occurred
 	}
+	if stats.FirstEffectiveContentAt.IsZero() && isEffectiveProviderContent(event) {
+		stats.FirstEffectiveContentAt = occurred
+	}
 	if strings.TrimSpace(event.Provider) != "" {
 		stats.Provider = strings.TrimSpace(event.Provider)
 	}
@@ -512,6 +515,21 @@ func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.Mo
 		}
 	case modeladapter.ModelEventKindTurnFinished:
 		stats.CompletionMarker = true
+	}
+}
+
+func isEffectiveProviderContent(event modeladapter.ModelEvent) bool {
+	switch event.Kind {
+	case modeladapter.ModelEventKindTextDelta, modeladapter.ModelEventKindThinkingDelta:
+		return event.Text != ""
+	case modeladapter.ModelEventKindPartialToolCall:
+		return strings.TrimSpace(event.ToolCallID) != "" && event.ToolCall != nil
+	case modeladapter.ModelEventKindToolCallDelta:
+		return strings.TrimSpace(event.ToolCallID) != "" && event.ToolCallDelta != nil
+	case modeladapter.ModelEventKindToolLikeCompleted:
+		return event.ToolInvocation != nil
+	default:
+		return false
 	}
 }
 
@@ -715,10 +733,11 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 		"potential_side_effect": firstNonEmpty(stats.PotentialSideEffect, "unknown"), "first_event_at": optionalTimeField(stats.FirstEventAt),
 		"header_at": optionalTimeField(stats.HeaderAt), "first_byte_at": optionalTimeField(stats.FirstByteAt),
 		"last_byte_at": optionalTimeField(stats.LastByteAt), "body_end_at": optionalTimeField(stats.BodyEndAt),
-		"last_effective_content_at": optionalTimeField(stats.LastEffectiveContentAt),
-		"close_cause":               firstNonEmpty(stats.CloseCause, "not_recorded"), "partial_boundary": firstNonEmpty(stats.PartialBoundary, "none"),
+		"last_effective_content_at":  optionalTimeField(stats.LastEffectiveContentAt),
+		"first_effective_content_at": optionalTimeField(stats.FirstEffectiveContentAt),
+		"close_cause":                firstNonEmpty(stats.CloseCause, "not_recorded"), "partial_boundary": firstNonEmpty(stats.PartialBoundary, "none"),
 		"transport_outcome": firstNonEmpty(stats.TransportOutcome, "started"),
-		"duration_ms":       duration.Milliseconds(), "retryable": firstNonEmpty(stats.Retryable, "unknown"),
+		"duration_ms":       duration.Milliseconds(), "ttfr_ms": providerTTFRMS(stats), "retryable": firstNonEmpty(stats.Retryable, "unknown"),
 		"retry_reason": firstNonEmpty(stats.RetryReason, "not_recorded"), "retry_suppression_reason": firstNonEmpty(stats.RetrySuppressionReason, "not_recorded"),
 		"protocol_final_status": firstNonEmpty(stats.ProtocolFinalStatus, "unknown"), "model_call_final_status": firstNonEmpty(stats.ModelCallFinalStatus, "not_recorded"),
 		"failure_stage":  firstNonEmpty(stats.FailureStage, "not_recorded"),
@@ -746,6 +765,17 @@ func optionalTimeField(value time.Time) any {
 		return "not_recorded"
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func providerTTFRMS(stats ProviderStreamStats) any {
+	if stats.StartedAt.IsZero() || stats.FirstEffectiveContentAt.IsZero() {
+		return "not_recorded"
+	}
+	value := stats.FirstEffectiveContentAt.Sub(stats.StartedAt).Milliseconds()
+	if value < 0 {
+		return int64(0)
+	}
+	return value
 }
 
 func providerHTTPAttemptField(attempt int) any {

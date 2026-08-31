@@ -359,6 +359,7 @@ type ProviderStreamStats struct {
 	LastByteAt               time.Time
 	BodyEndAt                time.Time
 	LastEffectiveContentAt   time.Time
+	FirstEffectiveContentAt  time.Time
 	CloseCause               string
 	PartialBoundary          string
 	TransportOutcome         string
