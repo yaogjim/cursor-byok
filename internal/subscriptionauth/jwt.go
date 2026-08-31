@@ -101,6 +101,11 @@ func emailFromToken(tokens ...string) string {
 }
 
 func accountIdentity(kind ProviderKind, accessToken string, idToken string) (accountID string, displayName string, chatgptAccountID string) {
+	accountID, displayName, chatgptAccountID, _ = accountIdentityWithStability(kind, accessToken, idToken)
+	return accountID, displayName, chatgptAccountID
+}
+
+func accountIdentityWithStability(kind ProviderKind, accessToken string, idToken string) (accountID string, displayName string, chatgptAccountID string, stable bool) {
 	claims := decodeJWTPayload(accessToken)
 	idClaims := decodeJWTPayload(idToken)
 	chatgptAccountID = firstNonEmpty(
@@ -119,12 +124,13 @@ func accountIdentity(kind ProviderKind, accessToken string, idToken string) (acc
 	default:
 		subject = firstNonEmpty(claims.stringValue("sub"), email, claims.stringValue("preferred_username"))
 	}
-	if subject == "" {
+	stable = subject != ""
+	if !stable {
 		subject = tokenFingerprint(accessToken)
 	}
 	displayName = firstNonEmpty(email, claims.stringValue("name"), subject, string(kind))
 	accountID = string(kind) + ":" + subject
-	return accountID, displayName, chatgptAccountID
+	return accountID, displayName, chatgptAccountID, stable
 }
 
 func tokenFingerprint(token string) string {

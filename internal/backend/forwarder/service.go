@@ -319,6 +319,7 @@ func NewServiceWithCredentials(historyRoot string, resolver modeladapter.Channel
 	if candidate, ok := resolver.(streamContinuationSettingsSource); ok {
 		service.streamContinuationSource = candidate
 	}
+	service.reconcileRuleProjection("startup", "")
 	service.startHistoryMaintenance()
 	service.startSubagentRecovery()
 	return service

@@ -98,6 +98,13 @@ func (service *Service) pendingByInput(pollToken string, deviceCode string) (pen
 	return pendingAuth{}, false
 }
 
+func (service *Service) CodexAffinityKey() ([]byte, error) {
+	if service == nil || service.store == nil {
+		return nil, errors.New("subscription auth store is unavailable")
+	}
+	return service.store.LoadOrCreateAffinityKey()
+}
+
 func (service *Service) Resolve(ctx context.Context, source CredentialSource) (Credential, error) {
 	normalized := NormalizeCredentialSource(string(source))
 	switch normalized {
@@ -128,11 +135,13 @@ func (service *Service) Resolve(ctx context.Context, source CredentialSource) (C
 		if account.LimitReached {
 			return Credential{}, ErrQuotaExhausted
 		}
-		accountID, _, _ := accountIdentity(ProviderGrok, account.AccessToken, "")
+		accountID, _, _, tokenStable := accountIdentityWithStability(ProviderGrok, account.AccessToken, "")
+		storedID := trimSpace(account.AccountID)
 		return Credential{
-			Provider:    ProviderGrok,
-			AccountID:   firstNonEmpty(account.AccountID, accountID),
-			AccessToken: account.AccessToken,
+			Provider:        ProviderGrok,
+			AccountID:       firstNonEmpty(storedID, accountID),
+			AccessToken:     account.AccessToken,
+			StableAccountID: storedID != "" || tokenStable,
 		}, nil
 	default:
 		return Credential{}, safeErrorf("unsupported credential source")

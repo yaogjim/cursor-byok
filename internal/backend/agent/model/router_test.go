@@ -190,15 +190,17 @@ func TestSanitizeProviderMessagesKeepsMultipleToolCallsAndReasoningMetadata(t *t
 }
 
 type stubCredentialResolver struct {
-	token      string
-	accountID  string
-	chatgptID  string
-	refreshTok string
-	calls      int
-	refreshN   int
-	quotaCalls []string
-	quotaErr   error
-	resolveSeq []subscriptionauth.Credential
+	token       string
+	accountID   string
+	chatgptID   string
+	stable      bool
+	refreshTok  string
+	refreshCred *subscriptionauth.Credential
+	calls       int
+	refreshN    int
+	quotaCalls  []string
+	quotaErr    error
+	resolveSeq  []subscriptionauth.Credential
 }
 
 func (stub *stubCredentialResolver) Resolve(context.Context, subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
@@ -215,11 +217,15 @@ func (stub *stubCredentialResolver) Resolve(context.Context, subscriptionauth.Cr
 		AccountID:        stub.accountID,
 		AccessToken:      stub.token,
 		ChatGPTAccountID: stub.chatgptID,
+		StableAccountID:  stub.stable,
 	}, nil
 }
 
 func (stub *stubCredentialResolver) ResolveAfterUnauthorized(_ context.Context, _ subscriptionauth.CredentialSource, _ string) (subscriptionauth.Credential, error) {
 	stub.refreshN++
+	if stub.refreshCred != nil {
+		return *stub.refreshCred, nil
+	}
 	token := stub.refreshTok
 	if token == "" {
 		token = stub.token + "-refreshed"
@@ -229,6 +235,7 @@ func (stub *stubCredentialResolver) ResolveAfterUnauthorized(_ context.Context, 
 		AccountID:        stub.accountID,
 		AccessToken:      token,
 		ChatGPTAccountID: stub.chatgptID,
+		StableAccountID:  stub.stable,
 	}, nil
 }
 

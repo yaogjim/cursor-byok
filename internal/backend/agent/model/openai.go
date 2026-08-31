@@ -585,6 +585,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
+		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
 		return httpReq, nil
 	}
 
@@ -1081,6 +1082,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	}
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
 	filterCodexResponsesBody(bodyMap, req, requestURL)
+	applyCodexAffinityToBody(bodyMap, req, requestURL)
 	body = bodyMap
 	recordLLMRequestArtifact(req, "openai", modelID, "POST", requestURL, body)
 
@@ -1107,6 +1109,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
+		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
 		return httpReq, nil
 	}
 
@@ -2450,9 +2453,20 @@ func isChatGPTCodexHost(requestURL string) bool {
 	return strings.EqualFold(parsed.Hostname(), "chatgpt.com")
 }
 
+func isChatGPTCodexResponsesURL(requestURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(requestURL))
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(parsed.Hostname(), "chatgpt.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.Path, "/") == "/backend-api/codex/responses"
+}
+
 func isManagedCodexChatGPTRequest(req StreamRequest, requestURL string) bool {
 	return subscriptionauth.NormalizeCredentialSource(req.CredentialSource) == subscriptionauth.CredentialSourceCodex &&
-		isChatGPTCodexHost(requestURL)
+		isChatGPTCodexResponsesURL(requestURL)
 }
 
 func applyOpenAIRequestHeaders(httpReq *http.Request, req StreamRequest, requestURL string) {
@@ -2460,19 +2474,45 @@ func applyOpenAIRequestHeaders(httpReq *http.Request, req StreamRequest, request
 		return
 	}
 	if isManagedCodexChatGPTRequest(req, requestURL) {
-		httpReq.Header.Set("originator", "codex_cli_rs")
-		if accountID := strings.TrimSpace(req.ChatGPTAccountID); accountID != "" {
-			httpReq.Header.Set("ChatGPT-Account-Id", accountID)
-		}
+		applyManagedCodexIdentityHeaders(httpReq, req)
 		return
 	}
 	httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
 }
 
+func applyManagedCodexReservedHeaders(httpReq *http.Request, req StreamRequest, requestURL string, apiKey string) {
+	if httpReq == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	applyManagedCodexIdentityHeaders(httpReq, req)
+}
+
+func applyManagedCodexIdentityHeaders(httpReq *http.Request, req StreamRequest) {
+	httpReq.Header.Set("originator", "codex_cli_rs")
+	if accountID := strings.TrimSpace(req.ChatGPTAccountID); accountID != "" {
+		httpReq.Header.Set("ChatGPT-Account-Id", accountID)
+	} else {
+		httpReq.Header.Del("ChatGPT-Account-Id")
+	}
+	httpReq.Header.Del("session-id")
+	httpReq.Header.Del("thread-id")
+	httpReq.Header.Del("x-client-request-id")
+	if sessionID := strings.TrimSpace(req.CodexAffinity.SessionID); sessionID != "" {
+		httpReq.Header.Set("session-id", sessionID)
+	}
+	if threadID := strings.TrimSpace(req.CodexAffinity.ThreadID); threadID != "" {
+		httpReq.Header.Set("thread-id", threadID)
+	}
+	if requestID := strings.TrimSpace(req.CodexAffinity.ClientRequestID); requestID != "" {
+		httpReq.Header.Set("x-client-request-id", requestID)
+	}
+}
+
 func isCodexResponsesAllowedKey(key string) bool {
 	switch key {
 	// previous_response_id 与签发它的 ChatGPT 账号绑定；managed Codex 无法验证归属，因此不允许透传。
-	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "truncation":
+	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "truncation", "prompt_cache_key":
 		return true
 	default:
 		return false
@@ -2488,5 +2528,16 @@ func filterCodexResponsesBody(body map[string]any, req StreamRequest, requestURL
 		if !isCodexResponsesAllowedKey(key) {
 			delete(body, key)
 		}
+	}
+	delete(body, "prompt_cache_key")
+}
+
+func applyCodexAffinityToBody(body map[string]any, req StreamRequest, requestURL string) {
+	if body == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	delete(body, "prompt_cache_key")
+	if key := strings.TrimSpace(req.CodexAffinity.PromptCacheKey); key != "" {
+		body["prompt_cache_key"] = key
 	}
 }

@@ -43,6 +43,13 @@
 
 ### ✅ 最近完成
 
+**upstream-v0.1.5-review-20260830** (completed, verified)
+- 已核对正式版 `v0.1.5@b807608`、最新 `upstream/main@9120b90` 与此前基线 `76003a9`；正式版后的主线只删除 `server_backup/**`，没有新增核心运行时能力。
+- 本地 `main@305b108` 与上游已分叉；隔离 worktree 的显式 merge 出现内容、修改/删除和目录迁移冲突，已按 Runbook `git merge --abort`。`main`、`gateway@534ffc0` 与工作树均未改变，无提交、无 push。
+- 结论：P0 先加固现有 Rule 文件持久化；P1 独立补 managed Codex 缓存亲和；P1 在显式 opt-in 与隐私合同下设计 Rule 离线日志/镜像；P1/P2 仅增加官方/BYOK 展示分组。
+- 已确认无需重复移植官方/BYOK 切换、双向子代理、普通 OpenAI/Anthropic cache、Provider 空闲超时、Codex/Grok 主链路、额度与账号轮换；拒绝整体移植 Deno 插件、Rust provider/router 和 conversation runtime。
+- 上游性能、内存和缓存命中宣传缺少可复现 benchmark；完整审阅、最小移植单元和验证口径已写入 `docs/prd_cursor_byok_当前功能与上游差异.md` §16。
+
 **macos-build-0.0.52.5-20260830** (completed, verified)
 - 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.5`。
 - 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.5.md` 对齐到 `0.0.52.5`；保留构建前已有的工作树改动。
@@ -160,6 +167,11 @@
 
 ### 📋 Pending Work (当前执行队列)
 
+- [completed] `rule-storage-hardening`：Rule 目录/文件私有权限、symlink 与路径逃逸拒绝、唯一临时文件原子替换、容量上限以及 Rule/docs index reconciliation 已实现并通过定向、race、vet 与 Windows 交叉构建验证；Windows 实机 ACL 行为仍归最终发布门禁。
+- [completed] `managed-codex-cache-affinity`：在继续剥离 `previous_response_id` 的前提下，已实现稳定账号隔离的 HMAC 域分离、私密安装密钥、`prompt_cache_key` 与三个保留 header 注入，以及 control/prompt_key/full profile；fake upstream、脱敏缓存观测和收益 A/B 作为独立后续工作，不把字段接线宣称为性能收益。
+- [pending] `managed-codex-cache-verification`：补 fake upstream、adapter HTTP retry、401 同账号刷新、quota 账号轮换、override/custom header 契约、脱敏缓存观测和 control/prompt/full 同负载 A/B 门禁。
+- [pending] `rule-offline-journal-design`：P0 完成后设计显式 opt-in 的 Rule 离线 journal、本地镜像、回放幂等、冲突恢复和跨来源内容去重；默认不得上传 Rule 正文。
+- [pending] `model-display-grouping`：仅增强官方模型、静态 BYOK、Codex 与 Grok 的模型列表展示分组，不改现有路由、凭据和子代理主链路。
 - [pending] `investigation-case-library`：持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验
 - [pending] `ai-evidence-bundle`：外部 AI 调查包导出、结构化分析结果导入和不可信日志数据边界
 - [pending] `client-analyzer-launcher`：客户端日志采集区接入跨平台分析器检测、启动按钮和未安装引导

@@ -251,6 +251,27 @@ Codex 使用版本化的本机私有 `codex-auth.json`。旧 schema v1 单账户
 - Codex 周窗口与会话窗口按账户存储。额度账户在已知重置时间到达后恢复候选资格；重置时间未知时通过逐账户刷新用量恢复。认证失效与仍处于额度阻塞期的账户不会被自动选中。
 - 401 刷新和 quota 轮换都只允许一次内部重试；已产生输出后不切换账户，避免重复内容或副作用。
 
+### 5.2 Rule 事实源、索引恢复与同步授权合同
+
+Rule 正文的唯一事实源是应用私有 Rule 目录中的规范 Markdown 文件；文件名提供 Rule `id`，文件正文提供 `content`。docs index 同时承载 Rule 投影、用户上传文档与 `additional_docs`，因此它不是 Rule 事实源，也不能整体由 Rule 文件重建。
+
+运行时遵循以下边界：
+
+- reconciliation 只幂等替换或删除可识别的 Rule 投影，必须保留上传文档、`additional_docs` 和其他非 Rule 记录。损坏 index 先隔离，再恢复可从有效 Rule 文件重建的投影；无法恢复的上传记录不伪造。
+- Rule CRUD 成功表示 Rule 文件已原子提交。索引更新失败只将投影标记为 dirty 并触发后续 reconciliation，不回滚已提交 Rule；dirty 未修复前 Rule Prompt 继续使用有效 Rule 文件，Rule 来源的 docs query fail closed，避免返回已删除的陈旧正文。
+- Rule 文件无法恢复 `title`、`git_origin` 或 URL 时，重建仅使用 `title=id`，其他字段留空，不把推断值写成事实。
+- 初始容量合同按字节计算：单 Rule 128 KiB、最多 128 个 Rule、磁盘 Rule 正文总量 1 MiB、单次 Prompt 注入 256 KiB。超限不截断；既有超限文件保留在磁盘但隔离，不进入 Prompt。
+- Rule 远端同步为 `manual-opt-in`：默认纯本地，不允许后台自动上传正文。未来 consent 存在应用私有状态中，绑定脱敏 Cursor 控制面账号与 consent 版本，不进入普通 YAML 导入导出；关闭同步立即停止网络，不自动删除本地或远端副本。
+
+### 5.3 managed Codex 缓存亲和合同
+
+managed Codex 只在稳定本地账号身份、稳定 conversation 和逻辑 `ModelCallID` 均存在时启用亲和。应用私有订阅目录保存独立 32 字节 `codex-affinity.key`，不得复用观测密钥，也不得进入配置、Wails DTO、日志或导出。
+
+- Router 使用 HMAC 域分离派生 `prompt_cache_key`、`session-id`、`thread-id` 和 `x-client-request-id`。前三项在同一稳定账号与同一 conversation 内稳定；请求 ID 额外绑定 `ModelCallID`，同一 HTTP retry 保持不变，不同逻辑请求唯一。
+- 401 刷新后稳定账号不变时保持亲和；quota 切换账号后重新分区。token 指纹 fallback、邮箱和 `ChatGPTAccountID` 不直接作为亲和键。
+- 只对 `credentialSource=codex` 且精确 ChatGPT Codex Responses 端点注入。调用方 body/header 同名值先删除或覆盖；`previous_response_id` 继续无条件剥离，`store=false` 保持。
+- 内部 profile 为 `control | prompt_key | full`，空值或未知值回到 `control`。字段已注入不代表缓存收益；收益只能由后续 fake upstream、脱敏指标和同负载 A/B 证明。
+
 ## 6. 服务生命周期
 
 服务启动链路由控制面发起，核心顺序如下：

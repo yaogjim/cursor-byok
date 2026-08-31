@@ -61,6 +61,14 @@ type ToolCallFunctionShape struct {
 	Arguments string `json:"arguments"`
 }
 
+// CodexAffinity 是仅内存的 managed Codex 缓存亲和字段，禁止记录值或可关联摘要。
+type CodexAffinity struct {
+	PromptCacheKey  string
+	SessionID       string
+	ThreadID        string
+	ClientRequestID string
+}
+
 // StreamRequest 表示一次统一的模型流请求。
 type StreamRequest struct {
 	// RequestID 表示当前模型调用所属 request。
@@ -89,6 +97,10 @@ type StreamRequest struct {
 	CredentialID string
 	// ChatGPTAccountID 表示 Codex 请求使用的 ChatGPT 账号 ID。
 	ChatGPTAccountID string
+	// StableAccountID 表示 CredentialID 来自持久账号记录，而非 token fingerprint fallback。
+	StableAccountID bool
+	// CodexAffinity 是仅内存的 managed Codex 缓存亲和结果，禁止写入配置、日志或导出。
+	CodexAffinity CodexAffinity
 	// MaxConcurrentRequests 是物理上游组的可选并发上限。
 	// 0 表示不限流；非零合法范围 1–16。路由解析后以 ResolvedChannel 的值为准。
 	MaxConcurrentRequests int

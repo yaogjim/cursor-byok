@@ -37,6 +37,28 @@ func DataRootPath() string {
 	return filepath.Join(RootDir(), "data")
 }
 
+// EnsurePrivateDir creates or tightens a directory that stores private application data.
+func EnsurePrivateDir(path string) error {
+	return ensurePrivateDir(path)
+}
+
+// EnsurePrivateFile tightens an existing regular private application file.
+func EnsurePrivateFile(path string) error {
+	return ensurePrivateFile(path)
+}
+
+// PrivateDirPaths returns application directories that must be private to the current user.
+func PrivateDirPaths() []string {
+	return []string{
+		RootDir(),
+		DataRootPath(),
+		HistoryRootPath(),
+		RulesRootPath(),
+		LogsRootPath(),
+		DocsIndexRootPath(),
+	}
+}
+
 func HistoryRootPath() string {
 	return filepath.Join(RootDir(), "history")
 }
@@ -63,6 +85,10 @@ func SubscriptionAuthRootPath() string {
 
 func CodexAuthFilePath() string {
 	return filepath.Join(SubscriptionAuthRootPath(), "codex-auth.json")
+}
+
+func CodexAffinityKeyFilePath() string {
+	return filepath.Join(SubscriptionAuthRootPath(), "codex-affinity.key")
 }
 
 func GrokAccountsFilePath() string {

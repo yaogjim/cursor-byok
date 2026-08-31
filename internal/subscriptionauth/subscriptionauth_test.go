@@ -27,6 +27,167 @@ func testJWT(t *testing.T, claims map[string]any) string {
 	return "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
 }
 
+func TestCodexAccountIdentityStability(t *testing.T) {
+	stableToken := testJWT(t, map[string]any{"sub": "durable-user"})
+	accountID, _, _, stable := accountIdentityWithStability(ProviderCodex, stableToken, "")
+	if !stable || accountID != "codex:durable-user" {
+		t.Fatalf("stable identity = (%q, %v)", accountID, stable)
+	}
+	credential := (storedCodexAuth{Tokens: storedTokenBundle{AccessToken: stableToken}}).credential()
+	if !credential.StableAccountID || credential.AccountID != accountID {
+		t.Fatalf("credential identity = (%q, %v)", credential.AccountID, credential.StableAccountID)
+	}
+
+	fallbackID, _, _, stable := accountIdentityWithStability(ProviderCodex, "opaque-token", "")
+	if stable {
+		t.Fatal("access-token fingerprint fallback was marked stable")
+	}
+	if fallbackID != "codex:"+tokenFingerprint("opaque-token") {
+		t.Fatalf("fallback identity = %q", fallbackID)
+	}
+	fallbackCred := (storedCodexAuth{Tokens: storedTokenBundle{AccessToken: "opaque-token"}}).credential()
+	if fallbackCred.StableAccountID {
+		t.Fatal("fingerprint credential enabled affinity identity")
+	}
+}
+
+func TestGrokPrefersPersistedAccountID(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	file := storedGrokFile{
+		Accounts: []storedGrokAccount{{
+			AccountID:   "grok:persisted-user",
+			AccessToken: "opaque-token",
+			Active:      true,
+		}},
+	}
+	if err := service.store.SaveGrok(file); err != nil {
+		t.Fatal(err)
+	}
+	cred, err := service.Resolve(context.Background(), CredentialSourceGrok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.AccountID != "grok:persisted-user" || !cred.StableAccountID {
+		t.Fatalf("grok identity = (%q, %v)", cred.AccountID, cred.StableAccountID)
+	}
+}
+
+func TestAffinityKeyPermissionsStableAndConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(filepath.Join(dir, "subscription-auth"))
+	first, err := store.LoadOrCreateAffinityKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != AffinityKeySize {
+		t.Fatalf("key length = %d", len(first))
+	}
+	second, err := store.LoadOrCreateAffinityKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("affinity key drifted across loads")
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(store.AffinityKeyPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("affinity key perm = %o", info.Mode().Perm())
+		}
+		dirInfo, err := os.Stat(store.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dirInfo.Mode().Perm() != 0o700 {
+			t.Fatalf("affinity key dir perm = %o", dirInfo.Mode().Perm())
+		}
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		keys [][]byte
+		errs []error
+	)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			key, err := store.LoadOrCreateAffinityKey()
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+			keys = append(keys, key)
+		}()
+	}
+	wg.Wait()
+	if len(errs) > 0 {
+		t.Fatalf("concurrent load errors: %v", errs)
+	}
+	for _, key := range keys {
+		if !bytes.Equal(first, key) {
+			t.Fatal("concurrent init produced a different affinity key")
+		}
+	}
+}
+
+func TestAffinityKeyIllegalLength(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStore(filepath.Join(dir, "subscription-auth"))
+	if err := store.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.AffinityKeyPath(), []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.LoadOrCreateAffinityKey()
+	if !errors.Is(err, ErrAffinityKeyLength) {
+		t.Fatalf("err = %v, want ErrAffinityKeyLength", err)
+	}
+	data, err := os.ReadFile(store.AffinityKeyPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "short" {
+		t.Fatal("illegal-length key was overwritten")
+	}
+}
+
+func TestAffinityKeyRejectsSymlinkTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated Windows privileges")
+	}
+	dir := t.TempDir()
+	store := NewFileStore(filepath.Join(dir, "subscription-auth"))
+	if err := store.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "outside-key")
+	original := bytes.Repeat([]byte{0x42}, AffinityKeySize)
+	if err := os.WriteFile(target, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, store.AffinityKeyPath()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadOrCreateAffinityKey(); err == nil {
+		t.Fatal("symlink affinity key was accepted")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, original) {
+		t.Fatal("symlink target was overwritten")
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) Do(req *http.Request) (*http.Response, error) {

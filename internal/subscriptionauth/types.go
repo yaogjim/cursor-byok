@@ -61,6 +61,9 @@ type Credential struct {
 	AccessToken      string
 	ChatGPTAccountID string
 	ExpiresAt        time.Time
+	// StableAccountID is true only when AccountID came from durable token claims,
+	// rather than the access-token fingerprint fallback.
+	StableAccountID bool
 }
 
 // AccountStatus is the redacted account DTO returned to the desktop UI.

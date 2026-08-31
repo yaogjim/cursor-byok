@@ -620,15 +620,48 @@ func TestFilterCodexResponsesBodyWhitelist(t *testing.T) {
 	}
 }
 
+func TestManagedCodexReservedHeadersOverrideCustomValues(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamReq := StreamRequest{
+		CredentialSource: "codex",
+		ChatGPTAccountID: "account-real",
+		CodexAffinity: CodexAffinity{
+			SessionID:       "session-real",
+			ThreadID:        "thread-real",
+			ClientRequestID: "request-real",
+		},
+		CustomHeadersEnabled: true,
+		CustomHeadersJSON:    `{"Authorization":"Bearer attacker","originator":"attacker","ChatGPT-Account-Id":"account-attacker","session-id":"session-attacker","thread-id":"thread-attacker","x-client-request-id":"request-attacker"}`,
+	}
+	if err := ApplyCustomHeaders(req, streamReq.CustomHeadersEnabled, streamReq.CustomHeadersJSON); err != nil {
+		t.Fatal(err)
+	}
+	applyManagedCodexReservedHeaders(req, streamReq, req.URL.String(), "token-real")
+	if req.Header.Get("Authorization") != "Bearer token-real" || req.Header.Get("originator") != "codex_cli_rs" || req.Header.Get("ChatGPT-Account-Id") != "account-real" {
+		t.Fatalf("managed identity headers were overridden: %#v", req.Header)
+	}
+	if req.Header.Get("session-id") != "session-real" || req.Header.Get("thread-id") != "thread-real" || req.Header.Get("x-client-request-id") != "request-real" {
+		t.Fatalf("managed affinity headers were overridden: %#v", req.Header)
+	}
+}
+
 func TestOpenAIManagedCodexResponsesHeadersAndWhitelist(t *testing.T) {
 	var (
-		gotUA, gotOriginator, gotAccountID string
-		requestBody                        map[string]any
+		gotUA, gotOriginator, gotAccountID, gotAuthorization string
+		gotSessionID, gotThreadID, gotClientRequestID        string
+		requestBody                                          map[string]any
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		gotUA = request.Header.Get("User-Agent")
 		gotOriginator = request.Header.Get("originator")
 		gotAccountID = request.Header.Get("ChatGPT-Account-Id")
+		gotAuthorization = request.Header.Get("Authorization")
+		gotSessionID = request.Header.Get("session-id")
+		gotThreadID = request.Header.Get("thread-id")
+		gotClientRequestID = request.Header.Get("x-client-request-id")
 		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
@@ -641,13 +674,19 @@ func TestOpenAIManagedCodexResponsesHeadersAndWhitelist(t *testing.T) {
 
 	adapter := &OpenAIAdapter{client: chatgptLoopbackClient(t, server)}
 	err := adapter.Stream(context.Background(), StreamRequest{
-		RequestID:                "request-1",
-		RunID:                    "run-1",
-		ModelCallID:              "model-call-1",
-		BaseURL:                  "https://chatgpt.com/backend-api/codex/responses",
-		APIKey:                   "codex-token",
-		CredentialSource:         "codex",
-		ChatGPTAccountID:         "acct-9",
+		RequestID:        "request-1",
+		RunID:            "run-1",
+		ModelCallID:      "model-call-1",
+		BaseURL:          "https://chatgpt.com/backend-api/codex/responses",
+		APIKey:           "codex-token",
+		CredentialSource: "codex",
+		ChatGPTAccountID: "acct-9",
+		CodexAffinity: CodexAffinity{
+			PromptCacheKey:  "derived-prompt-key",
+			SessionID:       "derived-session",
+			ThreadID:        "derived-thread",
+			ClientRequestID: "derived-request",
+		},
 		ProviderModelID:          "gpt-5.6",
 		OpenAIEndpoint:           "/v1/responses",
 		OpenAIExtraParamsEnabled: true,
@@ -664,13 +703,22 @@ func TestOpenAIManagedCodexResponsesHeadersAndWhitelist(t *testing.T) {
 	if gotAccountID != "acct-9" {
 		t.Fatalf("ChatGPT-Account-Id = %q", gotAccountID)
 	}
+	if gotAuthorization != "Bearer codex-token" {
+		t.Fatalf("Authorization = %q", gotAuthorization)
+	}
+	if gotSessionID != "derived-session" || gotThreadID != "derived-thread" || gotClientRequestID != "derived-request" {
+		t.Fatalf("affinity headers = (%q, %q, %q)", gotSessionID, gotThreadID, gotClientRequestID)
+	}
 	if gotUA == ClaudeCodeUserAgent {
 		t.Fatal("managed Codex Responses must not send Claude UA")
 	}
 	if requestBody["store"] != false {
 		t.Fatalf("store = %#v, want false", requestBody["store"])
 	}
-	for _, key := range []string{"max_output_tokens", "prompt_cache_key", "service_tier"} {
+	if requestBody["prompt_cache_key"] != "derived-prompt-key" {
+		t.Fatalf("prompt_cache_key = %#v", requestBody["prompt_cache_key"])
+	}
+	for _, key := range []string{"max_output_tokens", "service_tier"} {
 		if _, ok := requestBody[key]; ok {
 			t.Fatalf("%s should be stripped from Codex Responses: %#v", key, requestBody[key])
 		}

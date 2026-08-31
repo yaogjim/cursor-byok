@@ -122,13 +122,14 @@ func (auth storedCodexAuth) status() AccountStatus {
 }
 
 func (auth storedCodexAuth) credential() Credential {
-	accountID, _, chatgptAccountID := accountIdentity(ProviderCodex, auth.Tokens.AccessToken, auth.Tokens.IDToken)
+	accountID, _, chatgptAccountID, stableAccountID := accountIdentityWithStability(ProviderCodex, auth.Tokens.AccessToken, auth.Tokens.IDToken)
 	return Credential{
 		Provider:         ProviderCodex,
 		AccountID:        accountID,
 		AccessToken:      auth.Tokens.AccessToken,
 		ChatGPTAccountID: firstNonEmpty(auth.ChatGPTAccountID, chatgptAccountID),
 		ExpiresAt:        jwtExpiresAt(auth.Tokens.AccessToken),
+		StableAccountID:  stableAccountID,
 	}
 }
 

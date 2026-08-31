@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,10 +18,17 @@ import (
 	"github.com/google/uuid"
 
 	"cursor/gen/aiserverv1"
+	"cursor/internal/appdata"
 	"cursor/internal/logger"
 )
 
-const sharedUserRuleExtension = ".md"
+const (
+	sharedUserRuleExtension = ".md"
+	maxUserRuleBytes        = 128 << 10
+	maxUserRuleCount        = 128
+	maxUserRulesTotalBytes  = 1 << 20
+	maxUserRulesPromptBytes = 256 << 10
+)
 
 type UserRuleRecord struct {
 	ID          string
@@ -34,15 +42,10 @@ type UserRuleRecord struct {
 	ContentHash string
 }
 
-type userRuleGroup struct {
-	ContentHash string
-	Canonical   UserRuleRecord
-	Members     []UserRuleRecord
-}
-
 type UserRuleStore struct {
 	root string
 	mu   sync.Mutex
+	ops  persistFileOps
 }
 
 func NewUserRuleStore(root string) *UserRuleStore {
@@ -53,16 +56,13 @@ func (store *UserRuleStore) List() ([]UserRuleRecord, error) {
 	if store == nil {
 		return nil, nil
 	}
-
 	store.mu.Lock()
 	defer store.mu.Unlock()
-
-	groups, err := store.listGroupsLocked()
+	records, err := store.scanRuleFilesLocked()
 	if err != nil {
 		return nil, err
 	}
-	records := canonicalRecordsFromGroups(groups)
-	sort.SliceStable(records, func(i int, j int) bool {
+	sort.SliceStable(records, func(i, j int) bool {
 		if records[i].ModifiedAt.Equal(records[j].ModifiedAt) {
 			return records[i].Filename < records[j].Filename
 		}
@@ -75,401 +75,324 @@ func (store *UserRuleStore) Add(knowledge string) (UserRuleRecord, error) {
 	if store == nil {
 		return UserRuleRecord{}, fmt.Errorf("user rule store is nil")
 	}
-	if strings.TrimSpace(knowledge) == "" {
-		return UserRuleRecord{}, fmt.Errorf("knowledge is required")
+	if err := validateRuleContent(knowledge); err != nil {
+		return UserRuleRecord{}, err
 	}
-
 	store.mu.Lock()
 	defer store.mu.Unlock()
-
-	groups, err := store.listGroupsLocked()
+	records, err := store.scanRuleFilesLocked()
 	if err != nil {
 		return UserRuleRecord{}, err
 	}
-
-	contentHash := hashSharedUserRuleContent([]byte(knowledge))
-	if groupIndex := indexGroupByHash(groups, contentHash); groupIndex >= 0 {
-		if err := store.removeRuleFilesLocked(nonCanonicalMembers(groups[groupIndex].Members)); err != nil {
-			return UserRuleRecord{}, err
-		}
-		return groups[groupIndex].Canonical, nil
+	if len(records) >= maxUserRuleCount {
+		return UserRuleRecord{}, fmt.Errorf("user rule count exceeds %d", maxUserRuleCount)
 	}
-
+	if ruleContentBytes(records)+len([]byte(knowledge)) > maxUserRulesTotalBytes {
+		return UserRuleRecord{}, fmt.Errorf("user rule content exceeds %d bytes", maxUserRulesTotalBytes)
+	}
 	id := uuid.NewString()
 	if err := store.writeRuleLocked(id, knowledge); err != nil {
-		return UserRuleRecord{}, err
+		if !isPersistDurabilityError(err) {
+			return UserRuleRecord{}, err
+		}
+		logger.Errorf("user rule durability failed operation=add id=%s err_type=%T", id, err)
 	}
 	return store.loadRuleByIDLocked(id)
 }
 
-func (store *UserRuleStore) Update(id string, knowledge string) (UserRuleRecord, bool, error) {
+func (store *UserRuleStore) Update(id, knowledge string) (UserRuleRecord, bool, error) {
 	if store == nil {
 		return UserRuleRecord{}, false, fmt.Errorf("user rule store is nil")
 	}
-	if strings.TrimSpace(knowledge) == "" {
-		return UserRuleRecord{}, false, fmt.Errorf("knowledge is required")
+	if err := validateRuleContent(knowledge); err != nil {
+		return UserRuleRecord{}, false, err
 	}
-
 	normalizedID, err := normalizeUserRuleID(id)
 	if err != nil {
 		return UserRuleRecord{}, false, err
 	}
-
 	store.mu.Lock()
 	defer store.mu.Unlock()
-
 	current, err := store.loadRuleByIDLocked(normalizedID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return UserRuleRecord{}, false, nil
-		}
-		return UserRuleRecord{}, false, err
+	if errors.Is(err, os.ErrNotExist) {
+		return UserRuleRecord{}, false, nil
 	}
-
-	groups, err := store.listGroupsLocked()
 	if err != nil {
 		return UserRuleRecord{}, false, err
 	}
-
-	currentGroupIndex := indexGroupByHash(groups, current.ContentHash)
-	targetHash := hashSharedUserRuleContent([]byte(knowledge))
-	targetGroupIndex := indexGroupByHash(groups, targetHash)
-
-	if targetGroupIndex >= 0 && groups[targetGroupIndex].ContentHash == current.ContentHash {
-		if currentGroupIndex >= 0 {
-			if err := store.removeRuleFilesLocked(nonCanonicalMembers(groups[currentGroupIndex].Members)); err != nil {
-				return UserRuleRecord{}, false, err
-			}
-			return groups[currentGroupIndex].Canonical, true, nil
-		}
-		return current, true, nil
-	}
-
-	if targetGroupIndex >= 0 {
-		if currentGroupIndex >= 0 {
-			remainingCurrentMembers := groupMembersExcludingIDs(groups[currentGroupIndex], map[string]struct{}{current.ID: {}})
-			if err := store.removeRuleFilesLocked(nonCanonicalMembers(remainingCurrentMembers)); err != nil {
-				return UserRuleRecord{}, false, err
-			}
-		}
-		if err := store.removeRuleFilesLocked(nonCanonicalMembers(groups[targetGroupIndex].Members)); err != nil {
-			return UserRuleRecord{}, false, err
-		}
-		if err := store.removeRuleFilesLocked([]UserRuleRecord{current}); err != nil {
-			return UserRuleRecord{}, false, err
-		}
-		return groups[targetGroupIndex].Canonical, true, nil
-	}
-
-	if err := store.writeRuleLocked(current.ID, knowledge); err != nil {
-		return UserRuleRecord{}, false, err
-	}
-	if currentGroupIndex >= 0 {
-		remainingCurrentMembers := groupMembersExcludingIDs(groups[currentGroupIndex], map[string]struct{}{current.ID: {}})
-		if err := store.removeRuleFilesLocked(nonCanonicalMembers(remainingCurrentMembers)); err != nil {
-			return UserRuleRecord{}, false, err
-		}
-	}
-	record, err := store.loadRuleByIDLocked(current.ID)
+	records, err := store.scanRuleFilesLocked()
 	if err != nil {
 		return UserRuleRecord{}, false, err
 	}
-	return record, true, nil
+	if ruleContentBytes(records)-len([]byte(current.Knowledge))+len([]byte(knowledge)) > maxUserRulesTotalBytes {
+		return UserRuleRecord{}, false, fmt.Errorf("user rule content exceeds %d bytes", maxUserRulesTotalBytes)
+	}
+	if err := store.writeRuleLocked(normalizedID, knowledge); err != nil {
+		if !isPersistDurabilityError(err) {
+			return UserRuleRecord{}, false, err
+		}
+		logger.Errorf("user rule durability failed operation=update id=%s err_type=%T", normalizedID, err)
+	}
+	record, err := store.loadRuleByIDLocked(normalizedID)
+	return record, true, err
 }
 
 func (store *UserRuleStore) Remove(id string) error {
 	if store == nil {
 		return nil
 	}
-
 	normalizedID, err := normalizeUserRuleID(id)
 	if err != nil {
 		return err
 	}
-
 	store.mu.Lock()
 	defer store.mu.Unlock()
-
-	record, err := store.loadRuleByIDLocked(normalizedID)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-
-	groups, err := store.listGroupsLocked()
+	path, err := store.safeRulePathLocked(normalizedID)
 	if err != nil {
 		return err
 	}
-
-	groupIndex := indexGroupByHash(groups, record.ContentHash)
-	if groupIndex < 0 {
-		return store.removeRuleFilesLocked([]UserRuleRecord{record})
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
-	return store.removeRuleFilesLocked(groups[groupIndex].Members)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("user rule is not a regular file")
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove user rule %q: %w", normalizedID, err)
+	}
+	if err := store.ops.SyncDir(store.root); err != nil {
+		logger.Errorf("user rule durability failed operation=remove id=%s err_type=%T", normalizedID, err)
+	}
+	return nil
 }
 
 func (store *UserRuleStore) BuildSystemPromptSection() (string, int, int, error) {
-	if store == nil {
-		return "", 0, 0, nil
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-
-	groups, err := store.listGroupsLocked()
+	records, err := store.List()
 	if err != nil {
 		return "", 0, 0, err
 	}
-	if len(groups) == 0 {
+	if len(records) == 0 {
 		return "", 0, 0, nil
 	}
-
-	totalFiles := totalRuleFileCount(groups)
-	records := canonicalRecordsFromGroups(groups)
-	sort.SliceStable(records, func(i int, j int) bool {
-		return records[i].Filename < records[j].Filename
-	})
-
-	lines := []string{
-		`<shared_user_rules description="These shared local rules are loaded from the backend configuration directory and apply to every local conversation. Follow them when relevant.">`,
-	}
-	visibleCount := 0
-	for _, record := range records {
-		if strings.TrimSpace(record.Knowledge) == "" {
-			continue
-		}
-		lines = append(lines,
-			fmt.Sprintf(`<rule file="%s">`, escapeSharedRulePromptText(record.Filename)),
-			escapeSharedRulePromptText(record.Knowledge),
-			"</rule>",
-		)
-		visibleCount++
-	}
-	if visibleCount == 0 {
-		return "", totalFiles, 0, nil
+	sort.SliceStable(records, func(i, j int) bool { return records[i].Filename < records[j].Filename })
+	lines := []string{`<shared_user_rules description="These shared local rules are loaded from the backend configuration directory and apply to every local conversation. Follow them when relevant.">`}
+	for _, r := range records {
+		lines = append(lines, fmt.Sprintf(`<rule file="%s">`, escapeSharedRulePromptText(r.Filename)), escapeSharedRulePromptText(r.Knowledge), "</rule>")
 	}
 	lines = append(lines, "</shared_user_rules>")
-	return strings.Join(lines, "\n"), totalFiles, visibleCount, nil
-}
-
-func (store *UserRuleStore) listGroupsLocked() ([]userRuleGroup, error) {
-	records, err := store.scanRuleFilesLocked()
-	if err != nil {
-		return nil, err
+	prompt := strings.Join(lines, "\n")
+	if len([]byte(prompt)) > maxUserRulesPromptBytes {
+		return "", len(records), 0, fmt.Errorf("user rules prompt exceeds %d bytes", maxUserRulesPromptBytes)
 	}
-	return buildUserRuleGroups(records), nil
+	return prompt, len(records), len(records), nil
 }
 
 func (store *UserRuleStore) scanRuleFilesLocked() ([]UserRuleRecord, error) {
 	if err := store.ensureRootLocked(); err != nil {
 		return nil, err
 	}
-
 	entries, err := os.ReadDir(store.root)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read shared user rules directory: %w", err)
+		return nil, fmt.Errorf("read user rules directory: %w", err)
 	}
-
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	records := make([]UserRuleRecord, 0, len(entries))
+	total := 0
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != sharedUserRuleExtension {
+		if filepath.Ext(entry.Name()) != sharedUserRuleExtension {
 			continue
 		}
-		record, err := store.readRuleFileLocked(filepath.Join(store.root, entry.Name()))
+		path := filepath.Join(store.root, entry.Name())
+		record, err := store.readRuleFileLocked(path)
 		if err != nil {
-			logger.Infof("跳过不可用的共享 user rule 文件 path=%s err=%v", filepath.Join(store.root, entry.Name()), err)
+			logger.Infof("skip unavailable user rule file name=%q err_type=%T", entry.Name(), err)
+			continue
+		}
+		size := len([]byte(record.Knowledge))
+		if len(records) >= maxUserRuleCount || total+size > maxUserRulesTotalBytes {
+			logger.Infof("isolate legacy user rule file name=%q reason=aggregate_limit", entry.Name())
 			continue
 		}
 		records = append(records, record)
+		total += size
 	}
 	return records, nil
 }
 
 func (store *UserRuleStore) loadRuleByIDLocked(id string) (UserRuleRecord, error) {
-	return store.readRuleFileLocked(store.rulePathLocked(id))
-}
-
-func (store *UserRuleStore) readRuleFileLocked(path string) (UserRuleRecord, error) {
-	data, err := os.ReadFile(path)
+	path, err := store.safeRulePathLocked(id)
 	if err != nil {
 		return UserRuleRecord{}, err
+	}
+	return store.readRuleFileLocked(path)
+}
+func (store *UserRuleStore) readRuleFileLocked(path string) (UserRuleRecord, error) {
+	if err := store.validateContainedPathLocked(path); err != nil {
+		return UserRuleRecord{}, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return UserRuleRecord{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return UserRuleRecord{}, fmt.Errorf("user rule is not a regular file")
+	}
+	if err := appdata.EnsurePrivateFile(path); err != nil {
+		return UserRuleRecord{}, fmt.Errorf("secure user rule file: %w", err)
+	}
+	if info.Size() > maxUserRuleBytes {
+		return UserRuleRecord{}, fmt.Errorf("user rule exceeds %d bytes", maxUserRuleBytes)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return UserRuleRecord{}, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, maxUserRuleBytes+1))
+	closeErr := f.Close()
+	if readErr != nil {
+		return UserRuleRecord{}, readErr
+	}
+	if closeErr != nil {
+		return UserRuleRecord{}, closeErr
+	}
+	if len(data) > maxUserRuleBytes {
+		return UserRuleRecord{}, fmt.Errorf("user rule exceeds %d bytes", maxUserRuleBytes)
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return UserRuleRecord{}, fmt.Errorf("shared user rule file is empty")
+		return UserRuleRecord{}, fmt.Errorf("user rule file is empty")
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		return UserRuleRecord{}, err
-	}
-
 	filename := filepath.Base(path)
-	id, err := normalizeUserRuleID(strings.TrimSuffix(filename, filepath.Ext(filename)))
+	id, err := normalizeUserRuleID(strings.TrimSuffix(filename, sharedUserRuleExtension))
 	if err != nil {
 		return UserRuleRecord{}, err
 	}
-
-	modifiedAt := info.ModTime().UTC()
-	return UserRuleRecord{
-		ID:          id,
-		Title:       id,
-		Filename:    filename,
-		FullPath:    path,
-		Knowledge:   string(data),
-		CreatedAt:   modifiedAt.Format(time.RFC3339Nano),
-		IsGenerated: false,
-		ModifiedAt:  modifiedAt,
-		ContentHash: hashSharedUserRuleContent(data),
-	}, nil
+	modified := info.ModTime().UTC()
+	return UserRuleRecord{ID: id, Title: id, Filename: filename, FullPath: path, Knowledge: string(data), CreatedAt: modified.Format(time.RFC3339Nano), ModifiedAt: modified, ContentHash: hashSharedUserRuleContent(data)}, nil
 }
-
-func (store *UserRuleStore) writeRuleLocked(id string, knowledge string) error {
-	normalizedID, err := normalizeUserRuleID(id)
-	if err != nil {
+func (store *UserRuleStore) writeRuleLocked(id, knowledge string) error {
+	if err := validateRuleContent(knowledge); err != nil {
 		return err
-	}
-	if strings.TrimSpace(knowledge) == "" {
-		return fmt.Errorf("knowledge is required")
 	}
 	if err := store.ensureRootLocked(); err != nil {
 		return err
 	}
-
-	path := store.rulePathLocked(normalizedID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create shared user rules directory: %w", err)
+	path, err := store.safeRulePathLocked(id)
+	if err != nil {
+		return err
 	}
-
-	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, []byte(knowledge), 0o644); err != nil {
-		return fmt.Errorf("write temp shared user rule: %w", err)
+	if info, statErr := os.Lstat(path); statErr == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("user rule target is not a regular file")
+	} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("rename shared user rule file: %w", err)
+	tmp, err := os.CreateTemp(store.root, ".rule-*.tmp")
+	if err != nil {
+		return err
 	}
-	return nil
+	tmpPath := tmp.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = tmp.Close()
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := store.ops.EnsurePrivateFile(tmpPath); err != nil {
+		return err
+	}
+	n, err := io.Copy(tmp, io.LimitReader(strings.NewReader(knowledge), maxUserRuleBytes+1))
+	if err != nil {
+		return err
+	}
+	if n > maxUserRuleBytes {
+		return fmt.Errorf("user rule exceeds %d bytes", maxUserRuleBytes)
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := store.ops.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	ok = true
+	var durability error
+	if err := store.ops.EnsurePrivateFile(path); err != nil {
+		durability = &persistDurabilityError{op: "user_rule_chmod", err: err}
+	}
+	if err := store.ops.SyncDir(store.root); err != nil && durability == nil {
+		durability = &persistDurabilityError{op: "user_rule_dirsync", err: err}
+	}
+	return durability
 }
-
-func (store *UserRuleStore) removeRuleFilesLocked(records []UserRuleRecord) error {
-	for _, record := range records {
-		path := strings.TrimSpace(record.FullPath)
-		if path == "" {
-			path = store.rulePathLocked(record.ID)
-		}
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove shared user rule %q: %w", record.ID, err)
-		}
-	}
-	return nil
-}
-
 func (store *UserRuleStore) ensureRootLocked() error {
 	if strings.TrimSpace(store.root) == "" {
 		return fmt.Errorf("user rules root is empty")
 	}
-	if err := os.MkdirAll(store.root, 0o755); err != nil {
-		return fmt.Errorf("create user rules root: %w", err)
+	if err := appdata.EnsurePrivateDir(store.root); err != nil {
+		return err
+	}
+	info, err := os.Lstat(store.root)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("user rules root is not a regular directory")
 	}
 	return nil
 }
-
-func (store *UserRuleStore) rulePathLocked(id string) string {
-	if store == nil || strings.TrimSpace(store.root) == "" {
-		return ""
+func (store *UserRuleStore) safeRulePathLocked(id string) (string, error) {
+	normalized, err := normalizeUserRuleID(id)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(store.root, id+sharedUserRuleExtension)
+	path := filepath.Join(store.root, normalized+sharedUserRuleExtension)
+	if err := store.validateContainedPathLocked(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
-
-func buildUserRuleGroups(records []UserRuleRecord) []userRuleGroup {
-	if len(records) == 0 {
-		return nil
+func (store *UserRuleStore) validateContainedPathLocked(path string) error {
+	root, err := filepath.Abs(store.root)
+	if err != nil {
+		return err
 	}
-
-	membersByHash := make(map[string][]UserRuleRecord)
-	for _, record := range records {
-		membersByHash[record.ContentHash] = append(membersByHash[record.ContentHash], record)
+	candidate, err := filepath.Abs(path)
+	if err != nil {
+		return err
 	}
-
-	groups := make([]userRuleGroup, 0, len(membersByHash))
-	for contentHash, members := range membersByHash {
-		sort.SliceStable(members, func(i int, j int) bool {
-			return members[i].Filename < members[j].Filename
-		})
-		groups = append(groups, userRuleGroup{
-			ContentHash: contentHash,
-			Canonical:   members[0],
-			Members:     members,
-		})
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("user rule path escapes root")
 	}
-
-	sort.SliceStable(groups, func(i int, j int) bool {
-		return groups[i].Canonical.Filename < groups[j].Canonical.Filename
-	})
-	return groups
+	return nil
 }
-
-func canonicalRecordsFromGroups(groups []userRuleGroup) []UserRuleRecord {
-	if len(groups) == 0 {
-		return nil
+func validateRuleContent(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("knowledge is required")
 	}
-	records := make([]UserRuleRecord, 0, len(groups))
-	for _, group := range groups {
-		records = append(records, group.Canonical)
+	if len([]byte(v)) > maxUserRuleBytes {
+		return fmt.Errorf("user rule exceeds %d bytes", maxUserRuleBytes)
 	}
-	return records
+	return nil
 }
-
-func totalRuleFileCount(groups []userRuleGroup) int {
-	total := 0
-	for _, group := range groups {
-		total += len(group.Members)
+func ruleContentBytes(rs []UserRuleRecord) int {
+	n := 0
+	for _, r := range rs {
+		n += len([]byte(r.Knowledge))
 	}
-	return total
+	return n
 }
-
-func indexGroupByHash(groups []userRuleGroup, contentHash string) int {
-	for index := range groups {
-		if groups[index].ContentHash == contentHash {
-			return index
-		}
-	}
-	return -1
-}
-
-func nonCanonicalMembers(records []UserRuleRecord) []UserRuleRecord {
-	if len(records) <= 1 {
-		return nil
-	}
-	output := make([]UserRuleRecord, 0, len(records)-1)
-	output = append(output, records[1:]...)
-	return output
-}
-
-func groupMembersExcludingIDs(group userRuleGroup, excludedIDs map[string]struct{}) []UserRuleRecord {
-	if len(group.Members) == 0 {
-		return nil
-	}
-	filtered := make([]UserRuleRecord, 0, len(group.Members))
-	for _, record := range group.Members {
-		if _, excluded := excludedIDs[record.ID]; excluded {
-			continue
-		}
-		filtered = append(filtered, record)
-	}
-	return filtered
-}
-
 func normalizeUserRuleID(raw string) (string, error) {
-	id := strings.TrimSpace(raw)
-	id = strings.TrimSuffix(id, sharedUserRuleExtension)
+	id := strings.TrimSuffix(strings.TrimSpace(raw), sharedUserRuleExtension)
 	switch {
 	case id == "":
 		return "", fmt.Errorf("user rule id is required")
@@ -479,20 +402,37 @@ func normalizeUserRuleID(raw string) (string, error) {
 		return id, nil
 	}
 }
-
 func hashSharedUserRuleContent(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
-
 func escapeSharedRulePromptText(value string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		`"`, "&quot;",
-		"<", "&lt;",
-		">", "&gt;",
-	)
-	return replacer.Replace(value)
+	return strings.NewReplacer("&", "&amp;", `"`, "&quot;", "<", "&lt;", ">", "&gt;").Replace(value)
+}
+
+func (service *Service) reconcileRuleProjection(operation, id string) {
+	if service == nil || service.docsIndexStore == nil || service.rules == nil {
+		return
+	}
+	records, err := service.rules.List()
+	if err == nil {
+		err = service.docsIndexStore.ReconcileRuleProjection(records)
+	}
+	if err != nil {
+		service.docsIndexStore.MarkRuleProjectionDirty()
+		logger.Errorf("docs index rule projection failed operation=%s id=%s err_type=%T", operation, id, err)
+	}
+}
+
+func (service *Service) reconcileDirtyRuleProjection() error {
+	if service == nil || service.docsIndexStore == nil || service.rules == nil || !service.docsIndexStore.RuleProjectionDirty() {
+		return nil
+	}
+	records, err := service.rules.List()
+	if err != nil {
+		return err
+	}
+	return service.docsIndexStore.ReconcileRuleProjection(records)
 }
 
 func (service *Service) KnowledgeBaseAdd(_ context.Context, req *connect.Request[aiserverv1.KnowledgeBaseAddRequest]) (*connect.Response[aiserverv1.KnowledgeBaseAddResponse], error) {
@@ -507,19 +447,8 @@ func (service *Service) KnowledgeBaseAdd(_ context.Context, req *connect.Request
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	if service.docsIndexStore != nil {
-		if _, err := service.docsIndexStore.Upsert(DocsIndexRecord{
-			ID:         record.ID,
-			Identifier: record.ID,
-			Title:      firstNonEmptyDocs(req.Msg.GetTitle(), record.Title, record.ID),
-			URL:        firstNonEmptyDocs(docsIndexURLCandidate(req.Msg.GetKnowledge()), docsIndexURLCandidate(req.Msg.GetTitle())),
-			Content:    req.Msg.GetKnowledge(),
-			GitOrigin:  req.Msg.GetGitOrigin(),
-			Source:     docsIndexSourceLocal,
-		}); err != nil {
-			logger.Errorf("docs index sync failed operation=add id=%s err=%v", record.ID, err)
-		}
-	}
+	service.reconcileRuleProjection("add", record.ID)
+
 	return connect.NewResponse(&aiserverv1.KnowledgeBaseAddResponse{
 		Success: true,
 		Id:      record.ID,
@@ -573,18 +502,8 @@ func (service *Service) KnowledgeBaseUpdate(_ context.Context, req *connect.Requ
 	if !exists {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user rule %q not found", strings.TrimSpace(req.Msg.GetId())))
 	}
-	if service.docsIndexStore != nil {
-		if _, err := service.docsIndexStore.Upsert(DocsIndexRecord{
-			ID:         strings.TrimSpace(req.Msg.GetId()),
-			Identifier: strings.TrimSpace(req.Msg.GetId()),
-			Title:      firstNonEmptyDocs(req.Msg.GetTitle(), strings.TrimSpace(req.Msg.GetId())),
-			URL:        firstNonEmptyDocs(docsIndexURLCandidate(req.Msg.GetKnowledge()), docsIndexURLCandidate(req.Msg.GetTitle())),
-			Content:    req.Msg.GetKnowledge(),
-			Source:     docsIndexSourceLocal,
-		}); err != nil {
-			logger.Errorf("docs index sync failed operation=update id=%s err=%v", strings.TrimSpace(req.Msg.GetId()), err)
-		}
-	}
+	service.reconcileRuleProjection("update", strings.TrimSpace(req.Msg.GetId()))
+
 	return connect.NewResponse(&aiserverv1.KnowledgeBaseUpdateResponse{Success: true}), nil
 }
 
@@ -598,10 +517,7 @@ func (service *Service) KnowledgeBaseRemove(_ context.Context, req *connect.Requ
 	if err := service.rules.Remove(req.Msg.GetId()); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	if service.docsIndexStore != nil {
-		if err := service.docsIndexStore.Remove(req.Msg.GetId()); err != nil {
-			logger.Errorf("docs index sync failed operation=remove id=%s err=%v", strings.TrimSpace(req.Msg.GetId()), err)
-		}
-	}
+	service.reconcileRuleProjection("remove", strings.TrimSpace(req.Msg.GetId()))
+
 	return connect.NewResponse(&aiserverv1.KnowledgeBaseRemoveResponse{Success: true}), nil
 }

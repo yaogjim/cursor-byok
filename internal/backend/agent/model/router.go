@@ -119,6 +119,8 @@ func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamReq
 	}
 	req.CredentialSource = string(source)
 	if !source.Managed() {
+		req.StableAccountID = false
+		req.CodexAffinity = CodexAffinity{}
 		return req, nil
 	}
 	if router == nil || router.credentials == nil {
@@ -128,13 +130,19 @@ func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamReq
 	if err != nil {
 		return req, err
 	}
-	return applyCredentialToRequest(req, cred)
+	req, err = applyCredentialToRequest(req, cred)
+	if err != nil {
+		return req, err
+	}
+	return router.attachCodexAffinity(req), nil
 }
 
 func applyCredentialToRequest(req StreamRequest, cred subscriptionauth.Credential) (StreamRequest, error) {
 	req.APIKey = strings.TrimSpace(cred.AccessToken)
 	req.CredentialID = strings.TrimSpace(cred.AccountID)
 	req.ChatGPTAccountID = strings.TrimSpace(cred.ChatGPTAccountID)
+	req.StableAccountID = cred.StableAccountID
+	req.CodexAffinity = CodexAffinity{}
 	if req.APIKey == "" {
 		return req, subscriptionauth.ErrAuthRequired
 	}
@@ -183,7 +191,7 @@ func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req Str
 			if applyErr != nil {
 				return StreamRequest{}, false, applyErr
 			}
-			return next, true, nil
+			return router.attachCodexAffinity(next), true, nil
 		}
 		if isModelAdapterTestRequest(req) || !subscriptionauth.IsQuotaError(err) {
 			return StreamRequest{}, false, nil
@@ -202,7 +210,7 @@ func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req Str
 		if applyErr != nil {
 			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
 		}
-		return next, true, nil
+		return router.attachCodexAffinity(next), true, nil
 	case subscriptionauth.CredentialSourceGrok:
 		if isModelAdapterTestRequest(req) || isUnauthorizedHTTPStatus(err) || !subscriptionauth.IsQuotaError(err) {
 			return StreamRequest{}, false, nil
@@ -221,7 +229,7 @@ func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req Str
 		if applyErr != nil {
 			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
 		}
-		return next, true, nil
+		return router.attachCodexAffinity(next), true, nil
 	default:
 		return StreamRequest{}, false, nil
 	}

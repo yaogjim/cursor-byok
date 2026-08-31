@@ -1,27 +1,35 @@
 package subscriptionauth
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 )
 
 const (
-	schemaVersion      = 1
-	codexSchemaVersion = 2
-	dirPermission      = 0o700
-	filePermission     = 0o600
-	codexFileName      = "codex-auth.json"
-	grokFileName       = "grok-accounts.json"
-	codexAuthMode      = "chatgpt"
+	schemaVersion       = 1
+	codexSchemaVersion  = 2
+	dirPermission       = 0o700
+	filePermission      = 0o600
+	codexFileName       = "codex-auth.json"
+	grokFileName        = "grok-accounts.json"
+	affinityKeyFileName = "codex-affinity.key"
+	codexAuthMode       = "chatgpt"
+	AffinityKeySize     = 32
 )
 
+// ErrAffinityKeyLength is returned when the on-disk affinity key is not 32 bytes.
+var ErrAffinityKeyLength = errors.New("codex affinity key must be 32 bytes")
+
 type FileStore struct {
-	dir string
+	dir        string
+	affinityMu sync.Mutex
 }
 
 type storedCodexFile struct {
@@ -95,6 +103,127 @@ func (store *FileStore) CodexPath() string {
 
 func (store *FileStore) GrokPath() string {
 	return filepath.Join(store.dir, grokFileName)
+}
+
+func (store *FileStore) AffinityKeyPath() string {
+	return filepath.Join(store.dir, affinityKeyFileName)
+}
+
+func (store *FileStore) LoadOrCreateAffinityKey() ([]byte, error) {
+	if store == nil {
+		return nil, errors.New("subscription auth store is unavailable")
+	}
+	store.affinityMu.Lock()
+	defer store.affinityMu.Unlock()
+	if key, err := store.readAffinityKeyLocked(); err == nil {
+		return key, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	key := make([]byte, AffinityKeySize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate codex affinity key: %w", err)
+	}
+	if err := store.writeAffinityKeyLocked(key); err != nil {
+		if existing, readErr := store.readAffinityKeyLocked(); readErr == nil {
+			return existing, nil
+		}
+		return nil, err
+	}
+	return key, nil
+}
+
+func (store *FileStore) readAffinityKeyLocked() ([]byte, error) {
+	path := store.AffinityKeyPath()
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("codex affinity key is not a regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if runtime.GOOS != "windows" {
+		_ = os.Chmod(path, filePermission)
+	}
+	if len(data) != AffinityKeySize {
+		return nil, ErrAffinityKeyLength
+	}
+	out := make([]byte, AffinityKeySize)
+	copy(out, data)
+	return out, nil
+}
+
+func (store *FileStore) writeAffinityKeyLocked(key []byte) error {
+	if len(key) != AffinityKeySize {
+		return ErrAffinityKeyLength
+	}
+	if info, err := os.Lstat(store.AffinityKeyPath()); err == nil {
+		if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("codex affinity key is not a regular file")
+		}
+		return errors.New("codex affinity key already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := store.EnsureDir(); err != nil {
+		return err
+	}
+	path := store.AffinityKeyPath()
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+affinityKeyFileName+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if runtime.GOOS != "windows" {
+		if err := temp.Chmod(filePermission); err != nil {
+			_ = temp.Close()
+			return err
+		}
+	}
+	if _, err := temp.Write(key); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFile(tempPath, path); err != nil {
+		return err
+	}
+	committed = true
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, filePermission); err != nil {
+			return err
+		}
+	}
+	return syncStoreDir(dir)
+}
+
+func syncStoreDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func (store *FileStore) EnsureDir() error {

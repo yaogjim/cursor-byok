@@ -180,6 +180,12 @@ managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_respons
 
 验证结果以 `task/todo.md` 的 `macos-build-0.0.52.4-20260829` 为准。使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）；应用短版本与 bundle 版本均为 `0.0.52.4`，最低 macOS `10.15.0`，Mach-O arm64，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`，`SHA256SUMS` 校验通过。已提交（`9c4db4f`）并 push 到 `gateway` 分支。未做 Developer ID 签名或 notarization，未构建 Intel 包，未发布 GitHub Release。
 
+### 0.22 上游 `v0.1.5` 深度审阅与同步安全中止
+
+2026-08-30 已完成上游正式版 `v0.1.5@b807608`、最新主线 `upstream/main@9120b90` 与当前 `gateway@534ffc0` 的三方能力核对。正式版后的主线只删除废弃 `server_backup/**`。本地 `main@305b108` 与上游已分叉，隔离 worktree 的显式 merge 出现跨架构冲突，已按 Runbook 中止；本地 `main`、`gateway` 和工作树保持不变，无提交、无 push。
+
+移植顺序已经收口：P0 先修复 Rule 文件权限、symlink/路径、原子写和容量上限；P1 独立实现账号隔离的 managed Codex 缓存亲和，同时继续 fail-closed 删除 `previous_response_id`；P1 再设计显式 opt-in 的 Rule 离线 journal/镜像；P1/P2 只增加官方、静态 BYOK、Codex 与 Grok 的展示分组。官方/BYOK 切换、双向子代理、普通 OpenAI/Anthropic cache、Provider 空闲超时、Codex/Grok 主链路、额度与轮换无需重写；Deno 插件框架、Rust provider/router 和完整 conversation runtime 不整体移植。上游性能、内存和缓存命中幅度缺少可复现 benchmark，继续标为未验证。详细证据和最小移植单元见 `docs/prd_cursor_byok_当前功能与上游差异.md` §16。
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -361,6 +367,10 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 
 ### 2. 按时间索引
+
+- **2026-08-30**：完成 Rule P0 与 managed Codex affinity 基础检查点。Rule 私有权限、symlink/非普通文件拒绝、原子有界持久化、docs index 来源隔离与 reconciliation 已通过定向/race/vet 和 Windows 交叉构建；Windows 实机 ACL 仍待发布门禁。Codex 已接入稳定账号隔离、独立私密密钥、四字段 HMAC 域分离、精确 ChatGPT Responses 注入及 `control | prompt_key | full` profile，继续删除 `previous_response_id`。fake upstream、缓存观测和 A/B 尚未完成，不宣称性能收益；Rule journal 与手动同步尚未开始。
+
+- **2026-08-30**：完成上游 `v0.1.5@b807608` 与最新 `upstream/main@9120b90` 深度审阅。隔离 worktree 合并本地 `main@305b108` 发生真实跨架构冲突后已安全中止；`main`、`gateway` 未变，无提交、无 push。确定优先加固 Rule 持久化，再独立补 managed Codex 缓存亲和；Rule 离线同步必须显式 opt-in；不整体移植 Deno/Rust runtime。详细结论见差异 PRD §16。
 
 - **2026-08-30**：完成 `v0.0.52.5` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，产物归档为 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。构建首次因误用 Go 1.26.3 且清空编译缓存，在 8GB 内存/swap 压力下大型生成文件 `aiserver_v1.connect.go` 编译停滞；改用项目 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后成功。已核验 `0.0.52.5` 版本（Info.plist 与二进制注入）、arm64 架构、adhoc 签名、`hdiutil verify` 与 SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
