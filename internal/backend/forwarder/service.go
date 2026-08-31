@@ -864,6 +864,7 @@ func (service *Service) handleRunIntent(intent InboundIntent) error {
 	stream.ProviderAccumulatedReasoningItemID = ""
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
+	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
 	stream.ProviderSyntheticThinkingStartedAt = time.Time{}
 	stream.ProviderSyntheticThinkingPublished = false
 	stream.ProviderFinishReason = ""
@@ -1015,13 +1016,14 @@ func (service *Service) persistInterruptedProviderOutput(stream *ActiveStream) (
 	reasoningItemID := stream.ProviderAccumulatedReasoningItemID
 	reasoningStatus := stream.ProviderAccumulatedReasoningStatus
 	reasoningSummary := append([]byte(nil), stream.ProviderAccumulatedReasoningSummary...)
+	reasoningOrigin := stream.ProviderAccumulatedReasoningOrigin
 	stream.mu.Unlock()
 	if strings.TrimSpace(text) == "" && !hasReplayableReasoningPayload(reasoning, reasoningSignature, reasoningSignatureSource) {
 		return false, nil
 	}
 	key := interruptedProviderOutputIdempotencyKey(turnSeq, requestID, modelCallID, providerPass)
 	_, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-		{
+		overlayHistoryReasoningOrigin(HistoryEntry{
 			TurnSeq:        turnSeq,
 			RequestID:      requestID,
 			ModelCallID:    modelCallID,
@@ -1037,7 +1039,7 @@ func (service *Service) persistInterruptedProviderOutput(stream *ActiveStream) (
 				reasoningStatus,
 				reasoningSummary,
 			),
-		},
+		}, reasoningOrigin),
 	})
 	return true, err
 }
@@ -1564,6 +1566,7 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	stream.ProviderAccumulatedReasoningItemID = ""
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
+	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
 	if stream.ProviderSyntheticThinkingStartedAt.IsZero() {
 		stream.ProviderSyntheticThinkingStartedAt = time.Now().UTC()
 	}
@@ -2011,7 +2014,7 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 			return err
 		}
 		_, err = service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
+			overlayHistoryReasoningOrigin(withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID), activeStreamReasoningOrigin(stream)),
 		})
 		if err != nil {
 			return err
@@ -2405,13 +2408,14 @@ func (service *Service) closeStreamWithProviderError(
 	usage turnUsageSnapshot,
 	providerErr providerTerminalError,
 	allowReasoningOnly bool,
+	origin modeladapter.ReasoningOrigin,
 ) error {
 	if stream == nil {
 		return nil
 	}
 	errorText := safeProviderTerminalMessage(providerErr)
 	modelCallID := strings.TrimSpace(stream.CurrentModelCallID)
-	if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, currentProviderPass(stream), accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, allowReasoningOnly); err != nil {
+	if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, currentProviderPass(stream), accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, allowReasoningOnly, origin); err != nil {
 		return fmt.Errorf("flush provider error assistant output: %w", err)
 	}
 	if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "provider_error", usage, errorText, false); err != nil {
@@ -2691,7 +2695,7 @@ func activeStreamRequestID(stream *ActiveStream) string {
 }
 
 // flushAssistantText 把本轮累计的 assistant 文本一次性写回 history。
-func (service *Service) flushAssistantText(stream *ActiveStream, conversationID string, turnSeq int64, requestID string, text string, reasoningContent string, reasoningSignature string, reasoningSignatureSource string, reasoningItemID string, reasoningStatus string, reasoningSummary json.RawMessage, allowReasoningOnly bool) error {
+func (service *Service) flushAssistantText(stream *ActiveStream, conversationID string, turnSeq int64, requestID string, text string, reasoningContent string, reasoningSignature string, reasoningSignatureSource string, reasoningItemID string, reasoningStatus string, reasoningSummary json.RawMessage, allowReasoningOnly bool, origin modeladapter.ReasoningOrigin) error {
 	if strings.TrimSpace(text) == "" && (!allowReasoningOnly || !hasReplayableReasoningPayload(reasoningContent, reasoningSignature, reasoningSignatureSource)) {
 		return nil
 	}
@@ -2700,17 +2704,17 @@ func (service *Service) flushAssistantText(stream *ActiveStream, conversationID 
 		modelCallID = strings.TrimSpace(stream.CurrentModelCallID)
 	}
 	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{
-		withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID),
+		overlayHistoryReasoningOrigin(withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID), origin),
 	})
 	return err
 }
 
 // flushFailedProviderOutput 在 provider 失败时落盘累计输出，复用 cancel/interrupted 的幂等键避免重复写入。
-func (service *Service) flushFailedProviderOutput(stream *ActiveStream, conversationID string, turnSeq int64, requestID string, modelCallID string, providerPass int, text string, reasoningContent string, reasoningSignature string, reasoningSignatureSource string, reasoningItemID string, reasoningStatus string, reasoningSummary json.RawMessage, allowReasoningOnly bool) error {
+func (service *Service) flushFailedProviderOutput(stream *ActiveStream, conversationID string, turnSeq int64, requestID string, modelCallID string, providerPass int, text string, reasoningContent string, reasoningSignature string, reasoningSignatureSource string, reasoningItemID string, reasoningStatus string, reasoningSummary json.RawMessage, allowReasoningOnly bool, origin modeladapter.ReasoningOrigin) error {
 	if strings.TrimSpace(text) == "" && (!allowReasoningOnly || !hasReplayableReasoningPayload(reasoningContent, reasoningSignature, reasoningSignatureSource)) {
 		return nil
 	}
-	entry := withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID)
+	entry := overlayHistoryReasoningOrigin(withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(turnSeq, requestID, text, reasoningContent, reasoningSignature, reasoningSignatureSource, reasoningItemID, reasoningStatus, reasoningSummary), modelCallID), origin)
 	entry.IdempotencyKey = interruptedProviderOutputIdempotencyKey(turnSeq, requestID, modelCallID, providerPass)
 	_, err := service.appendConversationEntries(stream, conversationID, []HistoryEntry{entry})
 	return err
@@ -2926,6 +2930,55 @@ func newModeChangePromptContextEntry(turnSeq int64, requestID string, mode agent
 func withHistoryModelCallID(entry HistoryEntry, modelCallID string) HistoryEntry {
 	entry.ModelCallID = strings.TrimSpace(modelCallID)
 	return entry
+}
+
+func overlayHistoryReasoningOrigin(entry HistoryEntry, origin modeladapter.ReasoningOrigin) HistoryEntry {
+	if origin.IsZero() || len(entry.Payload) == 0 {
+		return entry
+	}
+	switch strings.TrimSpace(entry.Kind) {
+	case "assistant_text":
+		var payload assistantTextPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			return entry
+		}
+		payload.ReasoningOrigin = origin
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return entry
+		}
+		entry.Payload = encoded
+	case "tool_call":
+		var payload toolCallEntryPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			return entry
+		}
+		payload.ReasoningOrigin = origin
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return entry
+		}
+		entry.Payload = encoded
+	case "tool_result":
+		var payload toolResultEntryPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			return entry
+		}
+		payload.ReasoningOrigin = origin
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return entry
+		}
+		entry.Payload = encoded
+	}
+	return entry
+}
+
+func activeStreamReasoningOrigin(stream *ActiveStream) modeladapter.ReasoningOrigin {
+	if stream == nil {
+		return modeladapter.ReasoningOrigin{}
+	}
+	return stream.ProviderAccumulatedReasoningOrigin
 }
 
 // newAssistantTextEntry 构造 assistant 文本 entry。

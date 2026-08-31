@@ -154,6 +154,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 				OpenAIResponsesReasoningID:      payload.ReasoningItemID,
 				OpenAIResponsesReasoningStatus:  payload.ReasoningStatus,
 				OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), payload.ReasoningSummary...),
+				ReasoningOrigin:                 payload.ReasoningOrigin,
 			}
 			messages = append(messages, newProjectedReplayMessage(replayMessage, entry))
 			applyProjectedReplayReasoning(reasoningEmissions, entry, messages)
@@ -176,6 +177,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 			replayMessage.OpenAIResponsesReasoningID = payload.ReasoningItemID
 			replayMessage.OpenAIResponsesReasoningStatus = payload.ReasoningStatus
 			replayMessage.OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), payload.ReasoningSummary...)
+			replayMessage.ReasoningOrigin = payload.ReasoningOrigin
 			applyPromptProviderMetadataToFirstToolCall(&replayMessage, payload.ProviderItemID, payload.ProviderCallID, payload.ProviderStatus)
 			modelMessage := toModelMessage(replayMessage)
 			messages = append(messages, newProjectedReplayMessage(modelMessage, entry))
@@ -250,6 +252,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 						replayMessages[index].OpenAIResponsesReasoningID = payload.ReasoningItemID
 						replayMessages[index].OpenAIResponsesReasoningStatus = payload.ReasoningStatus
 						replayMessages[index].OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), payload.ReasoningSummary...)
+						replayMessages[index].ReasoningOrigin = payload.ReasoningOrigin
 						applyPromptProviderMetadataToFirstToolCall(&replayMessages[index], payload.ProviderItemID, payload.ProviderCallID, payload.ProviderStatus)
 					}
 					for _, replay := range replayMessages {
@@ -286,6 +289,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 				OpenAIResponsesReasoningID:      payload.ReasoningItemID,
 				OpenAIResponsesReasoningStatus:  payload.ReasoningStatus,
 				OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), payload.ReasoningSummary...),
+				ReasoningOrigin:                 payload.ReasoningOrigin,
 				ToolCalls: []modeladapter.ToolCallDescriptor{{
 					ID:                    strings.TrimSpace(payload.ToolCallID),
 					Type:                  "function",
@@ -602,6 +606,7 @@ func (projector *HistoryProjector) ProjectCheckpointProjection(conversation *Con
 			OpenAIResponsesReasoningID:      message.OpenAIResponsesReasoningID,
 			OpenAIResponsesReasoningStatus:  message.OpenAIResponsesReasoningStatus,
 			OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), message.OpenAIResponsesReasoningSummary...),
+			ReasoningOrigin:                 message.ReasoningOrigin,
 			ToolCalls:                       toPromptToolCalls(message.ToolCalls),
 			ToolCallID:                      message.ToolCallID,
 			Name:                            message.Name,
@@ -1229,12 +1234,27 @@ func clearReplayReasoning(message *modeladapter.Message) {
 	if message == nil {
 		return
 	}
+	keepOrigin := replayMessageHasOpaqueToolMetadata(*message)
 	message.ReasoningContent = ""
 	message.ReasoningSignature = ""
 	message.ReasoningSignatureSource = ""
+	if !keepOrigin {
+		message.ReasoningOrigin = modeladapter.ReasoningOrigin{}
+	}
 	message.OpenAIResponsesReasoningID = ""
 	message.OpenAIResponsesReasoningStatus = ""
 	message.OpenAIResponsesReasoningSummary = nil
+}
+
+func replayMessageHasOpaqueToolMetadata(message modeladapter.Message) bool {
+	for _, toolCall := range message.ToolCalls {
+		if strings.TrimSpace(toolCall.OpenAIResponsesID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesCallID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesStatus) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func copyReplayReasoning(dst *modeladapter.Message, src modeladapter.Message) {
@@ -1248,6 +1268,7 @@ type replayReasoningTuple struct {
 	itemID    string
 	status    string
 	summary   json.RawMessage
+	origin    modeladapter.ReasoningOrigin
 }
 
 func captureReplayReasoningTuple(message modeladapter.Message) replayReasoningTuple {
@@ -1257,6 +1278,7 @@ func captureReplayReasoningTuple(message modeladapter.Message) replayReasoningTu
 		source:    message.ReasoningSignatureSource,
 		itemID:    message.OpenAIResponsesReasoningID,
 		status:    message.OpenAIResponsesReasoningStatus,
+		origin:    message.ReasoningOrigin,
 	}
 	if len(message.OpenAIResponsesReasoningSummary) > 0 {
 		tuple.summary = append(json.RawMessage(nil), message.OpenAIResponsesReasoningSummary...)
@@ -1281,6 +1303,7 @@ func applyReplayReasoningTuple(dst *modeladapter.Message, tuple replayReasoningT
 	dst.ReasoningContent = tuple.content
 	dst.ReasoningSignature = tuple.signature
 	dst.ReasoningSignatureSource = tuple.source
+	dst.ReasoningOrigin = tuple.origin
 	dst.OpenAIResponsesReasoningID = tuple.itemID
 	dst.OpenAIResponsesReasoningStatus = tuple.status
 	if len(tuple.summary) == 0 {
@@ -1379,6 +1402,7 @@ func fillReplayReasoningMatchingMetadata(dst replayReasoningTuple, src replayRea
 	if strings.TrimSpace(string(src.summary)) != "" && strings.TrimSpace(string(dst.summary)) == "" {
 		dst.summary = append(json.RawMessage(nil), src.summary...)
 	}
+	dst.origin = mergeReplayReasoningOrigin(dst.origin, src.origin)
 	return dst
 }
 
@@ -1594,6 +1618,16 @@ func mergeReplayReasoningSignatureSource(left string, right string) string {
 	}
 }
 
+func mergeReplayReasoningOrigin(left modeladapter.ReasoningOrigin, right modeladapter.ReasoningOrigin) modeladapter.ReasoningOrigin {
+	if left.IsZero() {
+		return right
+	}
+	if right.IsZero() || left.Equal(right) {
+		return left
+	}
+	return modeladapter.ReasoningOrigin{}
+}
+
 func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapter.Message) {
 	if last == nil {
 		return
@@ -1604,6 +1638,7 @@ func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapt
 	last.ReasoningSignature = mergedSignature
 	if mergedSignature == "" {
 		last.ReasoningSignatureSource = ""
+		last.ReasoningOrigin = modeladapter.ReasoningOrigin{}
 		last.OpenAIResponsesReasoningID = ""
 		last.OpenAIResponsesReasoningStatus = ""
 		last.OpenAIResponsesReasoningSummary = nil
@@ -1611,6 +1646,7 @@ func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapt
 	}
 	if leftSignature == "" && rightSignature != "" {
 		last.ReasoningSignatureSource = strings.TrimSpace(current.ReasoningSignatureSource)
+		last.ReasoningOrigin = current.ReasoningOrigin
 		last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		last.OpenAIResponsesReasoningStatus = current.OpenAIResponsesReasoningStatus
 		last.OpenAIResponsesReasoningSummary = append(json.RawMessage(nil), current.OpenAIResponsesReasoningSummary...)
@@ -1618,6 +1654,7 @@ func mergeReplayReasoningMetadata(last *modeladapter.Message, current modeladapt
 	}
 	if leftSignature == rightSignature {
 		last.ReasoningSignatureSource = mergeReplayReasoningSignatureSource(last.ReasoningSignatureSource, current.ReasoningSignatureSource)
+		last.ReasoningOrigin = mergeReplayReasoningOrigin(last.ReasoningOrigin, current.ReasoningOrigin)
 		if strings.TrimSpace(last.OpenAIResponsesReasoningID) == "" {
 			last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		}
@@ -1995,6 +2032,7 @@ func toModelMessage(message promptengine.Message) modeladapter.Message {
 		OpenAIResponsesReasoningID:      message.OpenAIResponsesReasoningID,
 		OpenAIResponsesReasoningStatus:  message.OpenAIResponsesReasoningStatus,
 		OpenAIResponsesReasoningSummary: append(json.RawMessage(nil), message.OpenAIResponsesReasoningSummary...),
+		ReasoningOrigin:                 message.ReasoningOrigin,
 		ToolCalls:                       toModelToolCalls(message.ToolCalls),
 		ToolCallID:                      message.ToolCallID,
 		Name:                            message.Name,

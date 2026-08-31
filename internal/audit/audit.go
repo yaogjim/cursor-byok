@@ -33,6 +33,8 @@ var (
 	bearerCredentialPattern  = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;"']+`)
 	queryCredentialPattern   = regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth(?:orization)?|cookie|password|secret|token)=([^&\s"']+)`)
 	labeledCredentialPattern = regexp.MustCompile(`(?i)\b(api[_ -]?key|access[_ -]?token|auth(?:orization)?|cookie|password|secret|token)(\s+provided)?(\s*[:=]\s*)([^\s,;"']+)`)
+	unlabeledAPIKeyPattern   = regexp.MustCompile(`\b(?:sk-proj-|sk-ant-|sk-)[A-Za-z0-9_-]{4,}`)
+	unlabeledJWTPattern      = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 	urlQueryPattern          = regexp.MustCompile(`(?i)(https?://[^?\s"'<>]+)\?[^?\s"'<>]*`)
 )
 
@@ -276,6 +278,8 @@ func SanitizeMetadataText(value string) string {
 	sanitized := bearerCredentialPattern.ReplaceAllString(value, "Bearer "+redactedMetadataValue)
 	sanitized = queryCredentialPattern.ReplaceAllString(sanitized, "$1="+redactedMetadataValue)
 	sanitized = labeledCredentialPattern.ReplaceAllString(sanitized, "$1$2$3"+redactedMetadataValue)
+	sanitized = unlabeledAPIKeyPattern.ReplaceAllString(sanitized, redactedMetadataValue)
+	sanitized = unlabeledJWTPattern.ReplaceAllString(sanitized, redactedMetadataValue)
 	sanitized = urlQueryPattern.ReplaceAllString(sanitized, "$1")
 	return limitMetadataText(sanitized)
 }

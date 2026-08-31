@@ -234,3 +234,28 @@ func TestAnthropicPreEventContextCanceledDoesNotRetry(t *testing.T) {
 func anthropicTestRequest(baseURL string) StreamRequest {
 	return StreamRequest{RequestID: "request-1", RunID: "run-1", ModelCallID: "model-call-1", BaseURL: baseURL, APIKey: "test-key", ProviderModelID: "claude-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128}
 }
+
+func TestAnthropicStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
+	hits := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		hits++
+		return nil, errors.New("http must not be attempted")
+	})}
+	adapter := &AnthropicAdapter{client: client, retry: instantRetry()}
+	safety := &FallbackSafetyInfo{}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:           "request-1",
+		RunID:               "run-1",
+		ModelCallID:         "model-call-1",
+		BaseURL:             "https://example.test",
+		APIKey:              "test-key",
+		ProviderModelID:     "claude-test",
+		RequestBodyOverride: map[string]any{"pad": strings.Repeat("x", maxEncodedRequestBodyBytes)},
+		MaxTokens:           128,
+		FallbackSafety:      safety,
+	}, func(ModelEvent) error { return nil })
+	assertRequestBuildLimitError(t, err, hits)
+	if !safety.Snapshot().RequestBuildFailed {
+		t.Fatal("MarkRequestBuildFailed was not called")
+	}
+}

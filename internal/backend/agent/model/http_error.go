@@ -17,6 +17,10 @@ const (
 	// maxErrorBodyBytes 表示错误响应体最多读取的字节数。
 	maxErrorBodyBytes = 8192
 
+	// maxEncodedRequestBodyBytes 是最终 JSON 编码后、创建 HTTP 请求前的实际请求体字节上限。
+	// 配置层没有对应项；取与现有 canary 检查同量级的保守包级上限，避免无界编码体进入发送路径。
+	maxEncodedRequestBodyBytes = 32 << 20
+
 	ProviderErrorStatus4xx         = "status_4xx"
 	ProviderErrorRateLimited       = "rate_limited"
 	ProviderErrorServer5xx         = "server_5xx"
@@ -145,10 +149,12 @@ func isCapacityUnavailable(err error) bool {
 }
 
 // RequestBuildError 表示在发送 HTTP 请求之前的序列化/构建阶段出错。
-// 包括 JSON marshal、extra params 解析、自定义 header 构建失败等。
+// 包括 JSON marshal、编码体超限、extra params 解析、自定义 header 构建失败等。
 // 此类错误来自本地逻辑，不可能通过切换 provider 渠道解决，因此禁止 fallback。
 type RequestBuildError struct {
-	Err error
+	Err    error
+	Actual int
+	Limit  int
 }
 
 // FallbackSafetyError 把一次渠道尝试的 typed 安全快照与原始错误绑定。
@@ -183,6 +189,17 @@ func WrapFallbackSafetyError(err error, safety *FallbackSafetyInfo) error {
 	return &FallbackSafetyError{Err: err, Safety: safety.Snapshot()}
 }
 
+// wrapRequestBuildFailure 标记发送前的本地构建失败，避免 fallback 诊断把零 HTTP 误报成 no_http_attempt。
+func wrapRequestBuildFailure(req StreamRequest, err error) error {
+	if err == nil {
+		return nil
+	}
+	if req.FallbackSafety != nil {
+		req.FallbackSafety.MarkRequestBuildFailed()
+	}
+	return WrapFallbackSafetyError(err, req.FallbackSafety)
+}
+
 func fallbackSafetyFromError(err error) (FallbackSafetySnapshot, bool) {
 	var safetyErr *FallbackSafetyError
 	if errors.As(err, &safetyErr) && safetyErr != nil {
@@ -195,10 +212,24 @@ func (e *RequestBuildError) Error() string {
 	if e == nil {
 		return "request build error"
 	}
+	if e.Limit > 0 {
+		return fmt.Sprintf("request build error: encoded body bytes=%d limit=%d", e.Actual, e.Limit)
+	}
 	if e.Err == nil {
 		return "request build error"
 	}
 	return "request build error: " + e.Err.Error()
+}
+
+func checkEncodedRequestBodyLimit(payload []byte) error {
+	return checkEncodedRequestBodyBytes(len(payload), maxEncodedRequestBodyBytes)
+}
+
+func checkEncodedRequestBodyBytes(actual, limit int) error {
+	if actual <= limit {
+		return nil
+	}
+	return &RequestBuildError{Actual: actual, Limit: limit}
 }
 
 func (e *RequestBuildError) Unwrap() error {

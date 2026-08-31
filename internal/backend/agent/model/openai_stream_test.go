@@ -850,3 +850,33 @@ func TestOpenAIResponsesUnknownTerminalLikeEventStillTruncates(t *testing.T) {
 		t.Fatalf("diagnostics=%#v", snapshot)
 	}
 }
+
+func TestOpenAIStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
+	hits := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		hits++
+		return nil, errors.New("http must not be attempted")
+	})}
+	override := map[string]any{"pad": strings.Repeat("x", maxEncodedRequestBodyBytes)}
+	for _, endpoint := range []string{"/v1/chat/completions", "/v1/responses"} {
+		hits = 0
+		adapter := &OpenAIAdapter{client: client, retry: instantRetry()}
+		safety := &FallbackSafetyInfo{}
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID:           "request-1",
+			RunID:               "run-1",
+			ModelCallID:         "model-call-1",
+			BaseURL:             "https://example.test",
+			APIKey:              "test-key",
+			ProviderModelID:     "gpt-test",
+			OpenAIEndpoint:      endpoint,
+			RequestBodyOverride: override,
+			MaxTokens:           128,
+			FallbackSafety:      safety,
+		}, func(ModelEvent) error { return nil })
+		assertRequestBuildLimitError(t, err, hits)
+		if !safety.Snapshot().RequestBuildFailed {
+			t.Fatal("MarkRequestBuildFailed was not called")
+		}
+	}
+}

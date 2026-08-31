@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	modeladapter "cursor/internal/backend/agent/model"
 )
 
 func TestAppendEntriesDeduplicatesIdempotencyKey(t *testing.T) {
@@ -282,4 +285,189 @@ func TestProjectPromptReplayPreservesLegacyCanceledTurnActivity(t *testing.T) {
 		}
 	}
 	t.Fatalf("replay = %#v, want legacy canceled activity", replay)
+}
+
+func TestThinkingCompletedOriginPersistsThroughProviderDoneAndSameTargetSanitize(t *testing.T) {
+	service, stream := seedOriginPersistStream(t)
+	origin := testPersistedReasoningOrigin()
+	const flushed = "I will inspect"
+
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming"}
+	stream.mu.Unlock()
+
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{
+		Kind:                    modeladapter.ModelEventKindThinkingCompleted,
+		ThinkingSignature:       "encrypted-reasoning",
+		ThinkingSignatureSource: modeladapter.ReasoningSignatureSourceOpenAIResponses,
+		ProviderItemID:          "rsn_item_1",
+		ProviderStatus:          "completed",
+		ReasoningOrigin:         origin,
+		OccurredAt:              time.Now(),
+	}); err != nil {
+		t.Fatalf("thinking completed error = %v", err)
+	}
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{
+		Kind:       modeladapter.ModelEventKindTextDelta,
+		Text:       flushed,
+		OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("text delta error = %v", err)
+	}
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{
+		Kind:       modeladapter.ModelEventKindTurnFinished,
+		OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("turn finished error = %v", err)
+	}
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: 1, Done: true}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+
+	assertPersistedAssistantOriginReplaySanitize(t, service, stream, origin, flushed)
+}
+
+func TestFailedProviderFlushPersistsThinkingCompletedOrigin(t *testing.T) {
+	service, stream := seedOriginPersistStream(t)
+	origin := testPersistedReasoningOrigin()
+	const flushed = "partial answer before transport failure"
+
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming"}
+	stream.mu.Unlock()
+
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{
+		Kind:                    modeladapter.ModelEventKindThinkingCompleted,
+		ThinkingSignature:       "encrypted-reasoning",
+		ThinkingSignatureSource: modeladapter.ReasoningSignatureSourceOpenAIResponses,
+		ProviderItemID:          "rsn_item_1",
+		ProviderStatus:          "completed",
+		ReasoningOrigin:         origin,
+		OccurredAt:              time.Now(),
+	}); err != nil {
+		t.Fatalf("thinking completed error = %v", err)
+	}
+	if err := service.applyProviderModelEvent(stream, modeladapter.ModelEvent{
+		Kind:       modeladapter.ModelEventKindTextDelta,
+		Text:       flushed,
+		OccurredAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("text delta error = %v", err)
+	}
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err:   errors.New("transport failed"),
+	}); err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+
+	assertPersistedAssistantOriginReplaySanitize(t, service, stream, origin, flushed)
+}
+
+func testPersistedReasoningOrigin() modeladapter.ReasoningOrigin {
+	return modeladapter.ReasoningOrigin{
+		Provider:         "openai",
+		Endpoint:         "openai_responses:api.openai.com",
+		CredentialSource: "codex",
+		AccountID:        "acct-1",
+		ModelID:          "gpt-5",
+	}
+}
+
+func seedOriginPersistStream(t *testing.T) (*Service, *ActiveStream) {
+	t.Helper()
+	service, stream, _ := testCheckpointBlobProjection(t)
+	conversation, _, _, err := service.snapshotCheckpointConversation(stream)
+	if err != nil {
+		t.Fatalf("snapshotCheckpointConversation() error = %v", err)
+	}
+	if _, err := service.store.SaveConversationWithEntries(stream.ConversationID, conversation, conversation.Entries); err != nil {
+		t.Fatalf("SaveConversationWithEntries() error = %v", err)
+	}
+	return service, stream
+}
+
+func assertPersistedAssistantOriginReplaySanitize(t *testing.T, service *Service, stream *ActiveStream, origin modeladapter.ReasoningOrigin, wantText string) {
+	t.Helper()
+	persisted, err := service.store.LoadConversation(stream.ConversationID)
+	if err != nil {
+		t.Fatalf("LoadConversation() error = %v", err)
+	}
+	foundPayload := false
+	for _, entry := range persisted.Entries {
+		if entry.Kind != "assistant_text" {
+			continue
+		}
+		var payload assistantTextPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			t.Fatalf("decode assistant entry: %v", err)
+		}
+		if payload.Text != wantText {
+			continue
+		}
+		foundPayload = true
+		if !payload.ReasoningOrigin.Equal(origin) {
+			t.Fatalf("history origin = %#v, want %#v", payload.ReasoningOrigin, origin)
+		}
+		if payload.ReasoningSignature != "encrypted-reasoning" || payload.ReasoningItemID != "rsn_item_1" {
+			t.Fatalf("history opaque reasoning = %#v", payload)
+		}
+	}
+	if !foundPayload {
+		t.Fatalf("missing assistant_text %q in %#v", wantText, persisted.Entries)
+	}
+
+	replay, err := service.projector.ProjectPromptReplay(persisted)
+	if err != nil {
+		t.Fatalf("ProjectPromptReplay() error = %v", err)
+	}
+	var assistant modeladapter.Message
+	foundReplay := false
+	for _, message := range replay {
+		if message.Role != "assistant" || strings.TrimSpace(message.Content) != wantText {
+			continue
+		}
+		assistant = message
+		foundReplay = true
+		break
+	}
+	if !foundReplay {
+		t.Fatalf("replay missing assistant %q: %#v", wantText, replay)
+	}
+	if !assistant.ReasoningOrigin.Equal(origin) {
+		t.Fatalf("projected origin = %#v, want %#v", assistant.ReasoningOrigin, origin)
+	}
+	if assistant.ReasoningSignature != "encrypted-reasoning" || assistant.OpenAIResponsesReasoningID != "rsn_item_1" {
+		t.Fatalf("projected opaque reasoning = %#v", assistant)
+	}
+
+	kept := modeladapter.SanitizeProviderMessagesForTarget([]modeladapter.Message{
+		assistant,
+		{Role: "user", Content: "continue"},
+	}, origin)
+	if len(kept) != 2 {
+		t.Fatalf("same-target sanitize count = %d, want 2: %#v", len(kept), kept)
+	}
+	if !kept[0].ReasoningOrigin.Equal(origin) {
+		t.Fatalf("same-target sanitize origin = %#v, want %#v", kept[0].ReasoningOrigin, origin)
+	}
+	if kept[0].ReasoningSignature != "encrypted-reasoning" || kept[0].ReasoningSignatureSource != modeladapter.ReasoningSignatureSourceOpenAIResponses {
+		t.Fatalf("same-target sanitize dropped signature: %#v", kept[0])
+	}
+	if kept[0].OpenAIResponsesReasoningID != "rsn_item_1" {
+		t.Fatalf("same-target sanitize dropped reasoning id: %#v", kept[0])
+	}
 }

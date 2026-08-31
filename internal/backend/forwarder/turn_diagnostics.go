@@ -67,6 +67,8 @@ func streamDiagnosticFieldKeys() []string {
 		"last_sse_sequence",
 		"last_response_status",
 		"stream_recovery_attempts",
+		"provider_error_summary",
+		"provider_error_summary_type",
 	}
 }
 

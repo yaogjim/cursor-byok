@@ -186,6 +186,10 @@ managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_respons
 
 移植顺序已经收口：P0 先修复 Rule 文件权限、symlink/路径、原子写和容量上限；P1 独立实现账号隔离的 managed Codex 缓存亲和，同时继续 fail-closed 删除 `previous_response_id`；P1 再设计显式 opt-in 的 Rule 离线 journal/镜像；P1/P2 只增加官方、静态 BYOK、Codex 与 Grok 的展示分组。官方/BYOK 切换、双向子代理、普通 OpenAI/Anthropic cache、Provider 空闲超时、Codex/Grok 主链路、额度与轮换无需重写；Deno 插件框架、Rust provider/router 和完整 conversation runtime 不整体移植。上游性能、内存和缓存命中幅度缺少可复现 benchmark，继续标为未验证。详细证据和最小移植单元见 `docs/prd_cursor_byok_当前功能与上游差异.md` §16。
 
+### 0.23 Provider 历史净化（已完成并验证）
+
+2026-08-31 已完成目标感知来源身份的 Provider 历史净化，`delivery_status=verified`，未提交、未推送。发送前按目标来源身份判断 opaque 兼容性；跨身份剥离 opaque reasoning 与 Responses item 元数据，保留文本和工具链。HTTP 400 脱敏摘要进入诊断；最终 JSON 编码请求体预检 32MiB 上限，`request_build` 不重试、不 fallback。复审发现并修复 provider done origin 清零导致落盘丢失、tool flush 顺序和 safety suppression。验证：`/opt/homebrew/bin/go test -count=1 ./internal/backend/agent/model ./internal/backend/agent/prompt ./internal/backend/forwarder`、同范围 `go vet`、`git diff --check` 通过。任务证据见 `task/todo.md` 的 `provider-history-sanitize-20260831`。
+
 
 已完成（2026-08-23，未提交、未发布）。治理实现位于隔离分支/worktree `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`，基线仍为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；当前主工作树的无关 WIP 与两个 recorder/exporter 专用 stash 均保持隔离。
 
@@ -367,6 +371,8 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 
 ### 2. 按时间索引
+
+- **2026-08-31**：完成 Provider 历史净化。目标感知来源身份，跨身份剥离 opaque reasoning/Responses item 元数据但保留文本和工具链；400 脱敏摘要进入诊断；32MiB 最终编码请求体预检且 `request_build` 不重试/fallback。复审修复 provider done origin 清零落盘丢失、tool flush 顺序和 safety suppression。定向 `go test`/`go vet` 与 `git diff --check` 通过。详见 `task/todo.md` 的 `provider-history-sanitize-20260831`。
 
 - **2026-08-30**：完成 Rule P0 与 managed Codex affinity 基础检查点。Rule 私有权限、symlink/非普通文件拒绝、原子有界持久化、docs index 来源隔离与 reconciliation 已通过定向/race/vet 和 Windows 交叉构建；Windows 实机 ACL 仍待发布门禁。Codex 已接入稳定账号隔离、独立私密密钥、四字段 HMAC 域分离、精确 ChatGPT Responses 注入及 `control | prompt_key | full` profile，继续删除 `previous_response_id`。fake upstream、缓存观测和 A/B 尚未完成，不宣称性能收益；Rule journal 与手动同步尚未开始。
 

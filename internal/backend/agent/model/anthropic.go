@@ -307,7 +307,12 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
 	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
@@ -448,6 +453,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 			ThinkingDurationMS:      duration,
 			ThinkingSignature:       thinkingSignature,
 			ThinkingSignatureSource: thinkingSignatureSource,
+			ReasoningOrigin:         reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -652,10 +658,11 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 				}
 				streamIdle.MarkEffectiveContent()
 				if err := sink(ModelEvent{
-					Kind:       ModelEventKindToolLikeCompleted,
-					OccurredAt: time.Now().UTC(),
-					Provider:   "anthropic",
-					Model:      currentModel,
+					Kind:            ModelEventKindToolLikeCompleted,
+					OccurredAt:      time.Now().UTC(),
+					Provider:        "anthropic",
+					Model:           currentModel,
+					ReasoningOrigin: reasoningOriginFromRequest(req),
 					ToolInvocation: &runtimecore.ToolInvocation{
 						CallID:   accumulator.CallID,
 						ToolName: accumulator.Name,

@@ -443,6 +443,11 @@ func TestIsFallbackEligibleError_RawBytesObservedBlocks(t *testing.T) {
 			&RequestBuildError{Err: errTest},
 			false,
 		},
+		{
+			"request_build_size_limit",
+			&RequestBuildError{Actual: 10, Limit: 5},
+			false,
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -537,6 +542,9 @@ func TestFallbackEnabled_RequestBuildErrorBlocksFallback(t *testing.T) {
 	}
 	if adapter.calls != 1 {
 		t.Fatalf("expected 1 call (no fallback on build error), got %d", adapter.calls)
+	}
+	if got := fallbackSuppressionReason(err); got != "request_build" {
+		t.Fatalf("suppression = %q, want request_build", got)
 	}
 }
 

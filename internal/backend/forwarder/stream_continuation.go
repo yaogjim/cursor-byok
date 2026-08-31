@@ -382,6 +382,7 @@ func (service *Service) trySpawnStreamContinuation(
 	accumulatedReasoningItemID string,
 	accumulatedReasoningStatus string,
 	accumulatedReasoningSummary json.RawMessage,
+	accumulatedReasoningOrigin modeladapter.ReasoningOrigin,
 	usage turnUsageSnapshot,
 	hadToolInvocation bool,
 ) (bool, error) {
@@ -453,6 +454,7 @@ func (service *Service) trySpawnStreamContinuation(
 		stream, conversationID, turnSeq, requestID, modelCallID, providerPass,
 		accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource,
 		accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation,
+		accumulatedReasoningOrigin,
 	); err != nil {
 		return false, err
 	}

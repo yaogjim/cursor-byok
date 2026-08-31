@@ -567,7 +567,12 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
 	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
@@ -684,6 +689,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			Provider:           "openai",
 			Model:              currentModel,
 			ThinkingDurationMS: duration,
+			ReasoningOrigin:    reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -958,10 +964,11 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 					continue
 				}
 				if err := sink(ModelEvent{
-					Kind:       ModelEventKindToolLikeCompleted,
-					OccurredAt: time.Now().UTC(),
-					Provider:   "openai",
-					Model:      currentModel,
+					Kind:            ModelEventKindToolLikeCompleted,
+					OccurredAt:      time.Now().UTC(),
+					Provider:        "openai",
+					Model:           currentModel,
+					ReasoningOrigin: reasoningOriginFromRequest(req),
 					ToolInvocation: &runtimecore.ToolInvocation{
 						CallID:   strings.TrimSpace(accumulator.CallID),
 						ToolName: strings.TrimSpace(accumulator.Name),
@@ -992,10 +999,11 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			continue
 		}
 		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
+			Kind:            ModelEventKindToolLikeCompleted,
+			OccurredAt:      time.Now().UTC(),
+			Provider:        "openai",
+			Model:           currentModel,
+			ReasoningOrigin: reasoningOriginFromRequest(req),
 			ToolInvocation: &runtimecore.ToolInvocation{
 				CallID:   strings.TrimSpace(accumulator.CallID),
 				ToolName: strings.TrimSpace(accumulator.Name),
@@ -1091,7 +1099,12 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
 	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
@@ -1250,6 +1263,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			Provider:           "openai",
 			Model:              currentModel,
 			ThinkingDurationMS: duration,
+			ReasoningOrigin:    reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -1396,10 +1410,11 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		emittedToolInvocation = true
 		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
+			Kind:            ModelEventKindToolLikeCompleted,
+			OccurredAt:      time.Now().UTC(),
+			Provider:        "openai",
+			Model:           currentModel,
+			ReasoningOrigin: reasoningOriginFromRequest(req),
 			ToolInvocation: &runtimecore.ToolInvocation{
 				CallID:         strings.TrimSpace(accumulator.CallID),
 				ToolName:       strings.TrimSpace(accumulator.Name),
@@ -1484,10 +1499,11 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		emittedToolInvocation = true
 		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
+			Kind:            ModelEventKindToolLikeCompleted,
+			OccurredAt:      time.Now().UTC(),
+			Provider:        "openai",
+			Model:           currentModel,
+			ReasoningOrigin: reasoningOriginFromRequest(req),
 			ToolInvocation: &runtimecore.ToolInvocation{
 				CallID:         strings.TrimSpace(accumulator.CallID),
 				ToolName:       "GenerateImage",
@@ -1524,6 +1540,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			ThinkingDurationMS:      duration,
 			ThinkingSignature:       trimmedSignature,
 			ThinkingSignatureSource: ReasoningSignatureSourceOpenAIResponses,
+			ReasoningOrigin:         reasoningOriginFromRequest(req),
 			ProviderItemID:          strings.TrimSpace(providerItemID),
 			ProviderStatus:          strings.TrimSpace(providerStatus),
 			ProviderSummary:         cloneRawJSON(providerSummary),

@@ -3,11 +3,16 @@ package modeladapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
+	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
 	"cursor/internal/subscriptionauth"
 )
@@ -102,6 +107,7 @@ func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, 
 }
 
 func (router *Router) dispatchResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	req.Messages = sanitizeProviderMessagesForTarget(req.Messages, reasoningOriginFromRequest(req))
 	switch strings.TrimSpace(req.Provider) {
 	case "anthropic":
 		return router.anthropic.Stream(ctx, req, sink)
@@ -335,6 +341,15 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 // assistant prefill so providers that require a user/tool terminal message do
 // not reject the request.
 func sanitizeProviderMessages(input []Message) []Message {
+	return sanitizeProviderMessagesForTarget(input, ReasoningOrigin{})
+}
+
+// SanitizeProviderMessagesForTarget 按目标来源身份剥离不兼容的 opaque 字段组。
+func SanitizeProviderMessagesForTarget(input []Message, target ReasoningOrigin) []Message {
+	return sanitizeProviderMessagesForTarget(input, target)
+}
+
+func sanitizeProviderMessagesForTarget(input []Message, target ReasoningOrigin) []Message {
 	if len(input) == 0 {
 		return nil
 	}
@@ -347,6 +362,9 @@ func sanitizeProviderMessages(input []Message) []Message {
 		filtered = append(filtered, message)
 	}
 	filtered = mergeAdjacentAssistantToolCallMessages(filtered)
+	if !target.IsZero() {
+		filtered = stripIncompatibleProviderOpaqueMetadata(filtered, target)
+	}
 	filtered = trimDanglingAssistantToolCalls(filtered)
 	for len(filtered) > 0 && isAssistantPrefillMessage(filtered[len(filtered)-1]) {
 		filtered = filtered[:len(filtered)-1]
@@ -355,6 +373,191 @@ func sanitizeProviderMessages(input []Message) []Message {
 		return nil
 	}
 	return filtered
+}
+
+func reasoningOriginFromRequest(req StreamRequest) ReasoningOrigin {
+	modelID := strings.TrimSpace(req.ProviderModelID)
+	if modelID == "" {
+		modelID = strings.TrimSpace(req.ModelID)
+	}
+	return ReasoningOrigin{
+		Provider:         strings.ToLower(strings.TrimSpace(req.Provider)),
+		Endpoint:         providerOpaqueEndpointIdentity(req.Provider, req.BaseURL, req.OpenAIEndpoint),
+		CredentialSource: strings.ToLower(strings.TrimSpace(string(subscriptionauth.NormalizeCredentialSource(req.CredentialSource)))),
+		AccountID:        reasoningOriginAccountID(req),
+		ModelID:          modelID,
+	}
+}
+
+func reasoningOriginAccountID(req StreamRequest) string {
+	if req.StableAccountID {
+		return strings.TrimSpace(req.CredentialID)
+	}
+	if subscriptionauth.NormalizeCredentialSource(req.CredentialSource).Managed() {
+		return ""
+	}
+	return opaqueAPIKeyFingerprint(req.APIKey)
+}
+
+func opaqueAPIKeyFingerprint(apiKey string) string {
+	trimmed := strings.TrimSpace(apiKey)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:])
+}
+
+func providerOpaqueEndpointIdentity(provider string, baseURL string, openAIEndpoint string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	host := providerOpaqueHostIdentity(baseURL)
+	switch provider {
+	case "anthropic":
+		if host == "" {
+			return "anthropic"
+		}
+		return "anthropic:" + host
+	case "openai":
+		if isChatGPTCodexHost(baseURL) {
+			return "chatgpt_codex"
+		}
+		shape := modelchannel.OpenAIEndpointShape(ResolveOpenAIEndpoint(baseURL, openAIEndpoint))
+		kind := "openai_chat_completions"
+		if shape == "responses" {
+			kind = "openai_responses"
+		}
+		if host == "" {
+			return kind
+		}
+		return kind + ":" + host
+	default:
+		if host == "" {
+			return provider
+		}
+		return provider + ":" + host
+	}
+}
+
+func providerOpaqueHostIdentity(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return ""
+	}
+	if port := parsed.Port(); port != "" && !isDefaultURLPort(parsed.Scheme, port) {
+		host = net.JoinHostPort(host, port)
+	}
+	path := strings.TrimRight(strings.TrimSpace(parsed.Path), "/")
+	if path == "" {
+		return host
+	}
+	return host + path
+}
+
+func isDefaultURLPort(scheme, port string) bool {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "http":
+		return port == "80"
+	case "https":
+		return port == "443"
+	default:
+		return false
+	}
+}
+
+func stripIncompatibleProviderOpaqueMetadata(input []Message, target ReasoningOrigin) []Message {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make([]Message, 0, len(input))
+	for _, message := range input {
+		cloned := cloneProviderMessage(message)
+		applyTargetAwareProviderOpaqueSanitization(&cloned, target)
+		output = append(output, cloned)
+	}
+	return output
+}
+
+func applyTargetAwareProviderOpaqueSanitization(message *Message, target ReasoningOrigin) {
+	if message == nil || !messageHasProviderOpaqueMetadata(*message) {
+		return
+	}
+	if !message.ReasoningOrigin.IsZero() {
+		if message.ReasoningOrigin.Equal(target) {
+			return
+		}
+		stripProviderOpaqueMetadata(message)
+		return
+	}
+	if canKeepLegacyAnthropicOpaque(*message, target) {
+		stripOpenAIResponsesOpaqueMetadata(message)
+		return
+	}
+	stripProviderOpaqueMetadata(message)
+}
+
+func messageHasProviderOpaqueMetadata(message Message) bool {
+	if strings.TrimSpace(message.ReasoningSignature) != "" ||
+		strings.TrimSpace(message.ReasoningSignatureSource) != "" ||
+		strings.TrimSpace(message.OpenAIResponsesReasoningID) != "" ||
+		strings.TrimSpace(message.OpenAIResponsesReasoningStatus) != "" ||
+		len(message.OpenAIResponsesReasoningSummary) > 0 {
+		return true
+	}
+	for _, toolCall := range message.ToolCalls {
+		if strings.TrimSpace(toolCall.OpenAIResponsesID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesCallID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesStatus) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func canKeepLegacyAnthropicOpaque(message Message, target ReasoningOrigin) bool {
+	if strings.ToLower(strings.TrimSpace(target.Provider)) != "anthropic" {
+		return false
+	}
+	source := strings.TrimSpace(message.ReasoningSignatureSource)
+	if source == ReasoningSignatureSourceOpenAIResponses {
+		return false
+	}
+	if source != "" && source != ReasoningSignatureSourceAnthropic {
+		return false
+	}
+	return true
+}
+
+func stripProviderOpaqueMetadata(message *Message) {
+	if message == nil {
+		return
+	}
+	message.ReasoningSignature = ""
+	message.ReasoningSignatureSource = ""
+	message.ReasoningOrigin = ReasoningOrigin{}
+	stripOpenAIResponsesOpaqueMetadata(message)
+}
+
+func stripOpenAIResponsesOpaqueMetadata(message *Message) {
+	if message == nil {
+		return
+	}
+	message.OpenAIResponsesReasoningID = ""
+	message.OpenAIResponsesReasoningStatus = ""
+	message.OpenAIResponsesReasoningSummary = nil
+	if len(message.ToolCalls) == 0 {
+		return
+	}
+	toolCalls := append([]ToolCallDescriptor(nil), message.ToolCalls...)
+	for index := range toolCalls {
+		toolCalls[index].OpenAIResponsesID = ""
+		toolCalls[index].OpenAIResponsesCallID = ""
+		toolCalls[index].OpenAIResponsesStatus = ""
+	}
+	message.ToolCalls = toolCalls
 }
 
 func isAssistantPlaceholderMessage(message Message) bool {
@@ -510,6 +713,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	last.ReasoningSignature = mergedSignature
 	if mergedSignature == "" {
 		last.ReasoningSignatureSource = ""
+		last.ReasoningOrigin = ReasoningOrigin{}
 		last.OpenAIResponsesReasoningID = ""
 		last.OpenAIResponsesReasoningStatus = ""
 		last.OpenAIResponsesReasoningSummary = nil
@@ -517,6 +721,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	}
 	if leftSignature == "" && rightSignature != "" {
 		last.ReasoningSignatureSource = strings.TrimSpace(current.ReasoningSignatureSource)
+		last.ReasoningOrigin = current.ReasoningOrigin
 		last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		last.OpenAIResponsesReasoningStatus = current.OpenAIResponsesReasoningStatus
 		last.OpenAIResponsesReasoningSummary = append([]byte(nil), current.OpenAIResponsesReasoningSummary...)
@@ -524,6 +729,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	}
 	if leftSignature == rightSignature {
 		last.ReasoningSignatureSource = mergeProviderReasoningSignatureSource(last.ReasoningSignatureSource, current.ReasoningSignatureSource)
+		last.ReasoningOrigin = mergeProviderReasoningOrigin(last.ReasoningOrigin, current.ReasoningOrigin)
 		if strings.TrimSpace(last.OpenAIResponsesReasoningID) == "" {
 			last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		}
@@ -534,6 +740,16 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 			last.OpenAIResponsesReasoningSummary = append([]byte(nil), current.OpenAIResponsesReasoningSummary...)
 		}
 	}
+}
+
+func mergeProviderReasoningOrigin(left ReasoningOrigin, right ReasoningOrigin) ReasoningOrigin {
+	if left.IsZero() {
+		return right
+	}
+	if right.IsZero() || left.Equal(right) {
+		return left
+	}
+	return ReasoningOrigin{}
 }
 
 // providerToolResponseWindowEnd 返回 assistant tool-call 消息的响应收集窗口右边界（不含）。

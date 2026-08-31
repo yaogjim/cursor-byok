@@ -185,6 +185,7 @@ type ActiveStream struct {
 	ProviderAccumulatedReasoningItemID          string
 	ProviderAccumulatedReasoningStatus          string
 	ProviderAccumulatedReasoningSummary         json.RawMessage
+	ProviderAccumulatedReasoningOrigin          modeladapter.ReasoningOrigin
 	ProviderSyntheticThinkingStartedAt          time.Time
 	ProviderSyntheticThinkingPublished          bool
 	ProviderFinishReason                        string
@@ -373,6 +374,8 @@ type ProviderStreamStats struct {
 	ModelCallFinalStatus     string
 	FailureStage             string
 	ErrorCategory            string
+	ProviderErrorSummary     string
+	ProviderErrorSummaryType string
 	ContinuedFromModelCallID string
 	ContinuationIndex        int
 }
@@ -456,45 +459,48 @@ func (err providerTerminalError) Unwrap() error {
 }
 
 type toolResultEntryPayload struct {
-	ToolCallID               string          `json:"tool_call_id"`
-	ToolName                 string          `json:"tool_name"`
-	Arguments                string          `json:"arguments,omitempty"`
-	ResultText               string          `json:"result_text,omitempty"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
-	ProviderItemID           string          `json:"provider_item_id,omitempty"`
-	ProviderCallID           string          `json:"provider_call_id,omitempty"`
-	ProviderStatus           string          `json:"provider_status,omitempty"`
-	ToolCall                 json.RawMessage `json:"tool_call,omitempty"`
+	ToolCallID               string                       `json:"tool_call_id"`
+	ToolName                 string                       `json:"tool_name"`
+	Arguments                string                       `json:"arguments,omitempty"`
+	ResultText               string                       `json:"result_text,omitempty"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
+	ProviderItemID           string                       `json:"provider_item_id,omitempty"`
+	ProviderCallID           string                       `json:"provider_call_id,omitempty"`
+	ProviderStatus           string                       `json:"provider_status,omitempty"`
+	ToolCall                 json.RawMessage              `json:"tool_call,omitempty"`
 }
 
 type toolCallEntryPayload struct {
-	ToolCallID               string          `json:"tool_call_id"`
-	ToolName                 string          `json:"tool_name"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
-	ProviderItemID           string          `json:"provider_item_id,omitempty"`
-	ProviderCallID           string          `json:"provider_call_id,omitempty"`
-	ProviderStatus           string          `json:"provider_status,omitempty"`
-	ToolCall                 json.RawMessage `json:"tool_call"`
+	ToolCallID               string                       `json:"tool_call_id"`
+	ToolName                 string                       `json:"tool_name"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
+	ProviderItemID           string                       `json:"provider_item_id,omitempty"`
+	ProviderCallID           string                       `json:"provider_call_id,omitempty"`
+	ProviderStatus           string                       `json:"provider_status,omitempty"`
+	ToolCall                 json.RawMessage              `json:"tool_call"`
 }
 
 type assistantTextPayload struct {
-	Text                     string          `json:"text"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
+	Text                     string                       `json:"text"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
 }
 
 type metadataPayload struct {

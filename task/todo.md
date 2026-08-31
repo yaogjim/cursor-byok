@@ -43,6 +43,12 @@
 
 ### ✅ 最近完成
 
+**provider-history-sanitize-20260831** (completed, verified)
+- 发送边界按目标来源身份判断 opaque 兼容性；跨身份剥离 opaque reasoning / Responses item 元数据，保留文本与工具链。
+- HTTP 400 脱敏摘要进入诊断；最终编码请求体预检 32MiB，`request_build` 不重试、不 fallback。
+- 复审修复 provider done origin 清零导致落盘丢失、tool flush 顺序和 safety suppression。
+- 验证：`/opt/homebrew/bin/go test -count=1 ./internal/backend/agent/model ./internal/backend/agent/prompt ./internal/backend/forwarder`、同范围 `go vet`、`git diff --check` 通过；未 commit、未 push。
+
 **upstream-v0.1.5-review-20260830** (completed, verified)
 - 已核对正式版 `v0.1.5@b807608`、最新 `upstream/main@9120b90` 与此前基线 `76003a9`；正式版后的主线只删除 `server_backup/**`，没有新增核心运行时能力。
 - 本地 `main@305b108` 与上游已分叉；隔离 worktree 的显式 merge 出现内容、修改/删除和目录迁移冲突，已按 Runbook `git merge --abort`。`main`、`gateway@534ffc0` 与工作树均未改变，无提交、无 push。

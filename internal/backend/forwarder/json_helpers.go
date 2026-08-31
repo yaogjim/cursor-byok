@@ -39,6 +39,9 @@ func marshalCarryForwardMessage(message modeladapter.Message) ([]byte, error) {
 	if strings.TrimSpace(message.ReasoningSignatureSource) != "" {
 		payload["reasoning_signature_source"] = strings.TrimSpace(message.ReasoningSignatureSource)
 	}
+	if !message.ReasoningOrigin.IsZero() {
+		payload["reasoning_origin"] = message.ReasoningOrigin
+	}
 	if len(message.ToolCalls) > 0 {
 		payload["tool_calls"] = message.ToolCalls
 	}

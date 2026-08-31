@@ -208,7 +208,87 @@ func TestClassifyHTTPStatusAndProviderError(t *testing.T) {
 	if got := ClassifyProviderError(fmt.Errorf("wrap: %w", &CapacityUnavailableError{})); got != ProviderErrorCapacityUnavailable {
 		t.Fatalf("wrapped capacity category = %q", got)
 	}
+	if got := ClassifyProviderError(&RequestBuildError{Err: errors.New("json marshal failed")}); got != ProviderErrorRequestBuild {
+		t.Fatalf("request build category = %q", got)
+	}
+	if got := ClassifyProviderError(&RequestBuildError{Actual: 9, Limit: 8}); got != ProviderErrorRequestBuild {
+		t.Fatalf("encoded body limit category = %q", got)
+	}
 	if ProviderErrorStreamDecode != "stream_decode" {
 		t.Fatalf("reserved stream_decode category changed: %q", ProviderErrorStreamDecode)
+	}
+}
+
+func TestCheckEncodedRequestBodyLimitRejectsOversizeWithoutBody(t *testing.T) {
+	if err := checkEncodedRequestBodyBytes(8, 8); err != nil {
+		t.Fatalf("at limit: %v", err)
+	}
+	if err := checkEncodedRequestBodyLimit(make([]byte, maxEncodedRequestBodyBytes)); err != nil {
+		t.Fatalf("package limit accepted: %v", err)
+	}
+	err := checkEncodedRequestBodyBytes(9, 8)
+	var buildErr *RequestBuildError
+	if !errors.As(err, &buildErr) || buildErr.Actual != 9 || buildErr.Limit != 8 {
+		t.Fatalf("oversize err = %#v", err)
+	}
+	got := err.Error()
+	if got != "request build error: encoded body bytes=9 limit=8" {
+		t.Fatalf("Error() = %q", got)
+	}
+	if strings.Contains(got, "{") || strings.Contains(got, "pad") {
+		t.Fatalf("Error() leaked body: %q", got)
+	}
+}
+
+func assertRequestBuildLimitError(t *testing.T, err error, hits int) {
+	t.Helper()
+	if hits != 0 {
+		t.Fatalf("http attempts = %d, want 0", hits)
+	}
+	var buildErr *RequestBuildError
+	if !errors.As(err, &buildErr) || buildErr.Limit != maxEncodedRequestBodyBytes || buildErr.Actual <= buildErr.Limit {
+		t.Fatalf("err = %v, want RequestBuildError over encoded body limit", err)
+	}
+	if ClassifyProviderError(err) != ProviderErrorRequestBuild {
+		t.Fatalf("category = %q, want %q", ClassifyProviderError(err), ProviderErrorRequestBuild)
+	}
+	if isFallbackEligibleError(err) {
+		t.Fatal("encoded body limit must not be fallback eligible")
+	}
+	if IsRetryableZeroEventStreamError(err) {
+		t.Fatal("encoded body limit must not recover or retry")
+	}
+	got := err.Error()
+	want := fmt.Sprintf("request build error: encoded body bytes=%d limit=%d", buildErr.Actual, buildErr.Limit)
+	if got != want {
+		t.Fatalf("Error() = %q, want %q", got, want)
+	}
+	safety, ok := fallbackSafetyFromError(err)
+	if !ok {
+		return
+	}
+	if !safety.RequestBuildFailed {
+		t.Fatal("RequestBuildFailed must be marked for pre-HTTP build failures")
+	}
+	if safety.HTTPAttempts != 0 {
+		t.Fatalf("safety HTTPAttempts = %d, want 0", safety.HTTPAttempts)
+	}
+	if got := fallbackSuppressionReason(err); got != "request_build" {
+		t.Fatalf("suppression = %q, want request_build", got)
+	}
+}
+
+func TestWrapRequestBuildFailureMarksRequestBuildNotNoHTTP(t *testing.T) {
+	safety := &FallbackSafetyInfo{}
+	err := wrapRequestBuildFailure(StreamRequest{FallbackSafety: safety}, &RequestBuildError{Actual: 9, Limit: 8})
+	if !safety.Snapshot().RequestBuildFailed {
+		t.Fatal("MarkRequestBuildFailed was not called")
+	}
+	if got := fallbackSuppressionReason(err); got != "request_build" {
+		t.Fatalf("marked suppression = %q, want request_build", got)
+	}
+	unmarked := WrapFallbackSafetyError(&RequestBuildError{Actual: 9, Limit: 8}, &FallbackSafetyInfo{})
+	if got := fallbackSuppressionReason(unmarked); got != "no_http_attempt" {
+		t.Fatalf("unmarked suppression = %q, want no_http_attempt", got)
 	}
 }

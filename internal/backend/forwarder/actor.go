@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
+	"cursor/internal/audit"
 	runtimecore "cursor/internal/backend/agent/core"
 	modeladapter "cursor/internal/backend/agent/model"
 )
@@ -571,6 +572,14 @@ func applyProviderTerminalErrorStats(stats *ProviderStreamStats, err error) {
 	if httpAttempt := providerHTTPAttemptFromError(err); httpAttempt > 0 {
 		stats.HTTPAttempt = httpAttempt
 	}
+	if summary, summaryType := providerHTTPErrorSummary(err); summary != "" || summaryType != "" {
+		if summary != "" {
+			stats.ProviderErrorSummary = summary
+		}
+		if summaryType != "" {
+			stats.ProviderErrorSummaryType = summaryType
+		}
+	}
 	retryable, reason, suppression := providerRetryObservation(err, *stats)
 	stats.Retryable = retryable
 	stats.RetryReason = reason
@@ -662,6 +671,18 @@ func providerHTTPAttemptFromError(err error) int {
 	return 0
 }
 
+func providerHTTPErrorSummary(err error) (string, string) {
+	var httpErr *modeladapter.HTTPStatusError
+	if !errors.As(err, &httpErr) || httpErr == nil {
+		return "", ""
+	}
+	summary := strings.TrimSpace(httpErr.Body)
+	if summary != "" {
+		summary = audit.SanitizeMetadataText(summary)
+	}
+	return summary, strings.TrimSpace(httpErr.BodySummaryType)
+}
+
 func providerRetryObservation(err error, stats ProviderStreamStats) (retryable string, reason string, suppression string) {
 	if stats.DownstreamPublished || stats.VisibleTextBytes > 0 || stats.ReasoningBytes > 0 || stats.PartialToolCount > 0 || stats.CompletedToolCount > 0 || stats.DispatchedToolCount > 0 || stats.ModelEventCount > 0 {
 		return "false", "not_recorded", "output_or_tool_progress"
@@ -742,6 +763,8 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 		"protocol_final_status": firstNonEmpty(stats.ProtocolFinalStatus, "unknown"), "model_call_final_status": firstNonEmpty(stats.ModelCallFinalStatus, "not_recorded"),
 		"failure_stage":  firstNonEmpty(stats.FailureStage, "not_recorded"),
 		"error_category": firstNonEmpty(stats.ErrorCategory, "not_recorded"), "error_summary": safeProviderErrorSummary(stats),
+		"provider_error_summary":      firstNonEmpty(stats.ProviderErrorSummary, "not_recorded"),
+		"provider_error_summary_type": firstNonEmpty(stats.ProviderErrorSummaryType, "not_recorded"),
 	}
 	if continuedFrom := strings.TrimSpace(stats.ContinuedFromModelCallID); continuedFrom != "" {
 		fields["continued_from_model_call_id"] = continuedFrom
@@ -951,6 +974,9 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 			stream.ProviderAccumulatedReasoningItemID = strings.TrimSpace(event.ProviderItemID)
 			stream.ProviderAccumulatedReasoningStatus = strings.TrimSpace(event.ProviderStatus)
 			stream.ProviderAccumulatedReasoningSummary = append([]byte(nil), event.ProviderSummary...)
+			if !event.ReasoningOrigin.IsZero() {
+				stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
+			}
 			shouldEmitSyntheticThinking = strings.TrimSpace(stream.ProviderAccumulatedReasoning) == "" &&
 				strings.TrimSpace(event.ThinkingSignatureSource) == modeladapter.ReasoningSignatureSourceOpenAIResponses
 			if shouldEmitSyntheticThinking {
@@ -970,6 +996,11 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 					suppressThinkingCompleted = true
 				}
 			}
+			stream.UpdatedAt = time.Now().UTC()
+			stream.mu.Unlock()
+		} else if !event.ReasoningOrigin.IsZero() {
+			stream.mu.Lock()
+			stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
 			stream.UpdatedAt = time.Now().UTC()
 			stream.mu.Unlock()
 		}
@@ -1033,8 +1064,14 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		reasoningItemIDForTool := accumulatedReasoningItemID
 		reasoningStatusForTool := accumulatedReasoningStatus
 		reasoningSummaryForTool := append([]byte(nil), accumulatedReasoningSummary...)
+		stream.mu.Lock()
+		if !event.ReasoningOrigin.IsZero() {
+			stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
+		}
+		flushOrigin := stream.ProviderAccumulatedReasoningOrigin
+		stream.mu.Unlock()
 		if strings.TrimSpace(accumulatedText) != "" {
-			if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, false); err != nil {
+			if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, false, flushOrigin); err != nil {
 				return err
 			}
 		}
@@ -1171,6 +1208,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	accumulatedReasoningItemID := stream.ProviderAccumulatedReasoningItemID
 	accumulatedReasoningStatus := stream.ProviderAccumulatedReasoningStatus
 	accumulatedReasoningSummary := append([]byte(nil), stream.ProviderAccumulatedReasoningSummary...)
+	accumulatedReasoningOrigin := stream.ProviderAccumulatedReasoningOrigin
 	finishReason := stream.ProviderFinishReason
 	usage := stream.ProviderUsage
 	hadToolInvocation := stream.ToolInvocationCount > 0
@@ -1229,6 +1267,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	stream.ProviderAccumulatedReasoningItemID = ""
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
+	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ProviderTerminalToolInvocation = false
@@ -1248,7 +1287,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		spawned, spawnErr := service.trySpawnStreamContinuation(
 			stream, payload, conversationID, turnSeq, requestID, modelCallID, providerPass,
 			accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource,
-			accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, hadToolInvocation,
+			accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, accumulatedReasoningOrigin, usage, hadToolInvocation,
 		)
 		if spawnErr != nil {
 			return service.failStreamIfNonTerminal(stream, "unknown", spawnErr)
@@ -1271,9 +1310,9 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		var providerErr providerTerminalError
 		if errors.As(payload.Err, &providerErr) {
 			service.setTurnPhase(stream, TurnPhaseFailed)
-			terminalErr = service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation)
+			terminalErr = service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation, accumulatedReasoningOrigin)
 		} else {
-			if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+			if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
 				terminalErr = service.failStream(stream, "unknown", fmt.Errorf("flush failed provider output: %w", err))
 			} else {
 				service.setTurnPhase(stream, TurnPhaseFailed)
@@ -1290,7 +1329,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		})
 		flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)
 		flushReasoning := continuationFlushText(continuationIndex, continuationMismatch, accumulatedReasoning, continuationRemainderReasoning)
-		if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+		if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
 			return service.failStreamIfNonTerminal(stream, "unknown", err)
 		}
 		if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "partial", usage, reason, false); err != nil {
@@ -1302,7 +1341,7 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	}
 	flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)
 	flushReasoning := continuationFlushText(continuationIndex, continuationMismatch, accumulatedReasoning, continuationRemainderReasoning)
-	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
 		return service.failStreamIfNonTerminal(stream, "unknown", err)
 	}
 	if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "completed", usage, "", false); err != nil {

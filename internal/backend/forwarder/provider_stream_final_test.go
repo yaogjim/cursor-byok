@@ -271,6 +271,145 @@ func TestProviderTerminalTyped524KeepsStatusAndRetryDecision(t *testing.T) {
 	}
 }
 
+func TestProviderTerminalProjectsSanitizedHTTPStatusBodySummary(t *testing.T) {
+	service, stream, capture := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err: providerTerminalError{cause: &modeladapter.HTTPStatusError{
+			Provider:        "openai adapter",
+			StatusCode:      http.StatusUnauthorized,
+			Attempt:         1,
+			Body:            "Invalid API key provided: sk-secret",
+			BodySummaryType: "json_error",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if stats.HTTPStatus != "401" || stats.ErrorCategory != modeladapter.ProviderErrorStatus4xx || stats.Retryable != "false" || stats.RetrySuppressionReason != "http_status" {
+		t.Fatalf("typed http terminal stats = %#v", stats)
+	}
+	if stats.ProviderErrorSummaryType != "json_error" {
+		t.Fatalf("provider error summary type = %q, want json_error", stats.ProviderErrorSummaryType)
+	}
+	if strings.Contains(stats.ProviderErrorSummary, "sk-secret") {
+		t.Fatalf("provider error summary leaked secret: %q", stats.ProviderErrorSummary)
+	}
+	if !strings.Contains(stats.ProviderErrorSummary, "Invalid API key provided:") {
+		t.Fatalf("provider error summary dropped body: %q", stats.ProviderErrorSummary)
+	}
+
+	providerFinal := capturedEventByName(t, capture, "provider_stream_finished")
+	payload, ok := providerFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("provider final payload type = %T", providerFinal.Payload.Data)
+	}
+	if payload["http_status"] != "401" || payload["error_category"] != modeladapter.ProviderErrorStatus4xx || payload["retryable"] != "false" {
+		t.Fatalf("classification or retry changed: %#v", payload)
+	}
+	if payload["error_summary"] != "status_4xx status=401" {
+		t.Fatalf("existing error_summary changed: %#v", payload)
+	}
+	if payload["provider_error_summary_type"] != "json_error" {
+		t.Fatalf("provider_error_summary_type = %#v", payload["provider_error_summary_type"])
+	}
+	summary, _ := payload["provider_error_summary"].(string)
+	if strings.Contains(summary, "sk-secret") {
+		t.Fatalf("provider final leaked secret: %#v", payload)
+	}
+	if !strings.Contains(summary, "Invalid API key provided:") {
+		t.Fatalf("provider_error_summary = %#v", payload["provider_error_summary"])
+	}
+	if _, exists := payload["body"]; exists {
+		t.Fatalf("raw body field leaked: %#v", payload)
+	}
+	if providerFinal.Event.Fields["provider_error_summary_type"] != "json_error" {
+		t.Fatalf("whitelist dropped summary type: %#v", providerFinal.Event.Fields)
+	}
+	if fieldSummary, _ := providerFinal.Event.Fields["provider_error_summary"].(string); strings.Contains(fieldSummary, "sk-secret") || !strings.Contains(fieldSummary, "Invalid API key provided:") {
+		t.Fatalf("whitelisted summary = %#v", providerFinal.Event.Fields["provider_error_summary"])
+	}
+
+	modelFinal := capturedEventByName(t, capture, "model_call_final")
+	modelPayload, ok := modelFinal.Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("model final payload type = %T", modelFinal.Payload.Data)
+	}
+	if modelPayload["provider_error_summary_type"] != "json_error" {
+		t.Fatalf("model_call_final summary type = %#v", modelPayload["provider_error_summary_type"])
+	}
+	if modelSummary, _ := modelPayload["provider_error_summary"].(string); strings.Contains(modelSummary, "sk-secret") {
+		t.Fatalf("model_call_final leaked secret: %#v", modelPayload)
+	}
+}
+
+func TestProviderTerminalProjectsSanitizedUnlabeledHTTPStatusBodySummary(t *testing.T) {
+	const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	const unlabeledKey = "sk-proj-unlabeled-secret-value"
+	service, stream, _ := providerTerminalCaptureFixture(t)
+	stream.mu.Lock()
+	stream.CurrentProviderToken = 1
+	stream.CurrentModelCallID = "model-call-1"
+	stream.ProviderPassCount = 1
+	stream.ProviderActive = true
+	stream.Status = StreamStatusStreaming
+	stream.Phase = TurnPhaseProviderRunning
+	stream.ProviderStreamStats = ProviderStreamStats{Attempt: 1, ProtocolFinalStatus: "streaming", HTTPStatus: "not_recorded"}
+	stream.mu.Unlock()
+
+	err := service.handleProviderDoneEvent(stream, &streamProviderEvent{
+		Token: 1,
+		Done:  true,
+		Err: providerTerminalError{cause: &modeladapter.HTTPStatusError{
+			Provider:        "openai adapter",
+			StatusCode:      http.StatusUnauthorized,
+			Attempt:         1,
+			Body:            "rejected " + unlabeledKey + " " + jwt,
+			BodySummaryType: "json_error",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("handleProviderDoneEvent() error = %v", err)
+	}
+	stream.mu.Lock()
+	stats := stream.ProviderStreamStats
+	stream.mu.Unlock()
+	if strings.Contains(stats.ProviderErrorSummary, unlabeledKey) || strings.Contains(stats.ProviderErrorSummary, jwt) || strings.Contains(stats.ProviderErrorSummary, "eyJ") {
+		t.Fatalf("provider error summary leaked unlabeled secret: %q", stats.ProviderErrorSummary)
+	}
+	if !strings.Contains(stats.ProviderErrorSummary, "rejected") {
+		t.Fatalf("provider error summary dropped body: %q", stats.ProviderErrorSummary)
+	}
+}
+
+func TestProviderTerminalFieldsProjectHTTPErrorSummaryDefaults(t *testing.T) {
+	fields := providerTerminalFields("call-1", ProviderStreamStats{
+		ProviderErrorSummary:     "upstream unavailable",
+		ProviderErrorSummaryType: "text",
+	})
+	if fields["provider_error_summary"] != "upstream unavailable" || fields["provider_error_summary_type"] != "text" {
+		t.Fatalf("projected summary = %#v", fields)
+	}
+	missing := providerTerminalFields("call-1", ProviderStreamStats{})
+	if missing["provider_error_summary"] != "not_recorded" || missing["provider_error_summary_type"] != "not_recorded" {
+		t.Fatalf("missing summary must stay not_recorded: %#v", missing)
+	}
+}
+
 func TestProviderTerminal524AfterOutputIsSuppressed(t *testing.T) {
 	service, stream, _ := providerTerminalCaptureFixture(t)
 	stream.mu.Lock()
@@ -353,6 +492,9 @@ func TestProviderTerminalTransportKeepsNotRecordedStatus(t *testing.T) {
 	}
 	if payload["http_status"] != "not_recorded" || payload["error_category"] != modeladapter.ProviderErrorTransport {
 		t.Fatalf("transport final payload = %#v", payload)
+	}
+	if payload["provider_error_summary"] != "not_recorded" || payload["provider_error_summary_type"] != "not_recorded" {
+		t.Fatalf("transport invented provider error summary: %#v", payload)
 	}
 }
 

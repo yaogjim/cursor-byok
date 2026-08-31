@@ -213,6 +213,9 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		}
 
 		callErr := r.underlying.streamPreResolved(ctx, channelReq, wrappedSink)
+		if ClassifyProviderError(callErr) == ProviderErrorRequestBuild {
+			channelSafety.MarkRequestBuildFailed()
+		}
 		callErr = WrapFallbackSafetyError(callErr, channelSafety)
 
 		if callErr == nil {

@@ -977,3 +977,43 @@ func replayAggregationDump(messages []modeladapter.Message) string {
 	}
 	return string(encoded)
 }
+
+func TestProjectPromptReplayPreservesReasoningOrigin(t *testing.T) {
+	origin := modeladapter.ReasoningOrigin{
+		Provider:         "openai",
+		Endpoint:         "openai_responses:api.openai.com",
+		CredentialSource: "codex",
+		AccountID:        "acct-1",
+		ModelID:          "gpt-5",
+	}
+	conversation := replayAggregationConversation(t, []HistoryEntry{
+		replayAggregationUserEntry(t, 1, "request-1", "inspect file"),
+		overlayHistoryReasoningOrigin(withHistoryModelCallID(newAssistantTextEntryWithProviderMetadata(1, "request-1", "I will inspect", replayReasoningCanary, "encrypted-reasoning", modeladapter.ReasoningSignatureSourceOpenAIResponses, "rsn_item_1", "completed", replayAggregationSummary()), "model-call-1"), origin),
+		overlayHistoryReasoningOrigin(withHistoryModelCallID(newToolCallEntryWithProviderMetadata(1, "request-1", "call-1", "Edit", replayReasoningCanary, "encrypted-reasoning", modeladapter.ReasoningSignatureSourceOpenAIResponses, "rsn_item_1", "completed", replayAggregationSummary(), "item-1", "fc-1", "completed", transcriptTestEditToolCall(t, "one.txt")), "model-call-1"), origin),
+		replayAggregationToolResultEntry(t, 1, "request-1", "model-call-1", "call-1", "one.txt", "edited one"),
+	})
+	replay := projectReplayAggregation(t, conversation)
+	got := firstAssistantReplayMessage(t, replay)
+	if !got.ReasoningOrigin.Equal(origin) {
+		t.Fatalf("projected origin = %#v, want %#v\nreplay=%s", got.ReasoningOrigin, origin, replayAggregationDump(replay))
+	}
+	if got.ReasoningSignature != "encrypted-reasoning" || got.OpenAIResponsesReasoningID != "rsn_item_1" {
+		t.Fatalf("projected opaque reasoning = %#v", got)
+	}
+	assertReplayToolSequence(t, replay, []replayExpectedTool{
+		{ID: "call-1", Path: "one.txt", ProviderItemID: "item-1", ProviderCallID: "fc-1", ProviderStatus: "completed", Result: "edited one"},
+	})
+	foundToolOrigin := false
+	for _, message := range replay {
+		if len(message.ToolCalls) == 0 {
+			continue
+		}
+		foundToolOrigin = true
+		if !message.ReasoningOrigin.Equal(origin) {
+			t.Fatalf("tool-bearing origin = %#v, want %#v\nreplay=%s", message.ReasoningOrigin, origin, replayAggregationDump(replay))
+		}
+	}
+	if !foundToolOrigin {
+		t.Fatalf("projected replay lost tool calls\nreplay=%s", replayAggregationDump(replay))
+	}
+}

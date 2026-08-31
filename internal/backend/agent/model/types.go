@@ -4,6 +4,7 @@ package modeladapter
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,40 @@ const (
 	// ReasoningSignatureSourceOpenAIResponses 表示 signature 来自 OpenAI Responses encrypted reasoning content。
 	ReasoningSignatureSourceOpenAIResponses = "openai_responses"
 )
+
+// ReasoningOrigin 是 opaque reasoning / Responses item 元数据的最小来源身份。
+// 仅用于发送边界兼容判断与 omitempty 透传，不记录凭据或完整 URL。
+type ReasoningOrigin struct {
+	Provider         string `json:"provider,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	CredentialSource string `json:"credential_source,omitempty"`
+	AccountID        string `json:"account_id,omitempty"`
+	ModelID          string `json:"model_id,omitempty"`
+}
+
+// IsZero 表示没有可比较的来源身份。
+func (origin ReasoningOrigin) IsZero() bool {
+	return strings.TrimSpace(origin.Provider) == "" &&
+		strings.TrimSpace(origin.Endpoint) == "" &&
+		strings.TrimSpace(origin.CredentialSource) == "" &&
+		strings.TrimSpace(origin.AccountID) == "" &&
+		strings.TrimSpace(origin.ModelID) == ""
+}
+
+// Equal 按规范化后的身份字段严格相等比较。
+func (origin ReasoningOrigin) Equal(other ReasoningOrigin) bool {
+	return origin.normalized() == other.normalized()
+}
+
+func (origin ReasoningOrigin) normalized() ReasoningOrigin {
+	return ReasoningOrigin{
+		Provider:         strings.ToLower(strings.TrimSpace(origin.Provider)),
+		Endpoint:         strings.TrimSpace(origin.Endpoint),
+		CredentialSource: strings.ToLower(strings.TrimSpace(origin.CredentialSource)),
+		AccountID:        strings.TrimSpace(origin.AccountID),
+		ModelID:          strings.TrimSpace(origin.ModelID),
+	}
+}
 
 // Message 表示模型适配层统一使用的消息结构。
 type Message struct {
@@ -38,6 +73,8 @@ type Message struct {
 	OpenAIResponsesReasoningStatus string `json:"openai_responses_reasoning_status,omitempty"`
 	// OpenAIResponsesReasoningSummary 保存 Responses reasoning output item 的原始 summary。
 	OpenAIResponsesReasoningSummary json.RawMessage `json:"openai_responses_reasoning_summary,omitempty"`
+	// ReasoningOrigin 保存签发 opaque reasoning / Responses item 元数据的最小来源身份。
+	ReasoningOrigin ReasoningOrigin `json:"reasoning_origin,omitempty"`
 	// ToolCalls 表示 assistant 发起的函数调用。
 	ToolCalls []ToolCallDescriptor `json:"tool_calls,omitempty"`
 	// ToolCallID 表示 tool role 关联的调用 id。
@@ -415,6 +452,8 @@ type ModelEvent struct {
 	ThinkingSignature string
 	// ThinkingSignatureSource 表示思考签名的 provider 语义来源。
 	ThinkingSignatureSource string
+	// ReasoningOrigin 保存签发 opaque reasoning / Responses item 元数据的最小来源身份。
+	ReasoningOrigin ReasoningOrigin
 	// ProviderItemID 保存 provider 原始 output item id，用于 stateless Responses replay。
 	ProviderItemID string
 	// ProviderStatus 保存 provider 原始 output item status，用于 stateless Responses replay。
