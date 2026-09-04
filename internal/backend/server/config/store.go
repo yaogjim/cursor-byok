@@ -216,9 +216,6 @@ func (store *Store) SaveCursorConfig(_ context.Context, cfg Config) (Config, err
 		return Config{}, err
 	}
 	merged := disk
-	if cfg.ProviderStreamIdleTimeout > 0 {
-		merged.ProviderStreamIdleTimeout = cfg.ProviderStreamIdleTimeout
-	}
 	if strings.TrimSpace(cfg.BackendListenAddr) != "" {
 		merged.BackendListenAddr = cfg.BackendListenAddr
 	}
@@ -446,10 +443,10 @@ func shouldPersistNormalizedConfig(raw []byte, current Config, normalized Config
 	if current.Appearance.Theme != normalized.Appearance.Theme {
 		return true
 	}
-	if current.ProviderStreamIdleTimeout == normalized.ProviderStreamIdleTimeout {
-		return false
+	if yamlHasKey(raw, "providerStreamIdleTimeout") {
+		return true
 	}
-	return yamlHasKey(raw, "providerStreamIdleTimeout")
+	return false
 }
 
 func yamlHasKey(raw []byte, key string) bool {

@@ -315,8 +315,10 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
 	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {

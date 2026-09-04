@@ -6,6 +6,19 @@
 
 ### 🎯 Active Work Package
 
+**byok-recovery-hardening-20260903** (in_progress)
+- 冻结预算化恢复合同：Cursor 只见一个逻辑模型 / 一个 RunSSE；网关吸收上游 500/503；耗尽后至多一次 terminal，`IsRetryable=false`。
+- 默认预算：全链 5 HTTP attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s；最多 1 primary + 4 candidates。`maxWaitSeconds` 只累计实际退避 sleep。
+- HTTP 500/502/503/504/524、可恢复 transport、TLS handshake EOF、建连/首事件超时：同渠道最多 2 次，安全窗口内再切候选。429 遵守可容纳的 Retry-After，否则跳过等待并切换。401 只走凭据刷新/账号轮换。403/其他 4xx/529/父取消/证书校验/永久 DNS/请求构建/协议解析/provider terminal：快速失败。
+- 安全门：任意 raw byte / 模型事件 / 副作用后禁止重试和切换。删除全局 `providerStreamIdleTimeout`，只保留模型级活性。单渠道计划仍注入 RecoverySettings + liveness。
+- 排除：熔断、按供应商拆网络、partial-output continuation、OpenAI/Anthropic 跨协议混排。
+- 保留未提交的原生图片生成改动，不 stash/reset。
+- 2026-09-03/04 构建安装门禁已闭合：目标仓库 `workspace-gateway-native-fix` 的 `bin/macos-arm64.dmg` 校验有效；DMG 与 `/Applications/Gateway-byok.app` 均为 `0.0.56.0`、arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。运行进程监听 `127.0.0.1:18080` / `127.0.0.1:18090`，`/healthz` 返回 `200 ok`；启动日志无配置归一化、panic 或 fatal 错误。
+- 真实 Cursor 正常流量冒烟已闭合：同一 Cursor request 只观察到 1 次 RunSSE 入站/转发，内部多个 model call 均成功，未产生 terminal provider error。结构化事件已包含 failure/action、链级及渠道级 attempt/wait、安全门和最终动作字段；对最新 trace 的敏感 key 与常见 Bearer/API key 值模式扫描均为 0。
+- 已安装应用的本机 Gateway 受控故障验收已闭合：HTTP 500 与 503 场景均在主渠道恰好失败 2 次后切备用并成功；TLS 握手阶段 accept-then-close 场景在客户端表现为 transport reset，主渠道 2 次后切备用并成功；partial-output 场景只命中主渠道 1 次，发布 `PARTIAL-CANARY` 后以 `output_observed` 关闭安全门，未请求备用；预算耗尽场景按主渠道 500×2、备用 503×2 消费全链 4 attempts，SSE 流体只有 1 个 `provider_error` terminal。五条 trace 的恢复字段完整，临时 key、Authorization/正文类字段和 canary/成功正文命中均为 0。
+- 临时在线配置已完整回滚：`config.yaml` SHA-256 与原始备份同为 `a324d89d9b6eaf30b387e85a51924a03f6c13bcef1e2df1cef194d3a022e9d37`，模型数回到 32，临时模型为 0，`18091` 与 `18180–18183` 均已释放；正常应用继续监听 `18080/18090`，`/healthz` 返回 200。
+- 当前交付仍为 `verified-partial`：上述受控请求直接经过本机 Gateway，不等同于 Cursor UI/RunSSE 故障注入。仍待用真实 Cursor 单 Run/Agent 验证内部恢复不创建新生命周期、任意输出后不重放，以及预算耗尽时 Cursor 最多收到一次 terminal provider error。
+
 **gateway-provider-stream-truncation-20260830** (in_progress, verified-partial)
 - 已完成共享 Provider HTTP 流观测第一阶段：`provider_stream_finished` 可投影最终 HTTP attempt 的协议、编码/自动解压、连接复用、原始字节数、最后 SSE 事件元数据、typed close cause 和累计零字节恢复次数；response ID 仅保存短哈希，不落完整正文或凭据。
 - 已完成 OpenAI Responses 与 Anthropic 终态收口：支持 Responses CRLF、多行 `data:`、最后事件后立即 EOF；`[DONE]`、`response.completed`、`message_stop` 成功，failed/cancelled/incomplete/显式 error 为协议终态，无合法 marker 的 EOF 保持 `StreamTruncatedError`。

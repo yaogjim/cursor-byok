@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyModelAdapterTypeChange } from "./modelAdapterTypeChange.js";
+import {
+  applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
+  isOpenAIImageGenerationCompatible,
+  normalizeOpenAIImageGenerationEnabled,
+} from "./modelAdapterTypeChange.js";
 
 function modelIdentifierError(adapters) {
   for (const [index, adapter] of adapters.entries()) {
@@ -54,4 +59,102 @@ test("unknown type is ignored", () => {
   applyModelAdapterTypeChange(draft, "unknown");
   assert.equal(draft.type, "openai");
   assert.equal(draft.modelID, "cc");
+});
+
+test("native media generation defaults off", () => {
+  assert.equal(normalizeOpenAIImageGenerationEnabled({}), false);
+  assert.equal(normalizeOpenAIImageGenerationEnabled({
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/chat/completions",
+  }), false);
+});
+
+test("native media generation enabled round trip for compatible adapters", () => {
+  const source = {
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  assert.equal(isOpenAIImageGenerationCompatible(source), true);
+  assert.equal(normalizeOpenAIImageGenerationEnabled(source), true);
+  assert.equal(
+    applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+    true,
+  );
+});
+
+test("native media generation clears invalid combinations", () => {
+  const invalid = [
+    {
+      type: "anthropic",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    },
+    {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/chat/completions",
+      openAIImageGenerationEnabled: true,
+    },
+    {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/custom",
+      openAIImageGenerationEnabled: true,
+    },
+    {
+      type: "openai",
+      credentialSource: "codex",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    },
+    {
+      type: "openai",
+      credentialSource: "grok",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    },
+  ];
+  for (const source of invalid) {
+    assert.equal(isOpenAIImageGenerationCompatible(source), false);
+    assert.equal(normalizeOpenAIImageGenerationEnabled(source), false);
+    assert.equal(
+      applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+      false,
+    );
+  }
+});
+
+test("switching type or endpoint clears native media generation", () => {
+  const draft = {
+    type: "openai",
+    modelID: "gpt-5.5",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+
+  applyModelAdapterTypeChange(draft, "anthropic");
+  assert.equal(draft.openAIImageGenerationEnabled, false);
+
+  const endpointDraft = {
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/chat/completions",
+    openAIImageGenerationEnabled: true,
+  };
+  applyOpenAIImageGenerationConstraint(endpointDraft);
+  assert.equal(endpointDraft.openAIImageGenerationEnabled, false);
+
+  const credentialDraft = {
+    type: "openai",
+    credentialSource: "codex",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  applyOpenAIImageGenerationConstraint(credentialDraft);
+  assert.equal(credentialDraft.openAIImageGenerationEnabled, false);
 });

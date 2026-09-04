@@ -239,21 +239,19 @@ func TestOpenAINon2xxRecordsHTTPStatusClose(t *testing.T) {
 }
 
 func TestIdleWatchdogDoesNotRewriteCompletedEOF(t *testing.T) {
-	parent, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
 	diag := &StreamDiagnostics{}
 	diag.RecordHeader(http.StatusOK, 1, time.Now())
 	diag.RecordClose(io.EOF)
-	watchdog := &providerStreamIdleWatchdog{
-		ctx:     parent,
-		cancel:  cancel,
-		timeout: time.Hour,
-		err:     providerStreamIdleTimeoutError(time.Hour),
-	}
-	watchdog.AttachDiagnostics(diag)
-	watchdog.expire()
-	if watchdog.Err() != nil {
-		t.Fatalf("expire after EOF set idle err: %v", watchdog.Err())
+	_, live := newProviderLiveness(context.Background(), RecoverySettings{
+		CallTimeout:       time.Hour,
+		ConnectTimeout:    time.Hour,
+		FirstEventTimeout: time.Hour,
+		StreamIdleTimeout: time.Hour,
+	})
+	live.AttachDiagnostics(diag)
+	live.expire(LivenessPhaseIdle, time.Hour)
+	if live.Err() != nil {
+		t.Fatalf("expire after EOF set idle err: %v", live.Err())
 	}
 	snap := diag.Snapshot()
 	if snap.CloseCause != StreamCloseCauseEOF {
@@ -262,25 +260,24 @@ func TestIdleWatchdogDoesNotRewriteCompletedEOF(t *testing.T) {
 	if snap.TransportOutcome != TransportOutcomeSucceeded {
 		t.Fatalf("transport_outcome = %q, want succeeded", snap.TransportOutcome)
 	}
+	live.Stop()
 }
 
 func TestIdleWatchdogStopPreventsIdleClose(t *testing.T) {
-	parent, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
 	diag := &StreamDiagnostics{}
 	diag.RecordHeader(http.StatusOK, 1, time.Now())
 	diag.RecordClose(io.EOF)
-	watchdog := &providerStreamIdleWatchdog{
-		ctx:     parent,
-		cancel:  cancel,
-		timeout: time.Hour,
-		err:     providerStreamIdleTimeoutError(time.Hour),
-	}
-	watchdog.AttachDiagnostics(diag)
-	watchdog.Stop()
-	watchdog.expire()
-	if watchdog.Err() != nil {
-		t.Fatalf("stopped watchdog reported idle: %v", watchdog.Err())
+	_, live := newProviderLiveness(context.Background(), RecoverySettings{
+		CallTimeout:       time.Hour,
+		ConnectTimeout:    time.Hour,
+		FirstEventTimeout: time.Hour,
+		StreamIdleTimeout: time.Hour,
+	})
+	live.AttachDiagnostics(diag)
+	live.Stop()
+	live.expire(LivenessPhaseIdle, time.Hour)
+	if live.Err() != nil {
+		t.Fatalf("stopped watchdog reported idle: %v", live.Err())
 	}
 	if diag.Snapshot().CloseCause != StreamCloseCauseEOF {
 		t.Fatalf("stop+expire close_cause = %q", diag.Snapshot().CloseCause)
@@ -351,57 +348,57 @@ func TestRetryingStreamBodyPartialUnexpectedEOF(t *testing.T) {
 }
 
 func TestIdleWatchdogRecordsIdleTimeoutNotRawBytes(t *testing.T) {
-	parent, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
 	diag := &StreamDiagnostics{}
-	watchdog := &providerStreamIdleWatchdog{
-		ctx:     parent,
-		cancel:  cancel,
-		timeout: 40 * time.Millisecond,
-		err:     providerStreamIdleTimeoutError(40 * time.Millisecond),
-	}
-	watchdog.timer = time.AfterFunc(watchdog.timeout, watchdog.expire)
-	watchdog.AttachDiagnostics(diag)
+	_, live := newProviderLiveness(context.Background(), RecoverySettings{
+		CallTimeout:       time.Hour,
+		ConnectTimeout:    time.Hour,
+		FirstEventTimeout: 40 * time.Millisecond,
+		StreamIdleTimeout: time.Hour,
+	})
+	live.AttachDiagnostics(diag)
+	live.MarkHeadersReceived()
 	diag.RecordBytes(4, time.Now())
-	select {
-	case <-parent.Done():
-	case <-time.After(time.Second):
-		t.Fatal("watchdog did not expire")
+	deadline := time.After(time.Second)
+	for live.Err() == nil {
+		select {
+		case <-deadline:
+			t.Fatal("first-event watchdog did not expire")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	if ClassifyStreamCloseCause(watchdog.Err()) != StreamCloseCauseIdleTimeout {
-		t.Fatalf("watchdog err cause = %q", ClassifyStreamCloseCause(watchdog.Err()))
+	if ClassifyStreamCloseCause(live.Err()) != StreamCloseCauseFirstEventTimeout {
+		t.Fatalf("watchdog err cause = %q", ClassifyStreamCloseCause(live.Err()))
 	}
 	snap := diag.Snapshot()
-	if snap.CloseCause != StreamCloseCauseIdleTimeout {
-		t.Fatalf("close_cause = %q, want idle_timeout", snap.CloseCause)
+	if snap.CloseCause != StreamCloseCauseFirstEventTimeout {
+		t.Fatalf("close_cause = %q, want first_event_timeout", snap.CloseCause)
 	}
 	if snap.LastEffectiveContentAt.IsZero() == false {
-		t.Fatalf("idle timeout after raw bytes must not invent effective content: %#v", snap)
+		t.Fatalf("timeout after raw bytes must not invent effective content: %#v", snap)
 	}
+	live.Stop()
 }
 
 func TestIdleWatchdogEffectiveContentResetsTimer(t *testing.T) {
-	parent, cancel := context.WithCancelCause(context.Background())
-	defer cancel(nil)
 	diag := &StreamDiagnostics{}
-	watchdog := &providerStreamIdleWatchdog{
-		ctx:     parent,
-		cancel:  cancel,
-		timeout: 60 * time.Millisecond,
-		err:     providerStreamIdleTimeoutError(60 * time.Millisecond),
-	}
-	watchdog.timer = time.AfterFunc(watchdog.timeout, watchdog.expire)
-	watchdog.AttachDiagnostics(diag)
+	_, live := newProviderLiveness(context.Background(), RecoverySettings{
+		CallTimeout:       time.Hour,
+		ConnectTimeout:    time.Hour,
+		FirstEventTimeout: time.Hour,
+		StreamIdleTimeout: 60 * time.Millisecond,
+	})
+	live.AttachDiagnostics(diag)
+	live.MarkHeadersReceived()
 	time.Sleep(30 * time.Millisecond)
-	watchdog.MarkEffectiveContent()
+	live.MarkEffectiveContent()
 	time.Sleep(30 * time.Millisecond)
-	if watchdog.Err() != nil {
-		t.Fatalf("watchdog expired despite effective content: %v", watchdog.Err())
+	if live.Err() != nil {
+		t.Fatalf("watchdog expired despite effective content: %v", live.Err())
 	}
 	if diag.Snapshot().LastEffectiveContentAt.IsZero() {
 		t.Fatal("effective content timestamp not recorded")
 	}
-	watchdog.Stop()
+	live.Stop()
 }
 
 func TestOpenAIHeaderOnlyDoesNotCompleteProtocol(t *testing.T) {
@@ -515,6 +512,21 @@ func TestOpenAIRawCommentBytesVersusEffectiveContent(t *testing.T) {
 	}
 	if !snap.LastEffectiveContentAt.IsZero() {
 		t.Fatalf("SSE comment must not count as effective content: %#v", snap)
+	}
+}
+
+func TestBeginHTTPAttemptClearsPriorAttemptDiagnostics(t *testing.T) {
+	diag := &StreamDiagnostics{}
+	diag.RecordHeader(http.StatusServiceUnavailable, 1, time.Now())
+	diag.RecordBytes(4, time.Now())
+	diag.RecordClose(&LivenessTimeoutError{Phase: LivenessPhaseConnect, Timeout: time.Second})
+	diag.BeginHTTPAttempt()
+	snap := diag.Snapshot()
+	if snap.HTTPStatus != 0 || snap.HTTPAttempt != 0 || snap.RawBytesObserved || snap.RawByteCount != 0 {
+		t.Fatalf("new HTTP attempt retained prior transport state: %#v", snap)
+	}
+	if snap.CloseCause != StreamCloseCauseNotRecorded || !snap.BodyEndAt.IsZero() {
+		t.Fatalf("new HTTP attempt retained prior terminal state: %#v", snap)
 	}
 }
 

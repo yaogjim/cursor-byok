@@ -11,6 +11,7 @@ import {
   buildModelAdapterTestRequestHash,
   createEmptyModelAdapter,
   applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
   CUSTOM_HEADERS_DEFAULT_JSON,
   EXTRA_PARAMS_DEFAULT_JSON,
   fetchAvailableModelIDs,
@@ -18,6 +19,7 @@ import {
   getModelAdapterTestResultByID,
   isManagedCredentialSource,
   isModelAdapterTestResultStale,
+  isOpenAIImageGenerationCompatible,
   normalizeModelAdapter,
   OPENAI_ENDPOINT_CHAT_COMPLETIONS,
   OPENAI_ENDPOINT_CUSTOM,
@@ -32,6 +34,7 @@ import {
 import {
   DEFAULT_PROVIDER_FALLBACK,
   formatFallbackBudgetInput,
+  isFallbackChannelCompatible,
   isLogicalRoutingAdapter,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
   MAX_PROVIDER_FALLBACK_CANDIDATES,
@@ -134,6 +137,7 @@ const canFetchModels = computed(() => {
   return hasBaseURL && (isManagedCredentialSource(draft.credentialSource) || hasKey);
 });
 const isManagedCredential = computed(() => isManagedCredentialSource(draft.credentialSource));
+const canEnableOpenAIImageGeneration = computed(() => isOpenAIImageGenerationCompatible(draft));
 const selectedTestAdapter = computed(() => normalizeModelAdapter(draft));
 const currentRequestHash = computed(() => buildModelAdapterTestRequestHash(selectedTestAdapter.value));
 const directModelTestResult = computed(() => getModelAdapterTestResult(selectedTestAdapter.value));
@@ -181,14 +185,20 @@ const fieldTips = {
   maxCompletionTokens: "单次回复允许生成的最大 Token 数。留空时使用默认值。",
   openAIEndpoint: "选择接口协议端点。选“自定义路径”时，请在接口地址栏填写完整请求地址（含 /chat/completions 或 /responses 路径后缀），系统会根据末段自动判断协议形态。",
   openAIExtraParams: "开启后会把 JSON 对象覆盖到 OpenAI 请求体。同名字段以这里为准。OpenAI service_tier 支持 auto、default、flex、scale、priority。",
+  openAIImageGeneration: "仅兼容的上游应开启。仅 OpenAI、静态 API key、/v1/responses 端点可启用；切换类型、端点或凭据后会自动关闭。",
   customHeaders: "开启后会把 JSON 对象覆盖到最终请求头。同名请求头以这里为准，值必须是字符串。",
   anthropicExtraParams: "开启后会把 JSON 对象覆盖到 Anthropic 请求体。同名字段以这里为准。",
   anthropicMaxTokens: "Anthropic 模型单次回复允许生成的最大 Token 数。留空时使用默认值。",
   anthropicThinkingEffort: "Anthropic adaptive thinking 的思考强度。请求会固定使用新版 thinking.type=adaptive。",
   maxConcurrentRequests: "0 或不填表示不限制。同一接口地址与密钥的物理渠道共享该上限；无空闲槽时固定等待 2 秒。",
-  providerFallback: "启用后，此模型成为逻辑路由身份（建议仅子代理选择）。请求按主渠道和备选渠道顺序尝试，alias 自身不会向虚拟 endpoint 发请求。全链共享 HTTP 尝试与等待预算；单渠道最多 3 次，实际按 min(剩余预算, 3) 分配。仅在零原始字节、零 model event 时才允许渠道切换；一旦已有输出则禁止切换。跨 Provider 可能改变费用、隐私边界、模型语义和工具兼容性。",
-  maxHttpAttempts: "整条 fallback 链共享的最大 HTTP 尝试次数，默认 5，允许 2–9。越界会报错而不会静默截断。单渠道固定最多 3 次，实际按 min(剩余预算, 3) 分配。",
-  maxWaitSeconds: "整条 fallback 链共享的最大退避等待秒数，默认 8，允许 1–30。越界会报错而不会静默截断。",
+  providerFallback: "启用后，此模型成为逻辑路由身份（建议仅子代理选择）。请求按主渠道和备选渠道顺序尝试，alias 自身不会向虚拟 endpoint 发请求。5xx 等失败先在当前渠道再试一次，然后才安全切换；一旦出现任何原始字节、model event 或 side effect，禁止切换。候选仅限相同适配器类型和相同协议端点的物理渠道。",
+  maxHttpAttempts: "整条 fallback 链共享的最大 HTTP 尝试次数，默认 5，允许 2–9。越界会报错而不会静默截断。",
+  maxWaitSeconds: "整条 fallback 链共享的累计实际退避等待秒数，默认 8，允许 1–30。不含模型推理、首 Token、渠道执行或容量等待。越界会报错而不会静默截断。",
+  maxAttemptsPerChannel: "同一渠道连续尝试次数，默认 2，允许 1–3。5xx 等失败会先在当前渠道再试一次，再安全切换。",
+  connectTimeoutSeconds: "建立上游连接的超时秒数，默认 30，允许 5–120。",
+  firstEventTimeoutSeconds: "等待首个模型事件的秒数，默认 600，允许 60–1800。保证长首 Token 不会被 8 秒退避预算误杀。",
+  streamIdleTimeoutSeconds: "流式响应空闲超时秒数，默认 240，允许 30–900。按模型配置，不再使用全局空闲超时。",
+  callTimeoutSeconds: "整次调用墙钟超时秒数，默认 7200，允许 900–21600。不是退避等待预算。",
   tooltipData: "模型列表 hover 时显示的备注说明。",
 };
 
@@ -388,6 +398,13 @@ watch(
 );
 
 watch(
+  () => [draft.type, draft.credentialSource, draft.openAIEndpoint],
+  () => {
+    applyOpenAIImageGenerationConstraint(draft);
+  },
+);
+
+watch(
   () => [draft.type, draft.baseURL, draft.apiKey, draft.credentialSource, draft.customHeadersEnabled, draft.customHeadersJSON],
   () => {
     window.clearTimeout(modelListDebounceTimer);
@@ -414,18 +431,28 @@ onBeforeUnmount(() => {
 
 // ── providerFallback UI 支持 ──
 
-// 其他已保存渠道（排除当前编辑中的适配器）
+// 其他已保存渠道（排除当前编辑中的适配器）；仅同类型且同协议端点的物理渠道可入链
 const otherAdapters = computed(() =>
   appState.modelAdapters.filter(
-    (a) => a.id && a.id !== draft.id && !isLogicalRoutingAdapter(a),
+    (a) => a.id && a.id !== draft.id && !isLogicalRoutingAdapter(a) && isFallbackChannelCompatible(draft, a),
   ),
 );
+
+function fallbackChannelOptionLabel(adapter, priority) {
+  const name = adapter.displayName || adapter.id;
+  const provider = adapter.type === "anthropic" ? "Anthropic" : "OpenAI";
+  const modelID = adapter.modelID || "—";
+  if (priority) {
+    return `${name} · ${provider} · ${modelID} · 第 ${priority} 优先`;
+  }
+  return `${name} · ${provider} · ${modelID}`;
+}
 
 // 渠道下拉基础选项，含空"不选择"项
 const fallbackChannelBaseOptions = computed(() => [
   { label: "── 不选择 ──", value: "", icon: "icon-[mdi--minus-circle-outline]" },
   ...otherAdapters.value.map((a) => ({
-    label: a.displayName ? `${a.displayName}（${a.modelID}）` : (a.modelID || a.id),
+    label: fallbackChannelOptionLabel(a),
     value: a.id,
     icon: a.type === "anthropic" ? "icon-[logos--claude-icon]" : "icon-[bxl--openai]",
   })),
@@ -488,20 +515,6 @@ function setCandidateSlot(index, val) {
   draft.providerFallback.candidateChannelIDs = next;
 }
 
-// 是否跨 Provider（OpenAI/Anthropic 混用）
-const isCrossProviderFallback = computed(() => {
-  if (!draft.providerFallback.enabled) return false;
-  const ids = [
-    draft.providerFallback.primaryChannelID,
-    ...(draft.providerFallback.candidateChannelIDs || []),
-  ].filter(Boolean);
-  if (ids.length < 2) return false;
-  const types = new Set(
-    ids.map((id) => appState.modelAdapters.find((x) => x.id === id)?.type || "").filter(Boolean),
-  );
-  return types.size > 1;
-});
-
 function createFallbackBudgetModel(key) {
   return computed({
     get() {
@@ -515,11 +528,31 @@ function createFallbackBudgetModel(key) {
 
 const maxHttpAttemptsInput = createFallbackBudgetModel("maxHttpAttempts");
 const maxWaitSecondsInput = createFallbackBudgetModel("maxWaitSeconds");
+const maxAttemptsPerChannelInput = createFallbackBudgetModel("maxAttemptsPerChannel");
+const connectTimeoutSecondsInput = createFallbackBudgetModel("connectTimeoutSeconds");
+const firstEventTimeoutSecondsInput = createFallbackBudgetModel("firstEventTimeoutSeconds");
+const streamIdleTimeoutSecondsInput = createFallbackBudgetModel("streamIdleTimeoutSeconds");
+const callTimeoutSecondsInput = createFallbackBudgetModel("callTimeoutSeconds");
 const maxHttpAttemptsError = computed(() =>
   providerFallbackBudgetFieldError("maxHttpAttempts", draft.providerFallback.maxHttpAttempts),
 );
 const maxWaitSecondsError = computed(() =>
   providerFallbackBudgetFieldError("maxWaitSeconds", draft.providerFallback.maxWaitSeconds),
+);
+const maxAttemptsPerChannelError = computed(() =>
+  providerFallbackBudgetFieldError("maxAttemptsPerChannel", draft.providerFallback.maxAttemptsPerChannel),
+);
+const connectTimeoutSecondsError = computed(() =>
+  providerFallbackBudgetFieldError("connectTimeoutSeconds", draft.providerFallback.connectTimeoutSeconds),
+);
+const firstEventTimeoutSecondsError = computed(() =>
+  providerFallbackBudgetFieldError("firstEventTimeoutSeconds", draft.providerFallback.firstEventTimeoutSeconds),
+);
+const streamIdleTimeoutSecondsError = computed(() =>
+  providerFallbackBudgetFieldError("streamIdleTimeoutSeconds", draft.providerFallback.streamIdleTimeoutSeconds),
+);
+const callTimeoutSecondsError = computed(() =>
+  providerFallbackBudgetFieldError("callTimeoutSeconds", draft.providerFallback.callTimeoutSeconds),
 );
 const isLogicalRoutingDraft = computed(() => isLogicalRoutingAdapter(draft));
 const maxConcurrentRequestsInput = computed({
@@ -758,6 +791,21 @@ watch(
           />
         </div>
 
+        <div v-if="draft.type === 'openai'" class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+          <label class="flex items-center justify-between gap-3 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5">
+              <Tooltip :content="fieldTips.openAIImageGeneration" />
+              <span>OpenAI Responses 原生媒体生成</span>
+            </span>
+            <input
+              v-model="draft.openAIImageGenerationEnabled"
+              type="checkbox"
+              class="size-4 accent-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+              :disabled="!canEnableOpenAIImageGeneration"
+            />
+          </label>
+        </div>
+
         <div v-if="draft.type === 'anthropic'" class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
             <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
@@ -849,7 +897,7 @@ watch(
           </div>
           <div v-if="draft.providerFallback.enabled" class="mt-3 flex flex-col gap-3">
             <p class="text-xs text-[var(--color-text-secondary)]">
-              启用后，此模型是逻辑路由 alias（建议仅子代理选择），自身不会向虚拟 endpoint 发请求。请求按主渠道和备选渠道顺序尝试；单渠道最多 3 次 HTTP，实际按 min(剩余预算, 3) 分配。仅在零原始字节、零 model event 时允许切换，已有输出后不切换。跨 Provider 可能改变费用、隐私边界、模型语义和工具兼容性。
+              启用后，此模型是逻辑路由 alias（建议仅子代理选择），自身不会向虚拟 endpoint 发请求。5xx 等失败先在当前渠道再试一次，然后才安全切换；任何原始字节、event 或 side effect 后不再切换。首事件超时默认 600 秒，保证长首 Token 不会被 8 秒退避预算误杀。候选仅限相同类型和相同协议端点的物理渠道。
             </p>
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
               <label class="flex flex-col gap-1">
@@ -874,7 +922,7 @@ watch(
               <label class="flex flex-col gap-1">
                 <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
                   <Tooltip :content="fieldTips.maxWaitSeconds" />
-                  <span>全链最大等待秒数（默认 8）</span>
+                  <span>全链最大退避等待秒数（默认 8）</span>
                 </span>
                 <input
                   v-model="maxWaitSecondsInput"
@@ -888,20 +936,109 @@ watch(
                     : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
                 />
                 <span v-if="maxWaitSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ maxWaitSecondsError }}</span>
-                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 1–30；越界报错，不会静默截断。</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">仅累计实际退避，不含推理/首 Token/渠道执行/容量等待；允许 1–30。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.maxAttemptsPerChannel" />
+                  <span>单渠道最大尝试次数（默认 2）</span>
+                </span>
+                <input
+                  v-model="maxAttemptsPerChannelInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.maxAttemptsPerChannel)"
+                  :aria-invalid="Boolean(maxAttemptsPerChannelError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="maxAttemptsPerChannelError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="maxAttemptsPerChannelError" class="text-[11px] text-[var(--color-error-text)]">{{ maxAttemptsPerChannelError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 1–3；5xx 等先当前渠道再试一次再切换。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.connectTimeoutSeconds" />
+                  <span>建连超时秒数（默认 30）</span>
+                </span>
+                <input
+                  v-model="connectTimeoutSecondsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.connectTimeoutSeconds)"
+                  :aria-invalid="Boolean(connectTimeoutSecondsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="connectTimeoutSecondsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="connectTimeoutSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ connectTimeoutSecondsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 5–120。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.firstEventTimeoutSeconds" />
+                  <span>首事件超时秒数（默认 600）</span>
+                </span>
+                <input
+                  v-model="firstEventTimeoutSecondsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.firstEventTimeoutSeconds)"
+                  :aria-invalid="Boolean(firstEventTimeoutSecondsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="firstEventTimeoutSecondsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="firstEventTimeoutSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ firstEventTimeoutSecondsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 60–1800；保证长首 Token 不是 8 秒 wait budget。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.streamIdleTimeoutSeconds" />
+                  <span>流空闲超时秒数（默认 240）</span>
+                </span>
+                <input
+                  v-model="streamIdleTimeoutSecondsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.streamIdleTimeoutSeconds)"
+                  :aria-invalid="Boolean(streamIdleTimeoutSecondsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="streamIdleTimeoutSecondsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="streamIdleTimeoutSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ streamIdleTimeoutSecondsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 30–900。</span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text-secondary)]">
+                  <Tooltip :content="fieldTips.callTimeoutSeconds" />
+                  <span>整次调用超时秒数（默认 7200）</span>
+                </span>
+                <input
+                  v-model="callTimeoutSecondsInput"
+                  type="text"
+                  inputmode="numeric"
+                  :placeholder="String(DEFAULT_PROVIDER_FALLBACK.callTimeoutSeconds)"
+                  :aria-invalid="Boolean(callTimeoutSecondsError)"
+                  class="h-9 rounded-[6px] border bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none"
+                  :class="callTimeoutSecondsError
+                    ? 'border-[var(--color-error-border)] focus:border-[var(--color-error-text)]'
+                    : 'border-[var(--color-border)] focus:border-[var(--color-primary)]'"
+                />
+                <span v-if="callTimeoutSecondsError" class="text-[11px] text-[var(--color-error-text)]">{{ callTimeoutSecondsError }}</span>
+                <span v-else class="text-[11px] text-[var(--color-text-muted)]">允许 900–21600；墙钟超时，不是退避预算。</span>
               </label>
             </div>
             <div
               v-if="fallbackNoChannels"
               class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
             >
-              当前没有其他已保存的渠道，请先新增并保存其他模型配置后再配置 Fallback。
-            </div>
-            <div
-              v-if="isCrossProviderFallback"
-              class="rounded-[6px] border border-[var(--color-warning-border)] bg-[var(--color-warning-bg)] px-3 py-2 text-xs text-[var(--color-warning-text)]"
-            >
-              检测到跨 Provider 配置（OpenAI / Anthropic 混用）。跨 Provider fallback 可能改变费用、隐私边界、模型语义和工具兼容性；不兼容时该渠道将被跳过而非降级。
+              当前没有其他已保存的同类型同协议渠道，请先新增并保存兼容的物理渠道后再配置 Fallback。
             </div>
             <label v-if="!fallbackNoChannels" class="flex flex-col gap-1">
               <span class="text-xs text-[var(--color-text-secondary)]">主渠道（第 1 优先）</span>

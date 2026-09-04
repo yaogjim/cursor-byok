@@ -355,36 +355,40 @@ providerFallback:
   primaryChannelID: ""         # 主渠道 ID
   candidateChannelIDs: []      # 有序候选列表，显式配置
   maxHttpAttempts: 5           # 全链共享 HTTP 尝试预算；允许 2–9
-  maxWaitSeconds: 8            # 全链共享退避等待预算（秒）；允许 1–30
+  maxWaitSeconds: 8            # 仅累计实际退避 sleep，不是调用墙钟；允许 1–30
+  maxAttemptsPerChannel: 2     # 单渠道 HTTP 尝试；允许 1–3
+  connectTimeoutSeconds: 30    # 建连；允许 5–120
+  firstEventTimeoutSeconds: 600 # 首个有效事件；允许 60–1800
+  streamIdleTimeoutSeconds: 240 # 流空闲；允许 30–900
+  callTimeoutSeconds: 7200     # 整次逻辑调用；允许 900–21600
 ```
 
-- 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds`；合法非零值必须原样保存、导入导出和回显。
-- 保存入口对非零越界值严格报错；运行时解析再做 `2–9 / 1–30` 防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
-- 单渠道 HTTP attempt 上限固定为 3，不开放 UI 配置。启用 fallback 时采用“保证渠道覆盖，再用剩余预算重试”：先为当前请求下每个后续兼容渠道预留 1 次 attempt，当前渠道最多使用 `min(chain_remaining_attempts - reserved_attempts, 3)`；当预算不足以覆盖全部渠道时按配置顺序各执行 1 次，预算耗尽后的链尾不发送 HTTP。典型分配为：3 渠道/5 attempts → `3+1+1`，5 渠道/5 attempts → `1+1+1+1+1`，5 渠道/9 attempts → `3+3+1+1+1`。
-- 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道 4 秒默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
-- fallback 禁用时保留预算字段但不生效，运行路径继续使用单渠道 P0 合同。
-- 每条显式 fallback 链最多包含 5 个物理渠道：1 个主渠道与 1–4 个有序候选。渠道上限与 HTTP attempt 预算彼此独立；默认 5 attempts 可保证 5 个兼容渠道各获得 1 次机会。若显式配置的 attempt 预算小于渠道数，则按配置顺序覆盖到预算耗尽，未获得预留的链尾不发送 HTTP；运行时不得突破共享预算。
+- 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds / 每渠道 2 / 建连 30s / 首事件 600s / 空闲 240s / 整呼 7200s`；合法非零值必须原样保存、导入导出和回显。根级 `providerStreamIdleTimeout` 删除，不保留双路径；重新保存后只写模型级结构。
+- 保存入口对非零越界值严格报错；运行时解析再做防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
+- 单渠道 HTTP attempt 默认 2（范围 1–3）。启用 fallback 时采用“保证渠道覆盖，再用剩余预算重试”：先为当前请求下每个后续兼容渠道预留 1 次 attempt，当前渠道最多使用 `min(chain_remaining_attempts - reserved_attempts, maxAttemptsPerChannel)`；当预算不足以覆盖全部渠道时按配置顺序各执行 1 次，预算耗尽后的链尾不发送 HTTP。典型分配为：3 渠道/5 attempts → `2+2+1`，5 渠道/5 attempts → `1+1+1+1+1`，5 渠道/9 attempts → `2+2+2+2+1`。
+- 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。`maxWaitSeconds` 只累计实际退避 sleep，不计算模型推理、首 Token 等待、渠道执行或容量等待，不得用作请求墙钟 deadline。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
+- fallback 禁用时仍注入同一套 RecoverySettings 与四阶段活性；单渠道计划不切换，但不走旧的无设置 Router 路径。
+- 每条显式 fallback 链最多包含 5 个物理渠道：1 个主渠道与 1–4 个有序候选。渠道上限与 HTTP attempt 预算彼此独立。若显式配置的 attempt 预算小于渠道数，则按配置顺序覆盖到预算耗尽，未获得预留的链尾不发送 HTTP；运行时不得突破共享预算。
+- 候选必须同一 adapter 类型和 endpoint family；不允许 OpenAI/Anthropic 跨协议混排。熔断、按供应商拆网络、partial-output continuation 均不实施。
 - 模型配置的“测试全部”只测试物理 adapter，静默跳过逻辑 alias；单独点击逻辑 alias 的测试仍提示其虚拟 endpoint 不可直接测试，整链必须通过实际运行验证。
 
-**允许切换的错误类别**（首 model event 前安全窗口，且无副作用）：
+**允许同渠道重试、并在安全窗口内切换的错误类别**（零原始响应字节、零模型事件、零副作用，且父 context 未取消）：
 
-- transport 错误（DNS/TCP/TLS）
-- HTTP 429
-- 部分 5xx（502/503/504）
-- 2xx 后首 model event 前的 transport EOF / stream 截断
-- 零原始字节的 stream EOF / decode error
+- HTTP 500/502/503/504/524：当前渠道最多 2 次，仍失败且安全则切换
+- 可恢复 transport、TLS handshake EOF
+- 网关生成的建连/首事件超时
+- HTTP 429：优先遵守可容纳于剩余 wait 预算的 `Retry-After`，否则跳过等待并安全切换
+- 零原始字节的 stream EOF / unexpected EOF / reset
 
-**禁止切换：**
+**禁止切换、快速失败：**
 
-- `context.Cancel` / deadline exceeded
-- HTTP 400/401/403/404
-- 请求构建错误 / 模型参数错误
-- 任意原始响应字节已到达
-- 任意 model event 已到达
-- `partial_tool_seen / completed_tool_seen / tool_dispatched = true`
-- `checkpoint_committed = true`
-- `downstream_published = true`
-- `RequestBodyOverride` 跨 Provider
+- HTTP 401：只走现有凭据刷新/明确认证失效后的账号轮换
+- HTTP 403、其他 4xx、529
+- 父 context 取消 / deadline
+- 证书校验失败、永久 DNS
+- 请求构建/配置、协议解析、provider terminal
+- 流空闲超时、整次调用超时
+- 任意原始响应字节、模型事件、partial tool call 或副作用已出现
 
 **跨 Provider 兼容门禁**（fallback 到不同 Provider 时执行）：
 
@@ -616,7 +620,7 @@ Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID�
 与既有合同的关系：
 
 - §6.2 第 3、5 条的 **post-output replay gate** 继续有效：一旦原 attempt 已有 raw byte、模型事件、文本/思考、工具进度、下游输出或 checkpoint，不得把原请求当作普通 retry/fallback 重放，也不得把新 HTTP 请求伪装成原流续传。
-- §10.5 的 fallback 默认关闭、渠道预算、500 仅同渠道重试、529 及其他未列入 allowlist 的状态码语义不变。本节只**精确增加 HTTP 524** 的零输出窗口资格。
+- §10.5 的 fallback 默认关闭、共享预算、HTTP 500 同渠道最多 2 次后可安全切换、529 及其他未列入 allowlist 的状态码语义由预算化恢复合同覆盖。本节只**精确增加 HTTP 524** 的零输出窗口资格。
 - 自动续写（`automatic-continuation`）是新的独立机制，不是 P0 同 `model_call_id` 重试，也不是 P1 同 `model_call_id` 的渠道 fallback。
 - 不调查外部源站耗时；不新增未经批准的 `RestartProxy`；不改变 SCM/FSSync 对 Cursor 的 HTTP 响应语义；不修改 `proto/`、证书、MITM CONNECT/whitelist 或 18080/18090 端口。
 
@@ -634,7 +638,7 @@ HTTP 524（超时网关/源站无响应类 5xx）**仅在同时满足**以下条
 
 既有语义保持不变：
 
-- HTTP 500：可同渠道 P0 重试，禁止 fallback 切换。
+- HTTP 500：同渠道最多 2 次，安全窗口内可切换到下一候选。
 - HTTP 529：不得因本次 524 工作被扩大为 retry 或 fallback；观测分类可继续属于 `server_5xx`，但动作 allowlist 不包含 529。
 - 429、502、503、504、transport、零字节 pre-event EOF/decode 的既有资格不变。
 

@@ -4,7 +4,9 @@ import Select from "@/components/ui/Select.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
 import {
   ANTHROPIC_THINKING_EFFORT_DEFAULT,
+  applyOpenAIImageGenerationConstraint,
   createEmptyModelAdapter,
+  isOpenAIImageGenerationCompatible,
   normalizeModelAdapter,
   OPENAI_ENDPOINT_CHAT_COMPLETIONS,
   OPENAI_ENDPOINT_CUSTOM,
@@ -43,6 +45,7 @@ const openAIEndpointOptions = [
 
 const fieldTips = {
   openAIExtraParams: "开启后会把 JSON 对象覆盖到 OpenAI 请求体。同名字段以这里为准。OpenAI service_tier 支持 auto、default、flex、scale、priority；priority 可用于高优先级/Fast 类场景。",
+  openAIImageGeneration: "仅兼容的上游应开启。仅 OpenAI、静态 API key、/v1/responses 端点可启用；切换类型、端点或凭据后会自动关闭。",
 };
 
 const props = defineProps({
@@ -73,6 +76,7 @@ function createOptionalPositiveIntegerModel(key) {
 const maxCompletionTokensInput = createOptionalPositiveIntegerModel("maxCompletionTokens");
 const anthropicMaxTokensInput = createOptionalPositiveIntegerModel("anthropicMaxTokens");
 const contextWindowTokensInput = createOptionalPositiveIntegerModel("contextWindowTokens");
+const canEnableOpenAIImageGeneration = computed(() => isOpenAIImageGenerationCompatible(draft));
 
 function ensureOpenAIExtraParamsJSON() {
   if (!String(draft.openAIExtraParamsJSON || "").trim()) {
@@ -111,6 +115,11 @@ watch(() => draft.type, (type) => {
   } else if (type === "anthropic") {
     ensureAnthropicThinkingEffort();
   }
+  applyOpenAIImageGenerationConstraint(draft);
+});
+
+watch(() => [draft.credentialSource, draft.openAIEndpoint], () => {
+  applyOpenAIImageGenerationConstraint(draft);
 });
 
 watch(() => draft.openAIExtraParamsEnabled, (enabled) => {
@@ -253,6 +262,21 @@ function handleSave() {
                   spellcheck="false"
                   class="mt-3 min-h-[120px] w-full resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
                 />
+              </div>
+
+              <div v-if="draft.type === 'openai'" class="mt-3 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+                <label class="flex items-center justify-between gap-3 text-sm text-[var(--color-text)]">
+                  <span class="flex items-center gap-1.5">
+                    <Tooltip :content="fieldTips.openAIImageGeneration" />
+                    <span>OpenAI Responses 原生媒体生成</span>
+                  </span>
+                  <input
+                    v-model="draft.openAIImageGenerationEnabled"
+                    type="checkbox"
+                    class="size-4 accent-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                    :disabled="!canEnableOpenAIImageGeneration"
+                  />
+                </label>
               </div>
 
               <div v-if="draft.type === 'anthropic'" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">

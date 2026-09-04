@@ -72,3 +72,53 @@ func TestModelAdapterManagedResolvesTokenWithoutWritingBack(t *testing.T) {
 		t.Fatalf("测速缓存泄漏了临时 token：%s", encoded)
 	}
 }
+
+func TestModelAdapterTestRequestHashIncludesOpenAIImageGenerationEnabled(t *testing.T) {
+	base := serverconfig.ModelAdapterConfig{
+		DisplayName:    "gpt",
+		Type:           "openai",
+		BaseURL:        "https://api.example.com/v1",
+		APIKey:         "test-key",
+		TooltipData:    "gpt",
+		ModelID:        "gpt-test",
+		OpenAIEndpoint: "/v1/responses",
+	}
+	off := buildModelAdapterTestRequestHash(base)
+	enabled := base
+	enabled.OpenAIImageGenerationEnabled = true
+	on := buildModelAdapterTestRequestHash(enabled)
+	if off == "" || off == on {
+		t.Fatalf("toggling OpenAIImageGenerationEnabled must change request hash: off=%q on=%q", off, on)
+	}
+}
+
+func TestModelAdapterTestStreamRequestProjectsOpenAIImageGenerationEnabled(t *testing.T) {
+	originalStream := streamModelAdapterTestOpenAI
+	t.Cleanup(func() { streamModelAdapterTestOpenAI = originalStream })
+	var captured modeladapter.StreamRequest
+	streamModelAdapterTestOpenAI = func(_ context.Context, req modeladapter.StreamRequest, sink func(modeladapter.ModelEvent) error) error {
+		captured = req
+		if err := sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "done"}); err != nil {
+			return err
+		}
+		return sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTurnFinished, OutputTokens: 1})
+	}
+
+	adapter := serverconfig.ModelAdapterConfig{
+		DisplayName:                  "gpt",
+		Type:                         "openai",
+		BaseURL:                      "https://api.example.com/v1",
+		APIKey:                       "test-key",
+		TooltipData:                  "gpt",
+		ModelID:                      "gpt-test",
+		OpenAIEndpoint:               "/v1/responses",
+		OpenAIImageGenerationEnabled: true,
+	}
+	service := &ProxyService{modelTestResults: map[string]ModelAdapterTestResult{}}
+	if _, err := service.TestModelAdapter(adapter); err != nil {
+		t.Fatalf("TestModelAdapter 返回错误：%v", err)
+	}
+	if !captured.OpenAIImageGenerationEnabled {
+		t.Fatal("StreamRequest lost OpenAIImageGenerationEnabled")
+	}
+}

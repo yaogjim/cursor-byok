@@ -1144,10 +1144,10 @@ AND retry_budget_available
 
 架构约束：
 
-- 保留 `SelectChannelForModel` 单渠道接口，并新增 `ChannelPlan`（primary + ordered candidates）解析；fallback 关闭时返回单渠道计划，现有路径不变。
+- 保留 `SelectChannelForModel` 单渠道接口，并新增 `ChannelPlan`（primary + ordered candidates）解析；单渠道计划仍注入 RecoverySettings 与四阶段活性，不走旧的无设置 Router 路径。
 - `FallbackAwareRouter` 按计划逐个重建 provider request，不复用上一渠道 raw body；旧 response body 由 retry/adapter 关闭。
 - adapter/retry 通过 typed `FallbackSafetyInfo` 记录 `raw_bytes_observed`、`model_event_observed`、request-build、HTTP attempts 和等待预算；router 不根据错误文本推断输出安全状态。
-- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`。原始 P1 默认值为最多 5 次 HTTP attempt 与 8 秒退避预算；产品化后的配置范围、默认/兼容、单渠道 3 次上限和 wait 哨兵由 §14.9.4 覆盖。
+- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`。默认值为最多 5 次 HTTP attempt、每渠道 2 次与 8 秒退避预算；产品化后的配置范围、默认/兼容、每渠道上限和 wait 哨兵由 §14.9.4 覆盖。
 - `RequestBodyOverride`、provider opaque reasoning/tool state、图片、跨 Provider tools、不足的 context/output 容量会抑制候选；连续被跳过候选不能改变最后一个已实际尝试渠道的兼容性基准。
 - fallback 工件后缀按“最后一个实际兼容候选”计算；若剩余候选都会被门禁跳过，当前渠道保留原始 `model_call_id`，观测中的 `fallback_to` 也指向真正会尝试的下一渠道。
 - 显式 allowlist 代表用户授权候选模型语义变化；UI 明示费用、隐私、模型语义和工具兼容风险。
@@ -1347,21 +1347,26 @@ cli-model-pool.yaml + stdin prompt
 `ProviderFallbackConfig` 新增：
 
 - `maxHttpAttempts: int`：缺失/0 默认 5；保存合法范围 2–9。
-- `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30，单位为秒。
+- `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30。只累计实际退避 sleep，不是调用墙钟。
+- `maxAttemptsPerChannel: int`：缺失/0 默认 2；保存合法范围 1–3。
+- `connectTimeoutSeconds: int`：缺失/0 默认 30；保存合法范围 5–120。
+- `firstEventTimeoutSeconds: int`：缺失/0 默认 600；保存合法范围 60–1800。
+- `streamIdleTimeoutSeconds: int`：缺失/0 默认 240；保存合法范围 30–900。根级 `providerStreamIdleTimeout` 删除。
+- `callTimeoutSeconds: int`：缺失/0 默认 7200；保存合法范围 900–21600。退避期间暂停该时钟。
 
-归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时字段保留但不参与运行。
+归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时仍注入同一套 RecoverySettings 与活性，只是不切换渠道。候选必须同一 adapter 类型和 endpoint family；不允许 OpenAI/Anthropic 跨协议混排。熔断、按供应商拆网络、partial-output continuation 均不实施。
 
-每次 fallback chain 创建一个 `FallbackRetryBudget(maxHttpAttempts, maxWaitSeconds)`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, 3)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `3+1+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `3+3+1+1+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
+每次 fallback chain 创建一个共享 `FallbackRetryBudget` 与一条跨渠道 `providerLiveness`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, maxAttemptsPerChannel)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `2+2+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `2+2+2+2+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
 
-wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认 4s。普通单渠道 `FallbackBudget == nil` 时继续使用 4s。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
+wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认值。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
 
-跨 Provider 继续执行 §14.7 的 messages、tools、图片/附件、context/output、opaque state 与 `RequestBodyOverride` 门禁。同渠道 P0 可以按既有合同重试 HTTP 500，但 **500 不允许切换渠道**；router 的切换 allowlist 只能包含 transport、429、502/503/504、零原始字节且首 model event 前的 EOF/decode/idle failure，不得复用宽泛 `status >= 500` 或统一 `ProviderErrorServer5xx` 判定。任意 raw byte、model event、工具/checkpoint/downstream 副作用或 context cancel 后立即终止链。
+动作矩阵由 `classifyProviderFailure` 唯一决定。HTTP 500/502/503/504/524、可恢复 transport、TLS handshake EOF、网关建连/首事件超时：当前渠道最多 2 次，仍失败且安全则切换。429 遵守可容纳的 `Retry-After`，否则跳过等待并安全切换。401 只走凭据刷新/账号轮换。403、其他 4xx、529、父取消、证书校验、永久 DNS、请求构建、协议解析、provider terminal、流空闲超时和整呼超时快速失败，不切渠道。任意 raw byte、model event、工具/checkpoint/downstream 副作用或父 context cancel 后立即终止链。不得复用宽泛 `status >= 500` 或统一 `ProviderErrorServer5xx` 判定。健康请求的首 Token 晚于 90 秒但早于 600 秒不得被旧全局 idle 或 `maxWaitSeconds` 误杀。
 
 ### 14.9.5 前端保存、交互与观测合同
 
 保存必须对含派生 ID 的完整 adapter 集合完成引用、自引用、重复和预算校验，随后才在序列化 payload 时删除 `id`；Go 后端重新计算 ID。导入导出、禁用回显和旧配置 roundtrip 使用同一纯投影合同，不得让 `appState` 与 `configProjection` 对禁用字段采用不同语义。
 
-`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供“全链最大 HTTP 尝试次数（默认 5）”和“全链最大等待秒数（默认 8）”。帮助文本必须说明：单渠道最多 3、实际按剩余预算分配、alias 自身不发请求、已有输出后不切换，以及跨 Provider 的费用、隐私、模型语义和工具兼容风险。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
+`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供全链 attempt/wait、每渠道次数和四项活性输入。帮助文本必须说明：单渠道默认 2（1–3）、累计等待不含推理时间、alias 自身不发请求、已有输出后不切换，以及同协议/endpoint family 限制。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
 
 逻辑 alias 的“保存并测试”及单卡片“测试”只保存或阻止直接 endpoint 请求，并提示使用运行验证；物理渠道仍可单独测试。“测试全部”只调度物理 adapter，静默跳过逻辑 alias，不显示保存提示，也不把跳过计入批量测试总数。
 
@@ -1601,7 +1606,7 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 - **决策时间**：2026-08-27
 - **关联计划**：`.cursor/plans/interrupt_recovery_hardening_330c266b.plan.md`
 - **需求锚点**：工作决策基线 §6.2、§10.5、§10.15
-- **继承且不得改写**：§14.5 `DESIGN-PROVIDER-DISCONNECT-001`、§14.7 / §14.9 `DESIGN-P1-SUBAGENT-FALLBACK-001` 的 post-output replay gate、三层结果、`model_call_id` 幂等 final、500 仅同渠道重试、529 不在 retry/fallback allowlist、fallback 默认关闭与共享预算。
+- **继承且不得改写**：§14.5 `DESIGN-PROVIDER-DISCONNECT-001`、§14.7 / §14.9 的 post-output replay gate、三层结果、`model_call_id` 幂等 final、529 不在 retry/fallback allowlist、fallback 默认关闭与共享预算。HTTP 500 的同渠道 2 次后安全切换由预算化恢复合同覆盖，见 §14.9.4 与工作决策基线 §10.5。
 - **适用范围**：HTTP 524 精确 allowlist、同一 turn 的 automatic-continuation、provider 错误到 RunSSE/Connect terminal 的跨层投影、流诊断字段、session rotation 与 shutdown drain/cancel、TLS/SCM/FSSync/checkpoint 预期噪声。
 - **不包含**：调查 `api.aigo0.com` 等源站性能；新增未经批准的 `RestartProxy`；改变 SCM/FSSync 对 Cursor 的 HTTP 响应语义；修改 `proto/`、证书、MITM CONNECT/whitelist、18080/18090；把 continuation 接到 Gateway Chat/Responses 或 subagent child；默认开启 continuation。
 - **UI**：`N/A`（本工作包不要求新控制面；配置为可回滚 YAML/schema 开关，缺省关闭。若后续暴露 UI，必须另开切片且不得改变默认 disabled）。
@@ -1612,7 +1617,7 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 
 **根因 / 承重不变量**：
 
-1. retry/fallback 资格由**动作 allowlist** 决定，观测分类 `server_5xx` 不能代替动作。当前 `isRetryableHTTPStatus` 为 429/500/502/503/504，`isFallbackEligibleHTTPStatus` 为 429/502/503/504；524 被 `ClassifyHTTPStatus` 归入 `server_5xx`，但两个 allowlist 都不含 524。
+1. retry/fallback 资格由**动作 allowlist** 决定，观测分类 `server_5xx` 不能代替动作。当前 `isRetryableHTTPStatus` 与 `classifyProviderFailure` 为 429/500/502/503/504/524；529 与其他未列入状态快速失败。HTTP 500 同渠道最多 2 次后可在安全窗口切换。
 2. `providerRetryObservation` 对全部 `ProviderErrorServer5xx` 写 `retryable=true`，RunSSE `ErrorDetails.IsRetryable` 在 `buildRunSSEStructuredErrorWithDetail` 中硬编码 `true`，与真实 decision 脱节。
 3. P0 明确禁止原 attempt 在已有输出后普通重放；这不等于禁止**新** `model_call_id` 的安全续写。缺少独立 continuation 状态机时，实现者会把续写误接成 retry/fallback。
 4. `observability.Controller.Reconfigure` 在任意 settings/fingerprint 变化时同步 `previous.Close()`；`observabilitySettings` 把 routing/model 字段打进 fingerprint，存在轮换 recorder、阻塞或误伤在途流的路径。
@@ -1626,8 +1631,8 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 
 | 事实 | 锚点 |
 | --- | --- |
-| 同渠道 HTTP retry allowlist 为 429/500/502/503/504 | `internal/backend/agent/model/retry.go` `isRetryableHTTPStatus` |
-| fallback HTTP allowlist 为 429/502/503/504；500 禁止切换 | `fallback_router.go` `isFallbackEligibleHTTPStatus` 及注释 |
+| 同渠道 HTTP retry allowlist 为 429/500/502/503/504/524 | `internal/backend/agent/model/retry.go` `isRetryableHTTPStatus` |
+| fallback HTTP allowlist 为 429/500/502/503/504/524；529 禁止切换 | `fallback_router.go` `isFallbackEligibleError` / `classifyProviderFailure` |
 | 524/529 观测分类为 `server_5xx` | `http_error.go` `ClassifyHTTPStatus`；`http_error_test.go` 覆盖 529 |
 | 529 当前不在 retry/fallback 动作 allowlist | 上述两个函数；`fallback_router_test.go` `5xx_529` |
 | 观测层把全部 `server_5xx` 标为 retryable | `forwarder/actor.go` `providerRetryObservation` |
@@ -1637,7 +1642,7 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 | fingerprint 含 routing/model 字段 | `internal/backend/host.go` `observabilitySettings` |
 | bidi 真实解码失败才写 `decode_error`；stale 走独立 kind | `forwarder/service.go` `BidiAppend` |
 | P0 三层结果与安全重试门禁 | 本文件 §14.5 |
-| P1 fallback 保持同一 `model_call_id`，500 不切换 | 本文件 §14.7.6、§14.9.4；工作决策基线 §10.5 |
+| P1 fallback 保持同一 `model_call_id`，500 同渠道 2 次后可安全切换 | 本文件 §14.7.6、§14.9.4；工作决策基线 §10.5 |
 
 **推断（`evidence_status=inferred`）**：真实 Cursor 对同一 RunSSE 多段 assistant 的兼容性需在启用 continuation 前用故障注入 + 真实流验收；未完成前默认 disabled 覆盖该风险。
 
@@ -1652,7 +1657,7 @@ Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只�
 | 状态 | 同渠道 retry | fallback 切换 | 备注 |
 | --- | --- | --- | --- |
 | 524 | 仅零 raw byte、零模型事件、零工具进度、零 checkpoint、context 未取消 | 同左，且满足 §14.7/§14.9 其余 fallback 门禁 | 新增 |
-| 500 | 保持 P0：允许 | 保持禁止 | 不得扩大 |
+| 500 | 允许，每渠道最多 2 次 | 安全窗口内允许 | 预算化恢复合同 |
 | 529 | 保持禁止 | 保持禁止 | 不得扩大 |
 | 429/502/503/504 | 保持现状 | 保持现状 | 不得缩小或改写成“全部 5xx” |
 

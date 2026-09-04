@@ -224,6 +224,61 @@ func TestResolveChannelPlanCarriesPhysicalCapacityNotAlias(t *testing.T) {
 	}
 }
 
+func TestResolveAdapterToChannelProjectsOpenAIImageGenerationEnabled(t *testing.T) {
+	enabled := testModelAdapter("img-on", 1)
+	enabled.OpenAIImageGenerationEnabled = true
+	disabled := testModelAdapter("img-off", 2)
+	disabled.BaseURL = "https://api2.example.com/v1"
+	normalized, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{enabled, disabled})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	on := resolveAdapterToChannel(normalized[0])
+	off := resolveAdapterToChannel(normalized[1])
+	if !on.OpenAIImageGenerationEnabled {
+		t.Fatal("resolved channel lost OpenAIImageGenerationEnabled")
+	}
+	if off.OpenAIImageGenerationEnabled {
+		t.Fatal("disabled adapter projected OpenAIImageGenerationEnabled=true")
+	}
+
+	plan, err := resolveModelAdapterChannelPlan(normalized, normalized[0].ID)
+	if err != nil {
+		t.Fatalf("resolve plan: %v", err)
+	}
+	if len(plan.Channels) != 1 || !plan.Channels[0].OpenAIImageGenerationEnabled {
+		t.Fatalf("single-channel plan = %+v", plan)
+	}
+}
+
+func TestResolveChannelPlanKeepsOpenAIImageGenerationPerCandidate(t *testing.T) {
+	adapters, aliasID, primaryID, candidateID := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    primaryID,
+		CandidateChannelIDs: []string{candidateID},
+	}
+	adapters[1].OpenAIImageGenerationEnabled = true
+	adapters[2].OpenAIImageGenerationEnabled = false
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	plan, err := resolveModelAdapterChannelPlan(normalized, aliasID)
+	if err != nil {
+		t.Fatalf("resolve plan: %v", err)
+	}
+	if !plan.FallbackEnabled || len(plan.Channels) != 2 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if !plan.Channels[0].OpenAIImageGenerationEnabled {
+		t.Fatal("primary channel lost enabled capability")
+	}
+	if plan.Channels[1].OpenAIImageGenerationEnabled {
+		t.Fatal("candidate channel inherited primary capability")
+	}
+}
+
 func TestResolveChannelDefaultsMissingCapacityUnlimited(t *testing.T) {
 	adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
 	normalized, err := NormalizeModelAdapterConfigs(adapters)

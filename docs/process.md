@@ -7,6 +7,16 @@
 
 ## 一、待完成的内容
 
+### 0.0a BYOK 预算化恢复（本轮实施）
+
+2026-09-03 冻结并实施预算化恢复合同，覆盖旧的“HTTP 500 禁止 fallback 切换”。Cursor 只见一个逻辑模型 / 一个 RunSSE；网关内部吸收 500/503，耗尽后至多一次 terminal 且 `IsRetryable=false`。默认全链 5 attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s。`maxWaitSeconds` 只累计实际退避 sleep，退避期间暂停整呼时钟。500/502/503/504/524、可恢复 transport、TLS handshake EOF、建连/首事件超时：同渠道 2 次后可安全切换。429 遵守可容纳的 Retry-After，否则跳过等待并切换。403/其他 4xx/529/父取消/证书校验/永久 DNS/请求构建/协议解析/provider terminal 快速失败。任意 raw byte / 模型事件 / 副作用关闭窗口。删除全局 `providerStreamIdleTimeout`。单渠道计划仍注入 RecoverySettings。不实施熔断、供应商网络分流、partial-output continuation 或 OpenAI/Anthropic 混排。回滚关闭该模型 `providerFallback.enabled` 或恢复安装前 `.app`。
+
+2026-09-03/04 已完成目标仓库产物安装与在线正常流量冒烟。`workspace-gateway-native-fix/bin/macos-arm64.dmg` 通过 `hdiutil verify`；DMG 内应用与 `/Applications/Gateway-byok.app` 均为 `0.0.56.0`、Mach-O arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。安装实例监听 `127.0.0.1:18080` 与 `127.0.0.1:18090`，`GET /healthz` 返回 `200 ok`；最新启动日志显示 backend、MITM 和 Cursor 代理设置均成功，无配置归一化、panic 或 fatal 错误。真实 Cursor 正常请求只观察到一次 RunSSE 入站/转发，内部 model call 均成功且无 terminal provider error。
+
+2026-09-04 已完成直接经过本机 Gateway 的五类受控故障验收。HTTP 500 与 503 均在主渠道恰好失败 2 次后切备用成功；TLS 握手阶段 accept-then-close 在客户端表现为 transport reset，主渠道 2 次后切备用成功；partial-output 只请求主渠道 1 次，发布 `PARTIAL-CANARY` 后以 `output_observed` 关闭安全门，未重放到备用；预算耗尽按主渠道 500×2、备用 503×2 消费 4 个全链 attempts，已建立 HTTP 200 SSE 后仅在流体内输出 1 个 `provider_error` terminal。关联 trace 分别为 `65dee066553eddeb1b85bfe5470aadcf`、`4a4cd69e021a2eeef8ea9ae9b2a45ed6`、`ae2bdb7a6ff108b59d54935240e213e5`、`a5da9e5289d962eebbc41e1459d67f95`、`db10b4e26be085ed9a34d10130fda209`；failure/action、逻辑模型、渠道/provider、链级与渠道级 attempt、累计等待/退避、fallback 原因、安全门和最终动作字段均存在。临时 key、Authorization/请求响应正文类字段及 canary/成功正文扫描命中均为 0。
+
+临时在线配置已完整恢复：`config.yaml` 与原始备份 SHA-256 均为 `a324d89d9b6eaf30b387e85a51924a03f6c13bcef1e2df1cef194d3a022e9d37`，模型数回到 32，临时模型为 0，`18091` 与 `18180–18183` 均关闭；正常应用继续监听 `18080/18090`，`GET /healthz` 返回 200。当前仍为 `verified-partial`：这些是本机 Gateway 端到端请求，不是 Cursor UI/RunSSE 受控故障注入；真实 Cursor 单 Run/Agent 生命周期、输出后不重放和耗尽后至多一次 terminal 仍需产品级最终验收。
+
 ### 0.0 Cursor Subagent 只读重调度基础设施
 
 2026-08-30 已完成默认关闭的基础切片，当前状态为 `blocked, foundation-partial`。仓库新增未来兼容的 `subagentReschedule.enabled` 配置（旧配置缺失或 UI 保存均为 false）、禁用的 Settings 占位、`attempts.json` 版本化 ledger/CAS API、仅接受 typed `stream_decode` / `stream_idle_timeout` 的 readonly/3-attempt fail-closed policy，以及 attempt 级 observability 和日志分析器投影。上述 attempt ledger、policy 和 fencing API尚未接入生产 Task 生命周期，不改变现有 subagent 派发和 durable handoff。

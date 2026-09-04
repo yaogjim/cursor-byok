@@ -527,7 +527,6 @@ func observabilitySettings(cfg serverconfig.Config) observability.Settings {
 func observabilityRuntimeFingerprint(cfg serverconfig.Config) string {
 	fingerprintValues := []string{
 		cfg.Routing.Mode,
-		fmt.Sprint(cfg.ProviderStreamIdleTimeout),
 		fmt.Sprint(cfg.HomeMetrics.IncludeCacheWriteInHitRate),
 	}
 	for _, adapter := range cfg.ModelAdapters {
@@ -540,6 +539,13 @@ func observabilityRuntimeFingerprint(cfg serverconfig.Config) string {
 			fmt.Sprint(adapter.MaxCompletionTokens),
 			fmt.Sprint(adapter.AnthropicMaxTokens),
 			fmt.Sprint(adapter.ThinkingBudgetTokens),
+			fmt.Sprint(adapter.ProviderFallback.MaxHttpAttempts),
+			fmt.Sprint(adapter.ProviderFallback.MaxWaitSeconds),
+			fmt.Sprint(adapter.ProviderFallback.MaxAttemptsPerChannel),
+			fmt.Sprint(adapter.ProviderFallback.ConnectTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.FirstEventTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.StreamIdleTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.CallTimeoutSeconds),
 		)
 	}
 	return observability.ConfigFingerprint(fingerprintValues...)

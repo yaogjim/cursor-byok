@@ -30,10 +30,6 @@ func (s *stubPlanResolver) SelectChannelForModel(_ context.Context, _ string) (*
 	return nil, legacyruntime.ErrChannelNotAvailable
 }
 
-func (s *stubPlanResolver) ProviderStreamIdleTimeout(_ context.Context) time.Duration {
-	return time.Second
-}
-
 func (s *stubPlanResolver) SelectChannelPlanForModel(_ context.Context, _ string) (*legacyruntime.ChannelPlan, error) {
 	return s.plan, s.err
 }
@@ -369,7 +365,7 @@ func TestIsFallbackEligibleError(t *testing.T) {
 		{"5xx_503", &HTTPStatusError{StatusCode: http.StatusServiceUnavailable}, true},
 		{"5xx_504", &HTTPStatusError{StatusCode: http.StatusGatewayTimeout}, true},
 		{"5xx_524", &HTTPStatusError{StatusCode: HTTPStatusCloudflareTimeout}, true},
-		{"5xx_500", &HTTPStatusError{StatusCode: http.StatusInternalServerError}, false},
+		{"5xx_500", &HTTPStatusError{StatusCode: http.StatusInternalServerError}, true},
 		{"5xx_529", &HTTPStatusError{StatusCode: 529}, false},
 		{"429", &HTTPStatusError{StatusCode: http.StatusTooManyRequests}, true},
 		{"400", &HTTPStatusError{StatusCode: http.StatusBadRequest}, false},
@@ -413,10 +409,10 @@ func TestCheckFallbackCompatibility(t *testing.T) {
 		}
 	}
 
-	// 跨 provider 无 override → 兼容
+	// 跨 provider 无 override → 必须同 adapter type
 	ok, reason = checkFallbackCompatibility(StreamRequest{}, "openai", "anthropic")
-	if !ok || reason != "" {
-		t.Errorf("cross-provider no override: got ok=%v reason=%q", ok, reason)
+	if ok || reason != "adapter_type" {
+		t.Errorf("cross-provider no override: got ok=%v reason=%q, want adapter_type", ok, reason)
 	}
 }
 
@@ -555,21 +551,21 @@ func TestAllocateFallbackChannelAttemptsCoverageFirst(t *testing.T) {
 		subsequent int
 		want       int
 	}{
-		{name: "3ch_budget5_first", remaining: 5, subsequent: 2, want: 3},
+		{name: "3ch_budget5_first", remaining: 5, subsequent: 2, want: 2},
 		{name: "3ch_budget5_second", remaining: 2, subsequent: 1, want: 1},
 		{name: "3ch_budget5_third", remaining: 1, subsequent: 0, want: 1},
 		{name: "5ch_budget5_first", remaining: 5, subsequent: 4, want: 1},
-		{name: "5ch_budget9_first", remaining: 9, subsequent: 4, want: 3},
-		{name: "5ch_budget9_second", remaining: 6, subsequent: 3, want: 3},
+		{name: "5ch_budget9_first", remaining: 9, subsequent: 4, want: 2},
+		{name: "5ch_budget9_second", remaining: 6, subsequent: 3, want: 2},
 		{name: "5ch_budget9_third", remaining: 3, subsequent: 2, want: 1},
 		{name: "5ch_budget2_first", remaining: 2, subsequent: 4, want: 1},
 		{name: "5ch_budget2_second", remaining: 1, subsequent: 3, want: 1},
 		{name: "exhausted", remaining: 0, subsequent: 2, want: 0},
-		{name: "single_channel", remaining: 5, subsequent: 0, want: 3},
+		{name: "single_channel", remaining: 5, subsequent: 0, want: 2},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			got := allocateFallbackChannelAttempts(test.remaining, test.subsequent)
+			got := allocateFallbackChannelAttempts(test.remaining, test.subsequent, providerRequestMaxAttempts)
 			if got != test.want {
 				t.Fatalf("allocate(%d, %d) = %d, want %d", test.remaining, test.subsequent, got, test.want)
 			}
@@ -781,10 +777,10 @@ func TestCheckFallbackCompatibility_ToolsBlockedCrossProvider(t *testing.T) {
 		t.Errorf("same provider with tools: got ok=%v reason=%q, want ok=true", ok, reason)
 	}
 
-	// 跨 provider 无 tools → 兼容
+	// 跨 provider 无 tools → 仍因 adapter type 不兼容
 	ok, reason = checkFallbackCompatibility(StreamRequest{}, "openai", "anthropic")
-	if !ok || reason != "" {
-		t.Errorf("cross-provider no tools: got ok=%v reason=%q", ok, reason)
+	if ok || reason != "adapter_type" {
+		t.Errorf("cross-provider no tools: got ok=%v reason=%q, want adapter_type", ok, reason)
 	}
 }
 
@@ -937,4 +933,131 @@ func (a *suffixCapturingAdapter) Stream(_ context.Context, req StreamRequest, _ 
 		return a.errs[idx]
 	}
 	return nil
+}
+
+func TestFallbackEnabled_NoSwitchAfterSideEffect(t *testing.T) {
+	transportErr := &HTTPStatusError{StatusCode: http.StatusServiceUnavailable, Attempt: 1}
+	adapter := &sideEffectAdapter{err: transportErr}
+	plan := &legacyruntime.ChannelPlan{
+		Channels: []legacyruntime.ResolvedChannel{
+			makeTestChannel("ch-a", "openai"),
+			makeTestChannel("ch-b", "openai"),
+		},
+		FallbackEnabled: true,
+	}
+	r := newFallbackRouterForTest(adapter, plan)
+	err := r.Stream(context.Background(), StreamRequest{ModelID: "m1"}, func(ModelEvent) error { return nil })
+	if err == nil {
+		t.Fatal("expected error (side effect blocks fallback)")
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("expected 1 call, got %d", adapter.calls)
+	}
+}
+
+type sideEffectAdapter struct {
+	calls int
+	err   error
+}
+
+func (a *sideEffectAdapter) Stream(_ context.Context, req StreamRequest, _ func(ModelEvent) error) error {
+	a.calls++
+	if req.FallbackSafety != nil {
+		req.FallbackSafety.markHTTPAttempt()
+		req.FallbackSafety.MarkSideEffectObserved()
+	}
+	if req.FallbackBudget != nil {
+		_ = req.FallbackBudget.TryConsumeAttempt()
+	}
+	return a.err
+}
+
+func TestCheckFallbackChannelCompatibilityEndpointFamily(t *testing.T) {
+	chat := makeTestChannel("ch-chat", "openai")
+	chat.OpenAIEndpoint = "/v1/chat/completions"
+	responses := makeTestChannel("ch-resp", "openai")
+	responses.OpenAIEndpoint = "/v1/responses"
+	ok, reason := checkFallbackChannelCompatibility(StreamRequest{}, chat, responses)
+	if ok || reason != "endpoint_family" {
+		t.Fatalf("chat vs responses: ok=%v reason=%q, want endpoint_family", ok, reason)
+	}
+	ok, reason = checkFallbackChannelCompatibility(StreamRequest{}, chat, chat)
+	if !ok || reason != "" {
+		t.Fatalf("same family: ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestFallbackObservabilityIncludesPolicyBudgetAndSafety(t *testing.T) {
+	controller, eventsPath := newObservabilityController(t)
+	budget := NewFallbackRetryBudget(5, 8*time.Second)
+	_ = budget.TryConsumeAttempt()
+	_ = budget.TryConsumeAttempt()
+	_ = budget.TryReserveWait(250 * time.Millisecond)
+	recordFallbackAttempt(context.Background(), fallbackAttemptRecord{
+		requestID:      "request-1",
+		modelCallID:    "model-call-1",
+		logicalModel:   "logical-model",
+		channelAttempt: 1,
+		channelID:      "channel-a",
+		provider:       "openai",
+		failure:        classifyHTTPStatusFailure(http.StatusInternalServerError),
+		fallbackTo:     "channel-b",
+		budget:         budget,
+		allocation:     2,
+		retryDelay:     250 * time.Millisecond,
+		safety: FallbackSafetySnapshot{
+			HTTPAttempts: 2,
+			Waited:       250 * time.Millisecond,
+		},
+	})
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	events := filterObservabilityEvents(readObservabilityEvents(t, eventsPath), "provider_fallback_attempt")
+	if len(events) != 1 {
+		t.Fatalf("fallback event count = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("error category = %q", event.ErrorCategory)
+	}
+	for field, want := range map[string]string{
+		"logical_model":    "logical-model",
+		"channel_id":       "channel-a",
+		"provider":         "openai",
+		"failure_cause":    FailureCauseHTTP500,
+		"failure_phase":    LivenessPhaseHTTP,
+		"recovery_action":  RecoveryActionSwitch,
+		"fallback_to":      "channel-b",
+	} {
+		if got := observabilityFieldString(event, field); got != want {
+			t.Fatalf("%s = %q, want %q", field, got, want)
+		}
+	}
+	if observabilityFieldInt(event, "failure_http_status") != http.StatusInternalServerError ||
+		observabilityFieldInt(event, "channel_http_attempts") != 2 ||
+		observabilityFieldInt(event, "chain_attempts_used") != 2 {
+		t.Fatalf("attempt/status fields = %#v", event.Fields)
+	}
+}
+
+func TestFallbackSharedBudgetDoesNotInflatePastFive(t *testing.T) {
+	errs := make([]error, 20)
+	for i := range errs {
+		errs[i] = &HTTPStatusError{StatusCode: http.StatusInternalServerError, Attempt: 1}
+	}
+	adapter := &controlledAdapter{errs: errs}
+	plan := &legacyruntime.ChannelPlan{
+		Channels: []legacyruntime.ResolvedChannel{
+			makeTestChannel("ch-a", "openai"),
+			makeTestChannel("ch-b", "openai"),
+			makeTestChannel("ch-c", "openai"),
+		},
+		FallbackEnabled: true,
+	}
+	r := newFallbackRouterForTest(adapter, plan)
+	_ = r.Stream(context.Background(), StreamRequest{ModelID: "m1"}, func(ModelEvent) error { return nil })
+	if adapter.calls > fallbackChainTotalAttempts {
+		t.Fatalf("shared budget inflated: got %d calls, want <= %d", adapter.calls, fallbackChainTotalAttempts)
+	}
 }

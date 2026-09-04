@@ -13,7 +13,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	legacyruntime "cursor/internal/runtime"
 	"cursor/internal/subscriptionauth"
@@ -34,10 +33,6 @@ type staticChannelResolver struct {
 
 func (resolver staticChannelResolver) SelectChannelForModel(context.Context, string) (*legacyruntime.ResolvedChannel, error) {
 	return resolver.channel, nil
-}
-
-func (staticChannelResolver) ProviderStreamIdleTimeout(context.Context) time.Duration {
-	return time.Second
 }
 
 func TestRouterRuntimeDisabledClearsReasoningEffort(t *testing.T) {
@@ -979,8 +974,12 @@ func TestRouterManagedGrokDoesNotRotateOnBareStatus(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected provider error")
 			}
-			if hits != 1 {
-				t.Fatalf("hits=%d, want 1", hits)
+			wantHits := 1
+			if status == http.StatusTooManyRequests {
+				wantHits = providerRequestMaxAttempts
+			}
+			if hits != wantHits {
+				t.Fatalf("hits=%d, want %d", hits, wantHits)
 			}
 			if len(creds.quotaCalls) != 0 {
 				t.Fatalf("quota calls = %#v, want none", creds.quotaCalls)

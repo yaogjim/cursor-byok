@@ -2,7 +2,6 @@
 package modeladapter
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -291,7 +290,11 @@ func ClassifyProviderError(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil {
+		return live.Category()
+	}
+	if isParentContextError(err) {
 		return ProviderErrorContextCanceled
 	}
 	if isCapacityUnavailable(err) {
@@ -320,6 +323,10 @@ func ClassifyProviderError(err error) string {
 func isProviderStreamIdleTimeout(err error) bool {
 	var idle *StreamIdleTimeoutError
 	if errors.As(err, &idle) {
+		return true
+	}
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil && live.Phase == LivenessPhaseIdle {
 		return true
 	}
 	if err == nil {

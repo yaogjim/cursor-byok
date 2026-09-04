@@ -70,9 +70,19 @@ import {
   normalizeHomeMetrics,
   normalizeHomeMetricsReport,
 } from "@/state/homeMetrics";
-import { applyModelAdapterTypeChange } from "@/state/modelAdapterTypeChange";
+import {
+  applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
+  isOpenAIImageGenerationCompatible,
+  normalizeOpenAIImageGenerationEnabled,
+} from "@/state/modelAdapterTypeChange";
 
-export { applyModelAdapterTypeChange };
+export {
+  applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
+  isOpenAIImageGenerationCompatible,
+  normalizeOpenAIImageGenerationEnabled,
+};
 
 const APP_STATE_STORAGE_KEY = "cursor-client:runtime-state:v2";
 const GENERIC_SERVICE_ERROR = "服务错误";
@@ -249,6 +259,7 @@ export function buildModelAdapterTestRequestHash(source) {
     adapter.type === "openai" ? normalizeOpenAIEndpoint(adapter.openAIEndpoint) : "",
     adapter.type === "openai" ? String(Boolean(adapter.openAIExtraParamsEnabled)) : "false",
     adapter.type === "openai" && adapter.openAIExtraParamsEnabled ? asString(adapter.openAIExtraParamsJSON) : "",
+    adapter.type === "openai" ? String(Boolean(adapter.openAIImageGenerationEnabled)) : "false",
     String(Boolean(adapter.customHeadersEnabled)),
     adapter.customHeadersEnabled ? asString(adapter.customHeadersJSON) : "",
     adapter.type === "anthropic" ? String(Boolean(adapter.anthropicExtraParamsEnabled)) : "false",
@@ -339,6 +350,7 @@ export function createEmptyModelAdapter() {
     openAIEndpoint: OPENAI_ENDPOINT_CHAT_COMPLETIONS,
     openAIExtraParamsEnabled: false,
     openAIExtraParamsJSON: OPENAI_EXTRA_PARAMS_DEFAULT_JSON,
+    openAIImageGenerationEnabled: false,
     customHeadersEnabled: false,
     customHeadersJSON: CUSTOM_HEADERS_DEFAULT_JSON,
     anthropicExtraParamsEnabled: false,
@@ -350,11 +362,16 @@ export function createEmptyModelAdapter() {
     thinkingBudgetTokens: 0,
     maxConcurrentRequests: 0,
     providerFallback: {
-      enabled: false,
-      primaryChannelID: "",
+      enabled: DEFAULT_PROVIDER_FALLBACK.enabled,
+      primaryChannelID: DEFAULT_PROVIDER_FALLBACK.primaryChannelID,
       candidateChannelIDs: [],
       maxHttpAttempts: DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts,
       maxWaitSeconds: DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds,
+      maxAttemptsPerChannel: DEFAULT_PROVIDER_FALLBACK.maxAttemptsPerChannel,
+      connectTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.connectTimeoutSeconds,
+      firstEventTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.firstEventTimeoutSeconds,
+      streamIdleTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.streamIdleTimeoutSeconds,
+      callTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.callTimeoutSeconds,
     },
   };
 }
@@ -456,6 +473,14 @@ export function normalizeModelAdapter(source) {
   const openAIExtraParamsJSON = normalizedType === "openai"
     ? asString(raw.openAIExtraParamsJSON ?? raw.openaiExtraParamsJSON ?? raw.open_ai_extra_params_json) || OPENAI_EXTRA_PARAMS_DEFAULT_JSON
     : "";
+  const openAIImageGenerationEnabled = normalizeOpenAIImageGenerationEnabled({
+    type: normalizedType,
+    credentialSource: normalizedCredentialSource,
+    openAIEndpoint: normalizedType === "openai" ? effectiveOpenAIEndpoint : "",
+    openAIImageGenerationEnabled: raw.openAIImageGenerationEnabled
+      ?? raw.openaiImageGenerationEnabled
+      ?? raw.open_ai_image_generation_enabled,
+  });
   const customHeadersEnabled = asBoolean(raw.customHeadersEnabled ?? raw.custom_headers_enabled);
   const customHeadersJSON = asString(raw.customHeadersJSON ?? raw.custom_headers_json) || CUSTOM_HEADERS_DEFAULT_JSON;
   const anthropicExtraParamsEnabled = normalizedType === "anthropic"
@@ -478,6 +503,7 @@ export function normalizeModelAdapter(source) {
     openAIEndpoint: normalizedType === "openai" ? effectiveOpenAIEndpoint : "",
     openAIExtraParamsEnabled,
     openAIExtraParamsJSON,
+    openAIImageGenerationEnabled,
     customHeadersEnabled,
     customHeadersJSON,
     anthropicExtraParamsEnabled,
@@ -576,6 +602,9 @@ export function validateModelAdapters(source, { allAdapters } = {}) {
         return `${prefix} 的 ${extraParamsError}`;
       }
     }
+    if (adapter.openAIImageGenerationEnabled && !isOpenAIImageGenerationCompatible(adapter)) {
+      return `${prefix} 的 OpenAI Responses 原生媒体生成仅支持静态密钥与 /v1/responses 端点`;
+    }
     if (adapter.type === "anthropic" && adapter.anthropicExtraParamsEnabled) {
       const extraParamsError = validateAnthropicExtraParamsJSON(adapter.anthropicExtraParamsJSON);
       if (extraParamsError) {
@@ -648,7 +677,6 @@ function normalizeConfig(source) {
   const updates = raw.updates && typeof raw.updates === "object" ? raw.updates : {};
   return {
     observability: normalizeObservabilityConfig(raw.observability, raw.log),
-    providerStreamIdleTimeout: asPositiveInteger(raw.providerStreamIdleTimeout),
     backendListenAddr: asString(raw.configBackendListenAddr) || asString(raw.backendListenAddr),
     proxyListenAddr: asString(raw.configProxyListenAddr) || asString(raw.proxyListenAddr),
     modelAdapters: normalizeModelAdapters(raw.modelAdapters),
@@ -681,7 +709,6 @@ function applyHomeMetrics(raw) {
 function serializeConfigPayload(normalized) {
   return {
     observability: normalized.observability,
-    providerStreamIdleTimeout: normalized.providerStreamIdleTimeout,
     backendListenAddr: normalized.backendListenAddr,
     proxyListenAddr: normalized.proxyListenAddr,
     modelAdapters: normalized.modelAdapters.map((adapter) => ({ ...adapter })),
@@ -709,7 +736,6 @@ function buildConfigPayloadFromState(source = appState) {
   const preferences = buildClientPreferencesFromState(source);
   return serializeConfigPayload(normalizeConfig({
     observability: buildObservabilityConfigFromState(source),
-    providerStreamIdleTimeout: source.providerStreamIdleTimeout,
     backendListenAddr: source.configBackendListenAddr || source.backendListenAddr,
     proxyListenAddr: source.configProxyListenAddr || source.proxyListenAddr,
     modelAdapters: source.modelAdapters,
@@ -935,7 +961,6 @@ function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = ""
   appState.observabilityMode = normalized.observability.mode;
   appState.observabilityRetentionDays = normalized.observability.retentionDays;
   appState.observabilityMaxDiskMB = normalized.observability.maxDiskMB;
-  appState.providerStreamIdleTimeout = normalized.providerStreamIdleTimeout;
   appState.lastAgentModelHash = normalized.lastAgentModelHash;
   appState.configBackendListenAddr = normalized.backendListenAddr;
   appState.configProxyListenAddr = normalized.proxyListenAddr;
@@ -1307,7 +1332,6 @@ export const appState = reactive({
   },
   logCaptureLoading: false,
   logCleanupRunning: false,
-  providerStreamIdleTimeout: cachedConfig.providerStreamIdleTimeout,
   lastAgentModelHash: cachedConfig.lastAgentModelHash,
   gatewayEnabled: cachedConfig.gateway.enabled,
   gatewayListenAddr: cachedConfig.gateway.listenAddr,

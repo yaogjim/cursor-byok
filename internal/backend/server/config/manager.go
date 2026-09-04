@@ -166,15 +166,6 @@ func (manager *Manager) commitStoreWrite(notify bool, write func() (Config, bool
 	return cfg, nil
 }
 
-func (manager *Manager) ProviderStreamIdleTimeout(ctx context.Context) time.Duration {
-	if manager == nil {
-		return time.Duration(DefaultProviderStreamIdleTimeoutSeconds) * time.Second
-	}
-	manager.reloadIfChanged(ctx)
-	seconds := normalizeProviderStreamIdleTimeout(manager.currentConfig().ProviderStreamIdleTimeout)
-	return time.Duration(seconds) * time.Second
-}
-
 func (manager *Manager) StreamContinuationSettings(ctx context.Context) (enabled bool, maxPerTurn int, deadline time.Duration, overlapChars int) {
 	cfg := StreamContinuationConfig{}
 	if manager != nil {
@@ -239,35 +230,35 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 	adapters := make([]legacyruntime.ModelAdapterConfig, 0, len(cfg.ModelAdapters))
 	for _, item := range cfg.ModelAdapters {
 		adapters = append(adapters, legacyruntime.ModelAdapterConfig{
-			ID:                          item.ID,
-			Sort:                        item.Sort,
-			DisplayName:                 item.DisplayName,
-			Type:                        item.Type,
-			BaseURL:                     item.BaseURL,
-			APIKey:                      item.APIKey,
-			CredentialSource:            item.CredentialSource,
-			TooltipData:                 item.TooltipData,
-			ModelID:                     item.ModelID,
-			ReasoningEffort:             item.ReasoningEffort,
-			OpenAIEndpoint:              item.OpenAIEndpoint,
-			OpenAIExtraParamsEnabled:    item.OpenAIExtraParamsEnabled,
-			OpenAIExtraParamsJSON:       item.OpenAIExtraParamsJSON,
-			CustomHeadersEnabled:        item.CustomHeadersEnabled,
-			CustomHeadersJSON:           item.CustomHeadersJSON,
-			AnthropicExtraParamsEnabled: item.AnthropicExtraParamsEnabled,
-			AnthropicExtraParamsJSON:    item.AnthropicExtraParamsJSON,
-			ContextWindowTokens:         item.ContextWindowTokens,
-			MaxCompletionTokens:         item.MaxCompletionTokens,
-			AnthropicMaxTokens:          item.AnthropicMaxTokens,
-			AnthropicThinkingEffort:     item.AnthropicThinkingEffort,
-			ThinkingBudgetTokens:        item.ThinkingBudgetTokens,
-			MaxConcurrentRequests:       item.MaxConcurrentRequests,
+			ID:                           item.ID,
+			Sort:                         item.Sort,
+			DisplayName:                  item.DisplayName,
+			Type:                         item.Type,
+			BaseURL:                      item.BaseURL,
+			APIKey:                       item.APIKey,
+			CredentialSource:             item.CredentialSource,
+			TooltipData:                  item.TooltipData,
+			ModelID:                      item.ModelID,
+			ReasoningEffort:              item.ReasoningEffort,
+			OpenAIEndpoint:               item.OpenAIEndpoint,
+			OpenAIExtraParamsEnabled:     item.OpenAIExtraParamsEnabled,
+			OpenAIExtraParamsJSON:        item.OpenAIExtraParamsJSON,
+			OpenAIImageGenerationEnabled: item.OpenAIImageGenerationEnabled,
+			CustomHeadersEnabled:         item.CustomHeadersEnabled,
+			CustomHeadersJSON:            item.CustomHeadersJSON,
+			AnthropicExtraParamsEnabled:  item.AnthropicExtraParamsEnabled,
+			AnthropicExtraParamsJSON:     item.AnthropicExtraParamsJSON,
+			ContextWindowTokens:          item.ContextWindowTokens,
+			MaxCompletionTokens:          item.MaxCompletionTokens,
+			AnthropicMaxTokens:           item.AnthropicMaxTokens,
+			AnthropicThinkingEffort:      item.AnthropicThinkingEffort,
+			ThinkingBudgetTokens:         item.ThinkingBudgetTokens,
+			MaxConcurrentRequests:        item.MaxConcurrentRequests,
 		})
 	}
 	return legacyruntime.RuntimeConfigSnapshot{
-		ObservabilityLogEnabled:   isFullObservabilityMode(cfg.Observability.Mode),
-		ProviderStreamIdleTimeout: cfg.ProviderStreamIdleTimeout,
-		ModelAdapters:             adapters,
+		ObservabilityLogEnabled: isFullObservabilityMode(cfg.Observability.Mode),
+		ModelAdapters:           adapters,
 	}, nil
 }
 

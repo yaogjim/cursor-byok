@@ -49,8 +49,8 @@ func TestOpenAIThinkingDisableKindMiMo(t *testing.T) {
 func TestApplyOpenAIThinkingDisableMiMo(t *testing.T) {
 	req := StreamRequest{ThinkingEffort: "disabled", RequestKnobs: map[string]any{}}
 	body := map[string]any{
-		"model":           "mimo-v2.5-pro",
-		"messages":        []map[string]any{{"role": "user", "content": "hi"}},
+		"model":            "mimo-v2.5-pro",
+		"messages":         []map[string]any{{"role": "user", "content": "hi"}},
 		"reasoning_effort": "high",
 	}
 	applyOpenAIThinkingDisable(body, req, "https://api.xiaomimimo.com/v1", "mimo-v2.5-pro", "/chat/completions")

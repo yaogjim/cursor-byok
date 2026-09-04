@@ -275,91 +275,6 @@ func applyOpenAIPromptCacheKeyOverride(body map[string]any, req StreamRequest, m
 	}
 }
 
-func shouldExposeOpenAIResponsesImageGeneration(req StreamRequest, tools []map[string]any) bool {
-	if !openAIResponsesToolNamePresent(tools, "GenerateImage") {
-		return false
-	}
-	return openAITextLooksLikeImageGenerationRequest(openAILatestUserRequestText(req))
-}
-
-func ensureOpenAIResponsesImageGenerationTool(tools []map[string]any) []map[string]any {
-	for _, tool := range tools {
-		if strings.TrimSpace(fmt.Sprint(tool["type"])) == "image_generation" {
-			return tools
-		}
-	}
-	return append(tools, map[string]any{"type": "image_generation"})
-}
-
-func openAIResponsesToolNamePresent(tools []map[string]any, name string) bool {
-	for _, tool := range tools {
-		if strings.TrimSpace(fmt.Sprint(tool["name"])) == name {
-			return true
-		}
-		if functionShape, ok := tool["function"].(map[string]any); ok {
-			if strings.TrimSpace(fmt.Sprint(functionShape["name"])) == name {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func openAILatestUserRequestText(req StreamRequest) string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		message := req.Messages[i]
-		if strings.TrimSpace(strings.ToLower(message.Role)) != "user" {
-			continue
-		}
-		text := message.Content
-		if strings.TrimSpace(text) == "" && len(message.ContentParts) > 0 {
-			text = collapseTextContentParts(message.ContentParts)
-		}
-		if tagged := textBetweenOpenAITag(text, "current_user_request"); tagged != "" {
-			return tagged
-		}
-		if tagged := textBetweenOpenAITag(text, "user_query"); tagged != "" {
-			return tagged
-		}
-		if strings.TrimSpace(text) != "" {
-			return strings.TrimSpace(text)
-		}
-	}
-	return ""
-}
-
-func textBetweenOpenAITag(text string, tag string) string {
-	openTag := "<" + tag + ">"
-	closeTag := "</" + tag + ">"
-	start := strings.LastIndex(text, openTag)
-	if start < 0 {
-		return ""
-	}
-	start += len(openTag)
-	end := strings.Index(text[start:], closeTag)
-	if end < 0 {
-		return ""
-	}
-	return strings.TrimSpace(text[start : start+end])
-}
-
-func openAITextLooksLikeImageGenerationRequest(text string) bool {
-	trimmed := strings.TrimSpace(strings.ToLower(text))
-	if trimmed == "" {
-		return false
-	}
-	imageTerms := []string{
-		"图片", "图像", "照片", "相片", "人像", "头像", "插画", "海报", "壁纸", "封面", "摄影", "真实摄影",
-		"image", "picture", "photo", "portrait", "illustration", "poster", "wallpaper", "cover", "photorealistic",
-	}
-	for _, term := range imageTerms {
-		if strings.Contains(trimmed, term) {
-			return true
-		}
-	}
-	return false
-}
-
 func OpenAIEndpointURL(baseURL string, endpoint string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	normalizedEndpoint := strings.TrimSpace(endpoint)
@@ -557,6 +472,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	enforceOpenAIChatCompletionsImageGenerationToolPolicy(bodyMap)
 	body = bodyMap
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
 	recordLLMRequestArtifact(req, "openai", modelID, "POST", requestURL, body)
@@ -575,8 +491,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
 	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
@@ -1088,6 +1006,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	enforceOpenAIResponsesImageGenerationToolPolicy(bodyMap, req)
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
 	filterCodexResponsesBody(bodyMap, req, requestURL)
 	applyCodexAffinityToBody(bodyMap, req, requestURL)
@@ -1107,8 +1026,10 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
 	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {

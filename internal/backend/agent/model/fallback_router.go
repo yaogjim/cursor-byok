@@ -7,11 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"cursor/internal/audit"
+	"cursor/internal/modelchannel"
 	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
@@ -23,8 +23,8 @@ const (
 	fallbackChainMaxWait = time.Duration(legacyruntime.DefaultFallbackMaxWaitSeconds) * time.Second
 )
 
-// FallbackAwareRouter 在 ChannelPlan.FallbackEnabled=true 时按有序渠道列表依次尝试；
-// 禁用时（单渠道计划）完全等同于现有 Router，不增加任何开销和行为差异。
+// FallbackAwareRouter 解析 ChannelPlan，始终注入 RecoverySettings 与共享 liveness。
+// 多渠道时按有序列表在安全窗口内切换；单渠道计划不切换，但仍走同一恢复路径。
 type FallbackAwareRouter struct {
 	underlying *Router
 	resolver   ChannelPlanResolver
@@ -40,8 +40,7 @@ func NewFallbackAwareRouter(underlying *Router, resolver ChannelPlanResolver) *F
 }
 
 // Stream 实现 ModelAdapterRouter 接口。
-// 单渠道计划（FallbackEnabled=false）：行为与 Router.Stream 完全一致。
-// 多渠道计划（FallbackEnabled=true）：共享总 attempt 预算，仅在安全窗口内切换。
+// 每个模型调用都使用 ChannelPlan 中的恢复与活性设置；只有计划包含多个渠道时才会切换。
 func (r *FallbackAwareRouter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
 	if r == nil || r.underlying == nil || r.resolver == nil {
 		return fmt.Errorf("fallback router is unavailable")
@@ -55,27 +54,24 @@ func (r *FallbackAwareRouter) Stream(ctx context.Context, req StreamRequest, sin
 		return fmt.Errorf("no available channel for model %q", req.ModelID)
 	}
 
-	idleTimeout := r.resolver.ProviderStreamIdleTimeout(ctx)
-
-	// 单渠道或 fallback 禁用：完全等同于现有路径。
-	if !plan.FallbackEnabled || len(plan.Channels) <= 1 {
-		channel := plan.Channels[0]
-		channelReq := applyChannelToRequest(req, &channel, idleTimeout)
-		return r.underlying.streamPreResolved(ctx, channelReq, sink)
-	}
-
-	return r.streamWithFallback(ctx, req, sink, plan, idleTimeout)
+	legacyruntime.ClampChannelPlanRecovery(plan)
+	req.RecoverySettings = recoverySettingsFromPlan(plan)
+	return r.streamWithFallback(ctx, req, sink, plan)
 }
 
-func fallbackChainBudgetFromPlan(plan *legacyruntime.ChannelPlan) (int, time.Duration) {
-	attempts := fallbackChainTotalAttempts
-	waitSeconds := int(fallbackChainMaxWait / time.Second)
-	if plan != nil {
-		attempts = plan.MaxHttpAttempts
-		waitSeconds = plan.MaxWaitSeconds
+func recoverySettingsFromPlan(plan *legacyruntime.ChannelPlan) RecoverySettings {
+	if plan == nil {
+		return DefaultRecoverySettings()
 	}
-	attempts, waitSeconds = legacyruntime.ClampFallbackChainBudget(attempts, waitSeconds)
-	return attempts, time.Duration(waitSeconds) * time.Second
+	return NormalizeRecoverySettings(RecoverySettings{
+		MaxTotalAttempts:      plan.MaxHttpAttempts,
+		MaxAttemptsPerChannel: plan.MaxAttemptsPerChannel,
+		MaxTotalWait:          time.Duration(plan.MaxWaitSeconds) * time.Second,
+		ConnectTimeout:        time.Duration(plan.ConnectTimeoutSeconds) * time.Second,
+		FirstEventTimeout:     time.Duration(plan.FirstEventTimeoutSeconds) * time.Second,
+		StreamIdleTimeout:     time.Duration(plan.StreamIdleTimeoutSeconds) * time.Second,
+		CallTimeout:           time.Duration(plan.CallTimeoutSeconds) * time.Second,
+	})
 }
 
 // countSubsequentReservableChannels 统计从 currentIdx 之后、按实际切换顺序
@@ -100,27 +96,30 @@ func countSubsequentReservableChannels(req StreamRequest, channels []legacyrunti
 // allocateFallbackChannelAttempts 按“保证渠道覆盖，再用剩余预算重试”分配当前渠道的 HTTP 次数。
 // 每个后续可尝试/兼容渠道预留 1 次；当前渠道使用 remaining-reserved，且不超过 providerRequestMaxAttempts。
 // 当剩余预算不足以覆盖当前+全部后续时，仍给当前 1 次（按顺序覆盖），不突破 remainingAttempts。
-func allocateFallbackChannelAttempts(remainingAttempts, subsequentReservable int) int {
+func allocateFallbackChannelAttempts(remainingAttempts, subsequentReservable, maxAttemptsPerChannel int) int {
 	if remainingAttempts <= 0 {
 		return 0
 	}
 	if subsequentReservable < 0 {
 		subsequentReservable = 0
 	}
+	if maxAttemptsPerChannel <= 0 {
+		maxAttemptsPerChannel = providerRequestMaxAttempts
+	}
 	reserved := subsequentReservable
 	if reserved > remainingAttempts-1 {
 		reserved = remainingAttempts - 1
 	}
 	usable := remainingAttempts - reserved
-	if usable > providerRequestMaxAttempts {
-		usable = providerRequestMaxAttempts
+	if usable > maxAttemptsPerChannel {
+		usable = maxAttemptsPerChannel
 	}
 	return usable
 }
 
 // streamWithFallback 执行多渠道 fallback 循环。
 // 共享预算规则：
-//   - HTTP attempt 总上限由 ChannelPlan 决定（默认 fallbackChainTotalAttempts），每渠道单次分配不超过 providerRequestMaxAttempts（3）。
+//   - HTTP attempt 总上限由 ChannelPlan 决定（默认 fallbackChainTotalAttempts），每渠道单次分配不超过 providerRequestMaxAttempts（2）。
 //   - 覆盖优先：为每个后续实际可尝试/兼容渠道预留至少 1 次 HTTP；当前渠道最多使用 remaining-reserved。
 //   - sleep/backoff 预算 fallbackChainMaxWait（8s）通过 wall-clock 扣减方式传入各渠道；
 //     不使用 context.WithTimeout，避免连带截断正在进行的 HTTP 请求。
@@ -130,10 +129,17 @@ func (r *FallbackAwareRouter) streamWithFallback(
 	req StreamRequest,
 	sink func(ModelEvent) error,
 	plan *legacyruntime.ChannelPlan,
-	idleTimeout time.Duration,
 ) error {
-	attempts, maxWait := fallbackChainBudgetFromPlan(plan)
-	budget := NewFallbackRetryBudget(attempts, maxWait)
+	settings := req.normalizedRecoverySettings()
+	budget := NewFallbackRetryBudget(settings.MaxTotalAttempts, settings.MaxTotalWait)
+	ctx, live := newProviderLiveness(ctx, settings)
+	defer live.Stop()
+	req.liveness = live
+	if !plan.FallbackEnabled && len(plan.Channels) > 1 {
+		truncated := *plan
+		truncated.Channels = plan.Channels[:1]
+		plan = &truncated
+	}
 
 	var lastErr error
 	var prevChannel *legacyruntime.ResolvedChannel
@@ -170,34 +176,39 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		perChannelAttempts := allocateFallbackChannelAttempts(
 			remainingAttempts,
 			countSubsequentReservableChannels(req, plan.Channels, channelIdx),
+			settings.MaxAttemptsPerChannel,
 		)
 		if perChannelAttempts <= 0 {
 			break
 		}
 
-		channelReq := applyChannelToRequest(req, &channel, idleTimeout)
+		channelReq := applyChannelToRequest(req, &channel)
 		channelReq.FallbackMaxAttempts = perChannelAttempts
 		channelReq.FallbackRemainingWait = remainingWait
 		channelReq.FallbackBudget = budget
 		channelSafety := &FallbackSafetyInfo{}
 		channelReq.FallbackSafety = channelSafety
-		recordAttempt := func(reason, fallbackTo, suppressionReason string, success bool) {
-			if channelSafety.Snapshot().WaitBudgetBlocked && (suppressionReason == "" || suppressionReason == "chain_exhausted") {
+		recordAttempt := func(callErr error, fallbackTo, suppressionReason string, success bool) {
+			safety := channelSafety.Snapshot()
+			if safety.WaitBudgetBlocked && (suppressionReason == "" || suppressionReason == "chain_exhausted") {
 				suppressionReason = "wait_budget_exhausted"
 			}
 			recordFallbackAttempt(ctx, fallbackAttemptRecord{
 				requestID:         req.RequestID,
 				modelCallID:       req.ModelCallID,
+				logicalModel:      req.ModelID,
 				channelAttempt:    channelIdx + 1,
 				channelID:         channel.ID,
+				provider:          channel.Provider,
 				previousChannelID: previousChannelID,
-				reason:            reason,
+				failure:           classifyProviderFailure(callErr, httpStatusFromError(callErr)),
 				fallbackTo:        fallbackTo,
 				suppressionReason: suppressionReason,
 				success:           success,
 				budget:            budget,
 				allocation:        perChannelAttempts,
-				retryDelay:        channelSafety.Snapshot().LastRetryDelay,
+				retryDelay:        safety.LastRetryDelay,
+				safety:            safety,
 			})
 		}
 		// 只有后续仍存在兼容候选时，本次渠道才使用隔离后缀。
@@ -219,37 +230,36 @@ func (r *FallbackAwareRouter) streamWithFallback(
 		callErr = WrapFallbackSafetyError(callErr, channelSafety)
 
 		if callErr == nil {
-			recordAttempt("", "", "", true)
+			recordAttempt(nil, "", "", true)
 			return nil
 		}
 
 		lastErr = callErr
-		reason := ClassifyProviderError(callErr)
 
 		// ── 安全门禁检查（任一条件阻断 fallback）──────────────────────────────
 
 		// 1. 已有任意原始字节或 model event（含工具进度/下游发布）→ 禁止切换。
 		safety := channelSafety.Snapshot()
-		if safety.RawBytesObserved || safety.ModelEventObserved {
-			recordAttempt(reason, "", "output_observed", false)
+		if safety.OutputObserved() {
+			recordAttempt(callErr, "", "output_observed", false)
 			return callErr
 		}
 
 		// 2. 上下文取消 / deadline 超时 → 禁止切换
 		if ctx.Err() != nil {
-			recordAttempt(reason, "", "context_done", false)
+			recordAttempt(callErr, "", "context_done", false)
 			return ctx.Err()
 		}
 
-		// 3. HTTP 500 可同渠道重试但禁止切换；仅 transport/429/502/503/504/524/零字节截断可切。
+		// 3. 仅允许策略判定为可切换的失败；401 不走渠道 fallback。
 		if !isFallbackEligibleError(callErr) {
-			recordAttempt(reason, "", fallbackSuppressionReason(callErr), false)
+			recordAttempt(callErr, "", fallbackSuppressionReason(callErr), false)
 			return callErr
 		}
 
 		remainingAfterAttempt, _ := budget.Remaining()
 		if remainingAfterAttempt <= 0 {
-			recordAttempt(reason, "", "attempt_budget_exhausted", false)
+			recordAttempt(callErr, "", "attempt_budget_exhausted", false)
 			return callErr
 		}
 
@@ -273,13 +283,13 @@ func (r *FallbackAwareRouter) streamWithFallback(
 			break
 		}
 		if nextChannelIdx < 0 {
-			recordAttempt(reason, "", "chain_exhausted", false)
+			recordAttempt(callErr, "", "chain_exhausted", false)
 			return callErr
 		}
 
 		// 全部安全检查通过，切换到下一个实际兼容渠道。
 		nextChannelID := plan.Channels[nextChannelIdx].ID
-		recordAttempt(reason, nextChannelID, "", false)
+		recordAttempt(callErr, nextChannelID, "", false)
 
 		attemptedChannel := channel
 		prevChannel = &attemptedChannel
@@ -293,25 +303,24 @@ func (r *FallbackAwareRouter) streamWithFallback(
 }
 
 // isFallbackEligibleError 判断该错误是否允许切换到下一渠道。
-//
-// 允许切换：transport、429、502/503/504、524、零字节 pre-event 截断 / stream idle、
-// 以及零输出窗口内的 typed capacity_unavailable。
-// 禁止切换：HTTP 500（仅同渠道 P0 重试）、HTTP 529、context cancel/deadline、4xx 非429、
-// request_build、未知零 HTTP、RawBytesObserved=true 及其他。
+// 允许切换：500/502/503/504/524、429、可恢复 transport、TLS handshake EOF、
+// 网关建连/首事件超时、零字节截断，以及零输出窗口内的 capacity_unavailable。
+// 禁止切换：401/403/其他4xx、529、父 context 取消、证书校验、永久 DNS、
+// request_build、protocol decode、provider terminal、以及任何已观测输出。
 func isFallbackEligibleError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if isCapacityUnavailable(err) {
 		if safety, ok := fallbackSafetyFromError(err); ok {
-			if safety.RawBytesObserved || safety.ModelEventObserved {
+			if safety.OutputObserved() {
 				return false
 			}
 		}
 		return true
 	}
 	if safety, ok := fallbackSafetyFromError(err); ok {
-		if safety.RawBytesObserved || safety.ModelEventObserved || safety.RequestBuildFailed || safety.HTTPAttempts == 0 {
+		if safety.BlocksReplayOrSwitch() || safety.HTTPAttempts == 0 {
 			return false
 		}
 	}
@@ -320,32 +329,14 @@ func isFallbackEligibleError(err error) bool {
 	if errors.As(err, &trunc) && trunc != nil && trunc.RawBytesObserved {
 		return false
 	}
-	var httpErr *HTTPStatusError
-	if errors.As(err, &httpErr) && httpErr != nil {
-		return isFallbackEligibleHTTPStatus(httpErr.StatusCode)
-	}
-	switch ClassifyProviderError(err) {
-	case ProviderErrorTransport, ProviderErrorRateLimited,
-		ProviderErrorStreamIdleTimeout, ProviderErrorStreamDecode:
-		return true
-	default:
-		return false
-	}
-}
-
-func isFallbackEligibleHTTPStatus(status int) bool {
-	switch status {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, HTTPStatusCloudflareTimeout:
-		return true
-	default:
-		return false
-	}
+	failure := classifyProviderFailure(err, httpStatusFromError(err))
+	return failure.Switchable
 }
 
 func fallbackSuppressionReason(err error) string {
 	if safety, ok := fallbackSafetyFromError(err); ok {
 		switch {
-		case safety.RawBytesObserved || safety.ModelEventObserved:
+		case safety.OutputObserved():
 			return "output_observed"
 		case safety.RequestBuildFailed:
 			return "request_build"
@@ -380,9 +371,24 @@ func nextFallbackChannelIndex(req StreamRequest, channels []legacyruntime.Resolv
 	return -1
 }
 
+func channelEndpointFamily(channel legacyruntime.ResolvedChannel) string {
+	provider := strings.ToLower(strings.TrimSpace(channel.Provider))
+	if provider == "anthropic" {
+		return "anthropic:messages"
+	}
+	shape := modelchannel.OpenAIEndpointShape(ResolveOpenAIEndpoint(channel.BaseURL, channel.OpenAIEndpoint))
+	if shape == "" {
+		shape = "chat/completions"
+	}
+	return "openai:" + shape
+}
+
 func checkFallbackChannelCompatibility(req StreamRequest, fromChannel, toChannel legacyruntime.ResolvedChannel) (bool, string) {
 	if ok, reason := checkFallbackCompatibility(req, fromChannel.Provider, toChannel.Provider); !ok {
 		return false, reason
+	}
+	if channelEndpointFamily(fromChannel) != channelEndpointFamily(toChannel) {
+		return false, "endpoint_family"
 	}
 	if fromChannel.ContextWindowTokens > 0 && toChannel.ContextWindowTokens > 0 && toChannel.ContextWindowTokens < fromChannel.ContextWindowTokens {
 		return false, "context_window"
@@ -447,7 +453,7 @@ func checkFallbackCompatibility(req StreamRequest, fromProvider, toProvider stri
 	}
 	_ = from
 	_ = to
-	return true, ""
+	return false, "adapter_type"
 }
 
 // fallbackExtractAttemptsUsed 从错误中推断本次渠道消耗的 attempt 数，用于共享预算扣减。
@@ -467,16 +473,19 @@ func fallbackExtractAttemptsUsed(err error, allocated int) int {
 type fallbackAttemptRecord struct {
 	requestID         string
 	modelCallID       string
+	logicalModel      string
 	channelAttempt    int
 	channelID         string
+	provider          string
 	previousChannelID string
-	reason            string
+	failure           ProviderFailure
 	fallbackTo        string
 	suppressionReason string
 	success           bool
 	budget            *FallbackRetryBudget
 	allocation        int
 	retryDelay        time.Duration
+	safety            FallbackSafetySnapshot
 }
 
 // recordFallbackAttempt 记录 fallback 链每个渠道尝试的可观测事件。
@@ -505,10 +514,23 @@ func recordFallbackAttempt(ctx context.Context, rec fallbackAttemptRecord) {
 		status = "error"
 		semanticOutcome = observability.OutcomeFailed
 	}
-	fields := make(map[string]any, 16)
+	fields := make(map[string]any, 28)
 	fields["channel_attempt"] = rec.channelAttempt
+	fields["channel_http_attempts"] = rec.safety.HTTPAttempts
+	fields["channel_wait_used_ms"] = rec.safety.Waited.Milliseconds()
+	fields["safety_raw_bytes_observed"] = rec.safety.RawBytesObserved
+	fields["safety_model_event_observed"] = rec.safety.ModelEventObserved
+	fields["safety_side_effect_observed"] = rec.safety.SideEffectObserved
+	fields["safety_request_build_failed"] = rec.safety.RequestBuildFailed
+	fields["safety_gate_open"] = !rec.safety.BlocksReplayOrSwitch()
+	if strings.TrimSpace(rec.logicalModel) != "" {
+		fields["logical_model"] = audit.SanitizeMetadataText(rec.logicalModel)
+	}
 	if strings.TrimSpace(rec.channelID) != "" {
 		fields["channel_id"] = audit.SanitizeMetadataText(rec.channelID)
+	}
+	if strings.TrimSpace(rec.provider) != "" {
+		fields["provider"] = audit.SanitizeMetadataText(rec.provider)
 	}
 	if strings.TrimSpace(rec.previousChannelID) != "" {
 		fields["fallback_from"] = audit.SanitizeMetadataText(rec.previousChannelID)
@@ -516,8 +538,25 @@ func recordFallbackAttempt(ctx context.Context, rec fallbackAttemptRecord) {
 	if strings.TrimSpace(rec.fallbackTo) != "" {
 		fields["fallback_to"] = audit.SanitizeMetadataText(rec.fallbackTo)
 	}
-	if strings.TrimSpace(rec.reason) != "" {
-		fields["fallback_reason"] = rec.reason
+	if rec.failure.Category != "" {
+		fields["failure_category"] = rec.failure.Category
+	}
+	if rec.failure.Cause != "" {
+		fields["fallback_reason"] = rec.failure.Cause
+		fields["failure_cause"] = rec.failure.Cause
+	}
+	if rec.failure.Phase != "" {
+		fields["failure_phase"] = rec.failure.Phase
+	}
+	if rec.failure.Status > 0 {
+		fields["failure_http_status"] = rec.failure.Status
+	}
+	if rec.success {
+		fields["recovery_action"] = RecoveryActionSuccess
+	} else if strings.TrimSpace(rec.fallbackTo) != "" {
+		fields["recovery_action"] = RecoveryActionSwitch
+	} else {
+		fields["recovery_action"] = RecoveryActionFailFast
 	}
 	if strings.TrimSpace(rec.suppressionReason) != "" {
 		fields["fallback_suppressed_reason"] = rec.suppressionReason
@@ -548,6 +587,7 @@ func recordFallbackAttempt(ctx context.Context, rec fallbackAttemptRecord) {
 		Status:              status,
 		SemanticOutcome:     semanticOutcome,
 		ImplementationState: observability.ImplementationImplemented,
+		ErrorCategory:       rec.failure.Category,
 		Fields:              fields,
 	}
 	defer func() { _ = recover() }()

@@ -161,12 +161,11 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 
 	cursor := stale
 	cursor.Routing.Mode = "local"
-	cursor.ProviderStreamIdleTimeout = 45
 	savedCursor, err := store.SaveCursorConfig(context.Background(), cursor)
 	if err != nil {
 		t.Fatalf("SaveCursorConfig() error = %v", err)
 	}
-	if savedCursor.Routing.Mode != "local" || savedCursor.ProviderStreamIdleTimeout != 45 {
+	if savedCursor.Routing.Mode != "local" {
 		t.Fatalf("cursor section not saved: %+v", savedCursor)
 	}
 	if savedCursor.Appearance.Theme != "dark" || !savedCursor.Gateway.Enabled || savedCursor.Gateway.Token != got.Gateway.Token {
@@ -190,7 +189,6 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 
 	emptyCursor := DefaultConfig()
 	emptyCursor.Routing.Mode = "upstream"
-	emptyCursor.ProviderStreamIdleTimeout = 0
 	emptyCursor.BackendListenAddr = ""
 	emptyCursor.ProxyListenAddr = ""
 	preservedCursor, err := store.SaveCursorConfig(context.Background(), emptyCursor)
@@ -199,9 +197,6 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 	}
 	if preservedCursor.Routing.Mode != "upstream" {
 		t.Fatalf("empty cursor payload lost routing: %+v", preservedCursor)
-	}
-	if preservedCursor.ProviderStreamIdleTimeout != 45 {
-		t.Fatalf("empty cursor payload overwrote timeout: %+v", preservedCursor)
 	}
 	if preservedCursor.BackendListenAddr != seed.BackendListenAddr || preservedCursor.ProxyListenAddr != seed.ProxyListenAddr {
 		t.Fatalf("empty cursor payload overwrote listen addrs: %+v", preservedCursor)
@@ -385,27 +380,22 @@ func TestStoreSaveModelAdaptersRemapsFallbackWhenCandidateAPIKeyChanges(t *testi
 	}
 }
 
-func TestStoreSaveModelAdaptersRemapsFallbackWhenOpenAITypeBecomesAnthropic(t *testing.T) {
+func TestStoreSaveModelAdaptersRejectsFallbackWhenOpenAITypeBecomesAnthropic(t *testing.T) {
 	store := newWriteTestStore(t)
 	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
 		cfg.ModelAdapters = writeTestFallbackAdapters(t)
 	})
-	oldPrimary := seed.ModelAdapters[1].ID
 
 	edited := cloneWriteTestAdapters(seed.ModelAdapters)
 	edited[1].Type = "anthropic"
 	edited[1].OpenAIEndpoint = ""
 	edited[1].AnthropicThinkingEffort = "high"
-	saved, err := store.SaveModelAdapters(context.Background(), edited)
-	if err != nil {
+	_, err := store.SaveModelAdapters(context.Background(), edited)
+	if err == nil {
+		t.Fatal("expected same adapter type/endpoint validation error")
+	}
+	if !strings.Contains(err.Error(), "相同的适配器类型和协议端点") {
 		t.Fatalf("SaveModelAdapters() after type change error = %v", err)
-	}
-	newPrimary := saved.ModelAdapters[1].ID
-	if newPrimary == oldPrimary {
-		t.Fatal("switching openai to anthropic must recompute the physical channel ID")
-	}
-	if saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID != newPrimary {
-		t.Fatalf("primaryChannelID = %q, want remapped %q", saved.ModelAdapters[0].ProviderFallback.PrimaryChannelID, newPrimary)
 	}
 }
 

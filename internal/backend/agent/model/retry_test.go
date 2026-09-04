@@ -89,13 +89,13 @@ func TestProviderRetryTransportFailsThenSucceeds(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].Attempt != 1 || events[0].MaxAttempts != 3 || events[0].RetryDecision != retryDecisionRetry {
+	if events[0].Attempt != 1 || events[0].MaxAttempts != providerRequestMaxAttempts || events[0].RetryDecision != retryDecisionRetry {
 		t.Fatalf("first response = %+v", events[0])
 	}
 	if events[0].ErrorCategory != ProviderErrorTransport {
 		t.Fatalf("first error_category = %q", events[0].ErrorCategory)
 	}
-	if events[1].Attempt != 2 || events[1].MaxAttempts != 3 || events[1].RetryDecision != retryDecisionSuccessAfterRetry {
+	if events[1].Attempt != 2 || events[1].MaxAttempts != providerRequestMaxAttempts || events[1].RetryDecision != retryDecisionSuccessAfterRetry {
 		t.Fatalf("final response = %+v", events[1])
 	}
 }
@@ -222,11 +222,11 @@ func TestProviderRetry503Exhausted(t *testing.T) {
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
-	if hits != 3 || builds != 3 {
-		t.Fatalf("hits=%d builds=%d, want 3/3", hits, builds)
+	if hits != providerRequestMaxAttempts || builds != providerRequestMaxAttempts {
+		t.Fatalf("hits=%d builds=%d, want %d/%d", hits, builds, providerRequestMaxAttempts, providerRequestMaxAttempts)
 	}
-	if closed != 2 {
-		t.Fatalf("retried bodies closed = %d, want 2", closed)
+	if closed != providerRequestMaxAttempts-1 {
+		t.Fatalf("retried bodies closed = %d, want %d", closed, providerRequestMaxAttempts-1)
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
@@ -235,14 +235,14 @@ func TestProviderRetry503Exhausted(t *testing.T) {
 	}
 
 	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
-	if len(events) != 3 {
+	if len(events) != providerRequestMaxAttempts {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].RetryDecision != retryDecisionRetry || events[1].RetryDecision != retryDecisionRetry {
-		t.Fatalf("intermediate decisions = %q, %q", events[0].RetryDecision, events[1].RetryDecision)
+	if events[0].RetryDecision != retryDecisionRetry {
+		t.Fatalf("intermediate decisions = %q", events[0].RetryDecision)
 	}
-	if events[2].Attempt != 3 || events[2].MaxAttempts != 3 || events[2].RetryDecision != retryDecisionExhausted {
-		t.Fatalf("final event = %+v", events[2])
+	if events[len(events)-1].Attempt != providerRequestMaxAttempts || events[len(events)-1].MaxAttempts != providerRequestMaxAttempts || events[len(events)-1].RetryDecision != retryDecisionExhausted {
+		t.Fatalf("final event = %+v", events[len(events)-1])
 	}
 }
 
@@ -360,19 +360,19 @@ func TestProviderRetry524Exhausted(t *testing.T) {
 	if response.StatusCode != HTTPStatusCloudflareTimeout {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
-	if hits != 3 || builds != 3 {
-		t.Fatalf("hits=%d builds=%d, want 3/3", hits, builds)
+	if hits != providerRequestMaxAttempts || builds != providerRequestMaxAttempts {
+		t.Fatalf("hits=%d builds=%d, want %d/%d", hits, builds, providerRequestMaxAttempts, providerRequestMaxAttempts)
 	}
 	_ = response.Body.Close()
 	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
-	if len(events) != 3 {
+	if len(events) != providerRequestMaxAttempts {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].RetryDecision != retryDecisionRetry || events[1].RetryDecision != retryDecisionRetry {
-		t.Fatalf("intermediate decisions = %q, %q", events[0].RetryDecision, events[1].RetryDecision)
+	if events[0].RetryDecision != retryDecisionRetry {
+		t.Fatalf("intermediate decisions = %q", events[0].RetryDecision)
 	}
-	if events[2].RetryDecision != retryDecisionExhausted || events[2].ErrorCategory != ProviderErrorServer5xx {
-		t.Fatalf("final event = %+v", events[2])
+	if events[len(events)-1].RetryDecision != retryDecisionExhausted || events[len(events)-1].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("final event = %+v", events[len(events)-1])
 	}
 }
 
@@ -458,7 +458,7 @@ func TestProviderRetry401DoesNotRetry(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].Attempt != 1 || events[0].MaxAttempts != 3 || events[0].RetryDecision != retryDecisionNoRetryStatus {
+	if events[0].Attempt != 1 || events[0].MaxAttempts != providerRequestMaxAttempts || events[0].RetryDecision != retryDecisionNoRetryStatus {
 		t.Fatalf("401 event = %+v", events[0])
 	}
 }
@@ -489,8 +489,8 @@ func TestProviderRetryRebuildsRequestEachAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if builds != hits || builds != 3 {
-		t.Fatalf("builds=%d hits=%d, want 3/3", builds, hits)
+	if builds != hits || builds != providerRequestMaxAttempts {
+		t.Fatalf("builds=%d hits=%d, want %d/%d", builds, hits, providerRequestMaxAttempts, providerRequestMaxAttempts)
 	}
 }
 
@@ -881,8 +881,6 @@ func TestHTTPAndStreamRetryShareMaximumAttempts(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("retry")), Request: request}, nil
-		case 2:
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
 		default:
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("recovered")), Request: request}, nil
@@ -1235,7 +1233,7 @@ func TestApplyStreamRequestRetryOverridesWaitIncludingZero(t *testing.T) {
 		FallbackRemainingWait: 8 * time.Second,
 	})
 	if chainWait.maxTotalWait != 8*time.Second {
-		t.Fatalf("chain wait overlay = %v, want 8s (must exceed single-channel 4s)", chainWait.maxTotalWait)
+		t.Fatalf("chain wait overlay = %v, want 8s", chainWait.maxTotalWait)
 	}
 
 	disabled := applyStreamRequestRetry(base, StreamRequest{

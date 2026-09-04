@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	providerRequestMaxAttempts = 3
+	providerRequestMaxAttempts = 2
 
 	retryDecisionRetry                  = "retry"
 	retryDecisionSuccess                = "success"
@@ -37,7 +37,7 @@ const (
 
 	defaultRetryBaseDelay    = 200 * time.Millisecond
 	defaultRetryMaxDelay     = 2 * time.Second
-	defaultRetryMaxTotalWait = 4 * time.Second
+	defaultRetryMaxTotalWait = 8 * time.Second
 	retryBodyDrainLimit      = 8 << 10
 )
 
@@ -53,6 +53,8 @@ type providerRetry struct {
 	fallbackSafety *FallbackSafetyInfo
 	fallbackBudget *FallbackRetryBudget
 	diagnostics    *StreamDiagnostics
+	liveness       *providerLiveness
+	recovery       RecoverySettings
 }
 
 type providerAttemptContextKey struct{}
@@ -127,9 +129,11 @@ func normalizeProviderRetry(retry providerRetry) providerRetry {
 
 // applyStreamRequestRetry 先按普通单渠道规则 normalize，再在 fallback 路径
 // 用共享预算覆盖 maxAttempts / maxTotalWait。FallbackBudget != nil 时，
-// maxTotalWait 直接覆盖为剩余 wait（包括 0），不得回落到 4s。
+// maxTotalWait 直接覆盖为剩余 wait（包括 0），不得回落到默认 8s。
 func applyStreamRequestRetry(retry providerRetry, req StreamRequest) providerRetry {
 	retry = normalizeProviderRetry(retry)
+	settings := req.normalizedRecoverySettings()
+	retry.maxAttempts = settings.MaxAttemptsPerChannel
 	if req.FallbackMaxAttempts > 0 && req.FallbackMaxAttempts < retry.maxAttempts {
 		retry.maxAttempts = req.FallbackMaxAttempts
 	}
@@ -142,6 +146,8 @@ func applyStreamRequestRetry(retry providerRetry, req StreamRequest) providerRet
 	retry.fallbackSafety = req.FallbackSafety
 	retry.fallbackBudget = req.FallbackBudget
 	retry.diagnostics = req.StreamDiagnostics
+	retry.liveness = req.liveness
+	retry.recovery = settings
 	return retry
 }
 
@@ -195,7 +201,7 @@ func fullJitter(delay time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(delay) + 1))
 }
 
-// DoProviderRequestWithRetry 对尚未产生 model event 的 provider HTTP 请求做最多 3 次尝试。
+// DoProviderRequestWithRetry 对尚未产生 model event 的 provider HTTP 请求做有限次尝试。
 func DoProviderRequestWithRetry(
 	ctx context.Context,
 	client *http.Client,
@@ -321,7 +327,10 @@ func doProviderRequest(
 			return nil, err
 		}
 
+		retry.diagnostics.BeginHTTPAttempt()
 		httpReq = attachStreamHTTPTrace(httpReq, retry.diagnostics)
+		attemptCtx, finishAttempt := retry.startHTTPAttempt(ctx)
+		httpReq = httpReq.WithContext(attemptCtx)
 		startedAt := time.Now()
 		targetHost := ""
 		endpointKind := "custom"
@@ -343,9 +352,14 @@ func doProviderRequest(
 		})
 
 		if !retry.consumeFallbackAttempt() {
+			_ = finishAttempt(nil, fmt.Errorf("provider fallback HTTP attempt budget exhausted"))
 			return nil, fmt.Errorf("provider fallback HTTP attempt budget exhausted")
 		}
 		resp, err := client.Do(httpReq)
+		err = finishAttempt(resp, err)
+		if liveErr := retry.livenessError(); liveErr != nil && err != nil {
+			err = liveErr
+		}
 		outcome := classifyAttempt(err, resp, attempt, retry.maxAttempts)
 		if resp != nil {
 			retry.diagnostics.RecordHTTPResponse(resp, attempt, retry.now())
@@ -359,6 +373,11 @@ func doProviderRequest(
 				retry.markWaitBudgetBlocked()
 			} else {
 				delay = waitDelay
+			}
+		} else if outcome.decision == retryDecisionExhausted && resp != nil && isRetryableHTTPStatus(resp.StatusCode) {
+			if _, canWait := retry.retryWait(attempt, resp, waited); !canWait {
+				retry.markWaitBudgetBlocked()
+				outcome.decision = retryDecisionNoRetryWaitBudget
 			}
 		}
 
@@ -413,7 +432,10 @@ func doProviderRequest(
 			return nil, statusErr
 		}
 		closeResponseBody(resp)
-		if sleepErr := retry.sleep(ctx, delay); sleepErr != nil {
+		retry.pauseCallClock()
+		sleepErr := retry.sleep(ctx, delay)
+		retry.resumeCallClock()
+		if sleepErr != nil {
 			retry.diagnostics.RecordClose(sleepErr)
 			recordProviderAttempt(ctx, observer, requestID, modelCallID, audit.Event{
 				Kind:          "provider_response",
@@ -500,8 +522,23 @@ func (body *retryingStreamBody) Read(p []byte) (int, error) {
 			body.recordDecision(retryDecisionNoRetryStreamRawBytes, newStreamTruncatedError(body.provider, err))
 			return 0, err
 		}
-		if !isRetryableStreamReadError(err) {
+		if liveErr := body.retry.livenessError(); liveErr != nil {
+			failure := classifyProviderFailure(liveErr, 0)
+			if !failure.Retryable {
+				body.recordStreamTerminal(liveErr)
+				if isContextDoneError(liveErr) {
+					body.recordDecision(retryDecisionNoRetryStreamContext, liveErr)
+				} else {
+					body.recordDecision(retryDecisionNoRetryStreamError, liveErr)
+				}
+				return 0, liveErr
+			}
+			err = liveErr
+		} else if !isRetryableStreamReadError(err) {
 			if ctxErr := body.ctx.Err(); ctxErr != nil {
+				if liveErr := body.retry.livenessError(); liveErr != nil {
+					ctxErr = liveErr
+				}
 				body.recordStreamTerminal(ctxErr)
 				body.recordDecision(retryDecisionNoRetryStreamContext, ctxErr)
 				return 0, ctxErr
@@ -688,9 +725,12 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 	body.mu.Unlock()
 	body.recordDecision(retryDecisionStreamPreEventEOF, truncatedErr)
 	closeResponseBody(&http.Response{Body: old})
-	if err := body.retry.sleep(body.ctx, delay); err != nil {
-		body.recordDecision(retryDecisionNoRetryStreamContext, err)
-		return err
+	body.retry.pauseCallClock()
+	sleepErr := body.retry.sleep(body.ctx, delay)
+	body.retry.resumeCallClock()
+	if sleepErr != nil {
+		body.recordDecision(retryDecisionNoRetryStreamContext, sleepErr)
+		return sleepErr
 	}
 	body.mu.Lock()
 	body.state.waited += delay
@@ -720,13 +760,21 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			body.recordRequestBuildFailure(err)
 			return err
 		}
+		body.retry.diagnostics.BeginHTTPAttempt()
 		request = attachStreamHTTPTrace(request, body.retry.diagnostics)
+		attemptCtx, finishAttempt := body.retry.startHTTPAttempt(body.ctx)
+		request = request.WithContext(attemptCtx)
 		startedAt := time.Now()
 		endpoint, targetHost, canaryMatched := body.recordRequest(request)
 		if !body.retry.consumeFallbackAttempt() {
+			_ = finishAttempt(nil, fmt.Errorf("provider fallback HTTP attempt budget exhausted"))
 			return fmt.Errorf("provider fallback HTTP attempt budget exhausted")
 		}
 		resp, err := body.client.Do(request)
+		err = finishAttempt(resp, err)
+		if liveErr := body.retry.livenessError(); liveErr != nil && err != nil {
+			err = liveErr
+		}
 		outcome := classifyAttempt(err, resp, attempt, body.retry.maxAttempts)
 		var nextDelay time.Duration
 		if outcome.retryable {
@@ -774,9 +822,12 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			return statusErr
 		}
 		closeResponseBody(resp)
-		if err := body.retry.sleep(body.ctx, nextDelay); err != nil {
-			body.recordDecision(retryDecisionNoRetryStreamContext, err)
-			return err
+		body.retry.pauseCallClock()
+		sleepErr := body.retry.sleep(body.ctx, nextDelay)
+		body.retry.resumeCallClock()
+		if sleepErr != nil {
+			body.recordDecision(retryDecisionNoRetryStreamContext, sleepErr)
+			return sleepErr
 		}
 		body.mu.Lock()
 		body.state.waited += nextDelay
@@ -841,6 +892,10 @@ func classifyAttempt(err error, resp *http.Response, attempt, maxAttempts int) r
 		if isContextDoneError(err) {
 			return retryOutcome{false, retryDecisionNoRetryContext}
 		}
+		failure := classifyProviderFailure(err, 0)
+		if !failure.Retryable {
+			return retryOutcome{false, retryDecisionNoRetryStatus}
+		}
 		if attempt >= maxAttempts {
 			return retryOutcome{false, retryDecisionExhausted}
 		}
@@ -862,7 +917,14 @@ func classifyAttempt(err error, resp *http.Response, attempt, maxAttempts int) r
 }
 
 func isContextDoneError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	if isParentContextError(err) {
+		return true
+	}
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil && live.Phase == LivenessPhaseCall {
+		return true
+	}
+	return false
 }
 
 // HTTPStatusCloudflareTimeout 是 Cloudflare/超时网关返回的 HTTP 524。
@@ -878,18 +940,20 @@ const (
 	httpRetrySuppressionStatus = "http_status"
 )
 
-// HTTPRetryObservation 返回 typed HTTP 状态在零输出门之前的同渠道 retry 决策。
-// 524 使用稳定 reason http_524；500/502/503/504 保持既有 http_5xx；529 与其他未列入 allowlist 的状态不可重试。
+// HTTPRetryObservation 返回统一 typed HTTP 分类在零输出门之前的同渠道 retry 观测。
+// 动作只读取 classifyHTTPStatusFailure；这里仅把稳定 cause 映射为既有观测 reason。
 func HTTPRetryObservation(status int) (retryable bool, reason, suppression string) {
-	switch status {
-	case http.StatusTooManyRequests:
-		return true, httpRetryReason429, httpRetrySuppressionNone
-	case HTTPStatusCloudflareTimeout:
-		return true, httpRetryReason524, httpRetrySuppressionNone
-	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true, httpRetryReason5xx, httpRetrySuppressionNone
-	default:
+	failure := classifyHTTPStatusFailure(status)
+	if !failure.Retryable {
 		return false, httpRetryReasonNone, httpRetrySuppressionStatus
+	}
+	switch failure.Cause {
+	case FailureCauseHTTP429:
+		return true, httpRetryReason429, httpRetrySuppressionNone
+	case FailureCauseHTTP524:
+		return true, httpRetryReason524, httpRetrySuppressionNone
+	default:
+		return true, httpRetryReason5xx, httpRetrySuppressionNone
 	}
 }
 

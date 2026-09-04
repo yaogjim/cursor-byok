@@ -161,6 +161,8 @@ type StreamRequest struct {
 	OpenAIExtraParamsEnabled bool
 	// OpenAIExtraParamsJSON 表示 OpenAI 额外请求参数 JSON 对象。
 	OpenAIExtraParamsJSON string
+	// OpenAIImageGenerationEnabled 表示是否允许 OpenAI Responses 注入原生图片生成工具。
+	OpenAIImageGenerationEnabled bool
 	// CustomHeadersEnabled 表示是否启用自定义请求头。
 	CustomHeadersEnabled bool
 	// CustomHeadersJSON 表示自定义请求头 JSON 对象。
@@ -195,8 +197,10 @@ type StreamRequest struct {
 	ArtifactPaths *LLMArtifactPaths
 	// RequestBodyOverride 表示直接复用的 provider 原始请求体；设置后由 adapter 原样发送。
 	RequestBodyOverride map[string]any
-	// ProviderStreamIdleTimeout 表示 provider 流式响应无有效内容时的空闲超时。
-	ProviderStreamIdleTimeout time.Duration
+	// RecoverySettings 是同一逻辑调用共享的恢复与活性预算。零值使用默认归一化。
+	RecoverySettings RecoverySettings
+	// liveness 由 fallback router 或 adapter 注入；跨渠道共享 call timeout。
+	liveness *providerLiveness
 	// StreamDiagnostics 收集本次 HTTP 流的可选 header/body 时间线与 close_cause。
 	// nil 表示调用方不需要回读；适配器仍可分配局部实例。
 	StreamDiagnostics *StreamDiagnostics
@@ -230,6 +234,7 @@ type FallbackSafetyInfo struct {
 	mu                 sync.Mutex
 	rawBytesObserved   bool
 	modelEventObserved bool
+	sideEffectObserved bool
 	requestBuildFailed bool
 	httpAttempts       int
 	waited             time.Duration
@@ -240,6 +245,7 @@ type FallbackSafetyInfo struct {
 type FallbackSafetySnapshot struct {
 	RawBytesObserved   bool
 	ModelEventObserved bool
+	SideEffectObserved bool
 	RequestBuildFailed bool
 	HTTPAttempts       int
 	Waited             time.Duration
@@ -262,6 +268,15 @@ func (s *FallbackSafetyInfo) MarkModelEventObserved() {
 	}
 	s.mu.Lock()
 	s.modelEventObserved = true
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) MarkSideEffectObserved() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.sideEffectObserved = true
 	s.mu.Unlock()
 }
 
@@ -311,6 +326,7 @@ func (s *FallbackSafetyInfo) Snapshot() FallbackSafetySnapshot {
 	return FallbackSafetySnapshot{
 		RawBytesObserved:   s.rawBytesObserved,
 		ModelEventObserved: s.modelEventObserved,
+		SideEffectObserved: s.sideEffectObserved,
 		RequestBuildFailed: s.requestBuildFailed,
 		HTTPAttempts:       s.httpAttempts,
 		Waited:             s.waited,

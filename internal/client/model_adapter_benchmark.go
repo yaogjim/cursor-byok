@@ -727,32 +727,38 @@ func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter s
 	maxTokens := modelAdapterTestConfiguredOpenAIMaxTokens(adapter)
 	requestID := modelAdapterTestRequestID(adapter)
 	req := modeladapter.StreamRequest{
-		RequestID:                   requestID,
-		RunID:                       requestID,
-		ModelCallID:                 requestID,
-		ModelID:                     strings.TrimSpace(adapter.ID),
-		Provider:                    "openai",
-		BaseURL:                     strings.TrimSpace(adapter.BaseURL),
-		APIKey:                      modelAdapterTestRuntimeAPIKey(adapter, cred),
-		CredentialSource:            strings.TrimSpace(adapter.CredentialSource),
-		CredentialID:                strings.TrimSpace(cred.AccountID),
-		ChatGPTAccountID:            strings.TrimSpace(cred.ChatGPTAccountID),
-		ProviderModelID:             strings.TrimSpace(adapter.ModelID),
-		ResolvedChannelID:           strings.TrimSpace(adapter.ID),
-		ResolvedChannelName:         strings.TrimSpace(adapter.DisplayName),
-		ResolvedContextWindowTokens: adapter.ContextWindowTokens,
-		ReasoningEffort:             strings.TrimSpace(adapter.ReasoningEffort),
-		OpenAIEndpoint:              strings.TrimSpace(adapter.OpenAIEndpoint),
-		OpenAIExtraParamsEnabled:    adapter.OpenAIExtraParamsEnabled,
-		OpenAIExtraParamsJSON:       strings.TrimSpace(adapter.OpenAIExtraParamsJSON),
-		CustomHeadersEnabled:        adapter.CustomHeadersEnabled,
-		CustomHeadersJSON:           strings.TrimSpace(adapter.CustomHeadersJSON),
-		Messages:                    []modeladapter.Message{{Role: "user", Content: modelAdapterTestPrompt}},
-		MaxTokens:                   maxTokens,
-		Stream:                      true,
-		RequestKnobs:                map[string]any{"stream": true, "max_tokens": maxTokens},
-		Observer:                    observer,
-		ProviderStreamIdleTimeout:   modelAdapterTestTimeout,
+		RequestID:                    requestID,
+		RunID:                        requestID,
+		ModelCallID:                  requestID,
+		ModelID:                      strings.TrimSpace(adapter.ID),
+		Provider:                     "openai",
+		BaseURL:                      strings.TrimSpace(adapter.BaseURL),
+		APIKey:                       modelAdapterTestRuntimeAPIKey(adapter, cred),
+		CredentialSource:             strings.TrimSpace(adapter.CredentialSource),
+		CredentialID:                 strings.TrimSpace(cred.AccountID),
+		ChatGPTAccountID:             strings.TrimSpace(cred.ChatGPTAccountID),
+		ProviderModelID:              strings.TrimSpace(adapter.ModelID),
+		ResolvedChannelID:            strings.TrimSpace(adapter.ID),
+		ResolvedChannelName:          strings.TrimSpace(adapter.DisplayName),
+		ResolvedContextWindowTokens:  adapter.ContextWindowTokens,
+		ReasoningEffort:              strings.TrimSpace(adapter.ReasoningEffort),
+		OpenAIEndpoint:               strings.TrimSpace(adapter.OpenAIEndpoint),
+		OpenAIExtraParamsEnabled:     adapter.OpenAIExtraParamsEnabled,
+		OpenAIExtraParamsJSON:        strings.TrimSpace(adapter.OpenAIExtraParamsJSON),
+		OpenAIImageGenerationEnabled: adapter.OpenAIImageGenerationEnabled,
+		CustomHeadersEnabled:         adapter.CustomHeadersEnabled,
+		CustomHeadersJSON:            strings.TrimSpace(adapter.CustomHeadersJSON),
+		Messages:                     []modeladapter.Message{{Role: "user", Content: modelAdapterTestPrompt}},
+		MaxTokens:                    maxTokens,
+		Stream:                       true,
+		RequestKnobs:                 map[string]any{"stream": true, "max_tokens": maxTokens},
+		Observer:                     observer,
+		RecoverySettings: modeladapter.RecoverySettings{
+			ConnectTimeout:    modelAdapterTestTimeout,
+			FirstEventTimeout: modelAdapterTestTimeout,
+			StreamIdleTimeout: modelAdapterTestTimeout,
+			CallTimeout:       modelAdapterTestTimeout,
+		},
 	}
 	err := streamModelAdapterTestOpenAI(ctx, req, func(event modeladapter.ModelEvent) error {
 		now := time.Now().UTC()
@@ -821,7 +827,12 @@ func (s *ProxyService) executeAnthropicStreamingTest(ctx context.Context, adapte
 		Stream:                      true,
 		RequestKnobs:                map[string]any{"stream": true, "anthropic_max_tokens": maxTokens, "max_tokens": maxTokens},
 		Observer:                    observer,
-		ProviderStreamIdleTimeout:   modelAdapterTestTimeout,
+		RecoverySettings: modeladapter.RecoverySettings{
+			ConnectTimeout:    modelAdapterTestTimeout,
+			FirstEventTimeout: modelAdapterTestTimeout,
+			StreamIdleTimeout: modelAdapterTestTimeout,
+			CallTimeout:       modelAdapterTestTimeout,
+		},
 	}
 	err := modeladapter.NewAnthropicAdapter().Stream(ctx, req, func(event modeladapter.ModelEvent) error {
 		now := time.Now().UTC()
@@ -1087,6 +1098,7 @@ func buildModelAdapterTestRequestHash(adapter serverconfig.ModelAdapterConfig) s
 		source.OpenAIEndpoint,
 		strconv.Itoa(source.OpenAIExtraParamsEnabled),
 		source.OpenAIExtraParamsJSON,
+		strconv.Itoa(source.OpenAIImageGenerationEnabled),
 		strconv.Itoa(source.CustomHeadersEnabled),
 		source.CustomHeadersJSON,
 		strconv.Itoa(source.AnthropicExtraParamsEnabled),
@@ -1103,23 +1115,24 @@ func buildModelAdapterTestRequestHash(adapter serverconfig.ModelAdapterConfig) s
 }
 
 type modelAdapterTestHashSource struct {
-	Type                        string
-	BaseURL                     string
-	APIKey                      string
-	CredentialSource            string
-	ModelID                     string
-	ReasoningEffort             string
-	OpenAIEndpoint              string
-	OpenAIExtraParamsEnabled    int
-	OpenAIExtraParamsJSON       string
-	CustomHeadersEnabled        int
-	CustomHeadersJSON           string
-	AnthropicExtraParamsEnabled int
-	AnthropicExtraParamsJSON    string
-	ContextWindowTokens         int
-	MaxCompletionTokens         int
-	AnthropicMaxTokens          int
-	AnthropicThinkingEffort     string
+	Type                         string
+	BaseURL                      string
+	APIKey                       string
+	CredentialSource             string
+	ModelID                      string
+	ReasoningEffort              string
+	OpenAIEndpoint               string
+	OpenAIExtraParamsEnabled     int
+	OpenAIExtraParamsJSON        string
+	OpenAIImageGenerationEnabled int
+	CustomHeadersEnabled         int
+	CustomHeadersJSON            string
+	AnthropicExtraParamsEnabled  int
+	AnthropicExtraParamsJSON     string
+	ContextWindowTokens          int
+	MaxCompletionTokens          int
+	AnthropicMaxTokens           int
+	AnthropicThinkingEffort      string
 }
 
 func normalizeModelAdapterTestHashSource(adapter serverconfig.ModelAdapterConfig) modelAdapterTestHashSource {
@@ -1128,23 +1141,24 @@ func normalizeModelAdapterTestHashSource(adapter serverconfig.ModelAdapterConfig
 		baseURL = normalizedBaseURL
 	}
 	return modelAdapterTestHashSource{
-		Type:                        normalizeModelAdapterTestType(adapter.Type),
-		BaseURL:                     baseURL,
-		APIKey:                      strings.TrimSpace(adapter.APIKey),
-		CredentialSource:            string(subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)),
-		ModelID:                     strings.TrimSpace(adapter.ModelID),
-		ReasoningEffort:             normalizeModelAdapterTestProviderReasoning(adapter),
-		OpenAIEndpoint:              modelchannel.NormalizeOpenAIEndpoint(adapter.Type, adapter.OpenAIEndpoint),
-		OpenAIExtraParamsEnabled:    normalizeModelAdapterTestBool(adapter.Type == "openai" && adapter.OpenAIExtraParamsEnabled),
-		OpenAIExtraParamsJSON:       normalizeModelAdapterTestOpenAIExtraParamsJSON(adapter),
-		CustomHeadersEnabled:        normalizeModelAdapterTestBool(adapter.CustomHeadersEnabled),
-		CustomHeadersJSON:           normalizeModelAdapterTestCustomHeadersJSON(adapter),
-		AnthropicExtraParamsEnabled: normalizeModelAdapterTestBool(adapter.Type == "anthropic" && adapter.AnthropicExtraParamsEnabled),
-		AnthropicExtraParamsJSON:    normalizeModelAdapterTestAnthropicExtraParamsJSON(adapter),
-		ContextWindowTokens:         normalizeModelAdapterTestInt(adapter.ContextWindowTokens),
-		MaxCompletionTokens:         normalizeModelAdapterTestInt(adapter.MaxCompletionTokens),
-		AnthropicMaxTokens:          normalizeModelAdapterTestInt(adapter.AnthropicMaxTokens),
-		AnthropicThinkingEffort:     normalizeModelAdapterTestProviderAnthropicThinkingEffort(adapter),
+		Type:                         normalizeModelAdapterTestType(adapter.Type),
+		BaseURL:                      baseURL,
+		APIKey:                       strings.TrimSpace(adapter.APIKey),
+		CredentialSource:             string(subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)),
+		ModelID:                      strings.TrimSpace(adapter.ModelID),
+		ReasoningEffort:              normalizeModelAdapterTestProviderReasoning(adapter),
+		OpenAIEndpoint:               modelchannel.NormalizeOpenAIEndpoint(adapter.Type, adapter.OpenAIEndpoint),
+		OpenAIExtraParamsEnabled:     normalizeModelAdapterTestBool(adapter.Type == "openai" && adapter.OpenAIExtraParamsEnabled),
+		OpenAIExtraParamsJSON:        normalizeModelAdapterTestOpenAIExtraParamsJSON(adapter),
+		OpenAIImageGenerationEnabled: normalizeModelAdapterTestBool(adapter.Type == "openai" && adapter.OpenAIImageGenerationEnabled),
+		CustomHeadersEnabled:         normalizeModelAdapterTestBool(adapter.CustomHeadersEnabled),
+		CustomHeadersJSON:            normalizeModelAdapterTestCustomHeadersJSON(adapter),
+		AnthropicExtraParamsEnabled:  normalizeModelAdapterTestBool(adapter.Type == "anthropic" && adapter.AnthropicExtraParamsEnabled),
+		AnthropicExtraParamsJSON:     normalizeModelAdapterTestAnthropicExtraParamsJSON(adapter),
+		ContextWindowTokens:          normalizeModelAdapterTestInt(adapter.ContextWindowTokens),
+		MaxCompletionTokens:          normalizeModelAdapterTestInt(adapter.MaxCompletionTokens),
+		AnthropicMaxTokens:           normalizeModelAdapterTestInt(adapter.AnthropicMaxTokens),
+		AnthropicThinkingEffort:      normalizeModelAdapterTestProviderAnthropicThinkingEffort(adapter),
 	}
 }
 

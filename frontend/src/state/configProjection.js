@@ -42,6 +42,11 @@ export const DEFAULT_PROVIDER_FALLBACK = Object.freeze({
   candidateChannelIDs: Object.freeze([]),
   maxHttpAttempts: 5,
   maxWaitSeconds: 8,
+  maxAttemptsPerChannel: 2,
+  connectTimeoutSeconds: 30,
+  firstEventTimeoutSeconds: 600,
+  streamIdleTimeoutSeconds: 240,
+  callTimeoutSeconds: 7200,
 });
 
 export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
@@ -49,7 +54,36 @@ export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
 export const PROVIDER_FALLBACK_LIMITS = Object.freeze({
   maxHttpAttempts: Object.freeze({ min: 2, max: 9 }),
   maxWaitSeconds: Object.freeze({ min: 1, max: 30 }),
+  maxAttemptsPerChannel: Object.freeze({ min: 1, max: 3 }),
+  connectTimeoutSeconds: Object.freeze({ min: 5, max: 120 }),
+  firstEventTimeoutSeconds: Object.freeze({ min: 60, max: 1800 }),
+  streamIdleTimeoutSeconds: Object.freeze({ min: 30, max: 900 }),
+  callTimeoutSeconds: Object.freeze({ min: 900, max: 21600 }),
 });
+
+const PROVIDER_FALLBACK_BUDGET_FIELDS = Object.freeze([
+  Object.freeze(["maxHttpAttempts", "max_http_attempts"]),
+  Object.freeze(["maxWaitSeconds", "max_wait_seconds"]),
+  Object.freeze(["maxAttemptsPerChannel", "max_attempts_per_channel"]),
+  Object.freeze(["connectTimeoutSeconds", "connect_timeout_seconds"]),
+  Object.freeze(["firstEventTimeoutSeconds", "first_event_timeout_seconds"]),
+  Object.freeze(["streamIdleTimeoutSeconds", "stream_idle_timeout_seconds"]),
+  Object.freeze(["callTimeoutSeconds", "call_timeout_seconds"]),
+]);
+
+const PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS = Object.freeze({
+  maxHttpAttempts: "全链最大 HTTP 尝试次数必须为 2–9 的整数",
+  maxWaitSeconds: "全链最大退避等待秒数必须为 1–30 的整数",
+  maxAttemptsPerChannel: "单渠道最大尝试次数必须为 1–3 的整数",
+  connectTimeoutSeconds: "建连超时秒数必须为 5–120 的整数",
+  firstEventTimeoutSeconds: "首事件超时秒数必须为 60–1800 的整数",
+  streamIdleTimeoutSeconds: "流空闲超时秒数必须为 30–900 的整数",
+  callTimeoutSeconds: "整次调用超时秒数必须为 900–21600 的整数",
+});
+
+const OPENAI_ENDPOINT_RESPONSES = "/v1/responses";
+const OPENAI_ENDPOINT_CHAT_COMPLETIONS = "/v1/chat/completions";
+const OPENAI_ENDPOINT_CUSTOM = "/custom";
 
 export const DEFAULT_MAX_CONCURRENT_REQUESTS = 0;
 
@@ -123,6 +157,56 @@ function defaultBudget(value, fallback) {
   return value === 0 ? fallback : value;
 }
 
+function openAIEndpointShape(endpoint) {
+  const lower = asString(endpoint).toLowerCase();
+  if (lower.endsWith("/responses")) {
+    return "responses";
+  }
+  return "chat/completions";
+}
+
+function resolveOpenAIEndpoint(baseURL, endpoint) {
+  const base = asString(baseURL).toLowerCase().replace(/\/+$/, "");
+  if (base.endsWith("/responses")) {
+    return OPENAI_ENDPOINT_RESPONSES;
+  }
+  if (base.endsWith("/chat/completions")) {
+    return OPENAI_ENDPOINT_CHAT_COMPLETIONS;
+  }
+  const normalized = asString(endpoint).toLowerCase();
+  if (!normalized) {
+    return OPENAI_ENDPOINT_CHAT_COMPLETIONS;
+  }
+  if (
+    normalized === OPENAI_ENDPOINT_RESPONSES
+    || normalized === OPENAI_ENDPOINT_CHAT_COMPLETIONS
+    || normalized === OPENAI_ENDPOINT_CUSTOM
+  ) {
+    return normalized;
+  }
+  return "";
+}
+
+// channelEndpointFamily 与后端 fallback 兼容性判定对齐：Anthropic 固定 messages，
+// OpenAI 按 /responses 与 chat/completions 分成两个协议家族。
+export function channelEndpointFamily(adapter) {
+  const type = asString(adapter?.type).toLowerCase();
+  if (type === "anthropic") {
+    return "anthropic:messages";
+  }
+  const shape = openAIEndpointShape(resolveOpenAIEndpoint(adapter?.baseURL, adapter?.openAIEndpoint));
+  return `openai:${shape || "chat/completions"}`;
+}
+
+export function isFallbackChannelCompatible(from, to) {
+  const fromType = asString(from?.type).toLowerCase();
+  const toType = asString(to?.type).toLowerCase();
+  if (!fromType || !toType || fromType !== toType) {
+    return false;
+  }
+  return channelEndpointFamily(from) === channelEndpointFamily(to);
+}
+
 export function normalizeObservabilityConfig(source, legacyLog = false) {
   const hasObservability = Boolean(source && typeof source === "object" && !Array.isArray(source));
   const raw = hasObservability ? source : {};
@@ -184,45 +268,41 @@ export function buildClientPreferencesFromState(source = {}) {
 }
 
 // normalizeProviderFallback 归一化单条 providerFallback 配置（纯函数，无副作用）。
-// 缺失/0 预算归一化为 5/8；非零越界原样保留供校验报错，禁止静默 clamp。
+// 缺失/0 预算归一化为默认值；非零越界原样保留供校验报错，禁止静默 clamp。
 // 禁用时保留引用和预算字段，但不参与运行。
 export function normalizeProviderFallback(source) {
   const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
   const candidateSource = Array.isArray(raw.candidateChannelIDs)
     ? raw.candidateChannelIDs
     : (Array.isArray(raw.candidate_channel_ids) ? raw.candidate_channel_ids : []);
-  return {
+  const normalized = {
     enabled: asBoolean(raw.enabled),
     primaryChannelID: asString(raw.primaryChannelID ?? raw.primary_channel_id ?? ""),
     candidateChannelIDs: candidateSource.map((id) => asString(id)).filter(Boolean),
-    maxHttpAttempts: defaultBudget(
-      parseBudgetNumber(raw.maxHttpAttempts ?? raw.max_http_attempts),
-      DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts,
-    ),
-    maxWaitSeconds: defaultBudget(
-      parseBudgetNumber(raw.maxWaitSeconds ?? raw.max_wait_seconds),
-      DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds,
-    ),
   };
+  for (const [camel, snake] of PROVIDER_FALLBACK_BUDGET_FIELDS) {
+    normalized[camel] = defaultBudget(
+      parseBudgetNumber(raw[camel] ?? raw[snake]),
+      DEFAULT_PROVIDER_FALLBACK[camel],
+    );
+  }
+  return normalized;
+}
+
+function providerFallbackBudgetOutOfRange(field, value) {
+  const limits = PROVIDER_FALLBACK_LIMITS[field];
+  if (!limits) {
+    return false;
+  }
+  return !Number.isInteger(value) || value < limits.min || value > limits.max;
 }
 
 export function validateProviderFallbackBudget(source, prefix = "模型") {
   const fb = source && typeof source === "object" ? source : {};
-  const attempts = fb.maxHttpAttempts;
-  const wait = fb.maxWaitSeconds;
-  if (
-    !Number.isInteger(attempts)
-    || attempts < PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.min
-    || attempts > PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.max
-  ) {
-    return `${prefix} 的全链最大 HTTP 尝试次数必须为 2–9 的整数`;
-  }
-  if (
-    !Number.isInteger(wait)
-    || wait < PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.min
-    || wait > PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.max
-  ) {
-    return `${prefix} 的全链最大等待秒数必须为 1–30 的整数`;
+  for (const [field] of PROVIDER_FALLBACK_BUDGET_FIELDS) {
+    if (providerFallbackBudgetOutOfRange(field, fb[field])) {
+      return `${prefix} 的${PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS[field]}`;
+    }
   }
   return "";
 }
@@ -257,6 +337,9 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
     if (isLogicalRoutingAdapter(adapterByID.get(fb.primaryChannelID))) {
       return `${prefix} 的 Fallback 主渠道必须是未启用 Fallback 的物理渠道`;
     }
+    if (!isFallbackChannelCompatible(adapter, adapterByID.get(fb.primaryChannelID))) {
+      return `${prefix} 的 Fallback 主渠道必须与当前模型使用相同的适配器类型和协议端点`;
+    }
     if (!fb.candidateChannelIDs.length || fb.candidateChannelIDs.length > MAX_PROVIDER_FALLBACK_CANDIDATES) {
       return `${prefix} 的 Fallback 候选渠道数量必须为 1–${MAX_PROVIDER_FALLBACK_CANDIDATES} 个`;
     }
@@ -273,6 +356,9 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
       }
       if (isLogicalRoutingAdapter(adapterByID.get(cid))) {
         return `${prefix} 的 Fallback 候选渠道必须是未启用 Fallback 的物理渠道`;
+      }
+      if (!isFallbackChannelCompatible(adapter, adapterByID.get(cid))) {
+        return `${prefix} 的 Fallback 候选渠道必须与当前模型使用相同的适配器类型和协议端点`;
       }
       seenInChain.add(cid);
     }
@@ -352,17 +438,11 @@ export function providerFallbackBudgetFieldError(field, value) {
     return "";
   }
   const parsed = parseBudgetNumber(value);
-  if (field === "maxHttpAttempts") {
-    if (!Number.isInteger(parsed) || parsed < 2 || parsed > 9) {
-      return "全链最大 HTTP 尝试次数必须为 2–9 的整数";
-    }
+  if (!PROVIDER_FALLBACK_LIMITS[field]) {
     return "";
   }
-  if (field === "maxWaitSeconds") {
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 30) {
-      return "全链最大等待秒数必须为 1–30 的整数";
-    }
-    return "";
+  if (providerFallbackBudgetOutOfRange(field, parsed)) {
+    return PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS[field];
   }
   return "";
 }

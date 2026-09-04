@@ -497,9 +497,20 @@ func TestProviderFallbackBudgetDefaultsMissingAndZero(t *testing.T) {
 	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
 		t.Fatalf("missing budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
 	}
+	if fb.MaxAttemptsPerChannel != DefaultProviderFallbackMaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != DefaultProviderFallbackConnectTimeoutSeconds {
+		t.Fatalf("missing recovery = %d/%d", fb.MaxAttemptsPerChannel, fb.ConnectTimeoutSeconds)
+	}
+	if fb.FirstEventTimeoutSeconds != DefaultProviderFallbackFirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != DefaultProviderFallbackStreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != DefaultProviderFallbackCallTimeoutSeconds {
+		t.Fatalf("missing timeouts = %d/%d/%d", fb.FirstEventTimeoutSeconds, fb.StreamIdleTimeoutSeconds, fb.CallTimeoutSeconds)
+	}
 
 	adapters[0].ProviderFallback.MaxHttpAttempts = 0
 	adapters[0].ProviderFallback.MaxWaitSeconds = 0
+	adapters[0].ProviderFallback.MaxAttemptsPerChannel = 0
+	adapters[0].ProviderFallback.ConnectTimeoutSeconds = 0
+	adapters[0].ProviderFallback.FirstEventTimeoutSeconds = 0
+	adapters[0].ProviderFallback.StreamIdleTimeoutSeconds = 0
+	adapters[0].ProviderFallback.CallTimeoutSeconds = 0
 	got, err = NormalizeModelAdapterConfigs(adapters)
 	if err != nil {
 		t.Fatalf("zero budget should normalize: %v", err)
@@ -508,59 +519,71 @@ func TestProviderFallbackBudgetDefaultsMissingAndZero(t *testing.T) {
 	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
 		t.Fatalf("zero budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
 	}
+	if fb.MaxAttemptsPerChannel != DefaultProviderFallbackMaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != DefaultProviderFallbackConnectTimeoutSeconds || fb.FirstEventTimeoutSeconds != DefaultProviderFallbackFirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != DefaultProviderFallbackStreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != DefaultProviderFallbackCallTimeoutSeconds {
+		t.Fatalf("zero recovery = %+v", fb)
+	}
 }
 
 func TestProviderFallbackBudgetLegalBoundsPreserved(t *testing.T) {
-	cases := []struct {
-		attempts, wait int
-	}{
-		{2, 1},
-		{5, 8},
-		{7, 20},
-		{9, 30},
+	cases := []ProviderFallbackConfig{
+		{MaxHttpAttempts: 2, MaxWaitSeconds: 1, MaxAttemptsPerChannel: 1, ConnectTimeoutSeconds: 5, FirstEventTimeoutSeconds: 60, StreamIdleTimeoutSeconds: 30, CallTimeoutSeconds: 900},
+		{MaxHttpAttempts: 5, MaxWaitSeconds: 8, MaxAttemptsPerChannel: 2, ConnectTimeoutSeconds: 30, FirstEventTimeoutSeconds: 600, StreamIdleTimeoutSeconds: 240, CallTimeoutSeconds: 7200},
+		{MaxHttpAttempts: 7, MaxWaitSeconds: 20, MaxAttemptsPerChannel: 3, ConnectTimeoutSeconds: 120, FirstEventTimeoutSeconds: 1800, StreamIdleTimeoutSeconds: 900, CallTimeoutSeconds: 21600},
+		{MaxHttpAttempts: 9, MaxWaitSeconds: 30, MaxAttemptsPerChannel: 1, ConnectTimeoutSeconds: 5, FirstEventTimeoutSeconds: 60, StreamIdleTimeoutSeconds: 30, CallTimeoutSeconds: 900},
 	}
-	for _, test := range cases {
+	for _, budget := range cases {
 		adapters, _, idB, idC := testFallbackChain(t)
-		adapters[0].ProviderFallback = ProviderFallbackConfig{
-			Enabled:             true,
-			PrimaryChannelID:    idB,
-			CandidateChannelIDs: []string{idC},
-			MaxHttpAttempts:     test.attempts,
-			MaxWaitSeconds:      test.wait,
-		}
+		budget.Enabled = true
+		budget.PrimaryChannelID = idB
+		budget.CandidateChannelIDs = []string{idC}
+		adapters[0].ProviderFallback = budget
 		got, err := NormalizeModelAdapterConfigs(adapters)
 		if err != nil {
-			t.Fatalf("legal budget %d/%d rejected: %v", test.attempts, test.wait, err)
+			t.Fatalf("legal budget %+v rejected: %v", budget, err)
 		}
 		fb := got[0].ProviderFallback
-		if fb.MaxHttpAttempts != test.attempts || fb.MaxWaitSeconds != test.wait {
-			t.Fatalf("budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, test.attempts, test.wait)
+		if fb.MaxHttpAttempts != budget.MaxHttpAttempts || fb.MaxWaitSeconds != budget.MaxWaitSeconds || fb.MaxAttemptsPerChannel != budget.MaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != budget.ConnectTimeoutSeconds || fb.FirstEventTimeoutSeconds != budget.FirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != budget.StreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != budget.CallTimeoutSeconds {
+			t.Fatalf("budget = %+v, want %+v", fb, budget)
 		}
 	}
 }
 
 func TestProviderFallbackBudgetOutOfRangeFailsTyped(t *testing.T) {
 	cases := []struct {
-		name           string
-		attempts, wait int
-		field          string
+		name   string
+		mutate func(*ProviderFallbackConfig)
+		field  string
 	}{
-		{"attempts_1", 1, 8, "maxHttpAttempts"},
-		{"attempts_10", 10, 8, "maxHttpAttempts"},
-		{"attempts_negative", -3, 8, "maxHttpAttempts"},
-		{"wait_31", 5, 31, "maxWaitSeconds"},
-		{"wait_negative", 5, -1, "maxWaitSeconds"},
+		{"attempts_1", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = 1 }, "maxHttpAttempts"},
+		{"attempts_10", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = 10 }, "maxHttpAttempts"},
+		{"attempts_negative", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = -3 }, "maxHttpAttempts"},
+		{"wait_31", func(fb *ProviderFallbackConfig) { fb.MaxWaitSeconds = 31 }, "maxWaitSeconds"},
+		{"wait_negative", func(fb *ProviderFallbackConfig) { fb.MaxWaitSeconds = -1 }, "maxWaitSeconds"},
+		{"per_channel_4", func(fb *ProviderFallbackConfig) { fb.MaxAttemptsPerChannel = 4 }, "maxAttemptsPerChannel"},
+		{"connect_4", func(fb *ProviderFallbackConfig) { fb.ConnectTimeoutSeconds = 4 }, "connectTimeoutSeconds"},
+		{"connect_121", func(fb *ProviderFallbackConfig) { fb.ConnectTimeoutSeconds = 121 }, "connectTimeoutSeconds"},
+		{"first_event_59", func(fb *ProviderFallbackConfig) { fb.FirstEventTimeoutSeconds = 59 }, "firstEventTimeoutSeconds"},
+		{"first_event_1801", func(fb *ProviderFallbackConfig) { fb.FirstEventTimeoutSeconds = 1801 }, "firstEventTimeoutSeconds"},
+		{"idle_29", func(fb *ProviderFallbackConfig) { fb.StreamIdleTimeoutSeconds = 29 }, "streamIdleTimeoutSeconds"},
+		{"idle_901", func(fb *ProviderFallbackConfig) { fb.StreamIdleTimeoutSeconds = 901 }, "streamIdleTimeoutSeconds"},
+		{"call_899", func(fb *ProviderFallbackConfig) { fb.CallTimeoutSeconds = 899 }, "callTimeoutSeconds"},
+		{"call_21601", func(fb *ProviderFallbackConfig) { fb.CallTimeoutSeconds = 21601 }, "callTimeoutSeconds"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
+			if test.mutate == nil {
+				t.Fatal("missing mutate")
+			}
 			adapters, _, idB, idC := testFallbackChain(t)
-			adapters[0].ProviderFallback = ProviderFallbackConfig{
+			fb := ProviderFallbackConfig{
 				Enabled:             true,
 				PrimaryChannelID:    idB,
 				CandidateChannelIDs: []string{idC},
-				MaxHttpAttempts:     test.attempts,
-				MaxWaitSeconds:      test.wait,
+				MaxHttpAttempts:     5,
+				MaxWaitSeconds:      8,
 			}
+			test.mutate(&fb)
+			adapters[0].ProviderFallback = fb
 			_, err := NormalizeModelAdapterConfigs(adapters)
 			if err == nil {
 				t.Fatal("expected typed budget validation error")
@@ -900,5 +923,107 @@ func TestNormalizeModelAdapterConfigsAllowsManagedCredentialSourceWithoutAPIKey(
 	normalizedB, _ := NormalizeModelAdapterConfigs([]ModelAdapterConfig{tokenB})
 	if normalizedA[0].ID != normalizedB[0].ID {
 		t.Fatal("managed channel ID must not depend on a rotating token")
+	}
+}
+
+func TestOpenAIImageGenerationEnabledJSONYAMLIdentifier(t *testing.T) {
+	var fromJSON ModelAdapterConfig
+	if err := json.Unmarshal([]byte(`{"openAIImageGenerationEnabled":true}`), &fromJSON); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	if !fromJSON.OpenAIImageGenerationEnabled {
+		t.Fatal("json tag openAIImageGenerationEnabled was not decoded")
+	}
+
+	var fromYAML ModelAdapterConfig
+	if err := yaml.Unmarshal([]byte("openAIImageGenerationEnabled: true\n"), &fromYAML); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if !fromYAML.OpenAIImageGenerationEnabled {
+		t.Fatal("yaml tag openAIImageGenerationEnabled was not decoded")
+	}
+
+	var missing ModelAdapterConfig
+	if err := yaml.Unmarshal([]byte("displayName: model\n"), &missing); err != nil {
+		t.Fatalf("yaml unmarshal missing field: %v", err)
+	}
+	if missing.OpenAIImageGenerationEnabled {
+		t.Fatal("missing openAIImageGenerationEnabled must default false")
+	}
+}
+
+func TestNormalizeModelAdapterConfigsOpenAIImageGenerationEnabled(t *testing.T) {
+	allowed := testModelAdapter("img-allowed", 1)
+	allowed.OpenAIImageGenerationEnabled = true
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{allowed})
+	if err != nil {
+		t.Fatalf("openai+static+responses should allow true: %v", err)
+	}
+	if !got[0].OpenAIImageGenerationEnabled {
+		t.Fatal("allowed true was dropped")
+	}
+
+	missing := testModelAdapter("img-default", 1)
+	got, err = NormalizeModelAdapterConfigs([]ModelAdapterConfig{missing})
+	if err != nil {
+		t.Fatalf("default false should normalize: %v", err)
+	}
+	if got[0].OpenAIImageGenerationEnabled {
+		t.Fatal("missing field must stay false")
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*ModelAdapterConfig)
+		wantErr string
+	}{
+		{
+			name: "anthropic",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.Type = "anthropic"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "chat_completions",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.OpenAIEndpoint = "/v1/chat/completions"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "custom_endpoint",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.OpenAIEndpoint = "/custom"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "codex",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.CredentialSource = "codex"
+				adapter.APIKey = ""
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "grok",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.CredentialSource = "grok"
+				adapter.APIKey = ""
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := testModelAdapter("img-"+test.name, 1)
+			adapter.OpenAIImageGenerationEnabled = true
+			test.mutate(&adapter)
+			_, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("NormalizeModelAdapterConfigs() error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }

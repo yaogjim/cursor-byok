@@ -57,7 +57,7 @@ tasks:
         msg: "未检测到 protoc-gen-connect-go，请先安装。"
     cmds:
       - rm -rf ./gen/agentv1 ./gen/aiserverv1
-      - protoc -I ./proto --go_out=. --go_opt=module=cursor --connect-go_out=. --connect-go_opt=module=cursor ./proto/agent_v1.proto ./proto/aiserver_v1.proto
+      - protoc -I ./proto -I /opt/homebrew/include --go_out=. --go_opt=module=cursor --connect-go_out=. --connect-go_opt=module=cursor ./proto/agent_v1.proto ./proto/aiserver_v1.proto
       - gofmt -w $(find ./gen -name '*.go' -type f)
 
   go:mod:tidy:

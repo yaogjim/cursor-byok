@@ -59,6 +59,63 @@ func TestClampFallbackChainBudget(t *testing.T) {
 	}
 }
 
+func TestClampChannelPlanRecovery(t *testing.T) {
+	missing := &ChannelPlan{}
+	ClampChannelPlanRecovery(missing)
+	if missing.MaxHttpAttempts != DefaultFallbackMaxHttpAttempts || missing.MaxWaitSeconds != DefaultFallbackMaxWaitSeconds {
+		t.Fatalf("missing attempts/wait = %d/%d", missing.MaxHttpAttempts, missing.MaxWaitSeconds)
+	}
+	if missing.MaxAttemptsPerChannel != DefaultFallbackMaxAttemptsPerChannel || missing.ConnectTimeoutSeconds != DefaultFallbackConnectTimeoutSeconds {
+		t.Fatalf("missing per-channel/connect = %d/%d", missing.MaxAttemptsPerChannel, missing.ConnectTimeoutSeconds)
+	}
+	if missing.FirstEventTimeoutSeconds != DefaultFallbackFirstEventTimeoutSeconds || missing.StreamIdleTimeoutSeconds != DefaultFallbackStreamIdleTimeoutSeconds || missing.CallTimeoutSeconds != DefaultFallbackCallTimeoutSeconds {
+		t.Fatalf("missing liveness = %d/%d/%d", missing.FirstEventTimeoutSeconds, missing.StreamIdleTimeoutSeconds, missing.CallTimeoutSeconds)
+	}
+
+	legal := &ChannelPlan{
+		MaxHttpAttempts:          7,
+		MaxWaitSeconds:           20,
+		MaxAttemptsPerChannel:    3,
+		ConnectTimeoutSeconds:    5,
+		FirstEventTimeoutSeconds: 60,
+		StreamIdleTimeoutSeconds: 30,
+		CallTimeoutSeconds:       900,
+	}
+	ClampChannelPlanRecovery(legal)
+	if legal.MaxAttemptsPerChannel != 3 || legal.ConnectTimeoutSeconds != 5 || legal.FirstEventTimeoutSeconds != 60 || legal.StreamIdleTimeoutSeconds != 30 || legal.CallTimeoutSeconds != 900 {
+		t.Fatalf("legal clamp mutated: %+v", legal)
+	}
+
+	oor := &ChannelPlan{
+		MaxAttemptsPerChannel:    9,
+		ConnectTimeoutSeconds:    1,
+		FirstEventTimeoutSeconds: 10,
+		StreamIdleTimeoutSeconds: 10,
+		CallTimeoutSeconds:       100,
+	}
+	ClampChannelPlanRecovery(oor)
+	if oor.MaxAttemptsPerChannel != MaxFallbackMaxAttemptsPerChannel || oor.ConnectTimeoutSeconds != MinFallbackConnectTimeoutSeconds {
+		t.Fatalf("oor clamp = %+v", oor)
+	}
+	if oor.FirstEventTimeoutSeconds != MinFallbackFirstEventTimeoutSeconds || oor.StreamIdleTimeoutSeconds != MinFallbackStreamIdleTimeoutSeconds || oor.CallTimeoutSeconds != MinFallbackCallTimeoutSeconds {
+		t.Fatalf("oor liveness clamp = %+v", oor)
+	}
+
+	high := &ChannelPlan{
+		MaxAttemptsPerChannel:    4,
+		ConnectTimeoutSeconds:    1000,
+		FirstEventTimeoutSeconds: 10000,
+		StreamIdleTimeoutSeconds: 10000,
+		CallTimeoutSeconds:       100000,
+	}
+	ClampChannelPlanRecovery(high)
+	if high.MaxAttemptsPerChannel != MaxFallbackMaxAttemptsPerChannel || high.ConnectTimeoutSeconds != MaxFallbackConnectTimeoutSeconds || high.FirstEventTimeoutSeconds != MaxFallbackFirstEventTimeoutSeconds || high.StreamIdleTimeoutSeconds != MaxFallbackStreamIdleTimeoutSeconds || high.CallTimeoutSeconds != MaxFallbackCallTimeoutSeconds {
+		t.Fatalf("high clamp = %+v", high)
+	}
+
+	ClampChannelPlanRecovery(nil)
+}
+
 func TestNormalizeModelAdapterConfigsMaxConcurrentRequests(t *testing.T) {
 	missing, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{testRuntimeModelAdapter("")})
 	if err != nil {
@@ -137,5 +194,78 @@ func TestSelectChannelForModelMapsUpstreamCapacity(t *testing.T) {
 	canonicalEquivalent := BuildUpstreamCapacityGroupKey("openai", "https://api.example.com/v1", chA.APIKey)
 	if normalizedEquivalent != canonicalEquivalent {
 		t.Fatal("group key must normalize provider type and base URL")
+	}
+}
+
+func TestNormalizeModelAdapterConfigsOpenAIImageGenerationEnabled(t *testing.T) {
+	allowed := testRuntimeModelAdapter("")
+	allowed.OpenAIImageGenerationEnabled = true
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{allowed})
+	if err != nil {
+		t.Fatalf("openai+static+responses should allow true: %v", err)
+	}
+	if !got[0].OpenAIImageGenerationEnabled {
+		t.Fatal("allowed true was dropped")
+	}
+
+	chat := testRuntimeModelAdapter("")
+	chat.OpenAIEndpoint = "/v1/chat/completions"
+	chat.OpenAIImageGenerationEnabled = true
+	if _, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{chat}); err == nil || !strings.Contains(err.Error(), "openAIImageGenerationEnabled") {
+		t.Fatalf("chat completions true should be rejected: %v", err)
+	}
+
+	invalid := []struct {
+		name   string
+		mutate func(*ModelAdapterConfig)
+	}{
+		{name: "codex", mutate: func(adapter *ModelAdapterConfig) { adapter.CredentialSource = "codex" }},
+		{name: "grok", mutate: func(adapter *ModelAdapterConfig) { adapter.CredentialSource = "grok" }},
+		{name: "custom_endpoint", mutate: func(adapter *ModelAdapterConfig) { adapter.OpenAIEndpoint = "/custom" }},
+		{name: "anthropic", mutate: func(adapter *ModelAdapterConfig) {
+			adapter.Type = "anthropic"
+			adapter.AnthropicThinkingEffort = "xhigh"
+		}},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := testRuntimeModelAdapter("")
+			adapter.OpenAIImageGenerationEnabled = true
+			test.mutate(&adapter)
+			if _, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter}); err == nil || !strings.Contains(err.Error(), "openAIImageGenerationEnabled") {
+				t.Fatalf("incompatible true should be rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestSelectChannelForModelProjectsOpenAIImageGenerationEnabled(t *testing.T) {
+	svc := NewConfigurableChannelService(func(context.Context) (RuntimeConfigSnapshot, error) {
+		on := testRuntimeModelAdapter("")
+		on.DisplayName = "img-on"
+		on.ModelID = "img-on"
+		on.TooltipData = "img-on"
+		on.OpenAIImageGenerationEnabled = true
+		off := testRuntimeModelAdapter("")
+		off.DisplayName = "img-off"
+		off.ModelID = "img-off"
+		off.TooltipData = "img-off"
+		off.APIKey = "other-key"
+		return RuntimeConfigSnapshot{ModelAdapters: []ModelAdapterConfig{on, off}}, nil
+	}, "")
+
+	chOn, err := svc.SelectChannelForModel(context.Background(), "img-on")
+	if err != nil {
+		t.Fatalf("select on: %v", err)
+	}
+	chOff, err := svc.SelectChannelForModel(context.Background(), "img-off")
+	if err != nil {
+		t.Fatalf("select off: %v", err)
+	}
+	if !chOn.OpenAIImageGenerationEnabled {
+		t.Fatal("runtime resolved channel lost OpenAIImageGenerationEnabled")
+	}
+	if chOff.OpenAIImageGenerationEnabled {
+		t.Fatal("disabled runtime channel projected OpenAIImageGenerationEnabled=true")
 	}
 }

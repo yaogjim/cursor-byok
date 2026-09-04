@@ -19,7 +19,6 @@ func TestObservabilitySettingsFingerprintIgnoresRoutingAndModels(t *testing.T) {
 	base.Observability.MaxDiskMB = 1024
 	changed := base
 	changed.Routing.Mode = "upstream"
-	changed.ProviderStreamIdleTimeout = 30
 	changed.HomeMetrics.IncludeCacheWriteInHitRate = true
 	changed.ModelAdapters = []serverconfig.ModelAdapterConfig{{
 		Type:    "openai",

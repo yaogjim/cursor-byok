@@ -208,7 +208,7 @@ func requireHTTPHits(t *testing.T, got []int32, want []int32) {
 		totalGot += got[i]
 		totalWant += want[i]
 		if got[i] > int32(providerRequestMaxAttempts) {
-			t.Fatalf("channel %d exceeded per-channel cap 3: %v", i, got)
+			t.Fatalf("channel %d exceeded per-channel cap %d: %v", i, providerRequestMaxAttempts, got)
 		}
 	}
 	for i := range got {
@@ -239,7 +239,7 @@ func TestFallbackHTTPDefaultBudgetCoversThirdChannel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third channel should succeed under coverage-first budget, got %v", err)
 	}
-	requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{3, 1, 1})
+	requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{2, 2, 1})
 }
 
 func TestFallbackHTTPFiveChannelsBudgetFiveCoversLast(t *testing.T) {
@@ -288,7 +288,7 @@ func TestFallbackHTTPFiveChannelsBudgetNineCoverageFirst(t *testing.T) {
 		t.Fatal("expected chain to exhaust")
 	}
 	got := []int32{hits[0].Load(), hits[1].Load(), hits[2].Load(), hits[3].Load(), hits[4].Load()}
-	requireHTTPHits(t, got, []int32{3, 3, 1, 1, 1})
+	requireHTTPHits(t, got, []int32{2, 2, 2, 2, 1})
 }
 
 func TestFallbackHTTPCoverageTransportAnd503(t *testing.T) {
@@ -329,7 +329,7 @@ func TestFallbackHTTPCoverageTransportAnd503(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: third channel should succeed, got %v", test.name, err)
 			}
-			requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{3, 1, 1})
+			requireHTTPHits(t, []int32{primaryHits.Load(), secondHits.Load(), thirdHits.Load()}, []int32{2, 2, 1})
 		})
 	}
 }
@@ -394,8 +394,8 @@ func TestFallbackHTTPConfiguredAttemptBudgets(t *testing.T) {
 		want     []int32
 	}{
 		{name: "2", attempts: 2, want: []int32{1, 1, 0}},
-		{name: "7", attempts: 7, want: []int32{3, 3, 1}},
-		{name: "9", attempts: 9, want: []int32{3, 3, 3}},
+		{name: "7", attempts: 7, want: []int32{2, 2, 2}},
+		{name: "9", attempts: 9, want: []int32{2, 2, 2}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -419,7 +419,7 @@ func TestFallbackHTTPConfiguredAttemptBudgets(t *testing.T) {
 			}
 			for _, hits := range got {
 				if hits > int32(providerRequestMaxAttempts) {
-					t.Fatalf("single channel exceeded 3 attempts: %v", got)
+					t.Fatalf("single channel exceeded %d attempts: %v", providerRequestMaxAttempts, got)
 				}
 			}
 		})
@@ -444,12 +444,12 @@ func TestFallbackHTTPOnePlusThreePlusOne(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected chain to exhaust")
 	}
-	if primaryHits.Load() != 1 || secondHits.Load() != 3 || thirdHits.Load() != 1 {
-		t.Fatalf("1+3+1 hits = %d/%d/%d", primaryHits.Load(), secondHits.Load(), thirdHits.Load())
+	if primaryHits.Load() != 1 || secondHits.Load() != 2 || thirdHits.Load() != 2 {
+		t.Fatalf("1+2+2 hits = %d/%d/%d", primaryHits.Load(), secondHits.Load(), thirdHits.Load())
 	}
 }
 
-func TestFallbackHTTP500RetriesSameChannelButNeverSwitches(t *testing.T) {
+func TestFallbackHTTP500RetriesSameChannelThenSwitches(t *testing.T) {
 	primary, primaryHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusInternalServerError}})
 	candidate, candidateHits := startOpenAIScript(t, []httpScriptStep{{status: http.StatusOK}})
 	plan := &legacyruntime.ChannelPlan{
@@ -462,14 +462,14 @@ func TestFallbackHTTP500RetriesSameChannelButNeverSwitches(t *testing.T) {
 		MaxWaitSeconds:  8,
 	}
 	err := newHTTPFallbackRouter(plan, fallbackTestRetry()).Stream(context.Background(), fallbackHTTPRequest(), func(ModelEvent) error { return nil })
-	if err == nil {
-		t.Fatal("expected HTTP 500 to remain terminal for the chain")
+	if err != nil {
+		t.Fatalf("expected HTTP 500 to switch after 2 same-channel attempts: %v", err)
 	}
-	if primaryHits.Load() != 3 {
-		t.Fatalf("primary 500 retries = %d, want 3", primaryHits.Load())
+	if primaryHits.Load() != 2 {
+		t.Fatalf("primary 500 retries = %d, want 2", primaryHits.Load())
 	}
-	if candidateHits.Load() != 0 {
-		t.Fatalf("candidate hits = %d, want 0", candidateHits.Load())
+	if candidateHits.Load() != 1 {
+		t.Fatalf("candidate hits = %d, want 1", candidateHits.Load())
 	}
 }
 
@@ -513,8 +513,8 @@ func TestFallbackHTTPDisabledKeepsSingleChannelP0(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected disabled fallback to fail on the single channel")
 	}
-	if primaryHits.Load() != 3 {
-		t.Fatalf("disabled path hits = %d, want P0 max 3", primaryHits.Load())
+	if primaryHits.Load() != int32(providerRequestMaxAttempts) {
+		t.Fatalf("disabled path hits = %d, want P0 max %d", primaryHits.Load(), providerRequestMaxAttempts)
 	}
 	if candidateHits.Load() != 0 {
 		t.Fatalf("disabled path must not use candidates: %d", candidateHits.Load())

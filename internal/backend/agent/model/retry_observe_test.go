@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/internal/audit"
 	"cursor/internal/observability"
 )
 
@@ -149,6 +150,32 @@ func TestProviderObservabilityOmitsSecretsAndDoesNotForgeIDs(t *testing.T) {
 		if event.CursorRequestID != "request-id" || event.ModelCallID != "model-call-id" {
 			t.Fatalf("param correlation missing: %+v", event)
 		}
+	}
+}
+
+func TestRecoveryObservabilityFieldsOmitSecrets(t *testing.T) {
+	raw := `Post "https://api.example.test/v1/messages?api_key=sk-secret": Authorization: Bearer header-secret account_id=acct-123 body={"prompt":"do-not-record"}`
+	fields := map[string]any{"error_message": observabilityErrorMessage(raw)}
+	appendFailureObservabilityFields(fields, audit.Event{
+		ErrorCategory: ProviderErrorTransport,
+		ErrorMessage:  raw,
+		RetryDecision: retryDecisionRetry,
+	})
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, secret := range []string{"sk-secret", "header-secret", "acct-123", "api_key=sk-secret", "https://", "/v1/messages"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("recovery fields leaked %q: %s", secret, text)
+		}
+	}
+	if fields["failure_category"] != ProviderErrorTransport {
+		t.Fatalf("failure_category = %v", fields["failure_category"])
+	}
+	if fields["recovery_action"] != RecoveryActionRetrySame {
+		t.Fatalf("recovery_action = %v", fields["recovery_action"])
 	}
 }
 

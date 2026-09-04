@@ -18,6 +18,8 @@ import {
   prepareModelAdaptersForPersist,
   providerFallbackBudgetFieldError,
   PROVIDER_FALLBACK_LIMITS,
+  channelEndpointFamily,
+  isFallbackChannelCompatible,
   selectAdaptersForEndpointTest,
   shouldTestModelAdapterEndpoint,
   validateProviderFallbackAdapters,
@@ -33,7 +35,12 @@ import {
   DEFAULT_GATEWAY_CONFIG,
   resolveEffectiveTheme,
 } from "../src/state/configProjection.js";
-import { applyModelAdapterTypeChange } from "../src/state/modelAdapterTypeChange.js";
+import {
+  applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
+  isOpenAIImageGenerationCompatible,
+  normalizeOpenAIImageGenerationEnabled,
+} from "../src/state/modelAdapterTypeChange.js";
 
 function assertEqual(actual, expected, label) {
   const left = JSON.stringify(actual);
@@ -157,8 +164,18 @@ assertEqual(
 
 assertEqual(DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts, 5, "default maxHttpAttempts");
 assertEqual(DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds, 8, "default maxWaitSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.maxAttemptsPerChannel, 2, "default maxAttemptsPerChannel");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.connectTimeoutSeconds, 30, "default connectTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.firstEventTimeoutSeconds, 600, "default firstEventTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.streamIdleTimeoutSeconds, 240, "default streamIdleTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.callTimeoutSeconds, 7200, "default callTimeoutSeconds");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxHttpAttempts, { min: 2, max: 9 }, "attempt limits");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxWaitSeconds, { min: 1, max: 30 }, "wait limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.maxAttemptsPerChannel, { min: 1, max: 3 }, "per-channel attempt limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.connectTimeoutSeconds, { min: 5, max: 120 }, "connect timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.firstEventTimeoutSeconds, { min: 60, max: 1800 }, "first event timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.streamIdleTimeoutSeconds, { min: 30, max: 900 }, "stream idle timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.callTimeoutSeconds, { min: 900, max: 21600 }, "call timeout limits");
 assertEqual(MAX_PROVIDER_FALLBACK_CANDIDATES, 4, "fallback chain allows 1 primary + 4 candidates");
 
 const fbOff = normalizeProviderFallback(null);
@@ -167,6 +184,11 @@ assertEqual(fbOff.primaryChannelID, "", "null fallback primary");
 assertEqual(fbOff.candidateChannelIDs, [], "null fallback candidates");
 assertEqual(fbOff.maxHttpAttempts, 5, "null fallback attempts default");
 assertEqual(fbOff.maxWaitSeconds, 8, "null fallback wait default");
+assertEqual(fbOff.maxAttemptsPerChannel, 2, "null fallback per-channel default");
+assertEqual(fbOff.connectTimeoutSeconds, 30, "null fallback connect default");
+assertEqual(fbOff.firstEventTimeoutSeconds, 600, "null fallback first-event default");
+assertEqual(fbOff.streamIdleTimeoutSeconds, 240, "null fallback stream-idle default");
+assertEqual(fbOff.callTimeoutSeconds, 7200, "null fallback call default");
 
 const fbDisabled = normalizeProviderFallback({
   enabled: false,
@@ -191,6 +213,11 @@ assertEqual(fbEnabled.primaryChannelID, "ch-primary", "primary trim");
 assertEqual(fbEnabled.candidateChannelIDs, ["ch-cand1", "ch-cand2"], "empty candidates filtered");
 assertEqual(fbEnabled.maxHttpAttempts, 5, "missing attempts default 5");
 assertEqual(fbEnabled.maxWaitSeconds, 8, "missing wait default 8");
+assertEqual(fbEnabled.maxAttemptsPerChannel, 2, "missing per-channel default 2");
+assertEqual(fbEnabled.connectTimeoutSeconds, 30, "missing connect default 30");
+assertEqual(fbEnabled.firstEventTimeoutSeconds, 600, "missing first-event default 600");
+assertEqual(fbEnabled.streamIdleTimeoutSeconds, 240, "missing stream-idle default 240");
+assertEqual(fbEnabled.callTimeoutSeconds, 7200, "missing call default 7200");
 
 const fbZeroBudget = normalizeProviderFallback({
   enabled: true,
@@ -201,6 +228,11 @@ const fbZeroBudget = normalizeProviderFallback({
 });
 assertEqual(fbZeroBudget.maxHttpAttempts, 5, "zero attempts default 5");
 assertEqual(fbZeroBudget.maxWaitSeconds, 8, "zero wait default 8");
+assertEqual(fbZeroBudget.maxAttemptsPerChannel, 2, "zero per-channel default 2");
+assertEqual(fbZeroBudget.connectTimeoutSeconds, 30, "zero connect default 30");
+assertEqual(fbZeroBudget.firstEventTimeoutSeconds, 600, "zero first-event default 600");
+assertEqual(fbZeroBudget.streamIdleTimeoutSeconds, 240, "zero stream-idle default 240");
+assertEqual(fbZeroBudget.callTimeoutSeconds, 7200, "zero call default 7200");
 
 const fbLegalBounds = normalizeProviderFallback({
   enabled: true,
@@ -218,9 +250,19 @@ const fbLegalMax = normalizeProviderFallback({
   candidateChannelIDs: ["ch-b"],
   maxHttpAttempts: 9,
   maxWaitSeconds: 30,
+  maxAttemptsPerChannel: 3,
+  connectTimeoutSeconds: 120,
+  firstEventTimeoutSeconds: 1800,
+  streamIdleTimeoutSeconds: 900,
+  callTimeoutSeconds: 21600,
 });
 assertEqual(fbLegalMax.maxHttpAttempts, 9, "legal max attempts preserved");
 assertEqual(fbLegalMax.maxWaitSeconds, 30, "legal max wait preserved");
+assertEqual(fbLegalMax.maxAttemptsPerChannel, 3, "legal max per-channel preserved");
+assertEqual(fbLegalMax.connectTimeoutSeconds, 120, "legal max connect preserved");
+assertEqual(fbLegalMax.firstEventTimeoutSeconds, 1800, "legal max first-event preserved");
+assertEqual(fbLegalMax.streamIdleTimeoutSeconds, 900, "legal max stream-idle preserved");
+assertEqual(fbLegalMax.callTimeoutSeconds, 21600, "legal max call preserved");
 
 const fbOutOfRange = normalizeProviderFallback({
   enabled: true,
@@ -231,6 +273,16 @@ const fbOutOfRange = normalizeProviderFallback({
 });
 assertEqual(fbOutOfRange.maxHttpAttempts, 1, "out-of-range attempts must not clamp");
 assertEqual(fbOutOfRange.maxWaitSeconds, 31, "out-of-range wait must not clamp");
+assertEqual(
+  normalizeProviderFallback({ maxAttemptsPerChannel: 4 }).maxAttemptsPerChannel,
+  4,
+  "out-of-range per-channel must not clamp",
+);
+assertEqual(
+  normalizeProviderFallback({ firstEventTimeoutSeconds: 8 }).firstEventTimeoutSeconds,
+  8,
+  "out-of-range first-event must not clamp",
+);
 assert(
   Boolean(validateProviderFallbackBudget(fbOutOfRange)),
   "out-of-range budget must error instead of clamp",
@@ -268,10 +320,20 @@ const fbSnake = normalizeProviderFallback({
   candidateChannelIDs: ["ch-a"],
   max_http_attempts: 4,
   max_wait_seconds: 20,
+  max_attempts_per_channel: 3,
+  connect_timeout_seconds: 15,
+  first_event_timeout_seconds: 900,
+  stream_idle_timeout_seconds: 120,
+  call_timeout_seconds: 1800,
 });
 assertEqual(fbSnake.primaryChannelID, "ch-snake", "snake_case primary");
 assertEqual(fbSnake.maxHttpAttempts, 4, "snake_case attempts");
 assertEqual(fbSnake.maxWaitSeconds, 20, "snake_case wait");
+assertEqual(fbSnake.maxAttemptsPerChannel, 3, "snake_case per-channel");
+assertEqual(fbSnake.connectTimeoutSeconds, 15, "snake_case connect");
+assertEqual(fbSnake.firstEventTimeoutSeconds, 900, "snake_case first-event");
+assertEqual(fbSnake.streamIdleTimeoutSeconds, 120, "snake_case stream-idle");
+assertEqual(fbSnake.callTimeoutSeconds, 1800, "snake_case call");
 
 const fbBad = normalizeProviderFallback("not-an-object");
 assertEqual(fbBad.enabled, false, "non-object disabled");
@@ -357,9 +419,20 @@ assertEqual(
 );
 assertEqual(
   providerFallbackBudgetFieldError("maxWaitSeconds", 31),
-  "全链最大等待秒数必须为 1–30 的整数",
+  "全链最大退避等待秒数必须为 1–30 的整数",
   "wait 31 inline error",
 );
+assertEqual(
+  providerFallbackBudgetFieldError("maxAttemptsPerChannel", 4),
+  "单渠道最大尝试次数必须为 1–3 的整数",
+  "per-channel 4 inline error",
+);
+assertEqual(
+  providerFallbackBudgetFieldError("firstEventTimeoutSeconds", 8),
+  "首事件超时秒数必须为 60–1800 的整数",
+  "first-event 8 inline error",
+);
+assertEqual(providerFallbackBudgetFieldError("connectTimeoutSeconds", 0), "", "defaulted connect has no inline error");
 
 // ── 使用 backend 已返回的完整 adapter id 校验并作为保存身份提示 ──
 
@@ -566,6 +639,11 @@ assertEqual(disabledEcho.payloadAdapters[0].providerFallback.primaryChannelID, i
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.candidateChannelIDs, [idB], "disabled echo candidates");
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxHttpAttempts, 7, "disabled echo attempts");
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxWaitSeconds, 12, "disabled echo wait");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxAttemptsPerChannel, 2, "disabled echo per-channel default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.connectTimeoutSeconds, 30, "disabled echo connect default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.firstEventTimeoutSeconds, 600, "disabled echo first-event default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.streamIdleTimeoutSeconds, 240, "disabled echo stream-idle default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.callTimeoutSeconds, 7200, "disabled echo call default");
 
 const outOfRangePersist = prepareModelAdaptersForPersist(
   [{
@@ -619,6 +697,111 @@ const disabledWaitOutOfRange = prepareModelAdaptersForPersist(
 assert(
   !disabledWaitOutOfRange.ok && /1–30/.test(disabledWaitOutOfRange.error),
   `disabled out-of-range wait must still be rejected: ${disabledWaitOutOfRange.error}`,
+);
+
+const recoveryBudgetPersist = persistPayloadRoundtrip([
+  adapterA,
+  adapterB,
+  {
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB],
+      maxHttpAttempts: 6,
+      maxWaitSeconds: 12,
+      maxAttemptsPerChannel: 2,
+      connectTimeoutSeconds: 45,
+      firstEventTimeoutSeconds: 600,
+      streamIdleTimeoutSeconds: 240,
+      callTimeoutSeconds: 7200,
+    }),
+  },
+]);
+assert(recoveryBudgetPersist.ok, `recovery budget persist should succeed: ${recoveryBudgetPersist.error}`);
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.maxAttemptsPerChannel, 2, "persist maxAttemptsPerChannel");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.connectTimeoutSeconds, 45, "persist connectTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.firstEventTimeoutSeconds, 600, "persist firstEventTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.streamIdleTimeoutSeconds, 240, "persist streamIdleTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.callTimeoutSeconds, 7200, "persist callTimeoutSeconds");
+assertEqual(
+  recoveryBudgetPersist.second.adaptersWithIds[2].providerFallback,
+  recoveryBudgetPersist.reloaded[2].providerFallback,
+  "recovery budget second persist keeps fields",
+);
+
+const firstEventTooLowPersist = prepareModelAdaptersForPersist(
+  [{
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB],
+      firstEventTimeoutSeconds: 8,
+    }),
+  }, adapterA, adapterB],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !firstEventTooLowPersist.ok && /60–1800/.test(firstEventTooLowPersist.error),
+  `first-event 8s must be rejected: ${firstEventTooLowPersist.error}`,
+);
+
+const anthropicPhysical = {
+  ...physicalAdapter("backend-anthropic", "Claude", "https://api.anthropic.com"),
+  type: "anthropic",
+  modelID: "claude-3",
+};
+const openaiResponsesPhysical = {
+  ...physicalAdapter("backend-openai-responses", "GPT Responses", "https://api.openai.com/v1"),
+  openAIEndpoint: "/v1/responses",
+};
+assertEqual(channelEndpointFamily(adapterA), "openai:chat/completions", "chat completions family");
+assertEqual(channelEndpointFamily(openaiResponsesPhysical), "openai:responses", "responses family");
+assertEqual(channelEndpointFamily(anthropicPhysical), "anthropic:messages", "anthropic family");
+assertEqual(
+  channelEndpointFamily({ type: "openai", baseURL: "https://example.com/v1/responses", openAIEndpoint: "/custom" }),
+  "openai:responses",
+  "baseURL /responses wins over custom endpoint",
+);
+assertEqual(isFallbackChannelCompatible(adapterA, adapterB), true, "same openai chat family is compatible");
+assertEqual(isFallbackChannelCompatible(adapterA, openaiResponsesPhysical), false, "chat vs responses is incompatible");
+assertEqual(isFallbackChannelCompatible(adapterA, anthropicPhysical), false, "openai vs anthropic is incompatible");
+
+const crossProtocolPersist = prepareModelAdaptersForPersist(
+  [adapterA, anthropicPhysical, {
+    ...logicalAdapter,
+    type: "openai",
+    openAIEndpoint: "/v1/chat/completions",
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [anthropicPhysical.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !crossProtocolPersist.ok && /相同的适配器类型和协议端点/.test(crossProtocolPersist.error),
+  `openai/anthropic mix must be rejected: ${crossProtocolPersist.error}`,
+);
+
+const crossEndpointPersist = prepareModelAdaptersForPersist(
+  [adapterA, openaiResponsesPhysical, {
+    ...logicalAdapter,
+    type: "openai",
+    openAIEndpoint: "/v1/chat/completions",
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [openaiResponsesPhysical.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !crossEndpointPersist.ok && /相同的适配器类型和协议端点/.test(crossEndpointPersist.error),
+  `chat vs responses mix must be rejected: ${crossEndpointPersist.error}`,
 );
 
 const enabledRoundtrip = persistPayloadRoundtrip([adapterA, adapterB, logicalAdapter]);
@@ -886,6 +1069,7 @@ const projectionSource = readFileSync(path.join(frontendSrc, "state/configProjec
 const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"), "utf8");
 const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapterTypeChange.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
+const adapterModalSource = readFileSync(path.join(frontendSrc, "components/ModelAdapterModal.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
 const settingsRescheduleSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
@@ -1015,7 +1199,8 @@ assert(
   "type change helper must keep the current model identifier",
 );
 assert(
-  appStateSource.includes("export { applyModelAdapterTypeChange }"),
+  appStateSource.includes("export {")
+    && appStateSource.includes("applyModelAdapterTypeChange"),
   "appState must re-export applyModelAdapterTypeChange",
 );
 
@@ -1064,15 +1249,161 @@ function modelIdentifierError(adapters) {
   assertEqual(draft.openAIEndpoint, "/v1/chat/completions", "openai switch fills missing endpoint");
 }
 
+assertEqual(
+  normalizeOpenAIImageGenerationEnabled({}),
+  false,
+  "native media generation defaults off",
+);
+assertEqual(
+  normalizeOpenAIImageGenerationEnabled({
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/chat/completions",
+  }),
+  false,
+  "empty openai chat completions draft keeps native media generation off",
+);
+
+{
+  const source = {
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  assertEqual(isOpenAIImageGenerationCompatible(source), true, "compatible openai responses static");
+  assertEqual(normalizeOpenAIImageGenerationEnabled(source), true, "enabled compatible round trip");
+  assertEqual(
+    applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+    true,
+    "constraint preserves compatible enabled flag",
+  );
+}
+
+{
+  const invalid = [
+    ["anthropic", {
+      type: "anthropic",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["chat completions", {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/chat/completions",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["custom endpoint", {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/custom",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["codex credential", {
+      type: "openai",
+      credentialSource: "codex",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["grok credential", {
+      type: "openai",
+      credentialSource: "grok",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+  ];
+  for (const [label, source] of invalid) {
+    assertEqual(isOpenAIImageGenerationCompatible(source), false, `${label} is incompatible`);
+    assertEqual(normalizeOpenAIImageGenerationEnabled(source), false, `${label} normalizes off`);
+    assertEqual(
+      applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+      false,
+      `${label} constraint clears enabled flag`,
+    );
+  }
+}
+
+{
+  const draft = {
+    type: "openai",
+    modelID: "gpt-5.5",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  applyModelAdapterTypeChange(draft, "anthropic");
+  assertEqual(draft.openAIImageGenerationEnabled, false, "type switch to anthropic clears native media generation");
+}
+
+assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("openAIImageGenerationEnabled: false"),
+  "empty draft defaults openAIImageGenerationEnabled off",
+);
+assert(
+  appStateSource.includes("const openAIImageGenerationEnabled = normalizeOpenAIImageGenerationEnabled("),
+  "normalizeModelAdapter projects openAIImageGenerationEnabled",
+);
+assert(
+  extractSourceFunction(appStateSource, "serializeConfigPayload").includes("...adapter"),
+  "save/config projection keeps normalized adapter fields including openAIImageGenerationEnabled",
+);
+assert(
+  appStateSource.includes("if (adapter.openAIImageGenerationEnabled && !isOpenAIImageGenerationCompatible(adapter))"),
+  "validateModelAdapters rejects incompatible native media generation",
+);
+assert(
+  extractSourceFunction(appStateSource, "buildModelAdapterTestRequestHash").includes("openAIImageGenerationEnabled"),
+  "test identity hash preserves openAIImageGenerationEnabled",
+);
+assert(
+  extractSourceFunction(appStateSource, "duplicateModelAdapterAt").includes("...source"),
+  "copy path preserves normalized adapter fields including openAIImageGenerationEnabled",
+);
+assert(
+  editorSource.includes("OpenAI Responses 原生媒体生成")
+    && editorSource.includes("applyOpenAIImageGenerationConstraint")
+    && editorSource.includes(":disabled=\"!canEnableOpenAIImageGeneration\""),
+  "ModelEditor exposes native media generation and disables incompatible adapters",
+);
+assert(
+  adapterModalSource.includes("OpenAI Responses 原生媒体生成")
+    && adapterModalSource.includes("applyOpenAIImageGenerationConstraint")
+    && adapterModalSource.includes(":disabled=\"!canEnableOpenAIImageGeneration\""),
+  "ModelAdapterModal exposes native media generation and disables incompatible adapters",
+);
+assert(
+  editorSource.includes("仅兼容的上游应开启")
+    && adapterModalSource.includes("仅兼容的上游应开启"),
+  "both editors explain that only compatible upstreams should enable native media generation",
+);
+
 assert(editorSource.includes("formatFallbackBudgetInput"), "ModelEditor getter must hide NaN via helper");
 assert(editorSource.includes("parseFallbackBudgetInput"), "ModelEditor setter must parse via helper");
 assert(editorSource.includes("逻辑路由（建议仅子代理）"), "ModelEditor must mark logical routing");
 assert(editorSource.includes("全链最大 HTTP 尝试次数（默认 5）"), "ModelEditor attempts field");
-assert(editorSource.includes("全链最大等待秒数（默认 8）"), "ModelEditor wait field");
-assert(editorSource.includes("min(剩余预算, 3)"), "help text must mention min(remaining, 3)");
+assert(editorSource.includes("全链最大退避等待秒数（默认 8）"), "ModelEditor wait field");
+assert(editorSource.includes("单渠道最大尝试次数（默认 2）"), "ModelEditor per-channel attempts field");
+assert(editorSource.includes("建连超时秒数（默认 30）"), "ModelEditor connect timeout field");
+assert(editorSource.includes("首事件超时秒数（默认 600）"), "ModelEditor first-event timeout field");
+assert(editorSource.includes("流空闲超时秒数（默认 240）"), "ModelEditor stream idle timeout field");
+assert(editorSource.includes("整次调用超时秒数（默认 7200）"), "ModelEditor call timeout field");
 assert(editorSource.includes("自身不会向虚拟 endpoint 发请求"), "help text must say alias sends no request");
-assert(editorSource.includes("已有输出后不切换") || editorSource.includes("一旦已有输出则禁止切换"), "help text must forbid switch after output");
-assert(editorSource.includes("费用") && editorSource.includes("隐私") && editorSource.includes("工具兼容"), "help text must mention cost/privacy/compat risk");
+assert(
+  editorSource.includes("5xx 等失败先在当前渠道再试一次")
+    && (editorSource.includes("side effect") || editorSource.includes("side effect 后不再切换")),
+  "help text must retry current channel then refuse switch after bytes/event/side effect",
+);
+assert(
+  editorSource.includes("600") && editorSource.includes("8 秒"),
+  "help text must say 600s first-token is not the 8s wait budget",
+);
+assert(editorSource.includes("isFallbackChannelCompatible"), "candidate dropdown must filter by type and endpoint family");
+assert(editorSource.includes("fallbackChannelOptionLabel"), "channel options must show displayName/provider/modelID");
+assert(editorSource.includes("第 ${priority} 优先") || editorSource.includes("第 1 优先"), "channel UI must show priority");
+assert(!editorSource.includes("isCrossProviderFallback"), "cross-protocol mix must not remain a warning-only path");
+assert(!appStateSource.includes("providerStreamIdleTimeout"), "appState must drop root providerStreamIdleTimeout");
+assert(!projectionSource.includes("providerStreamIdleTimeout"), "configProjection must not project root providerStreamIdleTimeout");
 assert(editorSource.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT"), "save/test must hint runtime verification");
 assert(editorSource.includes("shouldTestModelAdapterEndpoint"), "save-and-test must skip logical alias HTTP");
 assert(editorSource.includes("上游并发上限"), "ModelEditor must show upstream concurrency limit");

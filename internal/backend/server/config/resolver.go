@@ -76,15 +76,21 @@ func resolveModelAdapterChannelPlan(adapters []ModelAdapterConfig, requestedMode
 	}
 	matched := adapters[matchIndex]
 	fb := matched.ProviderFallback
-	attempts, waitSeconds := legacyruntime.ClampFallbackChainBudget(fb.MaxHttpAttempts, fb.MaxWaitSeconds)
 	if !fb.Enabled || len(fb.CandidateChannelIDs) == 0 {
 		ch := resolveAdapterToChannel(matched)
-		return &legacyruntime.ChannelPlan{
-			Channels:        []legacyruntime.ResolvedChannel{ch},
-			FallbackEnabled: false,
-			MaxHttpAttempts: attempts,
-			MaxWaitSeconds:  waitSeconds,
-		}, nil
+		plan := &legacyruntime.ChannelPlan{
+			Channels:                 []legacyruntime.ResolvedChannel{ch},
+			FallbackEnabled:          false,
+			MaxHttpAttempts:          fb.MaxHttpAttempts,
+			MaxWaitSeconds:           fb.MaxWaitSeconds,
+			MaxAttemptsPerChannel:    fb.MaxAttemptsPerChannel,
+			ConnectTimeoutSeconds:    fb.ConnectTimeoutSeconds,
+			FirstEventTimeoutSeconds: fb.FirstEventTimeoutSeconds,
+			StreamIdleTimeoutSeconds: fb.StreamIdleTimeoutSeconds,
+			CallTimeoutSeconds:       fb.CallTimeoutSeconds,
+		}
+		legacyruntime.ClampChannelPlanRecovery(plan)
+		return plan, nil
 	}
 	// Fallback 已启用：构建链 [primary, candidates...]
 	// primary != matched.ID 已由 NormalizeModelAdapterConfigs 校验。
@@ -100,12 +106,19 @@ func resolveModelAdapterChannelPlan(adapters []ModelAdapterConfig, requestedMode
 		}
 		channels = append(channels, *candidateCh)
 	}
-	return &legacyruntime.ChannelPlan{
-		Channels:        channels,
-		FallbackEnabled: true,
-		MaxHttpAttempts: attempts,
-		MaxWaitSeconds:  waitSeconds,
-	}, nil
+	plan := &legacyruntime.ChannelPlan{
+		Channels:                 channels,
+		FallbackEnabled:          true,
+		MaxHttpAttempts:          fb.MaxHttpAttempts,
+		MaxWaitSeconds:           fb.MaxWaitSeconds,
+		MaxAttemptsPerChannel:    fb.MaxAttemptsPerChannel,
+		ConnectTimeoutSeconds:    fb.ConnectTimeoutSeconds,
+		FirstEventTimeoutSeconds: fb.FirstEventTimeoutSeconds,
+		StreamIdleTimeoutSeconds: fb.StreamIdleTimeoutSeconds,
+		CallTimeoutSeconds:       fb.CallTimeoutSeconds,
+	}
+	legacyruntime.ClampChannelPlanRecovery(plan)
+	return plan, nil
 }
 
 // resolveChannelByID 按渠道 ID（adapter.ID）在已归一化列表中查找并转换为 ResolvedChannel。
@@ -123,32 +136,33 @@ func resolveChannelByID(adapters []ModelAdapterConfig, channelID string) (*legac
 // 与 resolveModelAdapterChannel 保持相同字段映射语义，供 fallback 路径复用。
 func resolveAdapterToChannel(matched ModelAdapterConfig) legacyruntime.ResolvedChannel {
 	resolved := legacyruntime.ResolvedChannel{
-		ID:                          strings.TrimSpace(matched.ID),
-		Name:                        strings.TrimSpace(matched.DisplayName),
-		GroupName:                   "local",
-		Code:                        strings.TrimSpace(matched.ID),
-		Provider:                    strings.TrimSpace(matched.Type),
-		BaseURL:                     strings.TrimSpace(matched.BaseURL),
-		APIKey:                      strings.TrimSpace(matched.APIKey),
-		CredentialSource:            strings.TrimSpace(matched.CredentialSource),
-		Model:                       strings.TrimSpace(matched.ModelID),
-		OpenAIEndpoint:              strings.TrimSpace(matched.OpenAIEndpoint),
-		OpenAIExtraParamsEnabled:    matched.OpenAIExtraParamsEnabled,
-		OpenAIExtraParamsJSON:       strings.TrimSpace(matched.OpenAIExtraParamsJSON),
-		CustomHeadersEnabled:        matched.CustomHeadersEnabled,
-		CustomHeadersJSON:           strings.TrimSpace(matched.CustomHeadersJSON),
-		AnthropicExtraParamsEnabled: matched.AnthropicExtraParamsEnabled,
-		AnthropicExtraParamsJSON:    strings.TrimSpace(matched.AnthropicExtraParamsJSON),
-		TimeoutMS:                   defaultChannelTimeoutMS,
-		ContextWindowTokens:         defaultChannelContextWindowTokens,
-		MaxTokens:                   defaultChannelMaxTokens,
-		ReasoningEffort:             strings.TrimSpace(matched.ReasoningEffort),
-		AnthropicMaxTokens:          defaultChannelMaxTokens,
-		AnthropicThinkingEffort:     defaultChannelAnthropicEffort,
-		ThinkingEnabled:             true,
-		ThinkingBudgetTokens:        defaultChannelThinkingBudget,
-		MaxConcurrentRequests:       matched.MaxConcurrentRequests,
-		UpstreamCapacityGroupKey:    legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, subscriptionauth.ChannelIDSecret(subscriptionauth.NormalizeCredentialSource(matched.CredentialSource), matched.APIKey)),
+		ID:                           strings.TrimSpace(matched.ID),
+		Name:                         strings.TrimSpace(matched.DisplayName),
+		GroupName:                    "local",
+		Code:                         strings.TrimSpace(matched.ID),
+		Provider:                     strings.TrimSpace(matched.Type),
+		BaseURL:                      strings.TrimSpace(matched.BaseURL),
+		APIKey:                       strings.TrimSpace(matched.APIKey),
+		CredentialSource:             strings.TrimSpace(matched.CredentialSource),
+		Model:                        strings.TrimSpace(matched.ModelID),
+		OpenAIEndpoint:               strings.TrimSpace(matched.OpenAIEndpoint),
+		OpenAIExtraParamsEnabled:     matched.OpenAIExtraParamsEnabled,
+		OpenAIExtraParamsJSON:        strings.TrimSpace(matched.OpenAIExtraParamsJSON),
+		OpenAIImageGenerationEnabled: matched.OpenAIImageGenerationEnabled,
+		CustomHeadersEnabled:         matched.CustomHeadersEnabled,
+		CustomHeadersJSON:            strings.TrimSpace(matched.CustomHeadersJSON),
+		AnthropicExtraParamsEnabled:  matched.AnthropicExtraParamsEnabled,
+		AnthropicExtraParamsJSON:     strings.TrimSpace(matched.AnthropicExtraParamsJSON),
+		TimeoutMS:                    defaultChannelTimeoutMS,
+		ContextWindowTokens:          defaultChannelContextWindowTokens,
+		MaxTokens:                    defaultChannelMaxTokens,
+		ReasoningEffort:              strings.TrimSpace(matched.ReasoningEffort),
+		AnthropicMaxTokens:           defaultChannelMaxTokens,
+		AnthropicThinkingEffort:      defaultChannelAnthropicEffort,
+		ThinkingEnabled:              true,
+		ThinkingBudgetTokens:         defaultChannelThinkingBudget,
+		MaxConcurrentRequests:        matched.MaxConcurrentRequests,
+		UpstreamCapacityGroupKey:     legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, subscriptionauth.ChannelIDSecret(subscriptionauth.NormalizeCredentialSource(matched.CredentialSource), matched.APIKey)),
 	}
 	if matched.ContextWindowTokens > 0 {
 		resolved.ContextWindowTokens = matched.ContextWindowTokens

@@ -20,18 +20,21 @@ import (
 )
 
 const (
-	StreamCloseCauseEOF              = "eof"
-	StreamCloseCauseUnexpectedEOF    = "unexpected_eof"
-	StreamCloseCauseReset            = "reset"
-	StreamCloseCauseTLS              = "tls"
-	StreamCloseCauseIdleTimeout      = "idle_timeout"
-	StreamCloseCauseContextCanceled  = "context_canceled"
-	StreamCloseCauseDeadline         = "deadline"
-	StreamCloseCauseStreamDecode     = "stream_decode"
-	StreamCloseCauseProviderTerminal = "provider_terminal"
-	StreamCloseCauseHTTPStatus       = "http_status"
-	StreamCloseCauseUnknown          = "unknown"
-	StreamCloseCauseNotRecorded      = "not_recorded"
+	StreamCloseCauseEOF               = "eof"
+	StreamCloseCauseUnexpectedEOF     = "unexpected_eof"
+	StreamCloseCauseReset             = "reset"
+	StreamCloseCauseTLS               = "tls"
+	StreamCloseCauseIdleTimeout       = "idle_timeout"
+	StreamCloseCauseConnectTimeout    = "connect_timeout"
+	StreamCloseCauseFirstEventTimeout = "first_event_timeout"
+	StreamCloseCauseCallTimeout       = "call_timeout"
+	StreamCloseCauseContextCanceled   = "context_canceled"
+	StreamCloseCauseDeadline          = "deadline"
+	StreamCloseCauseStreamDecode      = "stream_decode"
+	StreamCloseCauseProviderTerminal  = "provider_terminal"
+	StreamCloseCauseHTTPStatus        = "http_status"
+	StreamCloseCauseUnknown           = "unknown"
+	StreamCloseCauseNotRecorded       = "not_recorded"
 
 	TransportOutcomeStarted   = "started"
 	TransportOutcomeSucceeded = "succeeded"
@@ -188,14 +191,7 @@ func (d *StreamDiagnostics) RecordSSEEvent(eventType, responseID string, sequenc
 	}
 }
 
-// BeginStreamRecoveryAttempt 清空 attempt 级观测，同时保留累计恢复次数。
-func (d *StreamDiagnostics) BeginStreamRecoveryAttempt() {
-	if d == nil {
-		return
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.streamRecoveryAttempts++
+func (d *StreamDiagnostics) resetAttemptLocked() {
 	d.headerAt = time.Time{}
 	d.firstByteAt = time.Time{}
 	d.lastByteAt = time.Time{}
@@ -219,6 +215,27 @@ func (d *StreamDiagnostics) BeginStreamRecoveryAttempt() {
 	d.lastSSESequence = 0
 	d.lastResponseStatus = ""
 	d.transportOutcome = TransportOutcomeStarted
+}
+
+// BeginHTTPAttempt 清空上一个物理 HTTP attempt 的诊断，累计流恢复次数保持不变。
+func (d *StreamDiagnostics) BeginHTTPAttempt() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.resetAttemptLocked()
+}
+
+// BeginStreamRecoveryAttempt 清空 attempt 级观测，同时保留累计恢复次数。
+func (d *StreamDiagnostics) BeginStreamRecoveryAttempt() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.streamRecoveryAttempts++
+	d.resetAttemptLocked()
 }
 
 func (d *StreamDiagnostics) RecordBytes(n int, at time.Time) {
@@ -329,6 +346,9 @@ func PreferCloseCause(existing, incoming string) string {
 	if incoming == StreamCloseCauseIdleTimeout && closeCauseRank(existing) > 0 {
 		return existing
 	}
+	if (incoming == StreamCloseCauseConnectTimeout || incoming == StreamCloseCauseFirstEventTimeout || incoming == StreamCloseCauseCallTimeout) && closeCauseRank(existing) > 0 {
+		return existing
+	}
 	if closeCauseRank(incoming) > closeCauseRank(existing) {
 		return incoming
 	}
@@ -340,7 +360,7 @@ func PreferCloseCause(existing, incoming string) string {
 
 func closeCauseRank(cause string) int {
 	switch cause {
-	case StreamCloseCauseIdleTimeout:
+	case StreamCloseCauseIdleTimeout, StreamCloseCauseConnectTimeout, StreamCloseCauseFirstEventTimeout, StreamCloseCauseCallTimeout:
 		return 90
 	case StreamCloseCauseDeadline:
 		return 85
@@ -367,7 +387,7 @@ func transportOutcomeForCloseCause(cause string) string {
 	switch cause {
 	case StreamCloseCauseContextCanceled:
 		return TransportOutcomeCanceled
-	case StreamCloseCauseDeadline, StreamCloseCauseIdleTimeout:
+	case StreamCloseCauseDeadline, StreamCloseCauseIdleTimeout, StreamCloseCauseConnectTimeout, StreamCloseCauseFirstEventTimeout, StreamCloseCauseCallTimeout:
 		return TransportOutcomeTimeout
 	case StreamCloseCauseNotRecorded, "":
 		return TransportOutcomeStarted
@@ -401,6 +421,19 @@ func ClassifyStreamCloseCause(err error) string {
 	var idle *StreamIdleTimeoutError
 	if errors.As(err, &idle) {
 		return StreamCloseCauseIdleTimeout
+	}
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil {
+		switch live.Phase {
+		case LivenessPhaseConnect:
+			return StreamCloseCauseConnectTimeout
+		case LivenessPhaseFirstEvent:
+			return StreamCloseCauseFirstEventTimeout
+		case LivenessPhaseIdle:
+			return StreamCloseCauseIdleTimeout
+		case LivenessPhaseCall:
+			return StreamCloseCauseCallTimeout
+		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return StreamCloseCauseDeadline

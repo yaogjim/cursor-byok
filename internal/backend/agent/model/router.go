@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"time"
 
 	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
@@ -31,7 +30,6 @@ type Router struct {
 
 type ChannelResolver interface {
 	SelectChannelForModel(context.Context, string) (*legacyruntime.ResolvedChannel, error)
-	ProviderStreamIdleTimeout(context.Context) time.Duration
 }
 
 // ChannelPlanResolver 扩展 ChannelResolver，增加多渠道 fallback 计划解析能力。
@@ -70,7 +68,7 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 		return fmt.Errorf("no available channel for model %q", req.ModelID)
 	}
 
-	resolved := applyChannelToRequest(req, channel, router.resolver.ProviderStreamIdleTimeout(ctx))
+	resolved := applyChannelToRequest(req, channel)
 	return router.streamPreResolved(ctx, resolved, sink)
 }
 
@@ -243,7 +241,7 @@ func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req Str
 
 // applyChannelToRequest 将 ResolvedChannel 的字段映射到 StreamRequest 副本中并返回。
 // 深拷贝 RequestKnobs，以确保 fallback 多渠道循环中各次调用互不污染同一 map。
-func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedChannel, idleTimeout time.Duration) StreamRequest {
+func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedChannel) StreamRequest {
 	resolved := req
 	// 深拷贝 RequestKnobs，防止 fallback 循环中多个渠道共享同一 map 造成互相覆盖。
 	if req.RequestKnobs != nil {
@@ -270,6 +268,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.OpenAIEndpoint = strings.TrimSpace(channel.OpenAIEndpoint)
 	resolved.OpenAIExtraParamsEnabled = channel.OpenAIExtraParamsEnabled
 	resolved.OpenAIExtraParamsJSON = strings.TrimSpace(channel.OpenAIExtraParamsJSON)
+	resolved.OpenAIImageGenerationEnabled = channel.OpenAIImageGenerationEnabled
 	resolved.CustomHeadersEnabled = channel.CustomHeadersEnabled
 	resolved.CustomHeadersJSON = strings.TrimSpace(channel.CustomHeadersJSON)
 	resolved.AnthropicExtraParamsEnabled = channel.AnthropicExtraParamsEnabled
@@ -277,7 +276,6 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.AnthropicMaxTokens = channel.AnthropicMaxTokens
 	resolved.AnthropicThinkingEffort = strings.TrimSpace(channel.AnthropicThinkingEffort)
 	resolved.ThinkingBudgetTokens = channel.ThinkingBudgetTokens
-	resolved.ProviderStreamIdleTimeout = idleTimeout
 	runtimeThinkingEffort := normalizeRuntimeThinkingEffort(req.ThinkingEffort)
 	if runtimeThinkingEffort != "" {
 		resolved.ThinkingEffort = runtimeThinkingEffort
@@ -319,6 +317,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 			}
 			resolved.RequestKnobs["openai_endpoint"] = resolved.OpenAIEndpoint
 			resolved.RequestKnobs["openai_extra_params_enabled"] = resolved.OpenAIExtraParamsEnabled
+			resolved.RequestKnobs["openai_image_generation_enabled"] = resolved.OpenAIImageGenerationEnabled
 			resolved.RequestKnobs["custom_headers_enabled"] = resolved.CustomHeadersEnabled
 		} else if resolved.Provider == "anthropic" {
 			delete(resolved.RequestKnobs, "reasoning_effort")
