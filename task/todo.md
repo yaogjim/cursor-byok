@@ -6,6 +6,21 @@
 
 ### 🎯 Active Work Package
 
+**upstream-leookun-99d527d-review-20260906** (in_progress, verified-partial)
+- 同步边界已冻结：本地 `main` 在隔离 worktree 中快进到 `leookun/main@99d527d`，比较范围为 `543f618..99d527d`；不合并或改写 `gateway`，不 push。
+- 迁移纪律：P0 只移植行为规格、失败用例和状态不变量；只有新增 Go P0 测试失败后，才允许实施对应的最小局部 P1。禁止复制、重写或 cherry-pick Rust 业务实现。
+- 32 个非 merge 提交已按完整 diff 初分：
+  - P0 行为测试候选：`b6fc732`/`aa47152`（OpenAI terminal/tool-call 一致性与 content filter 安全拒绝）、`24c41d0`/`0f564c0`/`c3951a4`（Grep/MCP 截断预算、终止性、准确提示）、`ab4d3ad`（稀疏 usage 字段累加不擦除）、`a42f84c`（跨模型调用复用 tool-call ID 不挂起或串联）、`fdae9c4`（context overflow→压缩→重试、摘要输入边界及恢复不变量）。
+  - Gateway 已有等价能力，仅做精确验证：`e87abac`（Rule 与 Blob/checkpoint 生命周期）、`924b5e5`（Cursor 配置/模型目录/本地路由）、`1734216`（请求覆盖、兼容路由、Commit Message）；静态存在不作为行为兼容证据。
+  - Rust/Cursor/desktop/plugin/CI 专属，不移植：`86c3899`、`d7578bc`、`e4b5e13`、`e0f9bd6`、`49a38ca`、`8942287`、`3aae326`、`2428614`、`edcdd77`、`2f3bffd`、`0a8934b`、`4700d3a`、`8fbbcd5`、`2cb15b5`、`c379c31`、`20fdea8`、`7484bb9`、`03b25be`、`f1ab8c7`、`d8190fc`、`9637efd`；其中配置读取失败按架构差异记录，不误判为 Gateway 功能缺失。
+- 与既有 `upstream-p0-p1-safe-port-20260830` 去重：已通过的 token anchor、终态竞态和 ReadImage 投影不重复实现；本轮优先补 OpenAI terminal 矩阵、跨模型调用 ID、稀疏 usage、截断结构与 over-limit 恢复链。
+- 明确排除：Rust run engine、整套 Compaction、Task/subagent runtime、desktop、插件 UI 和 Cursor 专属 wire；Gateway 已有等价能力且 P0 回归通过时不改实现。
+- [completed] `p0-openai-terminal`：新增 stop+tools、content_filter+tools、length+tools、tool_calls、空白/缺失 finish reason 的结束语义和事件序列；初始测试确认终态标签、过滤拒绝和 `[DONE]` fallback 缺口。
+- [completed] `p0-tool-usage-gates`：新增跨模型调用复用 tool-call ID、稀疏 usage、空 tool arguments、UTF-8 截断、MCP 图片 MIME/base64/结构和 ListMcpResources 单位测试；ID 与 MCP 结构既有行为通过，稀疏 usage、空参数和资源提示初始失败。
+- [pending] `p0-compaction-recovery`：既有 token anchor、append-only、fallback summary 与预算终止测试保持通过；provider context-overflow→压缩→重试的完整链仍与 `byok-recovery-hardening-20260903` 恢复合同交叉，本轮不以单个字符串解析测试冒充端到端兼容，也不先行改恢复主链。
+- [completed] `p1-failed-only`：仅修复新 P0 证明的 OpenAI Chat terminal 收口、presence-aware usage、空参数 `{}` 规范化，以及 ListMcpResources 资源计数提示；未改 Rust/run engine/Compaction/Task/desktop。
+- [completed] `verification-report`：`go test -count=1 ./internal/backend/agent/model ./internal/backend/agent/bridge/exec ./internal/backend/forwarder`、同范围 `go test -race -count=1`、`go vet` 与 `git diff --check` 均通过；中文报告明确区分 P0/P1 和 provider-overflow 全链缺口。
+
 **byok-recovery-hardening-20260903** (in_progress)
 - 冻结预算化恢复合同：Cursor 只见一个逻辑模型 / 一个 RunSSE；网关吸收上游 500/503；耗尽后至多一次 terminal，`IsRetryable=false`。
 - 默认预算：全链 5 HTTP attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s；最多 1 primary + 4 candidates。`maxWaitSeconds` 只累计实际退避 sleep。

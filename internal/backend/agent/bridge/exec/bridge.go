@@ -1507,7 +1507,12 @@ func truncateListMcpResourcesResultForReplay(result *agentv1.ListMcpResourcesExe
 		cloned.GetSuccess().Resources = cloned.GetSuccess().Resources[:len(cloned.GetSuccess().Resources)-1]
 	}
 	if len(cloned.GetSuccess().Resources) < len(result.GetSuccess().GetResources()) {
-		notice := replayTruncationNotice("ListMcpResources", mcpResourcesReplayLimit, len(cloned.GetSuccess().Resources), len(result.GetSuccess().GetResources()))
+		kept := len(cloned.GetSuccess().Resources)
+		original := len(result.GetSuccess().GetResources())
+		notice := replayTruncationNotice("ListMcpResources", mcpResourcesReplayLimit, kept, original)
+		if original > mcpResourcesReplayCount {
+			notice = fmt.Sprintf("[truncated: ListMcpResources result exceeded %d resources; showing %d of %d resources]", mcpResourcesReplayCount, kept, original)
+		}
 		cloned.GetSuccess().Resources = append(cloned.GetSuccess().Resources, &agentv1.ListMcpResourcesExecResult_McpResource{
 			Uri:         "truncated:list-mcp-resources",
 			Name:        stringPtr("truncated"),

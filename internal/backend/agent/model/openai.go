@@ -568,10 +568,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		} `json:"choices"`
 		Model string `json:"model"`
 		Usage *struct {
-			PromptTokens        int64 `json:"prompt_tokens"`
-			CompletionTokens    int64 `json:"completion_tokens"`
+			PromptTokens        *int64 `json:"prompt_tokens"`
+			CompletionTokens    *int64 `json:"completion_tokens"`
 			PromptTokensDetails *struct {
-				CachedTokens int64 `json:"cached_tokens"`
+				CachedTokens *int64 `json:"cached_tokens"`
 			} `json:"prompt_tokens_details,omitempty"`
 		} `json:"usage,omitempty"`
 	}
@@ -734,36 +734,55 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		return fmt.Errorf("openai chat stream error")
 	}
 	applyUsage := func(usage *struct {
-		PromptTokens        int64 `json:"prompt_tokens"`
-		CompletionTokens    int64 `json:"completion_tokens"`
+		PromptTokens        *int64 `json:"prompt_tokens"`
+		CompletionTokens    *int64 `json:"completion_tokens"`
 		PromptTokensDetails *struct {
-			CachedTokens int64 `json:"cached_tokens"`
+			CachedTokens *int64 `json:"cached_tokens"`
 		} `json:"prompt_tokens_details,omitempty"`
 	}) {
 		if usage == nil {
 			return
 		}
 		usagePresent = true
-		promptTokens := usage.PromptTokens
-		cachedTokens := int64(0)
-		if usage.PromptTokensDetails != nil {
+		if usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens != nil {
 			cacheReadPresent = true
-			cachedTokens = usage.PromptTokensDetails.CachedTokens
+			cacheReadTokens = maxInt64(*usage.PromptTokensDetails.CachedTokens, 0)
 		}
-		if promptTokens < 0 {
-			promptTokens = 0
+		if usage.PromptTokens != nil {
+			promptTokens := maxInt64(*usage.PromptTokens, 0)
+			if cacheReadTokens > promptTokens {
+				cacheReadTokens = promptTokens
+			}
+			inputTokens = promptTokens - cacheReadTokens
 		}
-		if cachedTokens < 0 {
-			cachedTokens = 0
+		if usage.CompletionTokens != nil {
+			outputTokens = maxInt64(*usage.CompletionTokens, 0)
 		}
-		if cachedTokens > promptTokens {
-			cachedTokens = promptTokens
-		}
-		inputTokens = promptTokens - cachedTokens
-		outputTokens = maxInt64(usage.CompletionTokens, 0)
-		cacheReadTokens = cachedTokens
 		cacheWriteTokens = 0
 		cacheWritePresent = true
+	}
+	flushCompletedTools := func() error {
+		for _, accumulator := range tools {
+			if !openAIToolArgsComplete(accumulator.Args.String()) {
+				continue
+			}
+			if err := sink(ModelEvent{
+				Kind:            ModelEventKindToolLikeCompleted,
+				OccurredAt:      time.Now().UTC(),
+				Provider:        "openai",
+				Model:           currentModel,
+				ReasoningOrigin: reasoningOriginFromRequest(req),
+				ToolInvocation: &runtimecore.ToolInvocation{
+					CallID:   strings.TrimSpace(accumulator.CallID),
+					ToolName: strings.TrimSpace(accumulator.Name),
+					ArgsJSON: normalizeCompletedOpenAIToolArgs(accumulator.Args.String()),
+				},
+			}); err != nil {
+				return err
+			}
+			streamIdle.MarkEffectiveContent()
+		}
+		return nil
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
@@ -786,6 +805,16 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			}
 			if err := flushThinkingCompleted(); err != nil {
 				return fail(err)
+			}
+			if !turnFinishedPending {
+				finishReason = normalizeOpenAIChatFinishReason("", len(tools) > 0)
+				if finishReason == "tool_calls" {
+					if err := flushCompletedTools(); err != nil {
+						return fail(err)
+					}
+				}
+				tools = make(map[int]*openAIToolAccumulator)
+				turnFinishedPending = true
 			}
 			if err := flushTurnFinished(); err != nil {
 				return fail(err)
@@ -877,28 +906,13 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			if err := flushThinkingCompleted(); err != nil {
 				return fail(err)
 			}
-			for _, accumulator := range tools {
-				if !openAIToolArgsComplete(accumulator.Args.String()) {
-					continue
-				}
-				if err := sink(ModelEvent{
-					Kind:            ModelEventKindToolLikeCompleted,
-					OccurredAt:      time.Now().UTC(),
-					Provider:        "openai",
-					Model:           currentModel,
-					ReasoningOrigin: reasoningOriginFromRequest(req),
-					ToolInvocation: &runtimecore.ToolInvocation{
-						CallID:   strings.TrimSpace(accumulator.CallID),
-						ToolName: strings.TrimSpace(accumulator.Name),
-						ArgsJSON: []byte(accumulator.Args.String()),
-					},
-				}); err != nil {
+			finishReason = normalizeOpenAIChatFinishReason(*choice.FinishReason, len(tools) > 0)
+			if finishReason == "tool_calls" {
+				if err := flushCompletedTools(); err != nil {
 					return fail(err)
 				}
-				streamIdle.MarkEffectiveContent()
 			}
 			tools = make(map[int]*openAIToolAccumulator)
-			finishReason = strings.TrimSpace(*choice.FinishReason)
 			turnFinishedPending = true
 			sawCompletionMarker = true
 		}
@@ -911,26 +925,6 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	}
 	if !sawCompletionMarker {
 		return fail(newStreamTruncatedError("openai", nil))
-	}
-	for _, accumulator := range tools {
-		if !openAIToolArgsComplete(accumulator.Args.String()) {
-			continue
-		}
-		if err := sink(ModelEvent{
-			Kind:            ModelEventKindToolLikeCompleted,
-			OccurredAt:      time.Now().UTC(),
-			Provider:        "openai",
-			Model:           currentModel,
-			ReasoningOrigin: reasoningOriginFromRequest(req),
-			ToolInvocation: &runtimecore.ToolInvocation{
-				CallID:   strings.TrimSpace(accumulator.CallID),
-				ToolName: strings.TrimSpace(accumulator.Name),
-				ArgsJSON: []byte(accumulator.Args.String()),
-			},
-		}); err != nil {
-			return fail(err)
-		}
-		streamIdle.MarkEffectiveContent()
 	}
 	if err := flushTaggedContentTail(); err != nil {
 		return fail(err)
@@ -1746,6 +1740,33 @@ responsesScan:
 	finishedAt = time.Now().UTC()
 	recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, effectiveFinishReason(), inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil))
 	return nil
+}
+
+func normalizeOpenAIChatFinishReason(raw string, hasTools bool) string {
+	reason := strings.TrimSpace(raw)
+	switch reason {
+	case "content_filter", "length":
+		return reason
+	case "tool_calls", "function_call":
+		return "tool_calls"
+	case "", "stop":
+		if hasTools {
+			return "tool_calls"
+		}
+		return "stop"
+	default:
+		if hasTools {
+			return "tool_calls"
+		}
+		return reason
+	}
+}
+
+func normalizeCompletedOpenAIToolArgs(raw string) []byte {
+	if strings.TrimSpace(raw) == "" {
+		return []byte("{}")
+	}
+	return []byte(raw)
 }
 
 func openAIToolArgsComplete(raw string) bool {

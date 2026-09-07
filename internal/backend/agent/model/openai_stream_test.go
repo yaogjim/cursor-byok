@@ -206,6 +206,183 @@ func TestOpenAIChatCompletionsIgnoresBlankFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatCompletionsTerminalStateMatrix(t *testing.T) {
+	tests := []struct {
+		name             string
+		finishReasonJSON string
+		withTool         bool
+		wantFinishReason string
+		wantCompleted    int
+	}{
+		{name: "normal stop", finishReasonJSON: `"stop"`, wantFinishReason: "stop"},
+		{name: "explicit tool calls", finishReasonJSON: `"tool_calls"`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+		{name: "observed tools outrank stop", finishReasonJSON: `"stop"`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+		{name: "content filter rejects observed tools", finishReasonJSON: `"content_filter"`, withTool: true, wantFinishReason: "content_filter"},
+		{name: "length rejects incomplete observed tools", finishReasonJSON: `"length"`, withTool: true, wantFinishReason: "length"},
+		{name: "blank finish reason falls back to stop", finishReasonJSON: `""`, wantFinishReason: "stop"},
+		{name: "missing finish reason falls back to stop", wantFinishReason: "stop"},
+		{name: "blank finish reason with tools falls back to tool calls", finishReasonJSON: `""`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				delta := `{"content":"done"}`
+				if test.withTool {
+					delta = `{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"Ls","arguments":"{}"}}]}`
+				}
+				finishField := ""
+				if test.finishReasonJSON != "" {
+					finishField = `,"finish_reason":` + test.finishReasonJSON
+				}
+				_, _ = fmt.Fprintf(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":%s%s}]}\n\n", delta, finishField)
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, test.wantCompleted)
+			assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+
+			finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+			if finished == nil {
+				t.Fatalf("turn finished event missing: %#v", events)
+			}
+			if finished.FinishReason != test.wantFinishReason {
+				t.Fatalf("finish reason = %q, want %q; events=%#v", finished.FinishReason, test.wantFinishReason, events)
+			}
+			if events[len(events)-1].Kind != ModelEventKindTurnFinished {
+				t.Fatalf("last event kind = %q, want %q; events=%#v", events[len(events)-1].Kind, ModelEventKindTurnFinished, events)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatCompletionsNormalizesEmptyToolArguments(t *testing.T) {
+	tests := []struct {
+		name              string
+		argumentsFragment string
+		finishSeparately  bool
+	}{
+		{name: "empty string", argumentsFragment: `,"arguments":""`},
+		{name: "whitespace", argumentsFragment: `,"arguments":"   "`},
+		{name: "missing field"},
+		{name: "zero argument delta before finish", argumentsFragment: `,"arguments":""`, finishSeparately: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				finish := `,"finish_reason":"tool_calls"`
+				if test.finishSeparately {
+					finish = `,"finish_reason":""`
+				}
+				_, _ = fmt.Fprintf(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"Ls\"%s}}]}%s}]}\n\n", test.argumentsFragment, finish)
+				if test.finishSeparately {
+					_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+				}
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			completed := firstOpenAIEventForTest(events, ModelEventKindToolLikeCompleted)
+			if completed == nil || completed.ToolInvocation == nil {
+				t.Fatalf("completed tool missing: %#v", events)
+			}
+			if got := string(completed.ToolInvocation.ArgsJSON); got != `{}` {
+				t.Fatalf("tool args = %q, want {}", got)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatCompletionsScopesReusedProviderToolCallIDByModelCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/a\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	streamCallID := func(modelCallID string) string {
+		t.Helper()
+		events := make([]ModelEvent, 0, 2)
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID:       "request-1",
+			RunID:           "run-1",
+			ModelCallID:     modelCallID,
+			BaseURL:         server.URL,
+			APIKey:          "test-key",
+			ProviderModelID: "gpt-test",
+			OpenAIEndpoint:  "/v1/chat/completions",
+			Messages:        []Message{{Role: "user", Content: "read it"}},
+			MaxTokens:       128,
+		}, func(event ModelEvent) error {
+			events = append(events, event)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("stream %q failed: %v", modelCallID, err)
+		}
+		completed := firstOpenAIEventForTest(events, ModelEventKindToolLikeCompleted)
+		if completed == nil || completed.ToolInvocation == nil {
+			t.Fatalf("stream %q missing completed tool: %#v", modelCallID, events)
+		}
+		return completed.ToolInvocation.CallID
+	}
+
+	first := streamCallID("model-call-1")
+	second := streamCallID("model-call-2")
+	if first == "" || second == "" {
+		t.Fatalf("namespaced call IDs must be non-empty: first=%q second=%q", first, second)
+	}
+	if first == second {
+		t.Fatalf("provider call ID was reused across model calls: %q", first)
+	}
+	if first != streamCallID("model-call-1") {
+		t.Fatalf("tool call namespace is not stable within one model call: %q", first)
+	}
+}
+
+func TestOpenAIChatCompletionsSparseUsageDoesNotEraseReportedCacheCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":900}}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+	if finished == nil {
+		t.Fatalf("turn finished event missing: %#v", events)
+	}
+	if !finished.UsagePresent || !finished.CacheReadPresent {
+		t.Fatalf("usage presence lost: %#v", finished)
+	}
+	if finished.InputTokens != 300 || finished.CacheReadTokens != 900 || finished.OutputTokens != 30 {
+		t.Fatalf("usage = input:%d cache-read:%d output:%d, want 300/900/30", finished.InputTokens, finished.CacheReadTokens, finished.OutputTokens)
+	}
+}
+
 func TestOpenAIChatCompletionsScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
 	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"Ls\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":\"\"}]}\n\n"
 	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload, errors.New("connection reset"))}
