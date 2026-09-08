@@ -733,8 +733,7 @@ func buildCLIModelDetails(adapters []legacyruntime.ModelAdapterConfig) []map[str
 			"displayName":      strings.TrimSpace(adapter.DisplayName),
 			"displayNameShort": strings.TrimSpace(adapter.DisplayName),
 			"apiKeyCredentials": map[string]any{
-				"apiKey":  strings.TrimSpace(adapter.APIKey),
-				"baseUrl": strings.TrimSpace(adapter.BaseURL),
+				"apiKey": "cursor-byok-local",
 			},
 		})
 	}

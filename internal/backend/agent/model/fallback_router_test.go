@@ -104,6 +104,30 @@ func TestFallbackDisabled_SingleChannelPath(t *testing.T) {
 	}
 }
 
+func TestFallbackAwareRouterDoesNotPassCatalogSentinelToProvider(t *testing.T) {
+	recorder := &recordingModelAdapter{}
+	plan := &legacyruntime.ChannelPlan{
+		Channels: []legacyruntime.ResolvedChannel{
+			makeTestChannel("ch-a", "openai"),
+			makeTestChannel("ch-b", "openai"),
+		},
+		FallbackEnabled: true,
+	}
+	router := NewFallbackAwareRouter(&Router{openai: recorder, anthropic: recorder}, &stubPlanResolver{plan: plan})
+	if err := router.Stream(context.Background(), StreamRequest{ModelID: "catalog-channel-id"}, func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if recorder.request.APIKey != "key-ch-a" {
+		t.Fatalf("APIKey = %q, want key-ch-a", recorder.request.APIKey)
+	}
+	if recorder.request.APIKey == "cursor-byok-local" {
+		t.Fatal("fallback provider received catalog sentinel")
+	}
+	if recorder.request.BaseURL != "https://api.example.com/v1" {
+		t.Fatalf("BaseURL = %q", recorder.request.BaseURL)
+	}
+}
+
 // TestFallbackEnabled_SuccessOnFirst 验证首渠道成功时不调用候选渠道。
 func TestFallbackEnabled_SuccessOnFirst(t *testing.T) {
 	adapter := &controlledAdapter{errs: []error{nil}}
@@ -1022,13 +1046,13 @@ func TestFallbackObservabilityIncludesPolicyBudgetAndSafety(t *testing.T) {
 		t.Fatalf("error category = %q", event.ErrorCategory)
 	}
 	for field, want := range map[string]string{
-		"logical_model":    "logical-model",
-		"channel_id":       "channel-a",
-		"provider":         "openai",
-		"failure_cause":    FailureCauseHTTP500,
-		"failure_phase":    LivenessPhaseHTTP,
-		"recovery_action":  RecoveryActionSwitch,
-		"fallback_to":      "channel-b",
+		"logical_model":   "logical-model",
+		"channel_id":      "channel-a",
+		"provider":        "openai",
+		"failure_cause":   FailureCauseHTTP500,
+		"failure_phase":   LivenessPhaseHTTP,
+		"recovery_action": RecoveryActionSwitch,
+		"fallback_to":     "channel-b",
 	} {
 		if got := observabilityFieldString(event, field); got != want {
 			t.Fatalf("%s = %q, want %q", field, got, want)

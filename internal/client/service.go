@@ -85,6 +85,17 @@ type ProxyService struct {
 
 	subscriptionAuth *subscriptionauth.Service
 
+	// cursorAppController 可注入 Cursor 应用生命周期，测试使用假应用。
+	cursorAppController cursor.AppController
+	// cursorQuitTimeout 覆盖正常退出等待上限，测试可缩短。
+	cursorQuitTimeout time.Duration
+	// applyCursorSettingsFn 可注入设置写入，测试跳过真实 CA/钥匙串。
+	applyCursorSettingsFn func() error
+	// emitProxyStateFn 可注入状态事件接收端，隔离测试不启动 Wails 应用。
+	emitProxyStateFn func(ProxyState)
+	// injectCursorUserInfoFn 可注入账号同步，测试不得写入真实 state.vscdb。
+	injectCursorUserInfoFn func(email, token string) error
+
 	gatewayMu                sync.Mutex
 	gateway                  *gateway.Server
 	gatewayLastError         string

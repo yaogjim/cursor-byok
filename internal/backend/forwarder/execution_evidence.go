@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
+	runtimecore "cursor/internal/backend/agent/core"
 )
 
 const (
@@ -351,7 +352,7 @@ func terminalFromSubagentCategory(category SubagentTerminalCategory) (string, bo
 }
 
 func classifyExecutionEvidenceTool(toolName string) (string, string) {
-	switch strings.TrimSpace(toolName) {
+	switch runtimecore.CanonicalToolName(strings.TrimSpace(toolName)) {
 	case "Write":
 		return executionEvidenceCategoryMutation, executionEvidenceToolKindWrite
 	case "PatchEdit":

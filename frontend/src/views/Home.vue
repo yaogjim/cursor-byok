@@ -185,6 +185,13 @@ async function handleResetMetrics() {
 
 async function handleCursorStart() {
   const result = await startService();
+  if (result.cancelled) {
+    return;
+  }
+  if (result.partial) {
+    message(result.error);
+    return;
+  }
   if (!result.ok) {
     showActionError("启动失败", result.error);
   }

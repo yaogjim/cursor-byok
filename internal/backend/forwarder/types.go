@@ -188,6 +188,7 @@ type ActiveStream struct {
 	ProviderAccumulatedReasoningOrigin          modeladapter.ReasoningOrigin
 	ProviderSyntheticThinkingStartedAt          time.Time
 	ProviderSyntheticThinkingPublished          bool
+	ProviderPublishedToolArgs                   bool
 	ProviderFinishReason                        string
 	ProviderUsage                               turnUsageSnapshot
 	ProviderStreamStats                         ProviderStreamStats
@@ -211,6 +212,7 @@ type ActiveStream struct {
 	ContinuationDeadline                        time.Time
 	ContinuationAbortReason                     string
 	PendingCompaction                           *PendingCompaction
+	OverflowRecoveryAttempted                   bool
 	PendingCheckpointBlobWrites                 map[uint32]string
 	ConfirmedCheckpointBlobs                    map[string]struct{}
 	NextCheckpointBlobRequestID                 uint32

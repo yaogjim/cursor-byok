@@ -153,6 +153,29 @@ func TestAnthropicExplicitErrorIsProviderTerminalAndDoesNotRetry(t *testing.T) {
 	}
 }
 
+func TestAnthropicHTTP200OverflowCodeIsContextOverflow(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"prompt is too long\"}}\n\n")
+	}))
+	defer server.Close()
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	req := anthropicTestRequest(server.URL)
+	err := adapter.Stream(context.Background(), req, func(ModelEvent) error { return nil })
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "context_length_exceeded" || hits != 1 {
+		t.Fatalf("err=%v terminal=%#v hits=%d", err, terminal, hits)
+	}
+	if !IsContextOverflowError(err) {
+		t.Fatal("anthropic overflow code was not classified as context overflow")
+	}
+	if ClassifyProviderError(err) != ProviderErrorTerminal || isFallbackEligibleError(err) {
+		t.Fatal("anthropic overflow must stay provider_terminal and not become fallback eligible")
+	}
+}
+
 func collectAnthropicStreamEvents(t *testing.T, server *httptest.Server) ([]ModelEvent, error) {
 	t.Helper()
 	adapter := &AnthropicAdapter{client: server.Client()}

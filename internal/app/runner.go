@@ -41,6 +41,8 @@ const (
 	adRefreshInterval = 3 * time.Minute
 	// disableWebViewSandboxEnv allows affected VDI users to opt out of the WebView2 sandbox.
 	disableWebViewSandboxEnv = "CURSOR_BYOK_DISABLE_WEBVIEW_SANDBOX"
+	proxyStartRequestedEvent = "proxy:start-requested"
+	mainWindowName           = "main"
 )
 
 // EmbeddedResources 定义了当前模块中的 EmbeddedResources 类型。
@@ -58,6 +60,7 @@ func init() {
 	application.RegisterEvent[bridge.ProxyState]("proxy:state")
 	application.RegisterEvent[bridge.UserConfig]("user-config:changed")
 	application.RegisterEvent[bridge.ModelAdapterTestResultsPayload]("model-adapter-test:updated")
+	application.RegisterEvent[application.Void](proxyStartRequestedEvent)
 	application.RegisterEvent[bridge.AdRuntime](ads.EventUpdated)
 	application.RegisterEvent[updater.StatePayload](updater.EventState)
 	application.RegisterEvent[updater.ProgressPayload](updater.EventProgress)
@@ -217,6 +220,7 @@ func Run(resources EmbeddedResources) error {
 	windowService.SetUpdater(updateManager)
 
 	mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:                mainWindowName,
 		Title:               appName,
 		Width:               1100,
 		Height:              720,
@@ -392,25 +396,25 @@ func Run(resources EmbeddedResources) error {
 		startAdRefreshLoop(adRefreshCtx)
 		go func() {
 			logger.Infof("application started, begin auto start service in background")
-			if _, err := proxyService.StartProxy(); err != nil {
-				logger.Errorf("自动启动服务失败: %v", err)
-			} else {
-				state := proxyService.GetState()
-				if refreshAdAssetBaseURL() {
-					refreshAdRuntime()
-				}
-				logger.Infof("代理已自动启动: %s", state.ProxyListenAddr)
+			err := runAutoStartProxy(func() error {
+				_, startErr := proxyService.StartProxy()
+				return startErr
+			})
+			if err != nil {
+				return
 			}
+			state := proxyService.GetState()
+			if refreshAdAssetBaseURL() {
+				refreshAdRuntime()
+			}
+			logger.Infof("代理已自动启动: %s", state.ProxyListenAddr)
 		}()
 	})
 
 	startItem.OnClick(func(ctx *application.Context) {
-		if _, err := proxyService.StartProxy(); err != nil {
-			logger.Errorf("启动服务失败: %v", err)
-		} else if refreshAdAssetBaseURL() {
-			refreshAdRuntime()
-		}
-		refreshTray()
+		requestInteractiveProxyStart(showMainWindow, func(name string) {
+			window.EmitEvent(name)
+		})
 	})
 	stopItem.OnClick(func(ctx *application.Context) {
 		if _, err := proxyService.StopProxy(); err != nil {
@@ -438,6 +442,26 @@ func Run(resources EmbeddedResources) error {
 
 type quitShutdown interface {
 	ShutdownForQuitFrom(initiator string)
+}
+
+func requestInteractiveProxyStart(showAndFocus func(), emitToMain func(eventName string)) {
+	if showAndFocus != nil {
+		showAndFocus()
+	}
+	if emitToMain != nil {
+		emitToMain(proxyStartRequestedEvent)
+	}
+}
+
+func runAutoStartProxy(start func() error) error {
+	if start == nil {
+		return nil
+	}
+	err := start()
+	if err != nil {
+		logger.Errorf("自动启动服务失败: %v", err)
+	}
+	return err
 }
 
 func runTrayQuit(proxy quitShutdown, quit func()) {

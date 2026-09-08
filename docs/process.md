@@ -7,6 +7,70 @@
 
 ## 一、待完成的内容
 
+### main → gateway 价值迁移追加完成情况复审（completed，verified-partial）
+
+用户要求再次 review 完成情况并修复问题；本轮审查 `git diff 2fc04e7` 和未跟踪源码/测试，保留前次最终验证豁免。Spec 复审 `719d398e-ecab-441f-9479-1fbd52cdeee2` 未报告 REC/CMP、CLI/MODEL、WebFetch 的新增具体缺陷；Standards 复审 `b5a71c5c-b64b-45d2-ad49-6bd11a9a4b86` 未报告 TOOL/RESULT 缺陷，提出的 Cursor 候选问题由主控核对、复现并修复。
+
+本轮确认并修复三类问题：
+
+1. **设置并发写入/回滚（P1）**：`Restore` 原先不核对当前 owner，另一个实例写入后会被旧快照覆盖；原 owner 未变化但值已更新也会被覆盖。新增失败测试证实问题。现在回滚核对 owner 及待恢复键的旧值/本次目标值，冲突时保留现状并返回错误；`ApplyPlanned` 在同一所有权锁内验证计划中的 owner 与全部注入键旧值再写入，防止 Plan→Apply 间隙覆盖新状态。StartProxy 传同一快照至实际应用路径，CA 操作后不重新 Plan；owner 读取错误和内层回滚失败不再吞掉。新测试覆盖外部 owner、原 owner 更新值、写 owner 失败后的补偿、无关键保留和重复补偿，以及 StartProxy 失败时不得回滚另一实例的设置。
+2. **部分成功错误事件丢失（P2）**：Cursor 启动失败时 RPC 已报 `cursor_launch_partial`，但 `emitState` 因代理仍运行清空 LastError，前端收到事件后可能隐藏错误。强化实际 StartProxy fixture 的事件接收端断言先失败；移除清空后通过，并断言显式 ClearLastError 仍能清错。未启动真实 Wails 应用。
+3. **预检查排队（P2）**：`InspectCursorProxyStart` 仍使用阻塞 Lock，可在另一次 30 秒退出等待后才返回。新增隔离并发测试先失败，再改为 TryLock 返回统一 busy 错误，与 StartProxy 防重复规则一致。
+
+主控未采纳两条建议：基线 `2fc04e7` 已明确 `Apply` 转移设置清理所有权，本轮不将原行为改成“同 URL 永不接管”；Windows/Linux 未实现可靠检测/正常退出是已有平台限制，不能通过未知状态直接写设置掩盖。该平台设置不匹配时仅退出 Cursor 再重试仍不能完成自动切换，明确保留 feature-gap，不声称全平台实现。复审原任务复查上述三个修复，未发现新的具体缺陷。
+
+修改后主控验证（均退出 0）：
+
+- `go test -count=1 -timeout=60s ./internal/cursor -run 'TestRestore|TestPlan'` 修复后通过。上述新缺陷的 RED 复现测试曾按预期失败，不能计为通过；对应 GREEN 结果及受影响包回归才是修复证据。
+- 文档收口证据：更新 `task/todo.md` 与本节后已执行 `git diff --check`，退出 0；该检查仅证明差异格式正常，不替代源码测试或真实应用验收。
+- `go test -count=1 -timeout=90s ./internal/cursor ./internal/client -run 'TestRestore|TestPlan|TestApplyPlanned|StartProxy|InspectCursor'`。
+- 最后产品/测试修改后：`go test -count=1 -timeout=120s ./internal/cursor ./internal/client`（两个受影响包完整测试）、`go test -count=1 -timeout=90s ./internal/app -run 'Tray|AutoStart'`、`node frontend/scripts/test-config-projection.mjs`、`git diff --check`。
+- macOS 链接器仍报告部分 object 的 14.0 与目标 11.0 版本 warning；未因此修改产品逻辑，也不把测试通过当作低版本实机兼容证据。
+
+证据边界：本轮不执行最终全仓 test/race/build、打包/lint、真实 CLI/网络/Cursor 验收；生命周期 fixture 仍替换 CA/钥匙串、账号注入、应用控制和状态事件接收端，store 的 ApplyPlanned 有独立语义测试，但不等于真实系统设置链已验收。没有修改真实凭据/设置、停止当前 Gateway/Cursor 或部署/提交/推送。方案文档和原有改动保留，历史 blocked 工作不启动。可复用教训：设置快照不是跨实例事务，补偿必须核对所有权与当前值；RPC 错误可见不代表异步状态事件保留错误；启动锁防重需要覆盖预检查入口。交付继续为 `verified-partial`。
+
+### 前次：main → gateway 价值迁移实施收口（completed，verified-partial）
+
+用户在 review 后授权继续，明确“最后的验证可以不做”。本轮完成剩余实施与代码层修复，保留必要定向回归；最终全量、race、根构建/打包和真实 CLI/Cursor 验收按授权省略，不宣称 accepted 或已部署。行为合同仍为 `main_gateway_价值功能分析与迁移方案_20260907.md` §3～§4、§9～§13，任务真值为 `task/todo.md`。
+
+- REC/CMP：修复恢复入口对 compiler/storage/usage 错误的错误归类，只有明确溢出保留非 retryable overflow terminal；此前一次恢复、摘要完整预算/完整轮次、fallback/usage/历史保留继续通过定向回归。
+- FETCH：修复非公网 IPv6 放行和 6to4/NAT64 改写实际拨号目标的问题，附加嵌入 IPv4 风险判断与真实目标规范化分离；新增 TLS SNI、Host、解析结果/拨号一致性 fixture。
+- CLI/MODEL：四路径与凭据隔离实现保留；补 Codex/Grok 目录 ID→凭据 resolver→fake provider 的实际 HTTP 合成链、thinking/capability/fallback/旧 ID 契约测试；现有 manager/modelchannel 已是事实源，没有为无重复规则新增生产服务或凭据缓存。
+- TOOL/RESULT：贯通 Shell/shell/Bash/bash 的权限前规范化、bridge、占位、证据、历史与预算；目录只发布 Shell、磁盘旧历史不改。共享预算包 `agent/toolresult` 收敛 UTF-8 截断、bytes/items 提示和额度，保留客户端展示与模型回放差异；exec/interaction/projector 的真正重复计算移除，冻结样本和重复应用测试通过。
+- CURSOR：`StartProxy`/Wails/UI 实际接入一次确认、正常退出等待、被改键快照、旧设置恢复、已有共享服务保护及部分成功展示；确认后的顺序为 Quit→Inject→Settings→Launch。退出/轮询辅助命令受 context 总时限约束，仅取消 helper；启动等待 `open` 退出结果且只尝试一次。Windows/Linux 未实现检测/正常退出时提示手动处理，不虚报未运行。自动启动遇到需确认时保留原状态、写可见 LastError，不普遍弹窗；托盘显式启动唤起主窗口同一确认流程。
+- 代码层终审：Standards `37ce3f91-fc43-41bb-b3be-4b50e1931b7c`、Spec `050ba47b-b48e-40a2-92ef-18b451385821` 两轴只读评审；主控及评审发现的 helper 超时、启动误报、未知平台、重复 start 排队、回滚失败不可见、托盘确认接线和账号注入时序问题均修复，两轴复审报告无剩余具体 P0/P1。未采纳“未确认就静默启动服务”的建议，以保持已批准的拒绝/未确认状态合同。
+
+本轮主控在对应修改后运行的关键定向命令均退出 0：
+
+- `go test -count=1 -timeout=90s ./internal/backend/forwarder -run 'Overflow|Compaction|HandleProviderDone'`；`go test -count=1 -timeout=60s ./internal/backend/agent/bridge/interaction -run 'WebFetch'`。
+- `go test -count=1 -timeout=120s ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder -run 'Canonical|Alias|Shell|Overflow|Compaction'`。
+- `go test -count=1 -timeout=120s ./internal/backend/agent/toolresult ./internal/backend/agent/bridge/exec ./internal/backend/agent/bridge/interaction`；`go test -count=1 -timeout=90s ./internal/backend/forwarder -run 'FreezeReplay|ShellAlias|LegacyShellAlias|TrimReplay|Projected.*Replay'`。
+- `go test -count=1 -timeout=120s ./internal/backend ./internal/backend/agent/model ./internal/backend/server/upstream ./internal/backend/server/config -run 'CLICatalog|CatalogCLI|SelectChannelForModelResolvesCatalog|NormalizeModelAdapterConfigsPinsManaged'`。此前一次宽名称过滤在 config 显示 `[no tests to run]`，不计该包场景通过；此命令已匹配实际 config 契约测试并通过。
+- `go test -count=1 -timeout=90s ./internal/cursor ./internal/client -run 'StartProxy|InspectCursor|QuitGracefully|Launch|IdentifyDarwin|UnsupportedPlatform|Helper|Plan|Restore'`。
+- 最后托盘/注入修复之后：`go test -count=1 -timeout=90s ./internal/client -run 'StartProxy|InspectCursor'`；`go test -count=1 -timeout=90s ./internal/app -run 'Tray|AutoStart'`；`node frontend/scripts/test-config-projection.mjs`；`git diff --check`，均通过。链接器有 macOS 14.0 对象与 11.0 目标的版本 warning，不作为低版本实机兼容证据。
+
+剩余证据边界：真实 CLI 默认/指定模型请求、真实 Cursor UI/退出/重启、SOCKS-only/真实直连、最终全量/race/build/打包/lint 均未最终验收；开发中曾有局部包构建、vet 和前端生产 build，不等于最后整仓验证。未读取或改变真实凭据，未退出/重启当前 Gateway/Cursor，未部署/commit/push，也未解阻历史缺少外部条件的工作包；本轮受管测试均结束，无需恢复原应用。代码实施与文档工作完成，交付保持 `verified-partial`。
+
+### 历史：main → gateway 价值迁移续跑（取消后暂停时记录）
+
+行为合同为 `main_gateway_价值功能分析与迁移方案_20260907.md` §3～§4、§9～§13；活动状态以 `task/todo.md` 的 `main-gateway-value-migration-20260907` 为准。保留 `2fc04e7` 上全部未提交代码及方案文档，不 reset/stash/commit/push。
+
+- 恢复接管初次和等待 20 秒后的重试均 503，等待 40 秒后的第 2 次重试成功。续接 ID `e12d6146-991b-40e9-892e-6174d9570cc3`。已修复前序工具标记误抑制恢复、当前空白文本/thinking、synthetic thinking 和已发布工具参数输出门禁；补合成 provider 经实际 `Service.RunSSE` 订阅入口的恢复、再次溢出唯一非 retryable terminal、延迟 Blob ACK、取消/旧事件、独立 usage 和历史保留测试。这不是真实 Cursor 或 BidiAppend 起始全链证据。
+- WebFetch 复核续接 ID `d93d407e-7fdf-47e0-a57c-5463bbdb2fe4`。修复尾随点主机、IPv6 zone、6to4/NAT64 内嵌私网 IPv4 及 `3fff::/20` 检查。子任务报告当前显式 HTTP 代理抓取 `https://example.com/` 成功（207 bytes，0.29s）；不宣称真实直连、SOCKS-only 或代理最终解析地址受控。
+- 主控在代码修改后独立执行 `go test -count=1 -timeout=300s ./internal/backend/agent/model ./internal/backend/forwarder ./internal/backend/agent/bridge/interaction ./internal/netproxy`、同四包 `go vet` 及 `git diff --check`，串联命令退出 0。恢复子任务另报告 model/forwarder `go test -race -count=1 -timeout=600s` 通过，主控本轮未另跑 race；根全量 test/build、打包和最终双轴 review 尚未运行。
+- 后续 CLI 复核启动返回 `transport status=not_recorded`，没有 ID；等待 20 秒后的第 1 次重试返回 `Subagent was aborted by the user`。尊重用户取消而暂停后续调度，不能记录成五次 503 耗尽，也不自动绕过取消重建任务。
+- 剩余 feature/test gap：Stage 1 的 `actor.go` 对 `tryAcceptOverflowRecovery` 所有错误统一使用 overflow terminal，与 REC-3 其他故障保留语义存在静态风险，需先补规划/存储失败反例再修复；真实 CLI 隔离请求链、WebFetch 最终安全/SNI 复核、Shell 别名、共享预算/模型规则、Cursor 生命周期、全量门禁和最终 review 均未收口。
+- 暂停前运行检查：Gateway PID 53552 仍监听 18080/18090 且 `/healthz=ok`；Cursor 主进程 PID 32928 存在，18091/9245 未监听。本轮主控等待/测试进程均已结束，没有停止或重启既有 Gateway/Cursor，也没有部署工作区源码或启动历史 blocked 工作包。用户恢复后先续接恢复任务处理错误语义，再完成 CLI 复核和后续依赖阶段。
+
+### 价值迁移完成情况 review（未实施修复）
+
+本次按用户要求由主控审查当前 `2fc04e7` 上的全部改动范围并聚焦行为与验收缺口，不替代最终独立双轴评审。没有修改产品或永久测试文件，没有启动应用/实施任务；仅更新任务与过程记录。
+
+- 现有测试：`go test -count=1 -timeout=300s ./internal/backend/agent/model ./internal/backend/forwarder ./internal/backend/agent/bridge/interaction ./internal/netproxy ./internal/backend/server/upstream ./internal/backend/server/config ./internal/backend`，随后同七包 `go vet`，串联退出 0；`git diff --check` 通过。本次未重跑全量/race/build 或真实 CLI/Cursor。
+- 三个临时 overlay 合同反例均复现失败（`go test -overlay=<临时映射> -count=1 -timeout=60s -run '^TestReviewProbe' -v ./internal/backend/agent/bridge/interaction ./internal/backend/forwarder`，退出 1）：非公网 IPv6 `fec0::1`、`::2`、`4000::1` 被放行；6to4 `2002:0808:0808::1234` 的拨号候选被改为 `8.8.8.8`；注入 compiler failure 后终态错误标为 `context_overflow_after_compaction`。临时文件随命令结束清理，没有实际连接内网。
+- 修复建议已登记 `task/todo.md` 的 `review-r1`～`review-r4`：补完整特殊用途 IP 判定；拆开地址等价规范化与内嵌地址安全检查，保持原拨号目标；按 typed error 保留终态类别；补目录→managed resolver→合成 provider 及目标真实 CLI 的隔离链证据。均是待实施建议，非已修复结论。
+- 完成结论：Stage 0 完成；Stage 1/2/4 已有实现及部分通过证据，但上述缺陷/CLI 运行链阻止验收；Stage 3/5/6 尚未实施，最终全量验证、构建和发布仍待完成。当前 `blocked, verified-partial` 合理，不可标 accepted。
+
 ### 0.0a BYOK 预算化恢复（本轮实施）
 
 2026-09-03 冻结并实施预算化恢复合同，覆盖旧的“HTTP 500 禁止 fallback 切换”。Cursor 只见一个逻辑模型 / 一个 RunSSE；网关内部吸收 500/503，耗尽后至多一次 terminal 且 `IsRetryable=false`。默认全链 5 attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s。`maxWaitSeconds` 只累计实际退避 sleep，退避期间暂停整呼时钟。500/502/503/504/524、可恢复 transport、TLS handshake EOF、建连/首事件超时：同渠道 2 次后可安全切换。429 遵守可容纳的 Retry-After，否则跳过等待并切换。403/其他 4xx/529/父取消/证书校验/永久 DNS/请求构建/协议解析/provider terminal 快速失败。任意 raw byte / 模型事件 / 副作用关闭窗口。删除全局 `providerStreamIdleTimeout`。单渠道计划仍注入 RecoverySettings。不实施熔断、供应商网络分流、partial-output continuation 或 OpenAI/Anthropic 混排。回滚关闭该模型 `providerFallback.enabled` 或恢复安装前 `.app`。

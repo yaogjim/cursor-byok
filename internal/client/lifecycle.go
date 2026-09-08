@@ -8,11 +8,9 @@ import (
 	"time"
 
 	"cursor/internal/backend"
-	"cursor/internal/cursor"
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
-	localruntime "cursor/internal/runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -63,82 +61,7 @@ type ProxyState struct {
 
 // StartProxy 用于处理与 StartProxy 相关的逻辑。
 func (s *ProxyService) StartProxy() (ProxyState, error) {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	logger.Infof("start service requested config_path=%s logs_root=%s", s.configPath, s.logsRoot)
-	fail := func(step string, err error) (ProxyState, error) {
-		logger.Errorf("start service failed step=%s err=%v", step, err)
-		s.setLastError(err)
-		s.emitState()
-		return s.GetState(), err
-	}
-	cfg, err := s.LoadUserConfig()
-	if err != nil {
-		return fail("load_user_config", err)
-	}
-	if err := s.ensureBackendHost(); err != nil {
-		return fail("ensure_backend_host", err)
-	}
-	if !s.backendHost.IsRunning() {
-		logger.Infof("starting embedded backend listen_addr=%s", s.backendHost.ListenAddr())
-		if err := s.backendHost.Start(); err != nil {
-			return fail("start_backend", err)
-		}
-	} else {
-		logger.Infof("embedded backend already running listen_addr=%s", s.backendHost.ListenAddr())
-	}
-	healthCtx, healthCancel := context.WithTimeout(context.Background(), backendReadyTimeout)
-	defer healthCancel()
-	if err := s.waitForBackend(healthCtx); err != nil {
-		return fail("wait_backend_ready", err)
-	}
-	logger.Infof("embedded backend ready listen_addr=%s", s.backendHost.ListenAddr())
-	if err := s.ensureProxy(cfg); err != nil {
-		return fail("ensure_proxy", err)
-	}
-
-	// 启动时注入账号信息
-	if err := cursor.InjectCursorUserInfo(localruntime.InjectAccountEmail, localruntime.InjectAuthToken); err != nil {
-		logger.Errorf("injectCursorUserInfo failed: %v", err)
-		// 不阻断启动，仅记录日志
-	}
-
-	if s.proxy != nil && !s.proxy.IsRunning() {
-		logger.Infof("starting mitm proxy listen_addr=%s", s.proxy.Snapshot().ListenAddr)
-		if err := s.proxy.Start(); err != nil {
-			return fail("start_mitm_proxy", err)
-		}
-	}
-
-	if err := s.ApplyCursorSettings(); err != nil {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stopCancel()
-		if s.proxy != nil {
-			_ = s.proxy.Stop(stopCtx)
-		}
-		_ = s.backendHost.StopWithCause(stopCtx, backend.ShutdownCause{
-			Reason:    backend.ShutdownReasonServiceStop,
-			Initiator: backend.ShutdownInitiatorStartFail,
-		})
-		startErr := fmt.Errorf("服务已启动，但注入 Cursor 配置失败: %w", err)
-		logger.Errorf("start service failed step=apply_cursor_settings err=%v", startErr)
-		s.setLastError(startErr)
-		s.emitState()
-		return s.GetState(), startErr
-	}
-
-	s.reconcileGateway(cfg)
-
-	s.setLastError(nil)
-	s.emitState()
-	state := s.GetState()
-	logger.Infof(
-		"start service completed backend_listen_addr=%s proxy_listen_addr=%s cursor_settings_applied=%t",
-		state.BackendListenAddr,
-		state.ProxyListenAddr,
-		state.CursorSettingsApplied,
-	)
-	return state, nil
+	return s.startProxy(false)
 }
 
 // StopProxy 用于处理与 StopProxy 相关的逻辑。
@@ -265,12 +188,13 @@ func (s *ProxyService) setLastError(err error) {
 // emitState 用于处理与 emitState 相关的逻辑。
 func (s *ProxyService) emitState() {
 	app := application.Get()
-	if app == nil {
+	if app == nil && s.emitProxyStateFn == nil {
 		return
 	}
 	state := s.GetState()
-	if state.Running {
-		state.LastError = ""
+	if s.emitProxyStateFn != nil {
+		s.emitProxyStateFn(state)
+		return
 	}
 	app.Event.Emit("proxy:state", state)
 }

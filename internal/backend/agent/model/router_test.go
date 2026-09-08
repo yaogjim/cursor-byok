@@ -10,10 +10,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
+	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
 	"cursor/internal/subscriptionauth"
 )
@@ -693,6 +698,9 @@ func TestRouterStaticChannelKeepsConfiguredAPIKey(t *testing.T) {
 	if creds.calls != 0 {
 		t.Fatalf("static channel must not resolve managed credentials, calls=%d", creds.calls)
 	}
+	if openAI.request.APIKey == "cursor-byok-local" {
+		t.Fatal("static provider received catalog sentinel")
+	}
 }
 
 func TestRouterManagedChannelUsesResolverToken(t *testing.T) {
@@ -718,6 +726,434 @@ func TestRouterManagedChannelUsesResolverToken(t *testing.T) {
 	if openAI.request.CredentialID != "codex:acct" {
 		t.Fatalf("CredentialID = %q", openAI.request.CredentialID)
 	}
+	if openAI.request.APIKey == "cursor-byok-local" {
+		t.Fatal("managed provider received catalog sentinel")
+	}
+}
+
+func TestCLICatalogIDsApplyRuntimeCredentialsToSyntheticManagedProviders(t *testing.T) {
+	const (
+		sentinel     = "cursor-byok-local"
+		codexToken   = "codex-runtime-token"
+		grokToken    = "grok-runtime-token"
+		codexAccount = "codex:synthetic"
+		grokAccount  = "grok:synthetic"
+		chatgptID    = "chatgpt-acct-1"
+	)
+
+	codexCap := &managedProviderCapture{}
+	codexProvider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !codexCap.recordHTTP(t, request, sentinel) {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeOpenAIResponsesSSE(writer, "ok")
+	}))
+	defer codexProvider.Close()
+
+	grokCap := &managedProviderCapture{}
+	grokProvider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !grokCap.recordHTTP(t, request, sentinel) {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeOpenAIChatSSE(writer, "ok")
+	}))
+	defer grokProvider.Close()
+
+	codexTarget, err := url.Parse(codexProvider.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grokTarget, err := url.Parse(grokProvider.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var originalURLs cliCatalogAtomicStringSlice
+	client := &http.Client{Transport: rewriteHostRoundTripper{
+		byHost: map[string]*url.URL{
+			"chatgpt.com": codexTarget,
+			"api.x.ai":    grokTarget,
+		},
+		onRequest: func(req *http.Request) {
+			originalURLs.Add(req.URL.String())
+		},
+	}}
+
+	manager := newCLICatalogTestManager(t, []serverconfig.ModelAdapterConfig{
+		{
+			Sort:            1,
+			DisplayName:     "static-byok",
+			Type:            "openai",
+			BaseURL:         "https://static.example/v1",
+			APIKey:          "static-runtime-secret",
+			TooltipData:     "static-byok",
+			ModelID:         "static-model",
+			ReasoningEffort: "medium",
+			OpenAIEndpoint:  modelchannel.OpenAIEndpointChatCompletions,
+		},
+		{
+			Sort:             2,
+			DisplayName:      "managed-codex",
+			Type:             "openai",
+			BaseURL:          "https://ignored.example/v1",
+			CredentialSource: "codex",
+			TooltipData:      "managed-codex",
+			ModelID:          "managed-model",
+			ReasoningEffort:  "medium",
+			OpenAIEndpoint:   modelchannel.OpenAIEndpointChatCompletions,
+		},
+		{
+			Sort:             3,
+			DisplayName:      "managed-grok",
+			Type:             "openai",
+			BaseURL:          "https://ignored.example/v1",
+			CredentialSource: "grok",
+			TooltipData:      "managed-grok",
+			ModelID:          "grok-model",
+			ReasoningEffort:  "medium",
+			OpenAIEndpoint:   modelchannel.OpenAIEndpointResponses,
+		},
+	})
+	idByName := map[string]string{}
+	for _, adapter := range manager.Current().ModelAdapters {
+		idByName[adapter.DisplayName] = adapter.ID
+	}
+	codexID := idByName["managed-codex"]
+	grokID := idByName["managed-grok"]
+	if codexID == "" || grokID == "" {
+		t.Fatalf("missing catalog IDs: %#v", idByName)
+	}
+
+	codexCh, err := manager.SelectChannelForModel(context.Background(), codexID)
+	if err != nil {
+		t.Fatalf("codex SelectChannelForModel: %v", err)
+	}
+	if codexCh.APIKey != "" || codexCh.APIKey == sentinel || codexCh.BaseURL != subscriptionauth.CodexResponsesURL {
+		t.Fatalf("codex channel = %+v", codexCh)
+	}
+	if codexCh.OpenAIEndpoint != modelchannel.OpenAIEndpointResponses || codexCh.Model != "managed-model" {
+		t.Fatalf("codex endpoint/model = %q %q", codexCh.OpenAIEndpoint, codexCh.Model)
+	}
+
+	grokCh, err := manager.SelectChannelForModel(context.Background(), grokID)
+	if err != nil {
+		t.Fatalf("grok SelectChannelForModel: %v", err)
+	}
+	if grokCh.APIKey != "" || grokCh.APIKey == sentinel || grokCh.BaseURL != subscriptionauth.GrokAPIBaseURL {
+		t.Fatalf("grok channel = %+v", grokCh)
+	}
+	if grokCh.OpenAIEndpoint != modelchannel.OpenAIEndpointChatCompletions || grokCh.Model != "grok-model" {
+		t.Fatalf("grok endpoint/model = %q %q", grokCh.OpenAIEndpoint, grokCh.Model)
+	}
+
+	creds := &sourceCredentialStub{creds: map[subscriptionauth.CredentialSource]subscriptionauth.Credential{
+		subscriptionauth.CredentialSourceCodex: {
+			Provider:         subscriptionauth.ProviderCodex,
+			AccountID:        codexAccount,
+			AccessToken:      codexToken,
+			ChatGPTAccountID: chatgptID,
+			StableAccountID:  true,
+		},
+		subscriptionauth.CredentialSourceGrok: {
+			Provider:        subscriptionauth.ProviderGrok,
+			AccountID:       grokAccount,
+			AccessToken:     grokToken,
+			StableAccountID: true,
+		},
+	}}
+	retry := instantRetry()
+	retry.maxAttempts = 1
+	openai := &capturingModelAdapter{inner: &OpenAIAdapter{client: client, retry: retry}}
+	router := &Router{
+		openai:      openai,
+		credentials: creds,
+		resolver:    manager,
+	}
+	fallback := NewFallbackAwareRouter(router, manager)
+	req := func(modelID string) StreamRequest {
+		return StreamRequest{
+			ModelID:  modelID,
+			Messages: []Message{{Role: "user", Content: "ping"}},
+		}
+	}
+	if err := fallback.Stream(context.Background(), req(codexID), func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("codex Stream: %v", err)
+	}
+	if err := fallback.Stream(context.Background(), req(grokID), func(ModelEvent) error { return nil }); err != nil {
+		t.Fatalf("grok Stream: %v", err)
+	}
+
+	if got := creds.resolveCount(subscriptionauth.CredentialSourceCodex); got != 1 {
+		t.Fatalf("codex Resolve calls = %d, want 1", got)
+	}
+	if got := creds.resolveCount(subscriptionauth.CredentialSourceGrok); got != 1 {
+		t.Fatalf("grok Resolve calls = %d, want 1", got)
+	}
+	if creds.refreshN != 0 {
+		t.Fatalf("ResolveAfterUnauthorized calls = %d, want 0", creds.refreshN)
+	}
+
+	captured := openai.snapshot()
+	if len(captured) != 2 {
+		t.Fatalf("adapter requests = %d, want 2", len(captured))
+	}
+	assertManagedStreamRequest(t, captured[0], managedStreamWant{
+		channelID:        codexID,
+		channelName:      "managed-codex",
+		providerModel:    "managed-model",
+		baseURL:          subscriptionauth.CodexResponsesURL,
+		endpoint:         modelchannel.OpenAIEndpointResponses,
+		source:           "codex",
+		token:            codexToken,
+		accountID:        codexAccount,
+		chatGPTAccountID: chatgptID,
+		sentinel:         sentinel,
+		reasoningEffort:  "medium",
+	})
+	assertManagedStreamRequest(t, captured[1], managedStreamWant{
+		channelID:       grokID,
+		channelName:     "managed-grok",
+		providerModel:   "grok-model",
+		baseURL:         subscriptionauth.GrokAPIBaseURL,
+		endpoint:        modelchannel.OpenAIEndpointChatCompletions,
+		source:          "grok",
+		token:           grokToken,
+		accountID:       grokAccount,
+		sentinel:        sentinel,
+		reasoningEffort: "medium",
+	})
+
+	codexHits, codexAuth, codexPath, codexModel, codexOriginator, codexAccountHdr := codexCap.snapshot()
+	if codexHits != 1 || codexAuth != codexToken || codexAuth == sentinel {
+		t.Fatalf("codex provider hits=%d auth=%q", codexHits, codexAuth)
+	}
+	if codexPath != "/backend-api/codex/responses" {
+		t.Fatalf("codex path = %q", codexPath)
+	}
+	if codexModel != "managed-model" {
+		t.Fatalf("codex body model = %q", codexModel)
+	}
+	if codexOriginator != "codex_cli_rs" || codexAccountHdr != chatgptID {
+		t.Fatalf("codex metadata originator=%q account=%q", codexOriginator, codexAccountHdr)
+	}
+
+	grokHits, grokAuth, grokPath, grokModel, grokOriginator, grokAccountHdr := grokCap.snapshot()
+	if grokHits != 1 || grokAuth != grokToken || grokAuth == sentinel {
+		t.Fatalf("grok provider hits=%d auth=%q", grokHits, grokAuth)
+	}
+	if grokPath != "/v1/chat/completions" {
+		t.Fatalf("grok path = %q", grokPath)
+	}
+	if grokModel != "grok-model" {
+		t.Fatalf("grok body model = %q", grokModel)
+	}
+	if grokOriginator != "" || grokAccountHdr != "" {
+		t.Fatalf("grok must not send Codex identity headers originator=%q account=%q", grokOriginator, grokAccountHdr)
+	}
+
+	gotURLs := originalURLs.Load()
+	if len(gotURLs) != 2 {
+		t.Fatalf("original URLs = %#v, want 2 official targets", gotURLs)
+	}
+	if gotURLs[0] != subscriptionauth.CodexResponsesURL {
+		t.Fatalf("codex original URL = %q, want pinned official endpoint", gotURLs[0])
+	}
+	wantGrokURL := OpenAIEndpointURL(subscriptionauth.GrokAPIBaseURL, modelchannel.OpenAIEndpointChatCompletions)
+	if gotURLs[1] != wantGrokURL {
+		t.Fatalf("grok original URL = %q, want %q", gotURLs[1], wantGrokURL)
+	}
+	if err := fallback.Stream(context.Background(), req("stale-catalog-id"), func(ModelEvent) error { return nil }); !errors.Is(err, legacyruntime.ErrChannelNotAvailable) {
+		t.Fatalf("stale Stream error = %v, want ErrChannelNotAvailable", err)
+	}
+	if creds.resolveCount(subscriptionauth.CredentialSourceCodex) != 1 || creds.resolveCount(subscriptionauth.CredentialSourceGrok) != 1 {
+		t.Fatalf("stale ID must not refresh managed credentials")
+	}
+}
+
+type managedStreamWant struct {
+	channelID        string
+	channelName      string
+	providerModel    string
+	baseURL          string
+	endpoint         string
+	source           string
+	token            string
+	accountID        string
+	chatGPTAccountID string
+	sentinel         string
+	reasoningEffort  string
+}
+
+func assertManagedStreamRequest(t *testing.T, got StreamRequest, want managedStreamWant) {
+	t.Helper()
+	if got.ResolvedChannelID != want.channelID || got.ResolvedChannelName != want.channelName {
+		t.Fatalf("channel metadata = %q %q, want %q %q", got.ResolvedChannelID, got.ResolvedChannelName, want.channelID, want.channelName)
+	}
+	if got.ProviderModelID != want.providerModel || got.ModelID != want.channelID {
+		t.Fatalf("model identity provider=%q catalog=%q, want provider=%q catalog=%q", got.ProviderModelID, got.ModelID, want.providerModel, want.channelID)
+	}
+	if got.BaseURL != want.baseURL || got.OpenAIEndpoint != want.endpoint {
+		t.Fatalf("target = %q %q, want %q %q", got.BaseURL, got.OpenAIEndpoint, want.baseURL, want.endpoint)
+	}
+	if got.CredentialSource != want.source || got.CredentialID != want.accountID || got.ChatGPTAccountID != want.chatGPTAccountID {
+		t.Fatalf("credential metadata source=%q id=%q chatgpt=%q", got.CredentialSource, got.CredentialID, got.ChatGPTAccountID)
+	}
+	if got.APIKey != want.token || got.APIKey == want.sentinel || got.APIKey == "" {
+		t.Fatalf("APIKey = %q, want runtime token", got.APIKey)
+	}
+	if want.reasoningEffort != "" && got.ReasoningEffort != want.reasoningEffort {
+		t.Fatalf("ReasoningEffort = %q, want %q", got.ReasoningEffort, want.reasoningEffort)
+	}
+}
+
+func newCLICatalogTestManager(t *testing.T, adapters []serverconfig.ModelAdapterConfig) *serverconfig.Manager {
+	t.Helper()
+	root := t.TempDir()
+	store := serverconfig.NewStore(filepath.Join(root, "config.yaml"), filepath.Join(root, "logs"))
+	manager, err := serverconfig.NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	cfg := serverconfig.DefaultConfig()
+	cfg.ModelAdapters = adapters
+	if _, err := manager.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	return manager
+}
+
+type capturingModelAdapter struct {
+	inner    ModelAdapter
+	mu       sync.Mutex
+	requests []StreamRequest
+}
+
+func (adapter *capturingModelAdapter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	adapter.mu.Lock()
+	adapter.requests = append(adapter.requests, req)
+	adapter.mu.Unlock()
+	if adapter.inner == nil {
+		return nil
+	}
+	return adapter.inner.Stream(ctx, req, sink)
+}
+
+func (adapter *capturingModelAdapter) snapshot() []StreamRequest {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	out := make([]StreamRequest, len(adapter.requests))
+	copy(out, adapter.requests)
+	return out
+}
+
+type managedProviderCapture struct {
+	mu         sync.Mutex
+	hits       int
+	auth       string
+	path       string
+	model      string
+	originator string
+	accountID  string
+}
+
+func (cap *managedProviderCapture) recordHTTP(t *testing.T, request *http.Request, sentinel string) bool {
+	t.Helper()
+	token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+	var body map[string]any
+	_ = json.NewDecoder(request.Body).Decode(&body)
+	model, _ := body["model"].(string)
+	cap.mu.Lock()
+	cap.hits++
+	cap.auth = token
+	cap.path = request.URL.Path
+	cap.model = model
+	cap.originator = request.Header.Get("originator")
+	cap.accountID = request.Header.Get("ChatGPT-Account-Id")
+	cap.mu.Unlock()
+	if token == sentinel || token == "" {
+		t.Errorf("provider received catalog sentinel or empty key %q", token)
+		return false
+	}
+	return true
+}
+
+func (cap *managedProviderCapture) snapshot() (hits int, auth, path, model, originator, accountID string) {
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	return cap.hits, cap.auth, cap.path, cap.model, cap.originator, cap.accountID
+}
+
+type cliCatalogAtomicStringSlice struct {
+	mu     sync.Mutex
+	values []string
+}
+
+func (box *cliCatalogAtomicStringSlice) Add(value string) {
+	box.mu.Lock()
+	box.values = append(box.values, value)
+	box.mu.Unlock()
+}
+
+func (box *cliCatalogAtomicStringSlice) Load() []string {
+	box.mu.Lock()
+	defer box.mu.Unlock()
+	out := make([]string, len(box.values))
+	copy(out, box.values)
+	return out
+}
+
+type sourceCredentialStub struct {
+	mu       sync.Mutex
+	creds    map[subscriptionauth.CredentialSource]subscriptionauth.Credential
+	calls    map[subscriptionauth.CredentialSource]int
+	refreshN int
+}
+
+func (stub *sourceCredentialStub) Resolve(_ context.Context, source subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
+	normalized := subscriptionauth.NormalizeCredentialSource(string(source))
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.calls == nil {
+		stub.calls = map[subscriptionauth.CredentialSource]int{}
+	}
+	stub.calls[normalized]++
+	cred, ok := stub.creds[normalized]
+	if !ok {
+		return subscriptionauth.Credential{}, fmt.Errorf("unexpected credential source %q", source)
+	}
+	return cred, nil
+}
+
+func (stub *sourceCredentialStub) ResolveAfterUnauthorized(context.Context, subscriptionauth.CredentialSource, string) (subscriptionauth.Credential, error) {
+	stub.mu.Lock()
+	stub.refreshN++
+	stub.mu.Unlock()
+	return subscriptionauth.Credential{}, fmt.Errorf("unexpected ResolveAfterUnauthorized")
+}
+
+func (stub *sourceCredentialStub) MarkQuotaExhausted(context.Context, string) error {
+	return nil
+}
+
+func (stub *sourceCredentialStub) RefreshUsage(context.Context, subscriptionauth.ProviderKind) (subscriptionauth.UsageSnapshot, error) {
+	return subscriptionauth.UsageSnapshot{}, nil
+}
+
+func (stub *sourceCredentialStub) resolveCount(source subscriptionauth.CredentialSource) int {
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if stub.calls == nil {
+		return 0
+	}
+	return stub.calls[subscriptionauth.NormalizeCredentialSource(string(source))]
+}
+
+func writeOpenAIResponsesSSE(writer http.ResponseWriter, text string) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"status\":\"completed\",\"output_text\":%q}}\n\n", text)
+	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 }
 
 func writeOpenAIChatSSE(writer http.ResponseWriter, text string) {

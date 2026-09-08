@@ -712,14 +712,28 @@ func TestOpenAIHalfFrameDoesNotRetryOrConcatResponses(t *testing.T) {
 }
 
 type rewriteHostRoundTripper struct {
-	target *url.URL
+	target    *url.URL
+	byHost    map[string]*url.URL
+	onRequest func(*http.Request)
 }
 
 func (rt rewriteHostRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt.onRequest != nil {
+		rt.onRequest(req)
+	}
 	clone := req.Clone(req.Context())
-	clone.URL.Scheme = rt.target.Scheme
-	clone.URL.Host = rt.target.Host
-	clone.Host = rt.target.Host
+	target := rt.target
+	if host := strings.ToLower(clone.URL.Hostname()); rt.byHost != nil {
+		if mapped, ok := rt.byHost[host]; ok {
+			target = mapped
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("no rewrite target for host %q", clone.URL.Host)
+	}
+	clone.URL.Scheme = target.Scheme
+	clone.URL.Host = target.Host
+	clone.Host = target.Host
 	clone.RequestURI = ""
 	return http.DefaultTransport.RoundTrip(clone)
 }
@@ -1014,6 +1028,42 @@ func TestOpenAIResponsesExplicitTerminalStatusesAreNotTransportErrors(t *testing
 				t.Fatalf("classification=%q diagnostics=%#v", ClassifyProviderError(err), snapshot)
 			}
 		})
+	}
+}
+
+func TestOpenAIHTTP200OverflowCodeIsContextOverflow(t *testing.T) {
+	err, _ := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-overflow\",\"status\":\"failed\",\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"too many tokens\"}}}\n\n")
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "context_length_exceeded" {
+		t.Fatalf("err=%v terminal=%#v", err, terminal)
+	}
+	if !IsContextOverflowError(err) {
+		t.Fatal("HTTP 200 overflow code was not classified as context overflow")
+	}
+	if ClassifyProviderError(err) != ProviderErrorTerminal {
+		t.Fatalf("category = %q, want provider_terminal", ClassifyProviderError(err))
+	}
+}
+
+func TestOpenAIChatOverflowCodeIsContextOverflowAndDoesNotRetry(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"error\":{\"code\":\"model_context_window_exceeded\",\"message\":\"prompt is too long\"}}\n\n")
+	}))
+	defer server.Close()
+	adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+	_, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "model_context_window_exceeded" {
+		t.Fatalf("err=%v terminal=%#v", err, terminal)
+	}
+	if !IsContextOverflowError(err) || hits != 1 {
+		t.Fatalf("overflow classification=%v hits=%d", IsContextOverflowError(err), hits)
+	}
+	if isFallbackEligibleError(err) || IsRetryableZeroEventStreamError(err) {
+		t.Fatal("chat overflow must not change retry/fallback")
 	}
 }
 

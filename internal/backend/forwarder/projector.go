@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
+	runtimecore "cursor/internal/backend/agent/core"
 	modeladapter "cursor/internal/backend/agent/model"
 	promptengine "cursor/internal/backend/agent/prompt"
 )
@@ -207,7 +208,7 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 						toolCall = decoded
 					}
 				}
-				toolName := strings.TrimSpace(payload.ToolName)
+				toolName := runtimecore.CanonicalToolName(strings.TrimSpace(payload.ToolName))
 				if toolName == "" && toolCall != nil {
 					toolName = inferToolName(toolCall)
 				}
@@ -1909,6 +1910,8 @@ func overrideModelToolReplayFromEntry(message *modeladapter.Message, toolName st
 }
 
 func effectiveReplayToolName(currentName string, overrideName string) string {
+	currentName = runtimecore.CanonicalToolName(strings.TrimSpace(currentName))
+	overrideName = runtimecore.CanonicalToolName(strings.TrimSpace(overrideName))
 	if isLegacyPatchEditToolName(currentName) || isLegacyPatchEditToolName(overrideName) {
 		return "Edit"
 	}

@@ -236,13 +236,6 @@ func (service *Service) updateConversationTokenState(stream *ActiveStream, conve
 		return nil
 	}
 	now := time.Now().UTC()
-	autoCompactionReserveTokens := int64(compactionAutoReserveTokens)
-	if finalizeAutoCompaction {
-		autoCompactionReserveTokens = service.resolveCompactionReserveTokens(activeStreamModelID(stream))
-		if autoCompactionReserveTokens <= 0 {
-			autoCompactionReserveTokens = compactionAutoReserveTokens
-		}
-	}
 	_, err := service.updateConversationMetaAndCheckpoint(stream, conversationID, func(item *ConversationFile) error {
 		if item == nil {
 			return nil
@@ -255,7 +248,7 @@ func (service *Service) updateConversationTokenState(stream *ActiveStream, conve
 			item.TokenDetailsMaxTokens = projectedConversationMaxTokens
 		}
 		if finalizeAutoCompaction {
-			updateConversationAutoCompactionState(item, promptTokensTotal, autoCompactionReserveTokens, modelCallID, now)
+			updateConversationAutoCompactionState(item, promptTokensTotal, compactionReserveTokens(int64(item.TokenDetailsMaxTokens)), modelCallID, now)
 		}
 		return nil
 	})

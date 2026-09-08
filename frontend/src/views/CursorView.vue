@@ -39,6 +39,13 @@ function showActionError(title, error) {
 
 async function handleToggleService() {
   const result = await toggleService();
+  if (result.cancelled) {
+    return;
+  }
+  if (result.partial) {
+    message(result.error);
+    return;
+  }
   if (!result.ok) {
     showActionError("服务操作失败", result.error);
   }

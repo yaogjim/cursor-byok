@@ -2,28 +2,22 @@
 package interaction
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
-	"mime"
-	"net"
 	"net/http"
 	neturl "net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
-	readability "codeberg.org/readeck/go-readability/v2"
-	htmlmarkdown "github.com/firecrawl/html-to-markdown"
-	mdplugin "github.com/firecrawl/html-to-markdown/plugin"
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
 	"cursor/internal/backend/agent/core"
+	"cursor/internal/backend/agent/toolresult"
 	"cursor/internal/netproxy"
 )
 
@@ -53,8 +47,10 @@ type InteractionBridge interface {
 type Bridge struct {
 	// nextID 生成交互消息编号。
 	nextID atomic.Uint32
-	// httpClient 负责执行 web search / web fetch 等需要外网的操作。
+	// httpClient 负责执行 web search 等需要外网的操作。
 	httpClient *http.Client
+	// webFetch 是 WebFetch 专用出站依赖；零值使用默认 DNS/拨号/代理解析。
+	webFetch webFetchNetwork
 }
 
 // NewBridge 创建一个交互桥实例。
@@ -570,11 +566,9 @@ var (
 )
 
 const (
-	webFetchBodyLimit     = 2 * 1024 * 1024
-	webFetchMarkdownLimit = 32 * 1024
-	webSearchPayloadLimit = 16 * 1024
-	webSearchTitleLimit   = 512
-	webSearchChunkLimit   = 2 * 1024
+	webSearchPayloadLimit = toolresult.WebSearchPayloadBytes
+	webSearchTitleLimit   = toolresult.WebSearchTitleBytes
+	webSearchChunkLimit   = toolresult.WebSearchSnippetBytes
 )
 
 func (bridge *Bridge) executeWebSearch(searchTerm string) ([]*agentv1.WebSearchReference, string, error) {
@@ -729,6 +723,20 @@ func formatWebSearchPayload(searchTerm string, references []*agentv1.WebSearchRe
 }
 
 func truncateWebSearchReplay(searchTerm string, references []*agentv1.WebSearchReference, payload string) ([]*agentv1.WebSearchReference, string) {
+	payloadLimit, ok := toolresult.PayloadBytes("WebSearch", toolresult.PurposeDisplay)
+	if !ok {
+		payloadLimit = webSearchPayloadLimit
+	}
+	if len(payload) > 0 && payloadLimit > 0 && len(payload) <= payloadLimit && toolresult.ContainsBytesNotice(payload, "WebSearch") {
+		nextReferences := make([]*agentv1.WebSearchReference, 0, len(references))
+		for _, reference := range references {
+			if reference == nil {
+				continue
+			}
+			nextReferences = append(nextReferences, proto.Clone(reference).(*agentv1.WebSearchReference))
+		}
+		return nextReferences, payload
+	}
 	truncated := false
 	nextReferences := make([]*agentv1.WebSearchReference, 0, len(references))
 	for _, reference := range references {
@@ -736,8 +744,8 @@ func truncateWebSearchReplay(searchTerm string, references []*agentv1.WebSearchR
 			continue
 		}
 		next := proto.Clone(reference).(*agentv1.WebSearchReference)
-		title := truncateInteractionText("WebSearch title", next.GetTitle(), webSearchTitleLimit)
-		chunk := truncateInteractionText("WebSearch snippet", next.GetChunk(), webSearchChunkLimit)
+		title := toolresult.TruncateTail("WebSearch title", next.GetTitle(), webSearchTitleLimit)
+		chunk := toolresult.TruncateTail("WebSearch snippet", next.GetChunk(), webSearchChunkLimit)
 		if title != next.GetTitle() || chunk != next.GetChunk() {
 			truncated = true
 		}
@@ -749,237 +757,18 @@ func truncateWebSearchReplay(searchTerm string, references []*agentv1.WebSearchR
 	if strings.TrimSpace(payload) != "" && len(nextPayload) == 0 {
 		nextPayload = payload
 	}
-	if len(nextPayload) > webSearchPayloadLimit {
+	if len(nextPayload) > payloadLimit {
 		truncated = true
-		nextPayload = truncateInteractionText("WebSearch", nextPayload, webSearchPayloadLimit)
+		nextPayload = toolresult.TruncateTail("WebSearch", nextPayload, payloadLimit)
 	}
 	if truncated && len(nextReferences) > 0 {
 		last := nextReferences[len(nextReferences)-1]
-		last.Chunk = strings.TrimSpace(last.GetChunk() + "\n\n" + interactionTruncationNotice("WebSearch", webSearchPayloadLimit, len(nextPayload), len(payload)))
+		notice := toolresult.BytesNotice("WebSearch", payloadLimit, len(nextPayload), len(payload))
+		if !toolresult.ContainsBytesNotice(last.GetChunk(), "WebSearch") {
+			last.Chunk = strings.TrimSpace(last.GetChunk() + "\n\n" + notice)
+		}
 		nextPayload = formatWebSearchPayload(searchTerm, nextReferences)
-		nextPayload = truncateInteractionText("WebSearch", nextPayload, webSearchPayloadLimit)
+		nextPayload = toolresult.TruncateTail("WebSearch", nextPayload, payloadLimit)
 	}
 	return nextReferences, nextPayload
-}
-
-func (bridge *Bridge) executeWebFetch(rawURL string) (string, error) {
-	parsedURL, err := validateWebFetchURL(rawURL)
-	if err != nil {
-		return "", err
-	}
-	client := bridge.httpClient
-	if client == nil {
-		client = netproxy.NewHTTPClient(15 * time.Second)
-	}
-	client = webFetchHTTPClient(client)
-	request, err := http.NewRequest(http.MethodGet, parsedURL.String(), nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("User-Agent", "cursor-local-agent/1.0")
-	request.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain,application/xml,application/json;q=0.9,*/*;q=0.1")
-	response, err := client.Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("web fetch http status %d", response.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(response.Body, webFetchBodyLimit+1))
-	if err != nil {
-		return "", err
-	}
-	if len(body) == 0 {
-		return "", fmt.Errorf("web fetch returned empty body")
-	}
-	if len(body) > webFetchBodyLimit {
-		body = body[:webFetchBodyLimit]
-	}
-	contentType := response.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = http.DetectContentType(body)
-	}
-	if !isWebFetchTextContentType(contentType) {
-		return "", fmt.Errorf("web fetch unsupported content type %q", contentType)
-	}
-	markdown, title, err := renderWebFetchMarkdown(parsedURL, body, contentType)
-	if err != nil {
-		return "", err
-	}
-	markdown = strings.TrimSpace(markdown)
-	if markdown == "" {
-		return "", fmt.Errorf("web fetch returned empty markdown")
-	}
-	title = strings.TrimSpace(title)
-	if title == "" {
-		title = parsedURL.String()
-	}
-	payload := fmt.Sprintf("Title: %s\nURL: %s\n\nContent:\n%s", title, parsedURL.String(), markdown)
-	return truncateWebFetchMarkdown(payload), nil
-}
-
-func validateWebFetchURL(rawURL string) (*neturl.URL, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return nil, fmt.Errorf("web fetch url is required")
-	}
-	parsedURL, err := neturl.Parse(rawURL)
-	if err != nil {
-		return nil, fmt.Errorf("web fetch invalid url: %w", err)
-	}
-	switch strings.ToLower(parsedURL.Scheme) {
-	case "http", "https":
-	default:
-		return nil, fmt.Errorf("web fetch only supports http and https urls")
-	}
-	host := strings.TrimSpace(parsedURL.Hostname())
-	if host == "" {
-		return nil, fmt.Errorf("web fetch url host is required")
-	}
-	if isBlockedWebFetchHost(host) {
-		return nil, fmt.Errorf("web fetch host is not public-web accessible")
-	}
-	return parsedURL, nil
-}
-
-func isBlockedWebFetchHost(host string) bool {
-	host = strings.Trim(strings.ToLower(host), "[]")
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified()
-}
-
-func isWebFetchTextContentType(contentType string) bool {
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		mediaType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	}
-	if strings.HasPrefix(mediaType, "text/") {
-		return true
-	}
-	switch mediaType {
-	case "application/xhtml+xml", "application/xml", "application/json", "application/ld+json", "application/rss+xml", "application/atom+xml":
-		return true
-	default:
-		return strings.HasSuffix(mediaType, "+xml") || strings.HasSuffix(mediaType, "+json")
-	}
-}
-
-func renderWebFetchMarkdown(pageURL *neturl.URL, body []byte, contentType string) (string, string, error) {
-	if !isHTMLLikeContentType(contentType) {
-		return string(body), "", nil
-	}
-	article, err := readability.FromReader(bytes.NewReader(body), pageURL)
-	if err == nil {
-		var articleHTML bytes.Buffer
-		if renderErr := article.RenderHTML(&articleHTML); renderErr == nil && strings.TrimSpace(articleHTML.String()) != "" {
-			if markdown, convertErr := convertHTMLToMarkdown(pageURL, articleHTML.String()); convertErr == nil && strings.TrimSpace(markdown) != "" {
-				return markdown, article.Title(), nil
-			}
-		}
-	}
-	markdown, err := convertHTMLToMarkdown(pageURL, string(body))
-	if err != nil {
-		return "", "", fmt.Errorf("web fetch markdown conversion failed: %w", err)
-	}
-	return markdown, extractWebFetchHTMLTitle(string(body)), nil
-}
-
-func isHTMLLikeContentType(contentType string) bool {
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		mediaType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	}
-	return mediaType == "text/html" || mediaType == "application/xhtml+xml" || mediaType == ""
-}
-
-func convertHTMLToMarkdown(pageURL *neturl.URL, htmlBody string) (string, error) {
-	converter := htmlmarkdown.NewConverter(htmlmarkdown.DomainFromURL(pageURL.String()), true, nil)
-	converter.Use(mdplugin.GitHubFlavored())
-	return converter.ConvertString(htmlBody)
-}
-
-func extractWebFetchHTMLTitle(htmlBody string) string {
-	matches := htmlTitlePattern.FindStringSubmatch(htmlBody)
-	if len(matches) < 2 {
-		return ""
-	}
-	return cleanupWebSearchHTML(matches[1])
-}
-
-func truncateWebFetchMarkdown(markdown string) string {
-	return truncateInteractionText("WebFetch", markdown, webFetchMarkdownLimit)
-}
-
-func truncateInteractionText(toolName string, text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	original := len(text)
-	notice := fmt.Sprintf("\n\n%s", interactionTruncationNotice(toolName, limit, limit, original))
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateInteractionUTF8(text, limit)
-		}
-		kept := truncateInteractionUTF8(text, keep)
-		nextNotice := fmt.Sprintf("\n\n%s", interactionTruncationNotice(toolName, limit, len(kept), original))
-		output := strings.TrimRight(kept, "\n") + nextNotice
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
-}
-
-func interactionTruncationNotice(toolName string, limit int, kept int, original int) string {
-	return fmt.Sprintf("[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, kept, original)
-}
-
-func truncateInteractionUTF8(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	if limit > len(text) {
-		limit = len(text)
-	}
-	truncated := text[:limit]
-	for !utf8.ValidString(truncated) && len(truncated) > 0 {
-		truncated = truncated[:len(truncated)-1]
-	}
-	return truncated
-}
-
-func webFetchHTTPClient(base *http.Client) *http.Client {
-	if base == nil {
-		base = netproxy.NewHTTPClient(15 * time.Second)
-	}
-	client := *base
-	previousCheckRedirect := client.CheckRedirect
-	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("web fetch stopped after 10 redirects")
-		}
-		if _, err := validateWebFetchURL(request.URL.String()); err != nil {
-			return err
-		}
-		if previousCheckRedirect != nil {
-			return previousCheckRedirect(request, via)
-		}
-		return nil
-	}
-	return &client
 }

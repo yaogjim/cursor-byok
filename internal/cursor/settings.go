@@ -137,8 +137,204 @@ func DefaultUserProxySettingsStore() (*UserProxySettingsStore, error) {
 	return NewUserProxySettingsStore(settingsPath), nil
 }
 
+// SettingValue 保存单个设置键的旧值。Present=false 表示该键原先不存在。
+type SettingValue struct {
+	Present bool
+	Value   any
+}
+
+// SettingsSnapshot 仅包含本次将修改的设置键旧值，以及所有权文件旧值。
+type SettingsSnapshot struct {
+	Keys    map[string]SettingValue
+	Owner   SettingValue
+	desired map[string]any
+}
+
+func desiredUserProxySettings(proxyURL string) map[string]any {
+	return map[string]any{
+		"http.proxy":                             proxyURL,
+		"http.proxyKerberosServicePrincipal":     proxyURL,
+		"http.proxySupport":                      "on",
+		"cursor.general.disableHttp2":            true,
+		"http.experimental.systemCertificatesV2": true,
+	}
+}
+
+func jsonValuesEqual(left any, right any) bool {
+	encodedLeft, errLeft := json.Marshal(left)
+	encodedRight, errRight := json.Marshal(right)
+	if errLeft != nil || errRight != nil {
+		return false
+	}
+	return bytes.Equal(encodedLeft, encodedRight)
+}
+
+func (s *UserProxySettingsStore) readSettingsMapUnlocked() (map[string]any, error) {
+	settings := make(map[string]any)
+	data, err := os.ReadFile(s.settingsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return settings, nil
+		}
+		return nil, fmt.Errorf("读取 Cursor 配置失败: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return settings, nil
+	}
+	parsed, err := decodeCursorSettingsJSONC(data)
+	if err != nil {
+		return nil, fmt.Errorf("解析 Cursor 配置失败: %w", err)
+	}
+	return parsed, nil
+}
+
+func (s *UserProxySettingsStore) readOwnerUnlocked() (SettingValue, error) {
+	data, err := os.ReadFile(s.ownerPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return SettingValue{}, nil
+	}
+	if err != nil {
+		return SettingValue{}, fmt.Errorf("读取 Cursor 配置所有者失败: %w", err)
+	}
+	return SettingValue{Present: true, Value: strings.TrimSpace(string(data))}, nil
+}
+
+func snapshotChangingKeys(current map[string]any, desired map[string]any) SettingsSnapshot {
+	snap := SettingsSnapshot{Keys: make(map[string]SettingValue), desired: desired}
+	for _, key := range injectedCursorSettingsKeys {
+		want, ok := desired[key]
+		if !ok {
+			continue
+		}
+		got, present := current[key]
+		if present && jsonValuesEqual(got, want) {
+			continue
+		}
+		snap.Keys[key] = SettingValue{Present: present, Value: got}
+	}
+	return snap
+}
+
+func (snap SettingsSnapshot) NeedsChange() bool {
+	return len(snap.Keys) > 0
+}
+
+// Plan 只快照将要改动的注入键旧值（区分未设置），不写入、不记录键内容。
+func (s *UserProxySettingsStore) Plan(proxyURL string) (SettingsSnapshot, error) {
+	var snap SettingsSnapshot
+	if s == nil || strings.TrimSpace(s.settingsPath) == "" || s.settingsPath == "." {
+		return snap, errors.New("Cursor 配置路径为空")
+	}
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return snap, errors.New("代理地址为空")
+	}
+	if _, err := os.Stat(filepath.Dir(s.settingsPath)); errors.Is(err, os.ErrNotExist) {
+		snap = snapshotChangingKeys(map[string]any{}, desiredUserProxySettings(proxyURL))
+		return snap, nil
+	}
+	err := s.withOwnershipLock(func() error {
+		current, err := s.readSettingsMapUnlocked()
+		if err != nil {
+			return err
+		}
+		snap = snapshotChangingKeys(current, desiredUserProxySettings(proxyURL))
+		snap.Owner, err = s.readOwnerUnlocked()
+		return err
+	})
+	return snap, err
+}
+
+// Restore 只恢复本实例仍持有的设置；未转移所有权的写入失败允许恢复原 owner。
+func (s *UserProxySettingsStore) Restore(snapshot SettingsSnapshot, ownerID string) error {
+	if s == nil || strings.TrimSpace(s.settingsPath) == "" || s.settingsPath == "." {
+		return errors.New("Cursor 配置路径为空")
+	}
+	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return errors.New("Cursor 配置所有者为空")
+	}
+	return s.withOwnershipLock(func() error {
+		currentOwner, err := s.readOwnerUnlocked()
+		if err != nil {
+			return err
+		}
+		if !jsonValuesEqual(currentOwner, snapshot.Owner) &&
+			(!currentOwner.Present || currentOwner.Value != ownerID) {
+			return errors.New("Cursor 配置所有权已变化，保留当前设置并停止回滚")
+		}
+		settings, err := s.readSettingsMapUnlocked()
+		if err != nil {
+			return err
+		}
+		unchanged := true
+		for key, old := range snapshot.Keys {
+			value, present := settings[key]
+			if jsonValuesEqual(SettingValue{Present: present, Value: value}, old) {
+				continue
+			}
+			unchanged = false
+			want, planned := snapshot.desired[key]
+			if !planned || !present || !jsonValuesEqual(value, want) {
+				return errors.New("Cursor 配置已被其他操作修改，保留当前设置并停止回滚")
+			}
+		}
+		if unchanged && jsonValuesEqual(currentOwner, snapshot.Owner) {
+			return nil
+		}
+		if len(snapshot.Keys) > 0 {
+			for key, old := range snapshot.Keys {
+				if old.Present {
+					settings[key] = old.Value
+				} else {
+					delete(settings, key)
+				}
+			}
+			if err := writeSettingsMapAt(s.settingsPath, settings); err != nil {
+				return err
+			}
+		}
+		if snapshot.Owner.Present {
+			ownerID, _ := snapshot.Owner.Value.(string)
+			return writeSettingsOwner(s.ownerPath(), ownerID)
+		}
+		if err := os.Remove(s.ownerPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("删除 Cursor 配置所有者失败: %w", err)
+		}
+		return nil
+	})
+}
+
+func writeSettingsMapAt(settingsPath string, settings map[string]any) error {
+	if settings == nil {
+		settings = make(map[string]any)
+	}
+	encoded, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("序列化 Cursor 配置失败: %w", err)
+	}
+	encoded = append(encoded, '\n')
+	tempPath := settingsPath + ".tmp"
+	if err := os.WriteFile(tempPath, encoded, 0o644); err != nil {
+		return fmt.Errorf("写入 Cursor 配置临时文件失败: %w", err)
+	}
+	if err := os.Rename(tempPath, settingsPath); err != nil {
+		return fmt.Errorf("保存 Cursor 配置失败: %w", err)
+	}
+	return nil
+}
+
+// ApplyPlanned 在同一所有权锁内检查旧值并写入，拒绝过期计划。
+func (s *UserProxySettingsStore) ApplyPlanned(proxyURL, ownerID string, snapshot SettingsSnapshot) error {
+	return s.apply(proxyURL, ownerID, &snapshot)
+}
+
 // Apply 写入代理设置，并将清理所有权原子转移给 ownerID。
 func (s *UserProxySettingsStore) Apply(proxyURL string, ownerID string) error {
+	return s.apply(proxyURL, ownerID, nil)
+}
+
+func (s *UserProxySettingsStore) apply(proxyURL, ownerID string, snapshot *SettingsSnapshot) error {
 	if s == nil || strings.TrimSpace(s.settingsPath) == "" || s.settingsPath == "." {
 		return errors.New("Cursor 配置路径为空")
 	}
@@ -150,6 +346,32 @@ func (s *UserProxySettingsStore) Apply(proxyURL string, ownerID string) error {
 		return fmt.Errorf("创建 Cursor 配置目录失败: %w", err)
 	}
 	return s.withOwnershipLock(func() error {
+		if snapshot != nil {
+			if !jsonValuesEqual(snapshot.desired, desiredUserProxySettings(strings.TrimSpace(proxyURL))) {
+				return errors.New("Cursor 配置计划与目标设置不一致")
+			}
+			owner, err := s.readOwnerUnlocked()
+			if err != nil {
+				return err
+			}
+			if !jsonValuesEqual(owner, snapshot.Owner) {
+				return errors.New("Cursor 配置所有权已变化，请重新检查后重试")
+			}
+			current, err := s.readSettingsMapUnlocked()
+			if err != nil {
+				return err
+			}
+			for key, desired := range snapshot.desired {
+				old, changing := snapshot.Keys[key]
+				if !changing {
+					old = SettingValue{Present: true, Value: desired}
+				}
+				value, present := current[key]
+				if !jsonValuesEqual(SettingValue{Present: present, Value: value}, old) {
+					return errors.New("Cursor 配置已变化，请重新检查后重试")
+				}
+			}
+		}
 		if err := writeUserProxySettingsAt(s.settingsPath, proxyURL); err != nil {
 			return err
 		}
@@ -263,11 +485,9 @@ func writeUserProxySettingsAt(settingsPath string, proxyURL string) error {
 		}
 	}
 
-	settings["http.proxy"] = proxyURL
-	settings["http.proxyKerberosServicePrincipal"] = proxyURL
-	settings["http.proxySupport"] = "on"
-	settings["cursor.general.disableHttp2"] = true
-	settings["http.experimental.systemCertificatesV2"] = true
+	for key, value := range desiredUserProxySettings(proxyURL) {
+		settings[key] = value
+	}
 
 	encoded, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

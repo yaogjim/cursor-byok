@@ -175,6 +175,18 @@ export function startProxyService() {
   return withApiLogging("StartProxy", () => StartProxy());
 }
 
+export function inspectCursorProxyStart() {
+  return withApiLogging("InspectCursorProxyStart", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.InspectCursorProxyStart`),
+  );
+}
+
+export function startProxyAfterRestartConfirm() {
+  return withApiLogging("StartProxyAfterRestartConfirm", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartProxyAfterRestartConfirm`),
+  );
+}
+
 export function stopProxyService() {
   return withApiLogging("StopProxy", () => StopProxy());
 }

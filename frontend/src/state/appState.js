@@ -1,5 +1,5 @@
 import { computed, reactive, watchSyncEffect } from "vue";
-import { Events } from "@wailsio/runtime";
+import { Events, Window } from "@wailsio/runtime";
 import dayjs from "dayjs";
 import {
   buildClientPreferencesFromState,
@@ -53,6 +53,8 @@ import {
   stopProxyService,
   startGatewayService,
   stopGatewayService,
+  inspectCursorProxyStart,
+  startProxyAfterRestartConfirm,
   testGatewayService,
   testModelAdapter,
   fetchModelAdapterModels,
@@ -76,6 +78,7 @@ import {
   isOpenAIImageGenerationCompatible,
   normalizeOpenAIImageGenerationEnabled,
 } from "@/state/modelAdapterTypeChange";
+import { showModal } from "@/composables/useModal";
 
 export {
   applyModelAdapterTypeChange,
@@ -86,6 +89,9 @@ export {
 
 const APP_STATE_STORAGE_KEY = "cursor-client:runtime-state:v2";
 const GENERIC_SERVICE_ERROR = "服务错误";
+const CURSOR_RESTART_CONFIRMATION_CODE = "cursor_restart_confirmation_required";
+const CURSOR_LAUNCH_PARTIAL_CODE = "cursor_launch_partial";
+const MAIN_WINDOW_NAME = "main";
 const SUPPORTED_MODEL_ADAPTER_TYPES = new Set(["openai", "anthropic"]);
 const SUPPORTED_CREDENTIAL_SOURCES = new Set(["static", "codex", "grok"]);
 const SUPPORTED_ANTHROPIC_THINKING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -105,6 +111,7 @@ export const CUSTOM_HEADERS_DEFAULT_JSON = `{
 const SUPPORTED_OPENAI_ENDPOINTS = new Set([OPENAI_ENDPOINT_RESPONSES, OPENAI_ENDPOINT_CHAT_COMPLETIONS, OPENAI_ENDPOINT_CUSTOM]);
 const SUPPORTED_ROUTE_MODES = new Set(["local", "upstream"]);
 const PROXY_STATE_EVENT = "proxy:state";
+const PROXY_START_REQUESTED_EVENT = "proxy:start-requested";
 const USER_CONFIG_CHANGED_EVENT = "user-config:changed";
 const UPDATE_STATE_EVENT = "update:state";
 const UPDATE_PROGRESS_EVENT = "update:progress";
@@ -1124,6 +1131,29 @@ function handleProxyStateEvent(event) {
   void syncServiceState().catch(() => {});
 }
 
+function shouldHandleProxyStartRequested(windowName) {
+  return asString(windowName) === MAIN_WINDOW_NAME;
+}
+
+async function currentWindowName() {
+  try {
+    if (Window && typeof Window.Name === "function") {
+      return asString(await Window.Name());
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+async function handleProxyStartRequestedEvent() {
+  const name = await currentWindowName();
+  if (!shouldHandleProxyStartRequested(name)) {
+    return { ok: false, ignored: true };
+  }
+  return startService();
+}
+
 function handleUserConfigChangedEvent(event) {
   if (event?.data && typeof event.data === "object") {
     applyConfigToState(event.data);
@@ -1477,6 +1507,16 @@ watchSyncEffect((onCleanup) => {
     return;
   }
   const unsubscribe = Events.On(PROXY_STATE_EVENT, handleProxyStateEvent);
+  onCleanup(() => {
+    unsubscribe();
+  });
+});
+
+watchSyncEffect((onCleanup) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const unsubscribe = Events.On(PROXY_START_REQUESTED_EVENT, handleProxyStartRequestedEvent);
   onCleanup(() => {
     unsubscribe();
   });
@@ -2067,15 +2107,69 @@ export async function startService() {
   }
   appState.serviceBusy = true;
   try {
-    const state = await startProxyService();
-    applyProxyState(state);
-    return { ok: true, error: "" };
+    let inspection = null;
+    try {
+      inspection = await inspectCursorProxyStart();
+    } catch (_error) {
+      inspection = null;
+    }
+    if (inspection?.manualAction) {
+      await syncServiceState().catch(() => {});
+      return { ok: false, error: inspection.message || "请手动退出 Cursor 后重试以应用配置" };
+    }
+    if (inspection?.needsRestart) {
+      const confirmed = await confirmCursorRestartOnce();
+      if (!confirmed) {
+        return { ok: false, cancelled: true, error: "已取消，保持当前设置与运行状态" };
+      }
+      return await finishStartProxy(() => startProxyAfterRestartConfirm());
+    }
+    try {
+      return await finishStartProxy(() => startProxyService());
+    } catch (error) {
+      if (errorHasCode(error, CURSOR_RESTART_CONFIRMATION_CODE)) {
+        const confirmed = await confirmCursorRestartOnce();
+        if (!confirmed) {
+          await syncServiceState().catch(() => {});
+          return { ok: false, cancelled: true, error: "已取消，保持当前设置与运行状态" };
+        }
+        return await finishStartProxy(() => startProxyAfterRestartConfirm());
+      }
+      throw error;
+    }
   } catch (error) {
     await syncServiceState().catch(() => {});
     return { ok: false, error: toUserError(error) };
   } finally {
     appState.serviceBusy = false;
   }
+}
+
+async function finishStartProxy(runner) {
+  try {
+    const state = await runner();
+    applyProxyState(state);
+    return { ok: true, error: "" };
+  } catch (error) {
+    await syncServiceState().catch(() => {});
+    if (errorHasCode(error, CURSOR_LAUNCH_PARTIAL_CODE)) {
+      return { ok: false, partial: true, error: toUserError(error) };
+    }
+    throw error;
+  }
+}
+
+function confirmCursorRestartOnce() {
+  return showModal({
+    title: "重启 Cursor",
+    content: "保存工作后重启 Cursor，以应用代理配置。",
+    confirmText: "重启",
+    cancelText: "取消",
+  });
+}
+
+function errorHasCode(error, code) {
+  return toUserError(error).includes(code);
 }
 
 export async function stopService() {

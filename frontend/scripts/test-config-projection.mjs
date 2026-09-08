@@ -1794,6 +1794,31 @@ assertEqual(
 const cursorViewSource = readFileSync(path.join(frontendSrc, "views/CursorView.vue"), "utf8");
 assert(cursorViewSource.includes("embedded"), "CursorView supports nested access layout");
 assert(cursorViewSource.includes("p-0"), "nested CursorView strips page padding");
+const startServiceFn = extractSourceFunction(appStateSource, "startService");
+const confirmCursorRestartFn = extractSourceFunction(appStateSource, "confirmCursorRestartOnce");
+assert(confirmCursorRestartFn.includes("showModal"), "startService confirms Cursor restart once via existing modal");
+assert(startServiceFn.includes("confirmCursorRestartOnce"), "startService uses one restart confirmation helper");
+assert(startServiceFn.includes("inspectCursorProxyStart"), "startService inspects restart need before StartProxy");
+assert(startServiceFn.includes("startProxyAfterRestartConfirm"), "confirmed restart uses StartProxyAfterRestartConfirm");
+assert(startServiceFn.includes("serviceBusy"), "startService keeps busy during inspect/confirm/start");
+assert(!startServiceFn.includes("stopProxyService"), "startService must not fake restart via StopProxy");
+assert(clientApiSource.includes("InspectCursorProxyStart"), "client API exposes inspect");
+assert(clientApiSource.includes("StartProxyAfterRestartConfirm"), "client API exposes confirmed StartProxy");
+const handleProxyStateFn = extractSourceFunction(appStateSource, "handleProxyStateEvent");
+assert(!handleProxyStateFn.includes("startService"), "proxy:state must not auto-start");
+assert(!handleProxyStateFn.includes("confirmCursorRestartOnce"), "auto-start lastError must not popup");
+const handleProxyStartRequestedFn = extractSourceFunction(appStateSource, "handleProxyStartRequestedEvent");
+assert(handleProxyStartRequestedFn.includes("startService"), "tray event uses startService inspect/confirm");
+assert(handleProxyStartRequestedFn.includes("shouldHandleProxyStartRequested"), "tray event listens only main window");
+assert(appStateSource.includes("PROXY_START_REQUESTED_EVENT"), "frontend listens for tray start event");
+assert(appStateSource.includes("Events.On(PROXY_START_REQUESTED_EVENT"), "tray start uses existing Events plumbing");
+assert(!handleProxyStartRequestedFn.includes("ApplicationStarted"), "startup must not trigger tray popup");
+const shouldHandleStartRequestedFn = extractSourceFunction(appStateSource, "shouldHandleProxyStartRequested");
+assert(shouldHandleStartRequestedFn.includes("MAIN_WINDOW_NAME"), "main-window filter uses named main window");
+assert(cursorViewSource.includes("result.partial"), "CursorView surfaces partial Cursor launch success");
+const homeViewSource = readFileSync(path.join(frontendSrc, "views/Home.vue"), "utf8");
+assert(homeViewSource.includes("result.partial"), "Home surfaces partial Cursor launch success");
+assert(homeViewSource.includes("result.cancelled"), "Home does not treat restart refusal as start failure");
 
 const localeDir = path.join(frontendSrc, "i18n/locales");
 const zhMessages = JSON.parse(readFileSync(path.join(localeDir, "zh-CN.json"), "utf8"));
@@ -1825,6 +1850,10 @@ const requiredLocaleSources = new Set([
   "导入 auth.json",
   "设备码授权",
   "凭据来源",
+  "重启 Cursor",
+  "保存工作后重启 Cursor，以应用代理配置。",
+  "重启",
+  "已取消，保持当前设置与运行状态",
 ]);
 const zhBySource = new Map(Object.entries(zhMessages).map(([id, source]) => [source, id]));
 for (const source of requiredLocaleSources) {

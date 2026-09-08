@@ -542,7 +542,12 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		finishReason = "error"
 		parts := make([]string, 0, 4)
 		message := "anthropic provider error"
+		code := ""
 		if event.Error != nil {
+			code = strings.TrimSpace(event.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(event.Error.Type) {
+				code = strings.TrimSpace(event.Error.Type)
+			}
 			if value := strings.TrimSpace(event.Error.Type); value != "" {
 				parts = append(parts, "type="+value)
 			}
@@ -559,7 +564,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 				message += ": " + detail
 			}
 		}
-		return &ProviderTerminalStatusError{Provider: "anthropic", Status: "failed", Message: message}
+		return &ProviderTerminalStatusError{Provider: "anthropic", Status: "failed", Code: code, Message: message}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

@@ -292,3 +292,107 @@ func TestWrapRequestBuildFailureMarksRequestBuildNotNoHTTP(t *testing.T) {
 		t.Fatalf("unmarked suppression = %q, want no_http_attempt", got)
 	}
 }
+
+func TestIsContextOverflowErrorClassifiesTrustedOverflowOnly(t *testing.T) {
+	overflow400 := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens"}}`)),
+	})
+	overflow413 := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusRequestEntityTooLarge,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"model_context_window_exceeded","message":"input too large"}}`)),
+	})
+	overflowPromptTooLong := buildHTTPStatusError("anthropic adapter", &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"prompt is too long"}}`)),
+	})
+	overflowWindowMessage := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader("context window exceeded for this request")),
+	})
+	overflowMaxLengthAndToken := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader("This model's maximum context length is 128000 tokens")),
+	})
+	generic400 := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_request_error","message":"bad json"}}`)),
+	})
+	statusOnly413 := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusRequestEntityTooLarge,
+		Body:       io.NopCloser(strings.NewReader("Request Entity Too Large")),
+	})
+	unauthorized := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"context_length_exceeded","message":"context window exceeded"}}`)),
+	})
+	forbidden := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusForbidden,
+		Body:       io.NopCloser(strings.NewReader("context window exceeded")),
+	})
+	rateLimited := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Body:       io.NopCloser(strings.NewReader("prompt is too long")),
+	})
+	serverError := buildHTTPStatusError("openai adapter", &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader("maximum context length exceeded token")),
+	})
+	http200Overflow := &ProviderTerminalStatusError{
+		Provider: "openai responses",
+		Status:   "failed",
+		Code:     "context_length_exceeded",
+		Message:  "too many tokens",
+	}
+	http200ProseOnly := &ProviderTerminalStatusError{
+		Provider: "openai responses",
+		Status:   "failed",
+		Message:  "prompt is too long",
+	}
+
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "http_400_code", err: overflow400, want: true},
+		{name: "http_413_code", err: overflow413, want: true},
+		{name: "http_400_prompt_too_long", err: overflowPromptTooLong, want: true},
+		{name: "http_400_window_message", err: overflowWindowMessage, want: true},
+		{name: "http_400_max_length_and_token", err: overflowMaxLengthAndToken, want: true},
+		{name: "http_200_terminal_code", err: http200Overflow, want: true},
+		{name: "wrapped_http_400", err: fmt.Errorf("wrap: %w", overflow400), want: true},
+		{name: "generic_400", err: generic400, want: false},
+		{name: "status_only_413", err: statusOnly413, want: false},
+		{name: "http_200_prose_only", err: http200ProseOnly, want: false},
+		{name: "401", err: unauthorized, want: false},
+		{name: "403", err: forbidden, want: false},
+		{name: "429", err: rateLimited, want: false},
+		{name: "5xx", err: serverError, want: false},
+		{name: "canceled", err: context.Canceled, want: false},
+		{name: "transport", err: errors.New("connection refused: context window exceeded"), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsContextOverflowError(test.err); got != test.want {
+				t.Fatalf("IsContextOverflowError(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+
+	var httpErr *HTTPStatusError
+	if !errors.As(overflow400, &httpErr) || httpErr.Code != "context_length_exceeded" {
+		t.Fatalf("HTTP 400 code not extracted before summary: %+v", httpErr)
+	}
+	if ClassifyProviderError(overflow400) != ProviderErrorStatus4xx {
+		t.Fatalf("overflow 400 category = %q, want status_4xx", ClassifyProviderError(overflow400))
+	}
+	if isFallbackEligibleError(overflow400) {
+		t.Fatal("overflow 400 must not become fallback eligible")
+	}
+	if IsRetryableZeroEventStreamError(overflow400) {
+		t.Fatal("overflow 400 must not become retryable")
+	}
+	if ClassifyProviderError(http200Overflow) != ProviderErrorTerminal {
+		t.Fatalf("http 200 overflow category = %q", ClassifyProviderError(http200Overflow))
+	}
+}

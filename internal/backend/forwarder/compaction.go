@@ -125,7 +125,7 @@ func (service *Service) buildManualCompactionPlan(stream *ActiveStream, conversa
 		ContextTokens:             contextTokens,
 		ContextWindowSize:         contextWindowSize,
 		ContextUsagePercent:       usagePercent,
-		ReserveTokens:             compactionAutoReserveTokens,
+		ReserveTokens:             compactionReserveTokens(contextWindowSize),
 		MessageCount:              clampInt64ToInt32(int64(len(compiled.Messages))),
 		IsFirstCompaction:         len(compactionSummaryTexts(conversation)) == 0,
 		ExistingSummary:           existingConversationSummaryText(conversation),
@@ -139,6 +139,10 @@ func (service *Service) buildManualCompactionPlan(stream *ActiveStream, conversa
 }
 
 func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversation *ConversationFile, compiled CompiledConversation) (*compactionPlan, error) {
+	return service.buildAutoCompactionPlanWithForce(stream, conversation, compiled, false)
+}
+
+func (service *Service) buildAutoCompactionPlanWithForce(stream *ActiveStream, conversation *ConversationFile, compiled CompiledConversation, force bool) (*compactionPlan, error) {
 	if stream == nil || conversation == nil {
 		return nil, nil
 	}
@@ -147,14 +151,18 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 		return nil, nil
 	}
 	estimatedCompiledTokens := estimateCompiledPromptTokens(compiled)
-	reserveTokens := service.resolveCompactionReserveTokens(stream.ModelID)
-	if reserveTokens <= 0 {
-		reserveTokens = conversation.AutoCompactionReserveTokens
+	reserveTokens := compactionReserveTokens(contextWindowSize)
+	budgetTokens := compactionBudgetTokens(contextWindowSize)
+	if budgetTokens <= 0 {
+		return nil, compactionTerminalError{
+			code: compactionOverflowTerminalCode,
+			message: fmt.Sprintf(
+				"context window leaves no compaction budget (window=%d reserve=%d)",
+				contextWindowSize,
+				reserveTokens,
+			),
+		}
 	}
-	if reserveTokens <= 0 {
-		reserveTokens = compactionAutoReserveTokens
-	}
-	budgetTokens := contextWindowSize - reserveTokens
 	preflightExceeded := estimatedCompiledTokens > 0 && estimatedCompiledTokens > budgetTokens
 	contextTokens := maxPositiveInt64(
 		conversation.AutoCompactionPromptTokens,
@@ -162,7 +170,7 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 		int64(conversation.TokenDetailsUsedTokens),
 	)
 	pendingExceeded := conversation.AutoCompactionPending && contextTokens > 0 && contextTokens > budgetTokens
-	if !pendingExceeded && !preflightExceeded {
+	if !force && !pendingExceeded && !preflightExceeded {
 		return nil, nil
 	}
 	usagePercent := 0.0
@@ -187,7 +195,7 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 	if err != nil {
 		return nil, err
 	}
-	if plan == nil && preflightExceeded {
+	if plan == nil && (preflightExceeded || force) {
 		return nil, compactionTerminalError{
 			code: compactionOverflowTerminalCode,
 			message: fmt.Sprintf(
@@ -369,13 +377,7 @@ func (service *Service) runPendingCompaction(stream *ActiveStream, token uint64,
 		return
 	}
 	summaryText, err := service.generateCompactionSummary(ctx, stream, plan, modelCallID)
-	if err == nil {
-		if trimmed := strings.TrimSpace(summaryText); trimmed != "" {
-			summaryText = trimmed
-		} else {
-			summaryText = buildFallbackCompactionSummary(plan)
-		}
-	}
+	summaryText, err = resolveCompactionSummaryResult(plan, summaryText, err)
 	if postErr := service.postStreamCommandWait(stream, streamCommand{
 		Kind: streamCommandCompactionEvent,
 		Compaction: &streamCompactionEvent{
@@ -806,7 +808,7 @@ func validateCompactionCandidateBudget(compiled CompiledConversation, plan *Pend
 	if plan == nil {
 		return nil
 	}
-	budgetTokens := plan.ContextWindowSize - plan.ReserveTokens
+	budgetTokens := compactionBudgetTokens(plan.ContextWindowSize)
 	estimatedTokens := estimateCompiledPromptTokens(compiled)
 	if budgetTokens > 0 && estimatedTokens <= budgetTokens {
 		return nil
@@ -843,6 +845,25 @@ func (service *Service) resolveCompactionReserveTokens(modelID string) int64 {
 	_ = service
 	_ = modelID
 	return compactionAutoReserveTokens
+}
+
+func compactionReserveTokens(windowSize int64) int64 {
+	if windowSize <= 0 {
+		return compactionAutoReserveTokens
+	}
+	proportional := windowSize / 10
+	if proportional < compactionAutoReserveTokens {
+		return compactionAutoReserveTokens
+	}
+	return proportional
+}
+
+func compactionBudgetTokens(windowSize int64) int64 {
+	budget := windowSize - compactionReserveTokens(windowSize)
+	if budget < 0 {
+		return 0
+	}
+	return budget
 }
 
 func parseManualCompactionRequest(userMessage *agentv1.UserMessage) (string, bool) {
@@ -1564,6 +1585,47 @@ func (err compactionTerminalError) TerminalCode() string {
 	return strings.TrimSpace(err.code)
 }
 
+func resolveCompactionSummaryResult(plan *PendingCompaction, summaryText string, err error) (string, error) {
+	if err != nil {
+		if modeladapter.IsContextOverflowError(err) {
+			return buildFallbackCompactionSummary(plan), nil
+		}
+		return "", err
+	}
+	if trimmed := strings.TrimSpace(summaryText); trimmed != "" {
+		return trimmed, nil
+	}
+	return buildFallbackCompactionSummary(plan), nil
+}
+
+func (service *Service) prepareCompactionSummaryMessages(plan *PendingCompaction) ([]modeladapter.Message, bool, error) {
+	if plan == nil {
+		return nil, false, nil
+	}
+	budget := compactionBudgetTokens(plan.ContextWindowSize)
+	turns := append([]compactedTurnSummary(nil), plan.CompactedTurns...)
+	startedWithTurns := len(plan.CompactedTurns) > 0
+	for {
+		view := clonePendingCompaction(plan)
+		view.CompactedTurns = turns
+		messages, err := service.buildCompactionSummaryMessages(view)
+		if err != nil {
+			return nil, false, err
+		}
+		estimated := estimateModelMessagesTokens(messages) + compactionSummaryOutputMaxTokens
+		if budget > 0 && estimated <= budget {
+			if startedWithTurns && len(turns) == 0 {
+				return nil, true, nil
+			}
+			return messages, false, nil
+		}
+		if len(turns) == 0 {
+			return nil, true, nil
+		}
+		turns = turns[1:]
+	}
+}
+
 func (service *Service) buildCompactionSummaryMessages(plan *PendingCompaction) ([]modeladapter.Message, error) {
 	if plan == nil {
 		return nil, nil
@@ -1612,12 +1674,12 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 	if service == nil || stream == nil || plan == nil {
 		return "", nil
 	}
-	messages, err := service.buildCompactionSummaryMessages(plan)
+	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
 	if err != nil {
 		return "", err
 	}
-	if len(messages) == 0 {
-		return "", nil
+	if useFallback || len(messages) == 0 {
+		return buildFallbackCompactionSummary(plan), nil
 	}
 	accumulated := ""
 	usage := turnUsageSnapshot{}

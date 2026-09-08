@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,6 +121,115 @@ func TestCompactionPlanningDoesNotRecompactArchivedHistory(t *testing.T) {
 	}
 	if plan != nil {
 		t.Fatalf("buildLegacyCompactionPlan() = %#v, want no already summarized candidates", plan)
+	}
+}
+
+func TestCompactionReserveUsesProportionalWindowBudget(t *testing.T) {
+	if got := compactionReserveTokens(200_000); got != 20_000 {
+		t.Fatalf("200k reserve = %d, want 20000", got)
+	}
+	if got := compactionReserveTokens(1_000_000); got != 100_000 {
+		t.Fatalf("1m reserve = %d, want 100000", got)
+	}
+	if got := compactionReserveTokens(50_000); got != compactionAutoReserveTokens {
+		t.Fatalf("50k reserve = %d, want floor %d", got, compactionAutoReserveTokens)
+	}
+	if got := compactionReserveTokens(5_000); got != compactionAutoReserveTokens {
+		t.Fatalf("small window reserve = %d, want floor %d", got, compactionAutoReserveTokens)
+	}
+	if got := compactionBudgetTokens(5_000); got != 0 {
+		t.Fatalf("small window budget = %d, want 0", got)
+	}
+	if got := compactionBudgetTokens(200_000); got != 180_000 {
+		t.Fatalf("200k budget = %d, want 180000", got)
+	}
+}
+
+func TestCompactionSummaryRequestTrimsOldestCompleteTurns(t *testing.T) {
+	service := &Service{}
+	oldest := compactedTurnSummary{UserText: strings.Repeat("oldest-turn-content ", 800)}
+	middle := compactedTurnSummary{UserText: strings.Repeat("middle-turn-content ", 800)}
+	newest := compactedTurnSummary{UserText: "newest turn must remain"}
+	plan := &PendingCompaction{
+		ContextWindowSize: 20_000,
+		ExistingSummary:   "keep existing summary",
+		HookMessage:       "hook guidance",
+		ManualInstruction: "manual emphasis",
+		CompactedTurns:    []compactedTurnSummary{oldest, middle, newest},
+	}
+	originalTurns := append([]compactedTurnSummary(nil), plan.CompactedTurns...)
+	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
+	if err != nil {
+		t.Fatalf("prepareCompactionSummaryMessages() error = %v", err)
+	}
+	if useFallback {
+		t.Fatal("expected a fitted summary request, got local fallback")
+	}
+	if len(messages) != 2 || messages[len(messages)-1].Role != "user" {
+		t.Fatalf("summary messages = %#v, want system+user", messages)
+	}
+	userText := messages[1].Content
+	if strings.Contains(userText, "oldest-turn-content") {
+		t.Fatalf("oldest complete turn was not trimmed: %s", userText)
+	}
+	if !strings.Contains(userText, "newest turn must remain") {
+		t.Fatal("newest complete turn was trimmed")
+	}
+	if !strings.Contains(userText, "keep existing summary") || !strings.Contains(userText, "hook guidance") {
+		t.Fatal("fixed summary inputs were dropped")
+	}
+	budget := compactionBudgetTokens(plan.ContextWindowSize)
+	if estimateModelMessagesTokens(messages)+compactionSummaryOutputMaxTokens > budget {
+		t.Fatalf("fitted request still exceeds budget estimated=%d budget=%d", estimateModelMessagesTokens(messages)+compactionSummaryOutputMaxTokens, budget)
+	}
+	if !reflect.DeepEqual(plan.CompactedTurns, originalTurns) {
+		t.Fatal("summary trimming mutated PendingCompaction turns")
+	}
+}
+
+func TestCompactionSummaryFallsBackWhenFixedInputDoesNotFit(t *testing.T) {
+	service := &Service{}
+	plan := &PendingCompaction{
+		ContextWindowSize: 12_000,
+		ExistingSummary:   strings.Repeat("fixed-summary ", 4000),
+		CompactedTurns:    []compactedTurnSummary{{UserText: strings.Repeat("only-turn ", 4000)}},
+	}
+	originalTurns := append([]compactedTurnSummary(nil), plan.CompactedTurns...)
+	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
+	if err != nil {
+		t.Fatalf("prepareCompactionSummaryMessages() error = %v", err)
+	}
+	if !useFallback {
+		t.Fatalf("got messages=%#v, want local fallback without sending empty history", messages)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("fallback still produced a summary request: %#v", messages)
+	}
+	if !reflect.DeepEqual(plan.CompactedTurns, originalTurns) {
+		t.Fatal("fallback mutated PendingCompaction turns")
+	}
+}
+
+func TestCompactionSummaryOverflowUsesLocalFallbackOnce(t *testing.T) {
+	plan := &PendingCompaction{
+		ExistingSummary: "keep this",
+		CompactedTurns:  []compactedTurnSummary{{UserText: "turn one"}},
+	}
+	overflow := providerTerminalError{cause: &modeladapter.HTTPStatusError{
+		StatusCode: 400,
+		Code:       "context_length_exceeded",
+		Body:       "prompt is too long",
+	}}
+	got, err := resolveCompactionSummaryResult(plan, "", overflow)
+	if err != nil {
+		t.Fatalf("overflow summary result error = %v", err)
+	}
+	if !strings.Contains(got, "keep this") || !strings.Contains(got, "turn one") {
+		t.Fatalf("fallback summary = %q", got)
+	}
+	canceled := context.Canceled
+	if _, err := resolveCompactionSummaryResult(plan, "", canceled); err == nil {
+		t.Fatal("non-overflow summary errors must not fall back")
 	}
 }
 

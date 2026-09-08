@@ -13,6 +13,9 @@ import (
 // ProxyState 定义了当前模块中的 ProxyState 类型。
 type ProxyState = client.ProxyState
 
+// CursorProxyStartInspection 定义 StartProxy 重启确认预检结果。
+type CursorProxyStartInspection = client.CursorProxyStartInspection
+
 // UserConfig 定义了当前模块中的 UserConfig 类型。
 type UserConfig = client.UserConfig
 
@@ -89,6 +92,16 @@ func NewProxyService(proxy *mitm.ProxyServer, certManager *certs.Manager, caCert
 // StartProxy 用于处理与 StartProxy 相关的逻辑。
 func (s *ProxyService) StartProxy() (ProxyState, error) {
 	return s.core.StartProxy()
+}
+
+// InspectCursorProxyStart 只读检查是否需要一次 Cursor 重启确认。
+func (s *ProxyService) InspectCursorProxyStart() (CursorProxyStartInspection, error) {
+	return s.core.InspectCursorProxyStart()
+}
+
+// StartProxyAfterRestartConfirm 在用户确认后继续 StartProxy 并正常重启 Cursor。
+func (s *ProxyService) StartProxyAfterRestartConfirm() (ProxyState, error) {
+	return s.core.StartProxyAfterRestartConfirm()
 }
 
 // StopProxy 用于处理与 StopProxy 相关的逻辑。

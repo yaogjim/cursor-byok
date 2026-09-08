@@ -313,7 +313,7 @@ func buildExecAbortMessage(pending runtimecore.PendingExec) *agentv1.AgentServer
 
 // buildStartedToolCall 把工具意图映射为可发送给客户端的 started ToolCall 结构。
 func buildStartedToolCall(invocation runtimecore.ToolInvocation) *agentv1.ToolCall {
-	switch strings.TrimSpace(invocation.ToolName) {
+	switch runtimecore.CanonicalToolName(strings.TrimSpace(invocation.ToolName)) {
 	case "Glob":
 		args, err := execbridge.DecodeGlobToolArgs(invocation.ArgsJSON)
 		if err != nil {

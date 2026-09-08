@@ -47,6 +47,7 @@ type HTTPStatusError struct {
 	StatusCode        int
 	Attempt           int
 	MaxAttempts       int
+	Code              string
 	Body              string
 	BodyReadError     error
 	BodySummaryType   string
@@ -111,6 +112,7 @@ type StreamTruncatedError struct {
 type ProviderTerminalStatusError struct {
 	Provider string
 	Status   string
+	Code     string
 	Message  string
 }
 
@@ -364,8 +366,65 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 		statusError.BodySummaryType = bodySummaryBodyReadError
 		return statusError
 	}
-	statusError.Body, statusError.BodySummaryType = summarizeProviderErrorBody(string(limitedBody))
+	rawBody := string(limitedBody)
+	statusError.Code = extractJSONErrorCode(rawBody)
+	statusError.Body, statusError.BodySummaryType = summarizeProviderErrorBody(rawBody)
 	return statusError
+}
+
+const (
+	overflowErrorCodeContextLengthExceeded = "context_length_exceeded"
+	overflowErrorCodeModelContextWindow    = "model_context_window_exceeded"
+)
+
+// IsContextOverflowError 判断可信 provider 溢出错误。
+// HTTP 400/413 需要溢出 code 或已知溢出 message；HTTP 200 协议失败只认明确溢出 code。
+// 401/403/429/5xx、取消和网络错误即使正文像溢出也不算。该判定不改变 retry/fallback 分类。
+func IsContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isParentContextError(err) {
+		return false
+	}
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil {
+		if httpErr.StatusCode != http.StatusBadRequest && httpErr.StatusCode != http.StatusRequestEntityTooLarge {
+			return false
+		}
+		if isContextOverflowCode(httpErr.Code) {
+			return true
+		}
+		return isContextOverflowMessage(httpErr.Body)
+	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) && terminal != nil {
+		return isContextOverflowCode(terminal.Code)
+	}
+	return false
+}
+
+func isContextOverflowCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case overflowErrorCodeContextLengthExceeded, overflowErrorCodeModelContextWindow:
+		return true
+	default:
+		return false
+	}
+}
+
+func isContextOverflowMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "prompt is too long") {
+		return true
+	}
+	if strings.Contains(normalized, "context window exceeded") {
+		return true
+	}
+	return strings.Contains(normalized, "maximum context length") && strings.Contains(normalized, "token")
 }
 
 func summarizeProviderErrorBody(raw string) (string, string) {
@@ -385,6 +444,39 @@ func extractJSONErrorMessage(raw string) string {
 		return ""
 	}
 	return extractJSONErrorMessageValue(payload, 0)
+}
+
+func extractJSONErrorCode(raw string) string {
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	return extractJSONErrorCodeValue(payload, 0)
+}
+
+func extractJSONErrorCodeValue(value any, depth int) string {
+	if depth > 8 || value == nil {
+		return ""
+	}
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if nested := extractJSONErrorCodeValue(typed["error"], depth+1); nested != "" {
+		return nested
+	}
+	for _, key := range []string{"code", "type"} {
+		code, _ := typed[key].(string)
+		trimmed := strings.TrimSpace(code)
+		if trimmed == "" {
+			continue
+		}
+		if key == "type" && !isContextOverflowCode(trimmed) {
+			continue
+		}
+		return trimmed
+	}
+	return ""
 }
 
 func extractJSONErrorMessageValue(value any, depth int) string {

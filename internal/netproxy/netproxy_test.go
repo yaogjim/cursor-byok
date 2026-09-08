@@ -3,6 +3,7 @@ package netproxy
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -109,4 +110,72 @@ func TestProviderHTTP1ProfileNegotiatesHTTP1(t *testing.T) {
 	if response.ProtoMajor != 1 {
 		t.Fatalf("response protocol = %s, want HTTP/1.x", response.Proto)
 	}
+}
+
+func TestProxyForRequestHonorsEnvProxyAndNoProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:8080")
+	t.Setenv("http_proxy", "http://127.0.0.1:8080")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8443")
+	t.Setenv("https_proxy", "http://127.0.0.1:8443")
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("all_proxy", "")
+	t.Setenv("NO_PROXY", "bypass.example")
+	t.Setenv("no_proxy", "bypass.example")
+	t.Setenv("REQUEST_METHOD", "")
+	resetProxyResolverForTest()
+
+	proxied, err := ProxyForRequest(&http.Request{URL: mustParseURL(t, "http://target.example/path")})
+	if err != nil {
+		t.Fatalf("ProxyForRequest(http target): %v", err)
+	}
+	if proxied == nil || proxied.Host != "127.0.0.1:8080" {
+		t.Fatalf("http proxy = %v, want 127.0.0.1:8080", proxied)
+	}
+
+	httpsProxied, err := ProxyForRequest(&http.Request{URL: mustParseURL(t, "https://target.example/")})
+	if err != nil {
+		t.Fatalf("ProxyForRequest(https target): %v", err)
+	}
+	if httpsProxied == nil || httpsProxied.Host != "127.0.0.1:8443" {
+		t.Fatalf("https proxy = %v, want 127.0.0.1:8443", httpsProxied)
+	}
+
+	direct, err := ProxyForRequest(&http.Request{URL: mustParseURL(t, "http://bypass.example/")})
+	if err != nil {
+		t.Fatalf("ProxyForRequest(no_proxy): %v", err)
+	}
+	if direct != nil {
+		t.Fatalf("no_proxy host still proxied: %v", direct)
+	}
+
+	loopback, err := ProxyForRequest(&http.Request{URL: mustParseURL(t, "http://127.0.0.1/")})
+	if err != nil {
+		t.Fatalf("ProxyForRequest(loopback): %v", err)
+	}
+	if loopback != nil {
+		t.Fatalf("loopback still proxied: %v", loopback)
+	}
+}
+
+func TestProxyForRequestNilRequest(t *testing.T) {
+	t.Parallel()
+	proxyURL, err := ProxyForRequest(nil)
+	if proxyURL != nil || err != nil {
+		t.Fatalf("ProxyForRequest(nil) = %v, %v", proxyURL, err)
+	}
+}
+
+func resetProxyResolverForTest() {
+	defaultResolver.mu.Lock()
+	defaultResolver.snapshot = proxySnapshot{}
+	defaultResolver.mu.Unlock()
+}
+
+func mustParseURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse url %q: %v", raw, err)
+	}
+	return parsed
 }

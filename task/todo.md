@@ -6,6 +6,37 @@
 
 ### 🎯 Active Work Package
 
+**main-gateway-value-migration-20260907** (completed, verified-partial)
+- 最新追加复审授权：用户要求“review 完成情况，如果发现问题请修复”。重新审查 `2fc04e7` 全部 diff 和未跟踪文件，确认并修复三类 Cursor 缺陷；前次最终全量/真实应用验证豁免保持，不部署、不重启、不提交。
+- [completed] `review-followup-audit`：Spec `719d398e-ecab-441f-9479-1fbd52cdeee2` 与 Standards `b5a71c5c-b64b-45d2-ad49-6bd11a9a4b86` 只读复审；恢复/压缩、CLI、WebFetch、Shell/共享预算未报告新增具体缺陷。对两条建议核对基线后未采纳：不改变原有 Apply 的所有权转移语义，不在未知平台绕过退出保护直接写设置。
+- [completed] `review-followup-fixes`（CURSOR-1）：隔离测试先复现跨实例/同原 owner 新值被旧快照回滚、过期计划覆盖、运行中 LastError 被事件清空、Inspect 排队。Restore 增加 owner 与旧值/目标值核对；ApplyPlanned 在同一锁内核对计划并写入，StartProxy 传递同一快照，CA 后不另建计划；读取 owner 错误和内层回滚错误对外可见。状态事件保留失败信息，Inspect 使用 TryLock。补 owner 写失败/二次回滚、外部设置与无关键保留、启动入口所有权冲突、部分成功事件与显式清错测试；修复复审未发现新具体缺陷。
+- [completed] `review-followup-closeout`：修改后 `go test -count=1 -timeout=120s ./internal/cursor ./internal/client`、`go test -count=1 -timeout=90s ./internal/app -run 'Tray|AutoStart'`、`node frontend/scripts/test-config-projection.mjs`、`git diff --check` 均退出 0；macOS 版本链接 warning 保留。实际系统 CA/钥匙串、真实 Wails 事件投递、真实应用重启及最终整仓门禁未执行；隔离生命周期测试仍用设置/应用替身，不能据此称完整真实链验收。Windows/Linux 自动检测和设置切换仍未支持，不能将“手动退出后重试”提示当成该平台链路已实现。
+- 前次实施授权与结果：用户在完成情况 review 后要求继续，允许省略最后验证。前次先修复 `review-r1`～`review-r4`，再推进原计划剩余功能；保留每切片必要定向回归，省略最后重复全量/race/build、打包及真实应用验收，未验证范围明确记录为 test-gap。当前源码不自动部署，既有进程不重启。
+- Owner：orchestrator；Priority：P0/P1；Risk：high；Design Readiness：approved（行为合同与验收锚点：`docs/main_gateway_价值功能分析与迁移方案_20260907.md` §3～§4、§9～§13；执行编排：已批准 Cursor plan `价值功能迁移执行`）。
+- 目标链路：provider overflow 有界恢复、CLI 本地模型目录与凭据隔离、Shell/Bash 全链兼容、WebFetch 直连 DNS 固定/代理兼容，以及 P1 共享规则和 Cursor 正常重启；交付状态从 `planned` 推进到证据支持的 `verified-partial` 或 `accepted`。
+- 基线：`gateway@2fc04e7`；开工时仅迁移方案文档未跟踪，生产代码无既有修改。已安装 Gateway-byok 监听 `127.0.0.1:18080/18090` 且 `/healthz=ok`，Cursor 正在运行；`18091/9245` 未监听。测试使用合成凭据、临时目录和隔离端口，不替换现有进程。
+- 非目标：Rust/Tauri 整树、P2 Antigravity/OAuth callback、全局 transport/安全框架、配置开关矩阵、强制终止 Cursor、提交或推送。既有 blocked 的 subagent runtime wiring 与 ACP 工作包不解阻。
+- Subagent 中断规则：在原任务上按 20/40/80/160/320 秒最多恢复 5 次；仍失败则保存工作区和证据，停止后续修改等待人工调整。
+- [completed] `stage-0-baseline`（S）：工作包和安全基线已登记。工具链为 Go 1.26.1、Node 25.6.1、npm 11.9.0、Task 3.53.1、Cursor Agent 2026.08.11；本机无 `wails3`。Gateway-byok PID 53552 继续监听 18080/18090 且 healthz=ok，18091/9245 未监听；未停止或替换既有进程。
+- [completed] `stage-1a-overflow-classifier`（S）：可信 provider overflow 分类已接入 adapter；保持 HTTP/fallback 重试语义，排除普通错误/取消。
+- [completed] `stage-1b-compaction-budget`（M）：比例 reserve、完整摘要请求预算、完整轮次裁剪及一次本地 fallback 已接线；本轮 Compaction 定向回归通过。
+- [completed] `stage-1c-run-recovery`（M，verified-partial）：每 Run 一次恢复、当前调用输出门禁、旧事件隔离与 RunSSE 合成链已有实现；本轮修复普通 compiler/storage 错误被标成 overflow，使用 typed terminal code 并保留 usage_persistence_error；定向 overflow/compaction/handler 回归通过。真实 Cursor/BidiAppend 起始全链及最终 race 按最新授权省略。
+- [completed] `stage-2-cli-routing`（M，verified-partial）：四路径共用 builder/policy；目录固定哨兵、optional baseUrl 未设置；新增 Codex/Grok 从目录 ID 到运行时凭据 resolver/合成 provider 的测试，保留官方端点与请求时解析。真实 CLI 最终验收省略，不再把合成链缺口与此前取消混为一谈。
+- [completed] `stage-3-shell-alias`（M）：`CanonicalToolName` 在 known-tool/权限之前及 started/bridge/evidence/replay/truncation 边界统一四名称；工具目录仍仅 Shell，存量磁盘历史不重写；四名称与旧历史不重派发定向测试通过。
+- [completed] `stage-4-webfetch-security`（M，verified-partial）：直连固定已验证 DNS 地址、redirect 逐跳代理选择；修复非公网 IPv6 漏检和 6to4/NAT64 错误改写拨号目标，补 HTTPS Host/SNI fixture。真实直连/SOCKS-only及最终重新代理探测省略。
+- [completed] `p0-verification`（范围已调整）：主控完成 P0 diff 复核和逐切片定向回归，发现的三个反例均修复。最终全量/race/build 门禁按用户授权省略；不是完整 P0 发布验收。
+- [completed] `stage-5-shared-rules`（M，verified-partial）：CLI 目录/运行已共享 manager/channel ID 事实源，没有为不存在的重复新增服务；新增静态/订阅/fallback/thinking/capability/旧 ID 一致性测试。工具预算提取到 `agent/toolresult`，迁移展示及历史回放薄调用层，保留 Shell 分字段、图片回放省略、资源结构与 edit 错误差异；冻结样本和 UTF-8/幂等定向测试通过。
+- [completed] `stage-6-cursor-restart`（M，verified-partial）：macOS 已识别 bundle 的一次确认、正常退出总时限、被改键快照与失败回退接入真实 StartProxy/Wails/UI；只取消辅助命令，不强杀 Cursor；启动等待实际命令结果、只发一次；并发 start 返回 busy。托盘显式启动进入主窗口同一确认流程；自动启动需确认时显示 LastError、保持原状态且不自动弹窗。重启路径账号注入在正常退出之后；回滚/重启失败可见，已有共享 backend/MITM 不停止。Windows/Linux 不虚报未运行，需改设置时提示手动处理。真实窗口/退出/启动验收省略。
+- [completed] `final-review-fixes`（代码层）：Standards `37ce3f91-fc43-41bb-b3be-4b50e1931b7c` 与 Spec `050ba47b-b48e-40a2-92ef-18b451385821` 只读双轴复核；修复退出 helper 未受 context 约束、启动只 Start 误报成功、未知平台、重复启动排队、回滚失败不可见，以及托盘确认未接线和注入顺序；两轴复审报告无剩余具体 P0/P1。未将静态复审升级为真实运行验收。
+- [completed] `runtime-doc-closeout`（S）：最后 client/app 托盘与启动顺序定向回归、前端配置投影及 diff 检查均通过，证据已归档 `docs/process.md`；所有本轮受管测试已结束。没有停止既有 Gateway/Cursor，因此未执行恢复/重启；未部署/commit/push，历史外部条件 blocked 工作包保持原样。
+- [skipped-by-user] `final-validation`：最后根全量 test/race/build、打包、lint 及真实 CLI/Cursor/代理验收省略；代码实施完成不等于上线验收，交付状态为 `verified-partial`。
+- [completed] `review-completion-current`：完成情况 review 及修复已执行；三个临时反例转为永久回归，历史失败证据保留在 `docs/process.md`。
+  - [completed] `review-r1-ipv6-public`（P1；FETCH-1）：`fec0::1`、`::2`、`4000::1` 现被拒绝，固定公网/特殊用途判断用于所有目标边界。
+  - [completed] `review-r2-ip-identity`（P1；FETCH-1）：仅 IPv4-mapped 等价 unmap；内嵌 IPv4 用于附加风险检查，6to4/NAT64 允许目标保持原 IPv6；拨号/Host/SNI 回归通过。
+  - [completed] `review-r3-error-category`（P1；REC-3）：compiler/storage/usage 失败保留类别，真正 overflow 维持唯一非 retryable terminal；失败注入回归通过。
+  - [completed] `review-r4-cli-evidence`（CLI-1，合成部分）：补实际 Codex/Grok resolver 和 fake HTTP 请求，目录不刷新凭据；真实 CLI 部分转入授权省略的 test-gap。
+- 验收与回退：逐切片 RED→GREEN→REFACTOR；命令与场景按方案 §11，回退按 §10.3；fixture 不替代真实 CLI/Cursor/代理证据，任何数据完整性、真实凭据或共享服务所有权反例立即暂停相应工作包。
+
 **upstream-leookun-99d527d-review-20260906** (in_progress, verified-partial)
 - 同步边界已冻结：本地 `main` 在隔离 worktree 中快进到 `leookun/main@99d527d`，比较范围为 `543f618..99d527d`；不合并或改写 `gateway`，不 push。
 - 迁移纪律：P0 只移植行为规格、失败用例和状态不变量；只有新增 Go P0 测试失败后，才允许实施对应的最小局部 P1。禁止复制、重写或 cherry-pick Rust 业务实现。

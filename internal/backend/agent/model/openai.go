@@ -710,7 +710,13 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	}
 	errorFromChunk := func(chunk openAIChunk) error {
 		finishReason = "error"
+		code := ""
+		var streamErr error
 		if chunk.Error != nil {
+			code = strings.TrimSpace(chunk.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(chunk.Error.Type) {
+				code = strings.TrimSpace(chunk.Error.Type)
+			}
 			parts := make([]string, 0, 4)
 			if value := strings.TrimSpace(chunk.Error.Type); value != "" {
 				parts = append(parts, "type="+value)
@@ -723,15 +729,21 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			}
 			if message := strings.TrimSpace(chunk.Error.Message); message != "" {
 				if len(parts) > 0 {
-					return fmt.Errorf("openai chat stream error %s: %s", strings.Join(parts, " "), message)
+					streamErr = fmt.Errorf("openai chat stream error %s: %s", strings.Join(parts, " "), message)
+				} else {
+					streamErr = fmt.Errorf("openai chat stream error: %s", message)
 				}
-				return fmt.Errorf("openai chat stream error: %s", message)
-			}
-			if len(parts) > 0 {
-				return fmt.Errorf("openai chat stream error %s", strings.Join(parts, " "))
+			} else if len(parts) > 0 {
+				streamErr = fmt.Errorf("openai chat stream error %s", strings.Join(parts, " "))
 			}
 		}
-		return fmt.Errorf("openai chat stream error")
+		if streamErr == nil {
+			streamErr = fmt.Errorf("openai chat stream error")
+		}
+		if isContextOverflowCode(code) {
+			return &ProviderTerminalStatusError{Provider: "openai", Status: "failed", Code: code, Message: streamErr.Error()}
+		}
+		return streamErr
 	}
 	applyUsage := func(usage *struct {
 		PromptTokens        *int64 `json:"prompt_tokens"`
@@ -1523,12 +1535,28 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	}
 	errorFromEvent := func(event openAIResponsesStreamEvent, status string) error {
 		message := ""
-		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
-			message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
-		} else if event.Response != nil && event.Response.Error != nil && strings.TrimSpace(event.Response.Error.Message) != "" {
-			message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
+		code := ""
+		if event.Error != nil {
+			code = strings.TrimSpace(event.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(event.Error.Type) {
+				code = strings.TrimSpace(event.Error.Type)
+			}
+			if strings.TrimSpace(event.Error.Message) != "" {
+				message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
+			}
 		}
-		return &ProviderTerminalStatusError{Provider: "openai responses", Status: status, Message: message}
+		if event.Response != nil && event.Response.Error != nil {
+			if code == "" {
+				code = strings.TrimSpace(event.Response.Error.Code)
+				if !isContextOverflowCode(code) && isContextOverflowCode(event.Response.Error.Type) {
+					code = strings.TrimSpace(event.Response.Error.Type)
+				}
+			}
+			if message == "" && strings.TrimSpace(event.Response.Error.Message) != "" {
+				message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
+			}
+		}
+		return &ProviderTerminalStatusError{Provider: "openai responses", Status: status, Code: code, Message: message}
 	}
 
 	scanner := bufio.NewScanner(resp.Body)

@@ -507,6 +507,15 @@ func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.Mo
 		if stats.ToolDispatchState == "not_dispatched" {
 			stats.ToolDispatchState = "partial_not_dispatched"
 		}
+	case modeladapter.ModelEventKindToolCallDelta:
+		if strings.TrimSpace(event.ToolCallID) == "" || event.ToolCallDelta == nil {
+			break
+		}
+		stats.PartialToolCount++
+		stats.PartialBoundary = modeladapter.PartialBoundaryPartialTool
+		if stats.ToolDispatchState == "not_dispatched" {
+			stats.ToolDispatchState = "partial_not_dispatched"
+		}
 	case modeladapter.ModelEventKindToolLikeCompleted:
 		stats.CompletedToolCount++
 		stats.LastEffectiveContentAt = occurred
@@ -540,6 +549,15 @@ func markProviderDownstreamPublished(stream *ActiveStream) {
 	}
 	stream.mu.Lock()
 	stream.ProviderStreamStats.DownstreamPublished = true
+	stream.mu.Unlock()
+}
+
+func markProviderPublishedToolArgs(stream *ActiveStream) {
+	if stream == nil {
+		return
+	}
+	stream.mu.Lock()
+	stream.ProviderPublishedToolArgs = true
 	stream.mu.Unlock()
 }
 
@@ -1055,6 +1073,7 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		}); err != nil {
 			return err
 		}
+		markProviderPublishedToolArgs(stream)
 		markProviderDownstreamPublished(stream)
 		return nil
 	case modeladapter.ModelEventKindToolLikeCompleted:
@@ -1079,6 +1098,7 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 			return fmt.Errorf("tool invocation is required")
 		}
 		invocation := *event.ToolInvocation
+		invocation.ToolName = runtimecore.CanonicalToolName(strings.TrimSpace(invocation.ToolName))
 		invocation.ReasoningContent = reasoningForTool
 		invocation.ReasoningSignature = reasoningSignatureForTool
 		invocation.ReasoningSignatureSource = reasoningSignatureSourceForTool
@@ -1219,6 +1239,17 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	continuationMismatch := stream.ContinuationOverlapMismatch
 	continuationRemainderText := stream.ContinuationRemainderText
 	continuationRemainderReasoning := stream.ContinuationRemainderReasoning
+	overflowState := overflowRecoveryCallState{
+		Text:              accumulatedText,
+		Reasoning:         accumulatedReasoning,
+		SyntheticThinking: stream.ProviderSyntheticThinkingPublished,
+		HadTool:           hadToolInvocation || terminalToolInvocation,
+		PartialTools:      stream.ProviderStreamStats.PartialToolCount > 0 || stream.ProviderPublishedToolArgs,
+		Pending:           len(stream.PendingExecs) + len(stream.PendingInteractions),
+		Continuation:      stream.ContinuationIndex > 0 || stream.ContinuationSpawned,
+		AlreadyAttempted:  stream.OverflowRecoveryAttempted,
+		Terminal:          isTerminalStreamStatus(stream.Status),
+	}
 	stream.ProviderStreamStats.ContinuedFromModelCallID = stream.ContinuedFromModelCallID
 	stream.ProviderStreamStats.ContinuationIndex = stream.ContinuationIndex
 	stream.ProviderStreamStats.FinishedAt = time.Now().UTC()
@@ -1268,6 +1299,9 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
 	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
+	stream.ProviderSyntheticThinkingStartedAt = time.Time{}
+	stream.ProviderSyntheticThinkingPublished = false
+	stream.ProviderPublishedToolArgs = false
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ProviderTerminalToolInvocation = false
@@ -1293,6 +1327,13 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 			return service.failStreamIfNonTerminal(stream, "unknown", spawnErr)
 		}
 		if spawned {
+			return nil
+		}
+		accepted, recoverErr := service.tryAcceptOverflowRecovery(stream, payload.Err, overflowState, usage)
+		if recoverErr != nil {
+			return service.failStreamIfNonTerminal(stream, overflowRecoveryFailureCode(recoverErr), recoverErr)
+		}
+		if accepted {
 			return nil
 		}
 		flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)

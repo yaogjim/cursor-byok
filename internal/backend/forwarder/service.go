@@ -857,6 +857,7 @@ func (service *Service) handleRunIntent(intent InboundIntent) error {
 	stream.TimerTokens = make(map[string]uint64)
 	stream.CurrentProviderToken = 0
 	stream.CurrentCompactionToken = 0
+	stream.OverflowRecoveryAttempted = false
 	stream.ProviderAccumulatedText = ""
 	stream.ProviderAccumulatedReasoning = ""
 	stream.ProviderAccumulatedReasoningSignature = ""
@@ -867,6 +868,7 @@ func (service *Service) handleRunIntent(intent InboundIntent) error {
 	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
 	stream.ProviderSyntheticThinkingStartedAt = time.Time{}
 	stream.ProviderSyntheticThinkingPublished = false
+	stream.ProviderPublishedToolArgs = false
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ToolInvocationCount = 0
@@ -1567,9 +1569,9 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
 	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
-	if stream.ProviderSyntheticThinkingStartedAt.IsZero() {
-		stream.ProviderSyntheticThinkingStartedAt = time.Now().UTC()
-	}
+	stream.ProviderSyntheticThinkingStartedAt = time.Now().UTC()
+	stream.ProviderSyntheticThinkingPublished = false
+	stream.ProviderPublishedToolArgs = false
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ProviderStreamStats = ProviderStreamStats{
@@ -1935,6 +1937,7 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 	if err := providerLoopInterruptErr(nil, stream, invocation.ModelCallID); err != nil {
 		return err
 	}
+	invocation.ToolName = runtimecore.CanonicalToolName(strings.TrimSpace(invocation.ToolName))
 	invocation = service.rewriteDirectMCPToolInvocation(stream, invocation)
 	invocation = service.normalizeCallMCPToolInvocation(stream, invocation)
 	trimmedToolName := strings.TrimSpace(invocation.ToolName)
@@ -2825,7 +2828,7 @@ func providerFailedCheckpointTerminal(stream *ActiveStream, terminalCode string,
 		}
 		meta.HTTPStatus = strings.TrimSpace(stats.HTTPStatus)
 		meta.ErrorCategory = strings.TrimSpace(stats.ErrorCategory)
-		if strings.EqualFold(strings.TrimSpace(terminalCode), "provider_error") {
+		if strings.EqualFold(strings.TrimSpace(terminalCode), "provider_error") || strings.EqualFold(strings.TrimSpace(terminalCode), compactionOverflowTerminalCode) {
 			retryable := false
 			meta.Retryable = &retryable
 		}
@@ -4133,7 +4136,7 @@ func buildTerminalStreamError(event StreamEvent) error {
 	case "failed_precondition":
 		return connect.NewError(connect.CodeFailedPrecondition, errors.New(strings.TrimSpace(event.TerminalErrorMessage)))
 	case compactionOverflowTerminalCode:
-		return buildRunSSECustomError(connect.CodeInvalidArgument, "Context Too Large After Compaction", errors.New(strings.TrimSpace(event.TerminalErrorMessage)))
+		return buildRunSSEStructuredErrorWithDetail(connect.CodeInvalidArgument, "Context Too Large After Compaction", "", errors.New(strings.TrimSpace(event.TerminalErrorMessage)), aiserverv1.ErrorDetails_ERROR_CUSTOM_MESSAGE, false, false, nil)
 	case "provider_error":
 		return buildRunSSEProviderError(event)
 	default:
@@ -4145,10 +4148,12 @@ func terminalEventRetryable(event StreamEvent) bool {
 	if event.TerminalRetryable != nil {
 		return *event.TerminalRetryable
 	}
-	if strings.EqualFold(strings.TrimSpace(event.TerminalErrorCode), "provider_error") {
+	switch strings.ToLower(strings.TrimSpace(event.TerminalErrorCode)) {
+	case "provider_error", compactionOverflowTerminalCode:
 		return false
+	default:
+		return true
 	}
-	return true
 }
 
 func runSSEAdditionalInfo(event StreamEvent) map[string]string {

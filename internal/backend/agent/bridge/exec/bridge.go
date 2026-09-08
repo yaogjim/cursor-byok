@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -22,6 +21,7 @@ import (
 
 	"cursor/gen/agentv1"
 	runtimecore "cursor/internal/backend/agent/core"
+	"cursor/internal/backend/agent/toolresult"
 )
 
 // ExecApplyResult 表示一次执行桥结果归一化后的最小产物。
@@ -83,7 +83,7 @@ func NewBridge() *Bridge {
 
 // OpenExec 打开一条执行型工具调用。
 func (bridge *Bridge) OpenExec(openContext OpenExecContext, toolCall runtimecore.ToolInvocation) (*agentv1.AgentServerMessage, runtimecore.PendingExec, error) {
-	switch strings.TrimSpace(toolCall.ToolName) {
+	switch runtimecore.CanonicalToolName(strings.TrimSpace(toolCall.ToolName)) {
 	case "Read":
 		return bridge.openRead(toolCall)
 	case "Write":
@@ -1375,6 +1375,9 @@ func truncateMcpToolResultForReplay(result *agentv1.McpToolResult) *agentv1.McpT
 	if !ok || cloned == nil || cloned.GetSuccess() == nil {
 		return result
 	}
+	if mcpSuccessAlreadyTruncated(cloned.GetSuccess()) {
+		return cloned
+	}
 	success := cloned.GetSuccess()
 	notices := make([]string, 0, 3)
 	if structured := success.GetStructuredContent(); structured != nil {
@@ -1390,7 +1393,7 @@ func truncateMcpToolResultForReplay(result *agentv1.McpToolResult) *agentv1.McpT
 	}
 	content := success.GetContent()
 	if len(content) > mcpReplayContentItemLimit {
-		notices = append(notices, fmt.Sprintf("[truncated: MCP content items exceeded %d items; showing %d of %d items]", mcpReplayContentItemLimit, mcpReplayContentItemLimit, len(content)))
+		notices = append(notices, toolresult.ItemsNotice("MCP content items", mcpReplayContentItemLimit, mcpReplayContentItemLimit, len(content)))
 		content = content[:mcpReplayContentItemLimit]
 	}
 	totalText := 0
@@ -1430,6 +1433,27 @@ func truncateMcpToolResultForReplay(result *agentv1.McpToolResult) *agentv1.McpT
 	}
 	success.Content = truncatedContent
 	return cloned
+}
+
+func mcpSuccessAlreadyTruncated(success *agentv1.McpSuccess) bool {
+	if success == nil {
+		return false
+	}
+	if structured := success.GetStructuredContent(); structured != nil {
+		if _, ok := structured.AsMap()["_truncated"]; ok {
+			return true
+		}
+	}
+	for _, item := range success.GetContent() {
+		if item == nil || item.GetText() == nil {
+			continue
+		}
+		text := item.GetText().GetText()
+		if strings.HasPrefix(text, "[truncated: MCP ") || strings.HasPrefix(text, "[truncated: MCP") {
+			return true
+		}
+	}
+	return false
 }
 
 // summarizeListMcpResourcesResult 生成 MCP 资源列表结果摘要。
@@ -1483,6 +1507,9 @@ func truncateListMcpResourcesResultForReplay(result *agentv1.ListMcpResourcesExe
 		return result
 	}
 	resources := cloned.GetSuccess().GetResources()
+	if len(resources) > 0 && resources[len(resources)-1].GetUri() == "truncated:list-mcp-resources" {
+		return cloned
+	}
 	if len(resources) > mcpResourcesReplayCount {
 		resources = resources[:mcpResourcesReplayCount]
 	}
@@ -1511,7 +1538,7 @@ func truncateListMcpResourcesResultForReplay(result *agentv1.ListMcpResourcesExe
 		original := len(result.GetSuccess().GetResources())
 		notice := replayTruncationNotice("ListMcpResources", mcpResourcesReplayLimit, kept, original)
 		if original > mcpResourcesReplayCount {
-			notice = fmt.Sprintf("[truncated: ListMcpResources result exceeded %d resources; showing %d of %d resources]", mcpResourcesReplayCount, kept, original)
+			notice = toolresult.CountNotice("ListMcpResources", "resources", mcpResourcesReplayCount, kept, original)
 		}
 		cloned.GetSuccess().Resources = append(cloned.GetSuccess().Resources, &agentv1.ListMcpResourcesExecResult_McpResource{
 			Uri:         "truncated:list-mcp-resources",
@@ -1592,159 +1619,58 @@ func buildGlobCompletedToolCall(toolCallID string, argsJSON []byte, result *agen
 	}
 }
 
-const maxGlobReplayFiles = 200
+const maxGlobReplayFiles = toolresult.GlobFiles
 
 const (
-	replayKiB = 1024
-
-	readReplayContentLimit     = 64 * replayKiB
-	readReplayLineLimit        = 0
-	readReplayBinaryLimit      = 32 * replayKiB
-	shellReplayStreamLimit     = 16 * replayKiB
-	grepReplayContentLimit     = 32 * replayKiB
-	grepReplayMatchLimit       = 2 * replayKiB
-	grepReplayMatchesPerFile   = 100
-	grepReplayTotalMatches     = 300
-	grepReplayListLimit        = 300
-	mcpReplayTextTotalLimit    = 32 * replayKiB
-	mcpReplayTextItemLimit     = 32 * replayKiB
-	mcpReplayContentItemLimit  = 20
-	mcpReplayStructuredLimit   = 32 * replayKiB
-	mcpReplayBinaryLimit       = 32 * replayKiB
-	mcpResourcesReplayLimit    = 32 * replayKiB
-	mcpResourcesReplayCount    = 200
-	mcpResourceDescriptionSize = replayKiB
+	readReplayContentLimit     = toolresult.ReadContentBytes
+	readReplayLineLimit        = toolresult.ReadLineBytes
+	readReplayBinaryLimit      = toolresult.ReadBinaryBytes
+	shellReplayStreamLimit     = toolresult.ShellStreamBytes
+	grepReplayContentLimit     = toolresult.GrepContentBytes
+	grepReplayMatchLimit       = toolresult.GrepMatchBytes
+	grepReplayMatchesPerFile   = toolresult.GrepMatchesPerFile
+	grepReplayTotalMatches     = toolresult.GrepTotalMatches
+	grepReplayListLimit        = toolresult.GrepListItems
+	mcpReplayTextTotalLimit    = toolresult.MCPTextTotalBytes
+	mcpReplayTextItemLimit     = toolresult.MCPTextItemBytes
+	mcpReplayContentItemLimit  = toolresult.MCPContentItems
+	mcpReplayStructuredLimit   = toolresult.MCPStructuredBytes
+	mcpReplayBinaryLimit       = toolresult.MCPBinaryBytes
+	mcpResourcesReplayLimit    = toolresult.MCPResourcesBytes
+	mcpResourcesReplayCount    = toolresult.MCPResourcesCount
+	mcpResourceDescriptionSize = toolresult.MCPResourceDescriptionBytes
 )
 
 func truncateReplayText(toolName string, text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	original := len(text)
-	notice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, limit, original)
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateUTF8Bytes(text, limit)
-		}
-		kept := truncateUTF8Bytes(text, keep)
-		nextNotice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, len(kept), original)
-		output := strings.TrimRight(kept, "\n") + nextNotice
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
+	return toolresult.TruncateTail(toolName, text, limit)
 }
 
 func truncateReplayTextMiddle(toolName string, text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	original := len(text)
-	notice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; omitted middle; showing %d of %d bytes]\n\n", toolName, limit, limit, original)
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateUTF8Bytes(text, limit)
-		}
-		headLimit := keep / 2
-		tailLimit := keep - headLimit
-		head := truncateUTF8Bytes(text, headLimit)
-		tail := truncateUTF8Suffix(text, tailLimit)
-		kept := len(head) + len(tail)
-		nextNotice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; omitted middle; showing %d of %d bytes]\n\n", toolName, limit, kept, original)
-		output := head + nextNotice + tail
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
+	return toolresult.TruncateMiddle(toolName, text, limit)
 }
 
 func truncateReplayLine(toolName string, text string, limit int) string {
-	if limit <= 0 || len(text) <= limit {
-		return text
-	}
-	original := len(text)
-	notice := fmt.Sprintf(" [truncated: %s line exceeded %d bytes; showing %d of %d bytes]", toolName, limit, limit, original)
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateUTF8Bytes(text, limit)
-		}
-		kept := truncateUTF8Bytes(text, keep)
-		nextNotice := fmt.Sprintf(" [truncated: %s line exceeded %d bytes; showing %d of %d bytes]", toolName, limit, len(kept), original)
-		output := kept + nextNotice
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
+	return toolresult.TruncateLine(toolName, text, limit)
 }
 
 func truncateReplayLines(toolName string, text string, lineLimit int) string {
-	if lineLimit <= 0 || text == "" {
-		return text
-	}
-	parts := strings.SplitAfter(text, "\n")
-	for index, part := range parts {
-		newline := ""
-		body := part
-		if strings.HasSuffix(part, "\n") {
-			body = strings.TrimSuffix(part, "\n")
-			newline = "\n"
-		}
-		parts[index] = truncateReplayLine(toolName, body, lineLimit) + newline
-	}
-	return strings.Join(parts, "")
+	return toolresult.TruncateLines(toolName, text, lineLimit)
 }
 
 func truncateUTF8Bytes(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	if limit > len(text) {
-		limit = len(text)
-	}
-	truncated := text[:limit]
-	for !utf8.ValidString(truncated) && len(truncated) > 0 {
-		truncated = truncated[:len(truncated)-1]
-	}
-	return truncated
+	return toolresult.CutPrefix(text, limit)
 }
 
 func truncateUTF8Suffix(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	start := len(text) - limit
-	if start < 0 {
-		start = 0
-	}
-	suffix := text[start:]
-	for !utf8.ValidString(suffix) && start < len(text) {
-		start++
-		suffix = text[start:]
-	}
-	return suffix
+	return toolresult.CutSuffix(text, limit)
 }
 
 func truncateByteSlice(value []byte, limit int) ([]byte, bool) {
-	if limit <= 0 || len(value) <= limit {
-		return value, false
-	}
-	return append([]byte(nil), value[:limit]...), true
+	return toolresult.CutBytes(value, limit)
 }
 
 func replayTruncationNotice(toolName string, limit int, kept int, original int) string {
-	return fmt.Sprintf("[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, kept, original)
+	return toolresult.BytesNotice(toolName, limit, kept, original)
 }
 
 // buildWriteCompletedToolCall 构造 Write 对应的完成态 ToolCall。
@@ -2663,6 +2589,15 @@ func truncateGrepContentResultForReplay(content *agentv1.GrepContentResult, budg
 func addGrepContentTruncationNotice(files []*agentv1.GrepFileMatch, originalBytes int) []*agentv1.GrepFileMatch {
 	used := grepContentBytes(files)
 	notice := replayTruncationNotice("Grep", grepReplayContentLimit, used, originalBytes)
+	if len(files) > 0 {
+		last := files[len(files)-1]
+		if len(last.GetMatches()) > 0 {
+			prev := last.GetMatches()[len(last.GetMatches())-1].GetContent()
+			if strings.HasPrefix(prev, "[truncated: Grep ") {
+				return files
+			}
+		}
+	}
 	match := &agentv1.GrepContentMatch{
 		LineNumber:       0,
 		Content:          notice,

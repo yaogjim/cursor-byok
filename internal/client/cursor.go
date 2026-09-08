@@ -10,6 +10,10 @@ import (
 
 // ApplyCursorSettings 用于处理与 ApplyCursorSettings 相关的逻辑。
 func (s *ProxyService) ApplyCursorSettings() error {
+	return s.applyCursorSettingsWithPlan(nil)
+}
+
+func (s *ProxyService) applyCursorSettingsWithPlan(plan *cursor.SettingsSnapshot) error {
 	if s == nil || s.proxy == nil {
 		return fmt.Errorf("proxy is not initialized")
 	}
@@ -40,15 +44,22 @@ func (s *ProxyService) ApplyCursorSettings() error {
 	if s.cursorSettingsStore == nil {
 		return fmt.Errorf("Cursor settings store is not initialized")
 	}
-	if err := s.cursorSettingsStore.Apply(
-		cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr),
-		s.cursorSettingsOwnerID,
-	); err != nil {
+	proxyURL := cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr)
+	if plan == nil {
+		snapshot, err := s.cursorSettingsStore.Plan(proxyURL)
+		if err != nil {
+			return err
+		}
+		plan = &snapshot
+	}
+	if err := s.cursorSettingsStore.ApplyPlanned(proxyURL, s.cursorSettingsOwnerID, *plan); err != nil {
 		return err
 	}
 	if goruntime.GOOS == "darwin" {
 		if err := cursor.SetSystemNodeExtraCACerts(caCertPath); err != nil {
-			_, _ = s.cursorSettingsStore.ClearOwned(s.cursorSettingsOwnerID, nil)
+			if restoreErr := s.cursorSettingsStore.Restore(*plan, s.cursorSettingsOwnerID); restoreErr != nil {
+				return fmt.Errorf("set node extra ca certs: %w; 未能恢复原设置: %v", err, restoreErr)
+			}
 			return fmt.Errorf("set node extra ca certs: %w", err)
 		}
 	}
