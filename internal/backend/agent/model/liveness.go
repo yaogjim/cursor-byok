@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"cursor/internal/netproxy"
 )
 
 // LivenessTimeoutError 是网关生成的建连/首事件/整呼超时。
@@ -103,18 +105,28 @@ func newProviderLiveness(parent context.Context, settings RecoverySettings) (con
 }
 
 func attachRequestLiveness(ctx context.Context, req *StreamRequest) (context.Context, *providerLiveness, bool) {
+	owned := false
+	var live *providerLiveness
 	if req != nil && req.liveness != nil {
-		return req.liveness.Context(), req.liveness, false
+		ctx = req.liveness.Context()
+		live = req.liveness
+	} else {
+		settings := DefaultRecoverySettings()
+		if req != nil {
+			settings = req.normalizedRecoverySettings()
+		}
+		ctx, live = newProviderLiveness(ctx, settings)
+		if req != nil {
+			req.liveness = live
+		}
+		owned = true
 	}
-	settings := DefaultRecoverySettings()
 	if req != nil {
-		settings = req.normalizedRecoverySettings()
+		// Fallback 会预先挂上共享 liveness；必须把模型级代理重新附着到返回的 ctx，
+		// 否则后续 WithContext(attemptCtx) 会丢掉 AttachRequest 写入的请求级代理。
+		ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	}
-	ctx, live := newProviderLiveness(ctx, settings)
-	if req != nil {
-		req.liveness = live
-	}
-	return ctx, live, true
+	return ctx, live, owned
 }
 
 func (live *providerLiveness) Context() context.Context {

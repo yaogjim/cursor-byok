@@ -393,6 +393,7 @@ func (adapter *OpenAIAdapter) Stream(ctx context.Context, req StreamRequest, sin
 }
 
 func (adapter *OpenAIAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("openai base url is empty")
@@ -509,7 +510,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			return nil, &RequestBuildError{Err: err}
 		}
 		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
-		return httpReq, nil
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false
@@ -1050,7 +1051,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			return nil, &RequestBuildError{Err: err}
 		}
 		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
-		return httpReq, nil
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false

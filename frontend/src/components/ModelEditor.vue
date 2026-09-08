@@ -17,6 +17,7 @@ import {
   fetchAvailableModelIDs,
   getModelAdapterTestResult,
   getModelAdapterTestResultByID,
+  getSavedOutboundProxy,
   isManagedCredentialSource,
   isModelAdapterTestResultStale,
   isOpenAIImageGenerationCompatible,
@@ -33,6 +34,7 @@ import {
 } from "@/state/appState";
 import {
   DEFAULT_PROVIDER_FALLBACK,
+  describeOutboundProxyInheritance,
   formatFallbackBudgetInput,
   isFallbackChannelCompatible,
   isLogicalRoutingAdapter,
@@ -155,6 +157,9 @@ const modelTestSummary = computed(() => {
   }
   return activeModelTestResult.value?.summaryText || "尚未测试";
 });
+const outboundProxyInheritanceText = computed(() =>
+  describeOutboundProxyInheritance(draft.outboundProxy, getSavedOutboundProxy()),
+);
 
 function ensureOpenAIExtraParamsJSON() {
   if (!String(draft.openAIExtraParamsJSON || "").trim()) {
@@ -191,6 +196,7 @@ const fieldTips = {
   anthropicMaxTokens: "Anthropic 模型单次回复允许生成的最大 Token 数。留空时使用默认值。",
   anthropicThinkingEffort: "Anthropic adaptive thinking 的思考强度。请求会固定使用新版 thinking.type=adaptive。",
   maxConcurrentRequests: "0 或不填表示不限制。同一接口地址与密钥的物理渠道共享该上限；无空闲槽时固定等待 2 秒。",
+  outboundProxy: "启用后该模型出站请求使用自定义 HTTP/HTTPS/SOCKS5 代理，不叠加环境变量或系统代理。关闭后保留地址并继承已保存的全局自定义代理；全局未启用时再继承环境/系统代理或直连。",
   providerFallback: "启用后，此模型成为逻辑路由身份（建议仅子代理选择）。请求按主渠道和备选渠道顺序尝试，alias 自身不会向虚拟 endpoint 发请求。5xx 等失败先在当前渠道再试一次，然后才安全切换；一旦出现任何原始字节、model event 或 side effect，禁止切换。候选仅限相同适配器类型和相同协议端点的物理渠道。",
   maxHttpAttempts: "整条 fallback 链共享的最大 HTTP 尝试次数，默认 5，允许 2–9。越界会报错而不会静默截断。",
   maxWaitSeconds: "整条 fallback 链共享的累计实际退避等待秒数，默认 8，允许 1–30。不含模型推理、首 Token、渠道执行或容量等待。越界会报错而不会静默截断。",
@@ -232,6 +238,7 @@ async function refreshModelList() {
       credentialSource,
       customHeadersEnabled: draft.customHeadersEnabled,
       customHeadersJSON: draft.customHeadersJSON,
+      outboundProxy: draft.outboundProxy,
     });
     if (requestSeq !== modelListRequestSeq.value) {
       return availableModelIDs.value;
@@ -405,7 +412,7 @@ watch(
 );
 
 watch(
-  () => [draft.type, draft.baseURL, draft.apiKey, draft.credentialSource, draft.customHeadersEnabled, draft.customHeadersJSON],
+  () => [draft.type, draft.baseURL, draft.apiKey, draft.credentialSource, draft.customHeadersEnabled, draft.customHeadersJSON, draft.outboundProxy?.enabled, draft.outboundProxy?.url],
   () => {
     window.clearTimeout(modelListDebounceTimer);
     const baseURL = String(draft.baseURL || "").trim();
@@ -852,6 +859,32 @@ watch(
             spellcheck="false"
             class="mt-3 min-h-[120px] w-full resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
           />
+        </div>
+
+        <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+              <Tooltip :content="fieldTips.outboundProxy" />
+              <span>自定义出站代理</span>
+            </span>
+            <label class="center-row gap-2 text-xs text-[var(--color-text)]">
+              <input
+                v-model="draft.outboundProxy.enabled"
+                type="checkbox"
+                class="size-4 accent-[var(--color-primary)]"
+              />
+              <span>启用</span>
+            </label>
+          </div>
+          <p class="mt-2 text-[11px] text-[var(--color-text-muted)]">{{ outboundProxyInheritanceText }}</p>
+          <input
+            v-model="draft.outboundProxy.url"
+            type="text"
+            spellcheck="false"
+            placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+            class="mt-3 h-9 w-full rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 font-mono text-xs text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
+          />
+          <span class="mt-1 text-[11px] text-[var(--color-text-muted)]">关闭后保留地址但不使用。仅启用时校验 http/https/socks5，支持标准 URL 认证。</span>
         </div>
 
         <label v-if="!isLogicalRoutingDraft" class="flex flex-col gap-1">

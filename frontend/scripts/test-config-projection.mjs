@@ -7,21 +7,28 @@ import {
   buildSubagentRescheduleConfigFromState,
   DEFAULT_SUBAGENT_RESCHEDULE,
   DEFAULT_PROVIDER_FALLBACK,
+  DEFAULT_OUTBOUND_PROXY,
+  describeOutboundProxyInheritance,
   formatFallbackBudgetInput,
   isLogicalRoutingAdapter,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
+  mergeImportedModelAdapters,
   normalizeClientPreferences,
   normalizeObservabilityConfig,
+  normalizeOutboundProxy,
   normalizeSubagentRescheduleConfig,
   normalizeProviderFallback,
+  outboundProxyHashFields,
   parseFallbackBudgetInput,
   prepareModelAdaptersForPersist,
   providerFallbackBudgetFieldError,
   PROVIDER_FALLBACK_LIMITS,
+  resolveEffectiveOutboundProxy,
   channelEndpointFamily,
   isFallbackChannelCompatible,
   selectAdaptersForEndpointTest,
   shouldTestModelAdapterEndpoint,
+  validateOutboundProxy,
   validateProviderFallbackAdapters,
   validateProviderFallbackBudget,
   DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -1039,6 +1046,279 @@ const outOfRangeCapacityPersist = persistCapacityRoundtrip([
 ]);
 assert(!outOfRangeCapacityPersist.ok, "out-of-range capacity must fail persist");
 
+{
+  assertEqual(normalizeOutboundProxy(undefined), { ...DEFAULT_OUTBOUND_PROXY }, "missing outboundProxy defaults off");
+  assertEqual(
+    normalizeOutboundProxy({ enabled: "true", url: "  socks5://127.0.0.1:1080  " }),
+    { enabled: true, url: "socks5://127.0.0.1:1080" },
+    "outboundProxy trims url and accepts truthy enabled",
+  );
+  assertEqual(validateOutboundProxy({ enabled: false, url: "not-a-url" }), "", "disabled outboundProxy skips url check");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "" }), "自定义代理 URL 不能为空", "enabled outboundProxy requires url");
+  assert(validateOutboundProxy({ enabled: true, url: "ftp://proxy.example" }).includes("http、https 或 socks5"), "enabled outboundProxy rejects unknown protocol");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "http://user:pass@127.0.0.1:7890" }), "", "enabled http proxy with auth is valid");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "socks5://127.0.0.1:1080" }), "", "enabled socks5 proxy is valid");
+  assert(
+    !validateOutboundProxy({ enabled: true, url: "http://user:secret@127.0.0.1:7890" }).includes("secret"),
+    "proxy validation must not echo credential url",
+  );
+
+  const modelCustom = resolveEffectiveOutboundProxy(
+    { enabled: true, url: "http://model.example:1" },
+    { enabled: true, url: "http://global.example:2" },
+  );
+  assertEqual(modelCustom, { enabled: true, url: "http://model.example:1" }, "model custom proxy wins over saved global");
+
+  const inherited = resolveEffectiveOutboundProxy(
+    { enabled: false, url: "http://model-unused.example:1" },
+    { enabled: true, url: "http://global.example:2" },
+  );
+  assertEqual(inherited, { enabled: true, url: "http://global.example:2" }, "disabled model inherits saved global");
+
+  const disabled = resolveEffectiveOutboundProxy(
+    { enabled: false, url: "http://model-unused.example:1" },
+    { enabled: false, url: "http://global-unused.example:2" },
+  );
+  assertEqual(disabled, { enabled: false, url: "" }, "disabled proxy excludes url from effective value");
+
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: false, url: "http://user:secret@127.0.0.1:9" },
+      { enabled: false, url: "http://global-secret:9" },
+    ),
+    ["false", ""],
+    "hash fields use FormatBool and drop disabled urls",
+  );
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: false, url: "http://unused" },
+      { enabled: true, url: "socks5://127.0.0.1:1080" },
+    ),
+    ["true", "socks5://127.0.0.1:1080"],
+    "inherited enabled global url is hashed",
+  );
+  {
+    const modelDraft = { enabled: false, url: "http://draft-unused.example" };
+    const latestSavedRoot = { enabled: true, url: "http://latest-saved-root.example" };
+    assertEqual(
+      outboundProxyHashFields(modelDraft, latestSavedRoot),
+      ["true", "http://latest-saved-root.example"],
+      "hash uses latest saved root even when the model draft is unchanged",
+    );
+    assertEqual(
+      modelDraft,
+      { enabled: false, url: "http://draft-unused.example" },
+      "draft proxy stays untouched while hash reads the latest saved root",
+    );
+  }
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: true, url: "http://model.example" },
+      { enabled: true, url: "http://changed-global.example" },
+    ),
+    ["true", "http://model.example"],
+    "custom model hash ignores saved global change",
+  );
+  assertEqual(
+    describeOutboundProxyInheritance({ enabled: false }, { enabled: true, url: "http://user:secret@host" }),
+    "当前继承已保存的全局自定义代理",
+    "inheritance copy must not include credential url",
+  );
+}
+
+{
+  function identityKey(adapter) {
+    return `${adapter.baseURL}|${adapter.modelID}|${adapter.apiKey}|${adapter.displayName}|${adapter.openAIEndpoint || ""}`;
+  }
+  const current = [
+    { id: "keep-a", sort: 1, displayName: "Alpha", baseURL: "https://a.example", modelID: "m1", apiKey: "k1" },
+    { id: "keep-b", sort: 2, displayName: "Beta", baseURL: "https://b.example", modelID: "m2", apiKey: "k2" },
+    { id: "keep-c", sort: 3, displayName: "Gamma", baseURL: "https://c.example", modelID: "m3", apiKey: "k3" },
+  ];
+  const byIdentity = mergeImportedModelAdapters(current, [
+    { displayName: "Alpha", baseURL: "https://a.example", modelID: "m1", apiKey: "k1", tooltipData: "updated-note" },
+    { displayName: "Delta", baseURL: "https://d.example", modelID: "m4", apiKey: "k4" },
+  ], { identityKey });
+  assert(byIdentity.ok, `identity merge should succeed: ${byIdentity.error}`);
+  assertEqual(byIdentity.updated, 1, "identity match updates one item");
+  assertEqual(byIdentity.added, 1, "unmatched import is appended");
+  assertEqual(byIdentity.adapters.map((item) => item.id), ["keep-a", "keep-b", "keep-c", ""], "unmatched current items keep order; new item has empty id");
+  assertEqual(byIdentity.adapters[3].sort, 0, "appended import is marked to stay at the end");
+  assertEqual(byIdentity.adapters[0].tooltipData, "updated-note", "identity match updates in place");
+  assertEqual(byIdentity.adapters[1].displayName, "Beta", "unmatched current item is preserved");
+
+  const byName = mergeImportedModelAdapters(current, [
+    { displayName: " Beta ", baseURL: "https://b-new.example", modelID: "m2-new", apiKey: "k2-new" },
+  ], { identityKey });
+  assert(byName.ok, `unique name merge should succeed: ${byName.error}`);
+  assertEqual(byName.updated, 1, "unique trimmed name updates one item");
+  assertEqual(byName.adapters[1].id, "keep-b", "name match keeps current id");
+  assertEqual(byName.adapters[1].baseURL, "https://b-new.example", "name match replaces adapter fields");
+
+  const duplicateNames = [
+    { id: "one", displayName: "Same", baseURL: "https://one.example", modelID: "m1", apiKey: "k1" },
+    { id: "two", displayName: "Same", baseURL: "https://two.example", modelID: "m2", apiKey: "k2" },
+  ];
+  const ambiguous = mergeImportedModelAdapters(duplicateNames, [
+    { displayName: "Same", baseURL: "https://other.example", modelID: "m9", apiKey: "k9" },
+  ], { identityKey });
+  assert(!ambiguous.ok, "ambiguous displayName must fail atomically");
+  assert(ambiguous.error.includes("无法唯一匹配"), "ambiguous name error is explicit");
+  assertEqual(ambiguous.adapters, [], "failed merge does not return partial adapters");
+
+  const currentPrimary = {
+    ...physicalAdapter("keep-primary", "Primary", "https://old.example/v1"),
+    sort: 1,
+    apiKey: "old-key",
+    modelID: "gpt-old",
+  };
+  const currentCandidate = {
+    ...physicalAdapter("keep-candidate", "OldCandidate", "https://old-cand.example/v1"),
+    sort: 2,
+    apiKey: "old-cand-key",
+    modelID: "gpt-old-cand",
+  };
+  const currentAlias = {
+    ...physicalAdapter("keep-alias", "CurrentAlias", "https://alias.example/v1"),
+    sort: 3,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "keep-primary",
+      candidateChannelIDs: ["keep-candidate"],
+    }),
+  };
+  const importedPrimary = {
+    ...physicalAdapter("incoming-primary", "Primary", "https://new.example/v1"),
+    apiKey: "new-key",
+    modelID: "gpt-new",
+  };
+  const importedNewCandidate = {
+    ...physicalAdapter("incoming-new-candidate", "NewCandidate", "https://new-cand.example/v1"),
+    apiKey: "new-cand-key",
+    modelID: "gpt-new-cand",
+  };
+  const importedAlias = {
+    ...physicalAdapter("incoming-alias", "ImportedAlias", "https://imported-alias.example/v1"),
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "incoming-primary",
+      candidateChannelIDs: ["incoming-new-candidate"],
+    }),
+  };
+  const completeImport = mergeImportedModelAdapters(
+    [currentPrimary, currentCandidate, currentAlias],
+    [importedPrimary, importedNewCandidate, importedAlias],
+    { identityKey },
+  );
+  assert(completeImport.ok, `complete physical+logical import should succeed: ${completeImport.error}`);
+  assertEqual(completeImport.updated, 1, "same-name primary is updated in place");
+  assertEqual(completeImport.added, 2, "new physical candidate and imported alias are appended");
+  assertEqual(
+    completeImport.adapters.map((item) => item.id),
+    ["keep-primary", "keep-candidate", "keep-alias", "incoming-new-candidate", "incoming-alias"],
+    "same-name update keeps current ID; new items keep imported IDs used by alias refs",
+  );
+  assertEqual(completeImport.adapters[0].baseURL, "https://new.example/v1", "same-name update replaces identity fields");
+  assertEqual(completeImport.adapters[0].apiKey, "new-key", "same-name update replaces api key");
+  assertEqual(
+    completeImport.adapters[2].providerFallback.primaryChannelID,
+    "keep-primary",
+    "unmatched current alias refs stay on current IDs",
+  );
+  assertEqual(
+    completeImport.adapters[2].providerFallback.candidateChannelIDs,
+    ["keep-candidate"],
+    "unmatched current alias candidates stay on current IDs",
+  );
+  assertEqual(
+    completeImport.adapters[4].providerFallback.primaryChannelID,
+    "keep-primary",
+    "imported alias primary remaps incoming ID onto the preserved current ID",
+  );
+  assertEqual(
+    completeImport.adapters[4].providerFallback.candidateChannelIDs,
+    ["incoming-new-candidate"],
+    "imported alias candidate keeps the appended physical ID",
+  );
+  assert(
+    completeImport.adapters.some((item) => item.id === "keep-primary"),
+    "Gateway identity is preserved because the current primary ID remains in the draft",
+  );
+  assertEqual(
+    validateProviderFallbackAdapters(completeImport.adapters),
+    "",
+    "merged draft must validate before save",
+  );
+  const completePersist = prepareModelAdaptersForPersist(
+    completeImport.adapters,
+    validateProviderFallbackAdapters,
+  );
+  assert(completePersist.ok, `save chain must remain resolvable: ${completePersist.error}`);
+  assertEqual(
+    completePersist.payloadAdapters[4].providerFallback.primaryChannelID,
+    "keep-primary",
+    "persist payload keeps remapped fallback primary",
+  );
+  assertEqual(
+    completePersist.payloadAdapters[4].providerFallback.candidateChannelIDs,
+    ["incoming-new-candidate"],
+    "persist payload keeps remapped fallback candidate",
+  );
+
+  const identityPrimary = {
+    ...physicalAdapter("keep-ident", "Ident", "https://ident.example/v1"),
+    sort: 1,
+  };
+  const importedIdentPrimary = physicalAdapter("incoming-ident", "Ident", "https://ident.example/v1");
+  const importedIdentCandidate = physicalAdapter("incoming-ident-cand", "IdentCand", "https://ident-cand.example/v1");
+  const importedIdentAlias = {
+    ...physicalAdapter("incoming-ident-alias", "IdentAlias", "https://ident-alias.example/v1"),
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "incoming-ident",
+      candidateChannelIDs: ["incoming-ident-cand"],
+    }),
+  };
+  const identityImport = mergeImportedModelAdapters(
+    [identityPrimary],
+    [importedIdentPrimary, importedIdentCandidate, importedIdentAlias],
+    { identityKey },
+  );
+  assert(identityImport.ok, `identity-matched physical+logical import should succeed: ${identityImport.error}`);
+  assertEqual(identityImport.updated, 1, "identity match updates the current physical channel");
+  assertEqual(identityImport.added, 2, "identity import appends unmatched candidate and alias");
+  assertEqual(
+    identityImport.adapters.map((item) => item.id),
+    ["keep-ident", "incoming-ident-cand", "incoming-ident-alias"],
+    "identity match keeps current ID; added candidate and alias keep incoming IDs",
+  );
+  assertEqual(
+    identityImport.adapters[2].providerFallback.primaryChannelID,
+    "keep-ident",
+    "imported alias remaps identity-matched incoming ID onto the current draft ID",
+  );
+  assertEqual(
+    identityImport.adapters[2].providerFallback.candidateChannelIDs,
+    ["incoming-ident-cand"],
+    "imported alias keeps the appended physical candidate ID",
+  );
+  assertEqual(
+    validateProviderFallbackAdapters(identityImport.adapters),
+    "",
+    "identity-matched import must validate before save",
+  );
+  const identityPersist = prepareModelAdaptersForPersist(
+    identityImport.adapters,
+    validateProviderFallbackAdapters,
+  );
+  assert(identityPersist.ok, `identity-matched save chain must remain resolvable: ${identityPersist.error}`);
+  assertEqual(
+    identityPersist.payloadAdapters[2].providerFallback.primaryChannelID,
+    "keep-ident",
+    "identity-matched persist payload keeps remapped fallback primary",
+  );
+}
+
 function extractSourceFunction(source, name) {
   const marker = `function ${name}`;
   const start = source.indexOf(marker);
@@ -1071,10 +1351,12 @@ const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapter
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
 const adapterModalSource = readFileSync(path.join(frontendSrc, "components/ModelAdapterModal.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
+const configTransferSource = readFileSync(path.join(frontendSrc, "composables/useConfigTransfer.js"), "utf8");
 const settingsRescheduleSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
 
 assert(projectionSource.endsWith("\n"), "configProjection.js must end with a trailing newline");
+assert(configTransferSource.endsWith("\n"), "useConfigTransfer.js must end with a trailing newline");
 assert(
   !/sha256Hex|SHA256_K|buildModelAdapterChannelID|withDerivedModelAdapterIDs/.test(projectionSource),
   "configProjection must not recompute channel IDs",
@@ -1191,6 +1473,14 @@ const startModelAdapterTestFn = extractSourceFunction(appStateSource, "startMode
 assert(
   startModelAdapterTestFn.includes("testModelAdapter(normalized)"),
   "TestModelAdapter must send normalized adapter including credentialSource",
+);
+assert(
+  startModelAdapterTestFn.includes("recordLocalModelAdapterTestFailure"),
+  "frontend prevalidation failures must record a visible per-model result",
+);
+assert(
+  !startModelAdapterTestFn.includes("Promise.reject(new Error(validationError))"),
+  "frontend prevalidation must not abort the caller with an unrecorded rejection",
 );
 const typeChangeHelper = extractSourceFunction(typeChangeSource, "applyModelAdapterTypeChange");
 assert(
@@ -1341,6 +1631,10 @@ assert(
   "empty draft defaults openAIImageGenerationEnabled off",
 );
 assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("outboundProxy: normalizeOutboundProxy()"),
+  "empty draft defaults outboundProxy off",
+);
+assert(
   appStateSource.includes("const openAIImageGenerationEnabled = normalizeOpenAIImageGenerationEnabled("),
   "normalizeModelAdapter projects openAIImageGenerationEnabled",
 );
@@ -1355,6 +1649,41 @@ assert(
 assert(
   extractSourceFunction(appStateSource, "buildModelAdapterTestRequestHash").includes("openAIImageGenerationEnabled"),
   "test identity hash preserves openAIImageGenerationEnabled",
+);
+assert(
+  extractSourceFunction(appStateSource, "buildModelAdapterTestRequestHash").includes("outboundProxyHashFields(adapter.outboundProxy, savedOutboundProxy.value)"),
+  "test identity hash appends effective saved-global outbound proxy fields",
+);
+assert(
+  appStateSource.includes("const savedOutboundProxy = ref("),
+  "saved outbound proxy is reactive so editor inheritance and stale hashes update when only the persisted global changes",
+);
+assert(
+  extractSourceFunction(appStateSource, "getSavedOutboundProxy").includes("savedOutboundProxy.value"),
+  "editor inheritance reads the reactive saved global proxy",
+);
+{
+  const applyIdx = appStateSource.indexOf("function applyConfigToState");
+  const rememberIdx = appStateSource.indexOf("rememberSavedOutboundProxy(normalized.outboundProxy)", applyIdx);
+  const modelOnlyIdx = appStateSource.indexOf("if (modelAdaptersOnly)", rememberIdx);
+  const preserveIdx = appStateSource.indexOf("applyConfigSectionSnapshot(scope, preserved[scope])", applyIdx);
+  assert(applyIdx >= 0 && rememberIdx > applyIdx, "applyConfigToState always remembers the persisted global proxy");
+  assert(
+    rememberIdx < modelOnlyIdx,
+    "persisted global proxy is remembered before models-only early return",
+  );
+  assert(
+    rememberIdx < preserveIdx,
+    "persisted global proxy is remembered before dirty settings draft restoration",
+  );
+  assert(
+    preserveIdx >= 0,
+    "dirty settings draft remains untouched after external config/reload",
+  );
+}
+assert(
+  extractSourceFunction(appStateSource, "captureConfigSectionSnapshot").includes("rememberSavedOutboundProxy"),
+  "initial settings snapshot still seeds the saved outbound proxy",
 );
 assert(
   extractSourceFunction(appStateSource, "duplicateModelAdapterAt").includes("...source"),
@@ -1428,8 +1757,37 @@ assert(
 const batchTestHandler = extractSourceFunction(modelConfigSource, "handleTestAllModelAdapters");
 assert(batchTestHandler.includes("selectAdaptersForEndpointTest"), "batch test must use the shared endpoint-test plan");
 assert(
+  batchTestHandler.includes("appState.modelAdapters.slice()"),
+  "batch test must snapshot all current model drafts",
+);
+assert(
+  !batchTestHandler.includes("filteredAdapters"),
+  "batch test must ignore search/provider filters",
+);
+assert(
+  !batchTestHandler.includes(".cancel(") && !batchTestHandler.includes("batch-stop"),
+  "batch stop must not claim in-flight tests were cancelled",
+);
+assert(
+  extractSourceFunction(modelConfigSource, "stopBatchTesting").includes("Promise.allSettled(Array.from(batchActiveCalls))"),
+  "batch stop waits for in-flight tests",
+);
+assert(
   !batchTestHandler.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT") && !batchTestHandler.includes("skippedLogical"),
-  "batch test must silently skip logical aliases without a hint popup",
+  "mixed batch still silently skips logical aliases without a hint popup",
+);
+assert(
+  batchTestHandler.includes("adapters.length === 0") && batchTestHandler.includes("testAllUnavailableText"),
+  "all-logical/empty batch test must show a no-testable status",
+);
+assert(
+  batchTestHandler.includes("message(testAllUnavailableText.value)"),
+  "all-logical batch test must toast instead of silently returning",
+);
+assert(modelConfigSource.includes("hasTestableModelAdapters"), "test-all disables when nothing is testable");
+assert(
+  modelConfigSource.includes("当前没有可测试的物理渠道"),
+  "test-all explains why logical aliases are not tested",
 );
 assert(
   projectionSource.includes("MAX_PROVIDER_FALLBACK_CANDIDATES")
@@ -1503,6 +1861,7 @@ assert(
   fetchModelsApiFn.includes("managed ? \"\" : source.apiKey"),
   "clientApi must not send apiKey for managed credential sources",
 );
+assert(fetchModelsApiFn.includes("outboundProxy"), "clientApi FetchModelAdapterModels must send outboundProxy");
 const routerSource = readFileSync(path.join(frontendSrc, "router/index.js"), "utf8");
 assert(appStateSource.includes('"/models": "models"'), "models route must map to models section");
 assert(appStateSource.includes("snapshotModelsSection"), "models section must have a dirty snapshot");
@@ -1743,21 +2102,56 @@ const homeTrendChartSource = readFileSync(path.join(frontendSrc, "components/cha
 assert(homeTrendChartSource.includes("effectiveAppearanceTheme"), "trend chart redraws when resolved theme changes");
 assert(!settingsSource.includes("不能端到端保存 system"), "settings no longer treats system as planned-only");
 assert(settingsSource.includes("persistScopedUserConfig(\"settings\")"), "settings still saves its own section");
+assert(settingsSource.includes("自定义出站代理"), "settings exposes global outbound proxy");
+assert(settingsSource.includes("appState.outboundProxy.enabled"), "settings proxy toggle binds outboundProxy");
+assert(settingsSource.includes("appState.outboundProxy.url"), "settings proxy url binds outboundProxy");
+assert(!settingsSource.includes("HTTP 代理"), "settings must replace the planned HTTP proxy placeholder");
+assert(editorSource.includes("自定义出站代理"), "ModelEditor exposes per-model outbound proxy");
+assert(editorSource.includes("draft.outboundProxy.enabled"), "ModelEditor proxy toggle binds model outboundProxy");
+assert(editorSource.includes("describeOutboundProxyInheritance"), "ModelEditor shows proxy inheritance without credential urls");
+assert(appStateSource.includes("outboundProxy: source.outboundProxy"), "settings save payload includes outboundProxy");
+assert(extractSourceFunction(appStateSource, "snapshotSettingsSection").includes("outboundProxy"), "settings dirty snapshot includes outboundProxy");
+assert(extractSourceFunction(appStateSource, "persistScopedConfig").includes("validateOutboundProxy"), "settings save validates enabled proxy url");
+assert(clientApiSource.includes("ReadModelAdaptersForImport"), "client API exposes model-only import");
+assert(appStateSource.includes("applyImportedModelAdapters"), "import merge is applied to the models draft");
+{
+  const importModelAdaptersFn = extractSourceFunction(configTransferSource, "importModelAdapters");
+  const importConfigFn = extractSourceFunction(configTransferSource, "importConfig");
+  const busyIdx = importModelAdaptersFn.indexOf("beginImport()");
+  const dialogIdx = importModelAdaptersFn.indexOf("Dialogs.OpenFile");
+  assert(busyIdx >= 0 && busyIdx < dialogIdx, "model import sets busy at handler entry before the file dialog");
+  assert(importModelAdaptersFn.includes("finally"), "model import resets busy after cancel or failure");
+  assert(
+    !importModelAdaptersFn.includes("showModal") && !importModelAdaptersFn.includes("合并模型配置"),
+    "reversible draft import must not add an extra confirmation gate",
+  );
+  assert(configTransferSource.includes("appState.configSaving"), "import guards an in-flight config save");
+  assert(importConfigFn.includes("beginImport()"), "full-config import uses the same busy guard");
+  assert(modelConfigSource.includes("configTransferBusy"), "models page disables import while transfer is busy");
+}
+assert(
+  extractSourceFunction(appStateSource, "applyProxyState").includes("netProxyUsingCustom"),
+  "proxy state projects custom outbound source from GetState",
+);
 assert(modelConfigSource.includes("filterModelAdapters"), "models page uses shared search/provider filter");
 assert(modelConfigSource.includes("layoutMode"), "models page has list/grid toggle");
 assert(modelConfigSource.includes("handleDuplicateModelAdapter"), "list/grid keep duplicate");
 assert(modelConfigSource.includes("handleDeleteModelAdapter"), "list/grid keep delete");
 assert(modelConfigSource.includes("showModal"), "model delete asks for confirmation");
-assert(modelConfigSource.includes("handleImportConfig"), "models import semantics remain");
+assert(modelConfigSource.includes("handleImportModelAdapters"), "models import merges model drafts only");
 assert(modelConfigSource.includes("handleExportConfig"), "models export semantics remain");
-assert(modelConfigSource.includes("导入完整配置"), "models import button names full-config transfer");
+assert(modelConfigSource.includes("导入模型配置"), "models import button names model-only transfer");
 assert(modelConfigSource.includes("导出完整配置"), "models export button names full-config transfer");
 function extractNamedButtonInner(source, title) {
   const match = source.match(new RegExp(`<Button[\\s\\S]*?title="${title}"[\\s\\S]*?>([\\s\\S]*?)</Button>`));
   return match ? match[1] : "";
 }
-assert(!extractNamedButtonInner(modelConfigSource, "导入完整配置").includes("icon-["), "models import button has no icon");
+assert(!extractNamedButtonInner(modelConfigSource, "导入模型配置").includes("icon-["), "models import button has no icon");
 assert(!extractNamedButtonInner(modelConfigSource, "导出完整配置").includes("icon-["), "models export button has no icon");
+assert(modelConfigSource.includes("全部测试"), "models page replaces clear-all with test-all");
+assert(!modelConfigSource.includes("清除全部"), "models page must not keep clear-all");
+assert(!modelConfigSource.includes("handleClearAllModelAdapters"), "models page must not keep clear-all handler");
+assert(modelConfigSource.includes("handleTestAllModelAdapters"), "models page wires test-all");
 const deleteModelFn = extractSourceFunction(appStateSource, "deleteModelAdapterAt");
 const duplicateModelFn = extractSourceFunction(appStateSource, "duplicateModelAdapterAt");
 const deleteHandler = extractSourceFunction(modelConfigSource, "handleDeleteModelAdapter");

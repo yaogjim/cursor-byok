@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"cursor/internal/netproxy"
 )
 
 func TestStoreSaveUserConfigPreservesDiskHash(t *testing.T) {
@@ -212,6 +214,58 @@ func TestStoreSectionSavesDoNotOverwriteOtherPages(t *testing.T) {
 	}
 	if savedAdapters.Appearance.Theme != "light" || savedAdapters.Routing.Mode != "upstream" || !savedAdapters.Gateway.Enabled {
 		t.Fatalf("adapter save overwrote other pages: %+v", savedAdapters)
+	}
+}
+
+func TestStoreSectionSavePreservesOutboundProxy(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.Appearance.Theme = "dark"
+		cfg.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://global.example:8080"}
+		adapter := testModelAdapter("ch-a", 1)
+		adapter.OutboundProxy = netproxy.Config{Enabled: true, URL: "socks5://127.0.0.1:1080"}
+		cfg.ModelAdapters = []ModelAdapterConfig{adapter}
+	})
+
+	settings := DefaultConfig()
+	settings.Appearance.Theme = "light"
+	settings.OutboundProxy = netproxy.Config{Enabled: false, URL: "http://global.example:8080"}
+	savedSettings, err := store.SaveSystemSettings(context.Background(), settings)
+	if err != nil {
+		t.Fatalf("SaveSystemSettings() error = %v", err)
+	}
+	if savedSettings.OutboundProxy.Enabled || savedSettings.OutboundProxy.URL != "http://global.example:8080" {
+		t.Fatalf("settings outboundProxy = %+v", savedSettings.OutboundProxy)
+	}
+	if len(savedSettings.ModelAdapters) != 1 || savedSettings.ModelAdapters[0].OutboundProxy.URL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("settings save overwrote model proxy: %+v", savedSettings.ModelAdapters)
+	}
+	if savedSettings.Appearance.Theme != "light" {
+		t.Fatalf("theme = %q", savedSettings.Appearance.Theme)
+	}
+
+	adapters := cloneWriteTestAdapters(savedSettings.ModelAdapters)
+	adapters[0].OutboundProxy = netproxy.Config{Enabled: true, URL: "http://model.example:9090"}
+	savedAdapters, err := store.SaveModelAdapters(context.Background(), adapters)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+	if savedAdapters.ModelAdapters[0].OutboundProxy.URL != "http://model.example:9090" {
+		t.Fatalf("model outboundProxy not saved: %+v", savedAdapters.ModelAdapters[0].OutboundProxy)
+	}
+	if savedAdapters.OutboundProxy != savedSettings.OutboundProxy || savedAdapters.Appearance.Theme != "light" {
+		t.Fatalf("adapter save overwrote global proxy/settings: %+v", savedAdapters)
+	}
+
+	stale := seed
+	stale.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://should-not-apply.example"}
+	stale.Appearance.Theme = "dark"
+	savedCursor, err := store.SaveCursorConfig(context.Background(), stale)
+	if err != nil {
+		t.Fatalf("SaveCursorConfig() error = %v", err)
+	}
+	if savedCursor.OutboundProxy != savedAdapters.OutboundProxy {
+		t.Fatalf("cursor save overwrote outboundProxy: %+v", savedCursor.OutboundProxy)
 	}
 }
 

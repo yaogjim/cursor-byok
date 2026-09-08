@@ -24,6 +24,7 @@ import (
 	"unicode/utf8"
 
 	"cursor/gen/agentv1"
+	"cursor/internal/netproxy"
 )
 
 func TestValidateWebFetchURLFreezesSchemeHostAndLiteralChecks(t *testing.T) {
@@ -370,6 +371,40 @@ func TestWebFetchExplicitProxySkipsLocalResolveAndAllowsLoopbackProxy(t *testing
 		t.Fatalf("executeWebFetch: %v", err)
 	}
 	if !strings.Contains(markdown, "via-proxy") {
+		t.Fatalf("markdown = %q", markdown)
+	}
+	if got := rec.lookupHosts(); len(got) != 0 {
+		t.Fatalf("lookup hosts = %v", got)
+	}
+}
+
+func TestWebFetchDefaultProxyForRequestHonorsGlobalCustom(t *testing.T) {
+	proxyURL := &neturl.URL{Scheme: "http", Host: "127.0.0.1:18088"}
+	netproxy.SetGlobal(netproxy.Config{Enabled: true, URL: proxyURL.String()})
+	t.Cleanup(func() { netproxy.SetGlobal(netproxy.Config{}) })
+
+	rec := &webFetchCallRecorder{}
+	bridge := &Bridge{webFetch: webFetchNetwork{
+		timeout: time.Second,
+		lookupIPAddr: func(context.Context, string) ([]net.IPAddr, error) {
+			t.Fatal("global custom must not perform local DNS")
+			return nil, fmt.Errorf("dns")
+		},
+		dialContext: rec.dialHTTP(func(address string, req *http.Request) pipeHTTPResponse {
+			if address != "127.0.0.1:18088" {
+				t.Errorf("dialed %q, want 127.0.0.1:18088", address)
+			}
+			if req.Host != "example.com" {
+				t.Errorf("Host = %q, want example.com", req.Host)
+			}
+			return pipeHTTPResponse{body: "via-global-proxy"}
+		}),
+	}}
+	markdown, err := bridge.executeWebFetch("http://example.com/")
+	if err != nil {
+		t.Fatalf("executeWebFetch: %v", err)
+	}
+	if !strings.Contains(markdown, "via-global-proxy") {
 		t.Fatalf("markdown = %q", markdown)
 	}
 	if got := rec.lookupHosts(); len(got) != 0 {

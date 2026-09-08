@@ -31,7 +31,7 @@ type ProxyState struct {
 	ProxyRunning bool `json:"proxyRunning"`
 	// CursorSettingsApplied 表示宿主代理设置是否已注入。
 	CursorSettingsApplied bool `json:"cursorSettingsApplied"`
-	// NetProxySource 表示当前出站网络代理来源：system/env/direct。
+	// NetProxySource 表示当前出站网络代理来源：custom/system/env/direct。
 	NetProxySource string `json:"netProxySource"`
 	// NetProxyActive 表示当前出站网络代理是否启用。
 	NetProxyActive bool `json:"netProxyActive"`
@@ -39,6 +39,8 @@ type ProxyState struct {
 	NetProxyUsingSystem bool `json:"netProxyUsingSystem"`
 	// NetProxyUsingEnv 表示当前出站网络代理是否来自环境变量。
 	NetProxyUsingEnv bool `json:"netProxyUsingEnv"`
+	// NetProxyUsingCustom 表示当前出站网络代理是否来自已保存的自定义代理。
+	NetProxyUsingCustom bool `json:"netProxyUsingCustom"`
 	// NetProxyHTTP 表示当前 HTTP 代理地址，已移除凭据。
 	NetProxyHTTP string `json:"netProxyHttp"`
 	// NetProxyHTTPS 表示当前 HTTPS 代理地址，已移除凭据。
@@ -142,6 +144,7 @@ func (s *ProxyService) GetState() ProxyState {
 		NetProxyActive:        netProxy.Active,
 		NetProxyUsingSystem:   netProxy.UsingSystemProxy,
 		NetProxyUsingEnv:      netProxy.UsingEnvProxy,
+		NetProxyUsingCustom:   netProxy.UsingCustomProxy,
 		NetProxyHTTP:          netProxy.HTTPProxy,
 		NetProxyHTTPS:         netProxy.HTTPSProxy,
 		NetProxyPACIgnored:    netProxy.PACIgnored,

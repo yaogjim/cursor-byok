@@ -7,6 +7,35 @@
 
 ## 一、待完成的内容
 
+### 模型导入、全部测试与分层代理（2026-09-08，verified-partial）
+
+用户确认访谈及计划后授权 Build。需求和设计已同步至工作决策基线 §10.14、系统架构 §14.19；本次只实现模型专用导入、全部测试和分层出站代理，没有启用全局超时、跳过 SSL、Task 恢复或 PAC 引擎。
+
+完成的代码链路：
+
+- 模型导入不再因服务运行被静默禁用，新增 `ReadModelAdaptersForImport`，只读取现有 YAML 的 `modelAdapters`，合并到模型草稿，显式保存后才写模型分区。先按渠道身份、再按唯一同名更新，保留未命中项和位置，新增项追加；取消/失败不污染草稿，保留完整配置导入后端和原导出语义。
+- “清除全部”替换为“全部测试”，忽略搜索/提供商筛选，沿用并发 10、现有单模型接口、结果与超时；单项失败继续，停止只停止后续派发并等待在途结束。空列表/全逻辑 alias 有明确提示。
+- 根配置及模型 `outboundProxy` 默认关闭，关闭保留地址。优先级为模型自定义 > BYOK 全局自定义 > 环境/OS > 直连；自定义代理失败不降级默认代理，回环/内部通信保持直连。接通配置规范化/分区保存、UI、热更新、普通推理、候选渠道切换、测试、模型发现及共用 netproxy 出站客户端；不修改系统代理或其他进程。
+
+整合验证中修复的具体缺陷：
+
+1. fallback 候选共用 liveness context，HTTP retry 再替换 context，会丢掉请求级代理。定向假上游测试先返回错误路线的 502；在两个 context 边界保留代理后，候选各用自己的代理且测试通过。
+2. 模型 `ID` 标为 `yaml:"-"`，真实导出不写 ID。原模型专用读取返回空 ID，前端不能映射候选引用；新增导出→导入回归先报 `ID = ""`，再复用身份规范化恢复 ID。`NormalizeModelAdapterDrafts` 只恢复单项规范化和排序，跨集合 fallback/capacity 检查保留在合并/保存之后，允许导入引用当前模型的部分 alias。前端对导入 ID→当前草稿 ID 重写引用，覆盖同名但端点/Key 改变、新增候选和未命中旧引用。
+3. 已保存全局代理快照原先只在 settings capture 更新，保留未保存设置草稿或 models-only 重载时可能陈旧。改为应用持久配置时先更新响应式快照；前端哈希与继承说明使用已保存值而非未保存草稿。
+4. 导入 busy 从原先文件选择后提前到入口，重复点击不再开启多个导入；取消恢复可点。本次模型草稿合并不额外增加确认门禁。
+
+运行证据：
+
+- 主控 `go test -count=1 -timeout=180s ./internal/netproxy ./internal/backend/server/config ./internal/runtime ./internal/backend/agent/model ./internal/client ./internal/backend/agent/bridge/interaction ./internal/backend ./internal/app ./internal/bridge` 退出 0，九包均通过。覆盖本地 HTTP/SOCKS5 代理、优先级、失败不降级、并发隔离、热更新/在途请求、推理/候选/测试/发现和网页抓取原有 DNS/私网规则。
+- 最后导入 ID 修正后 config/client/bridge 再次完整测试，三包均 `ok`；补充的实际 YAML 导出读回及部分 alias 用例通过。定向 `go vet ./internal/backend/server/config ./internal/client` 通过。
+- 最后前端修改后，`node frontend/scripts/test-config-projection.mjs` 输出 `config projection tests passed`；`node frontend/scripts/test-client-api-logging.mjs` 输出 `clientApi logging contract tests passed (54 call sites)`。
+- `npm run build --prefix frontend` 退出 0，134 modules、`built in 3.24s`。构建按既有流程刷新翻译目录及 catalog，未回退原有 catalog 改动。保留 chunk >500 kB 与 Node localstorage-file warning，Go 保留 macOS 14.0 对象/11.0 链接目标 warning；不以构建通过证明低版本实机兼容。
+- `git diff --check` 通过。既有版本号、发布资产、release-notes/releaselog 修改保留，没有 commit/push。
+
+浏览器证据（隔离 Vite `127.0.0.1:5179`，合成内存状态，无桌面后端）：网络页代理默认关闭，切换后出现待保存状态；输入 `ftp://proxy.example:8080` 保存显示“全局自定义代理 URL 仅支持 http、https 或 socks5”，没有未捕获 JS 异常。模型页模拟 service/backend/proxyRunning 均为 true 时，导入按钮 `disabled=false`；两条无 Key 假模型仅搜索显示一条，点击全部测试后 `filtered=1,total=2,completed=2`，两条均有可见校验错误且模型数仍为 2。模型编辑代理默认继承，勾选后显示模型自定义，输入 SOCKS5 地址再关闭仍保留地址并恢复继承文案。浏览器测试状态已清除，测试预览停止，不触碰真实模型凭据或已运行服务。
+
+证据边界：真实 Wails 原生文件选择/保存 RPC、外部代理实机及真实模型请求未验证；本地假代理/假上游与浏览器内存 fixture 不能替代这些证据。本次不打包/安装/重启应用，不执行无关完整仓库测试/race。交付为 `verified-partial`：代码及相关验证完成，桌面实机验收待后续受控执行。
+
 ### main → gateway 价值迁移追加完成情况复审（completed，verified-partial）
 
 用户要求再次 review 完成情况并修复问题；本轮审查 `git diff 2fc04e7` 和未跟踪源码/测试，保留前次最终验证豁免。Spec 复审 `719d398e-ecab-441f-9479-1fbd52cdeee2` 未报告 REC/CMP、CLI/MODEL、WebFetch 的新增具体缺陷；Standards 复审 `b5a71c5c-b64b-45d2-ad49-6bd11a9a4b86` 未报告 TOOL/RESULT 缺陷，提出的 Cursor 候选问题由主控核对、复现并修复。
@@ -280,6 +309,10 @@ managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_respons
 指定 transcript 最终复盘结论：原会话中因服务中断停止的 Stage 4 已在用户切换 LLM 服务后恢复并闭合；Stage 6 四条 `Superseded by newer request` 只是同一根测试命令被后续请求替代，后续串行全量测试已闭合，并无可直接 resume 的独立遗留任务。原始建议中唯一未逐字覆盖且可在当前合同内补齐的是显式 15K reasoning canary；现已把三工具共享 reasoning 回归升级为 15 KiB start/end canary，并通过专项、forwarder 全包/race/vet 和 diff 检查。更强的“assistant 文件声明逐项对照 Git diff”和“reasoning 超阈值时中途打断”不属于已批准 metadata-only 完成门禁语义，若要实施需另行设计；recorder/exporter stash 与真实 Cursor 六场景仍是独立工作包，未混入本治理包。
 
 阶段状态、命令和缺口以 [`task/todo.md`](../task/todo.md) 的 `agent-governance-completion-20260822` 为准；治理包当前 `DELIVERY_STATUS=accepted`，但尚未 commit、push、tag 或发布，后续发布必须等待单独批准。
+
+### 0.24 本地编译 macOS v0.0.60.0
+
+2026-09-07 完成 `v0.0.60.0` Apple Silicon macOS 本地构建。版本号统一为 `0.0.60.0`（纠正提交 `f6ce0b0` 中 `0.060.0` 的写法，与历史 `0.0.x.y` 四段格式一致），`releaselog/0.060.0.md` 重命名为 `0.0.60.0.md`。使用 Go 1.26.1、Task 3.53.1、`PATH=~/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（24,225,414 bytes），并归档为 `bin/release/0.0.60.0/cursor-byok-0.0.60.0-macos-arm64.dmg`。挂载核验：Info.plist 短版本与 bundle 版本均为 `0.0.60.0`，二进制注入版本 `0.0.60.0`，Mach-O 64-bit arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `7e0d86254c84e9f8211337e5feb96866e0343a083b751c3e6fa083e8325d641f`，`SHA256SUMS` 复核通过。构建同时再生成 i18n catalog 行号引用（97 处 line 值刷新，无文案变化）。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布；版本号修正与构建证据未提交，待用户确认。
 
 ### 1. 版本发布与交付
 

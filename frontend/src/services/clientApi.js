@@ -109,6 +109,12 @@ export function exportUserConfig(path) {
   );
 }
 
+export function readModelAdaptersForImport(path) {
+  return withApiLogging("ReadModelAdaptersForImport", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ReadModelAdaptersForImport`, path),
+  );
+}
+
 export function importUserConfig(path) {
   return Call.ByName(`${PROXY_SERVICE_NAME}.ImportUserConfig`, path).then(
     (result) => {
@@ -293,6 +299,12 @@ export function fetchModelAdapterModels(payload) {
     credentialSource: credentialSource || "static",
     customHeadersEnabled: source.customHeadersEnabled,
     customHeadersJSON: source.customHeadersJSON,
+    outboundProxy: source.outboundProxy && typeof source.outboundProxy === "object"
+      ? {
+          enabled: Boolean(source.outboundProxy.enabled),
+          url: String(source.outboundProxy.url || ""),
+        }
+      : { enabled: false, url: "" },
   };
   return withApiLogging("FetchModelAdapterModels", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, request),

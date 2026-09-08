@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cursor/internal/audit"
+	"cursor/internal/netproxy"
 )
 
 const (
@@ -284,6 +285,20 @@ func attachStreamHTTPTrace(request *http.Request, diagnostics *StreamDiagnostics
 	return request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
 }
 
+// bindAttemptOutboundProxy 在替换 attempt context 时保留请求级自定义代理。
+// startHTTPAttempt 从共享 liveness ctx 派生，fallback 预挂 liveness 时该 ctx 不含 OutboundProxy。
+func bindAttemptOutboundProxy(request *http.Request, attemptCtx context.Context, parent context.Context) *http.Request {
+	if request == nil {
+		return nil
+	}
+	if cfg, ok := netproxy.RequestConfigFromContext(request.Context()); ok {
+		attemptCtx = netproxy.WithRequestConfig(attemptCtx, cfg)
+	} else if cfg, ok := netproxy.RequestConfigFromContext(parent); ok {
+		attemptCtx = netproxy.WithRequestConfig(attemptCtx, cfg)
+	}
+	return request.WithContext(attemptCtx)
+}
+
 func doProviderRequest(
 	ctx context.Context,
 	client *http.Client,
@@ -330,7 +345,7 @@ func doProviderRequest(
 		retry.diagnostics.BeginHTTPAttempt()
 		httpReq = attachStreamHTTPTrace(httpReq, retry.diagnostics)
 		attemptCtx, finishAttempt := retry.startHTTPAttempt(ctx)
-		httpReq = httpReq.WithContext(attemptCtx)
+		httpReq = bindAttemptOutboundProxy(httpReq, attemptCtx, ctx)
 		startedAt := time.Now()
 		targetHost := ""
 		endpointKind := "custom"
@@ -763,7 +778,7 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 		body.retry.diagnostics.BeginHTTPAttempt()
 		request = attachStreamHTTPTrace(request, body.retry.diagnostics)
 		attemptCtx, finishAttempt := body.retry.startHTTPAttempt(body.ctx)
-		request = request.WithContext(attemptCtx)
+		request = bindAttemptOutboundProxy(request, attemptCtx, body.ctx)
 		startedAt := time.Now()
 		endpoint, targetHost, canaryMatched := body.recordRequest(request)
 		if !body.retry.consumeFallbackAttempt() {

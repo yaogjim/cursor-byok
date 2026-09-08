@@ -10,6 +10,7 @@ import (
 
 	"cursor/gen/agentv1"
 	runtimecore "cursor/internal/backend/agent/core"
+	"cursor/internal/netproxy"
 )
 
 const (
@@ -226,6 +227,8 @@ type StreamRequest struct {
 	// FallbackBudget 是整条 fallback chain 共享的 HTTP attempt 与退避等待预算。
 	// nil 表示普通单渠道路径，仍使用原有 providerRetry 本地预算。
 	FallbackBudget *FallbackRetryBudget
+	// OutboundProxy 是本次请求的模型级自定义代理；关闭表示继承全局。按请求附着，不修改共享 transport。
+	OutboundProxy netproxy.Config
 }
 
 // FallbackSafetyInfo 是单个渠道尝试的 typed 安全状态。Router 不根据错误

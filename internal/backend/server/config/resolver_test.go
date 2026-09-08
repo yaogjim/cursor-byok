@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/internal/netproxy"
 	legacyruntime "cursor/internal/runtime"
 	"cursor/internal/subscriptionauth"
 )
@@ -413,5 +414,54 @@ func TestSelectChannelForModelResolvesCatalogIDsWithoutSentinel(t *testing.T) {
 	first, err := manager.SelectChannelForModel(context.Background(), staticID)
 	if err != nil || first.ID != staticID {
 		t.Fatalf("known ID after stale miss = %+v err=%v", first, err)
+	}
+}
+
+func TestResolveAdapterToChannelProjectsOutboundProxy(t *testing.T) {
+	enabled := testModelAdapter("proxy-on", 1)
+	enabled.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://model.example:8080"}
+	disabled := testModelAdapter("proxy-off", 2)
+	disabled.BaseURL = "https://api2.example.com/v1"
+	disabled.OutboundProxy = netproxy.Config{Enabled: false, URL: "http://unused.example:9"}
+	normalized, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{enabled, disabled})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	on := resolveAdapterToChannel(normalized[0])
+	off := resolveAdapterToChannel(normalized[1])
+	if !on.OutboundProxy.Enabled || on.OutboundProxy.URL != "http://model.example:8080" {
+		t.Fatalf("enabled channel proxy = %+v", on.OutboundProxy)
+	}
+	if off.OutboundProxy.Enabled || off.OutboundProxy.URL != "http://unused.example:9" {
+		t.Fatalf("disabled channel must retain unused URL: %+v", off.OutboundProxy)
+	}
+}
+
+func TestResolveChannelPlanKeepsOutboundProxyPerCandidate(t *testing.T) {
+	adapters, aliasID, primaryID, candidateID := testFallbackChain(t)
+	adapters[0].OutboundProxy = netproxy.Config{Enabled: true, URL: "http://alias.example:1"}
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    primaryID,
+		CandidateChannelIDs: []string{candidateID},
+	}
+	adapters[1].OutboundProxy = netproxy.Config{Enabled: true, URL: "http://primary.example:2"}
+	adapters[2].OutboundProxy = netproxy.Config{Enabled: true, URL: "socks5://candidate.example:3"}
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	plan, err := resolveModelAdapterChannelPlan(normalized, aliasID)
+	if err != nil {
+		t.Fatalf("resolve plan: %v", err)
+	}
+	if !plan.FallbackEnabled || len(plan.Channels) != 2 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if plan.Channels[0].OutboundProxy.URL != "http://primary.example:2" {
+		t.Fatalf("primary used alias proxy: %+v", plan.Channels[0].OutboundProxy)
+	}
+	if plan.Channels[1].OutboundProxy.URL != "socks5://candidate.example:3" {
+		t.Fatalf("candidate used alias/primary proxy: %+v", plan.Channels[1].OutboundProxy)
 	}
 }

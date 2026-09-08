@@ -214,6 +214,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 }
 
 func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("anthropic base url is empty")
@@ -335,7 +336,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 			// 自定义 header 构建失败是本地逻辑错误，禁止 fallback。
 			return nil, &RequestBuildError{Err: err}
 		}
-		return httpReq, nil
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false

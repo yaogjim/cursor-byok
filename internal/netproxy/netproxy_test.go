@@ -61,7 +61,7 @@ func TestNewProviderTransportAppliesOneExperiment(t *testing.T) {
 			}
 		}},
 		{name: "direct", profile: ProviderTransportProfileDirect, check: func(t *testing.T, transport *http.Transport) {
-			if transport.Proxy != nil || transport.DisableCompression || transport.DisableKeepAlives {
+			if transport.Proxy == nil || transport.DisableCompression || transport.DisableKeepAlives {
 				t.Fatalf("direct transport mixed profiles: %#v", transport)
 			}
 		}},
@@ -168,6 +168,7 @@ func TestProxyForRequestNilRequest(t *testing.T) {
 func resetProxyResolverForTest() {
 	defaultResolver.mu.Lock()
 	defaultResolver.snapshot = proxySnapshot{}
+	defaultResolver.globalConfig = Config{}
 	defaultResolver.mu.Unlock()
 }
 

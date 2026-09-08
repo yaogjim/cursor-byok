@@ -17,6 +17,7 @@ import (
 	"cursor/internal/subscriptionauth"
 
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/netproxy"
 )
 
 func TestBuildModelListEndpointCandidates(t *testing.T) {
@@ -675,5 +676,39 @@ func TestModelAdapterTestRequestIDUsesQuotaSkipPrefix(t *testing.T) {
 	}
 	if adapter.APIKey != "" {
 		t.Fatalf("adapter.APIKey 被写回：%q", adapter.APIKey)
+	}
+}
+
+func TestFetchModelAdapterModelsUsesOutboundProxy(t *testing.T) {
+	originalDo := modelListHTTPDo
+	t.Cleanup(func() { modelListHTTPDo = originalDo })
+	modelListHTTPDo = defaultModelListHTTPDo
+
+	var hits int
+	proxy := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		if request.Header.Get("Authorization") != "Bearer sk-test" {
+			t.Errorf("Authorization = %q", request.Header.Get("Authorization"))
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"id":"gpt-proxy"}]}`))
+	}))
+	t.Cleanup(proxy.Close)
+
+	service := &ProxyService{}
+	result, err := service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:          "openai",
+		BaseURL:       "http://provider.example/v1",
+		APIKey:        "sk-test",
+		OutboundProxy: netproxy.Config{Enabled: true, URL: proxy.URL},
+	})
+	if err != nil {
+		t.Fatalf("FetchModelAdapterModels 返回错误：%v", err)
+	}
+	if hits == 0 {
+		t.Fatal("model discovery did not go through observable proxy")
+	}
+	if len(result.Models) != 1 || result.Models[0] != "gpt-proxy" {
+		t.Fatalf("models = %#v", result.Models)
 	}
 }

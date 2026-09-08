@@ -163,6 +163,7 @@ func resolveAdapterToChannel(matched ModelAdapterConfig) legacyruntime.ResolvedC
 		ThinkingBudgetTokens:         defaultChannelThinkingBudget,
 		MaxConcurrentRequests:        matched.MaxConcurrentRequests,
 		UpstreamCapacityGroupKey:     legacyruntime.BuildUpstreamCapacityGroupKey(matched.Type, matched.BaseURL, subscriptionauth.ChannelIDSecret(subscriptionauth.NormalizeCredentialSource(matched.CredentialSource), matched.APIKey)),
+		OutboundProxy:                matched.OutboundProxy,
 	}
 	if matched.ContextWindowTokens > 0 {
 		resolved.ContextWindowTokens = matched.ContextWindowTokens

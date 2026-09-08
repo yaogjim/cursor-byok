@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/internal/netproxy"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -667,6 +669,72 @@ func TestProviderFallbackBudgetYAMLJSONRoundtrip(t *testing.T) {
 	}
 }
 
+func TestNormalizeModelAdapterDraftsRestoresIDsWithoutCrossCollectionValidation(t *testing.T) {
+	adapters, _, idB, idC := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	want, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize full collection: %v", err)
+	}
+
+	payload, err := yaml.Marshal(want)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v", err)
+	}
+	var decoded []ModelAdapterConfig
+	if err := yaml.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	for _, row := range decoded {
+		if row.ID != "" {
+			t.Fatalf("yaml.Marshal omitted IDs expected, got %q", row.ID)
+		}
+	}
+
+	got, err := NormalizeModelAdapterDrafts(decoded)
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterDrafts() error = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("NormalizeModelAdapterDrafts() len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID {
+			t.Fatalf("adapter[%d].ID = %q, want %q", i, got[i].ID, want[i].ID)
+		}
+	}
+	if !got[0].ProviderFallback.Enabled || got[0].ProviderFallback.PrimaryChannelID != idB {
+		t.Fatalf("fallback primary = %+v, want %q", got[0].ProviderFallback, idB)
+	}
+	if len(got[0].ProviderFallback.CandidateChannelIDs) != 1 || got[0].ProviderFallback.CandidateChannelIDs[0] != idC {
+		t.Fatalf("fallback candidates = %#v, want [%q]", got[0].ProviderFallback.CandidateChannelIDs, idC)
+	}
+
+	partial := []ModelAdapterConfig{decoded[0]}
+	if _, err := NormalizeModelAdapterConfigs(partial); err == nil {
+		t.Fatal("NormalizeModelAdapterConfigs should reject alias without the candidate set")
+	}
+	drafts, err := NormalizeModelAdapterDrafts(partial)
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterDrafts(partial) error = %v", err)
+	}
+	if drafts[0].ID != want[0].ID {
+		t.Fatalf("partial alias ID = %q, want %q", drafts[0].ID, want[0].ID)
+	}
+	if drafts[0].ProviderFallback.PrimaryChannelID != idB || drafts[0].ProviderFallback.CandidateChannelIDs[0] != idC {
+		t.Fatalf("partial alias refs = %+v", drafts[0].ProviderFallback)
+	}
+
+	invalid := []ModelAdapterConfig{testModelAdapter("", 1)}
+	if _, err := NormalizeModelAdapterDrafts(invalid); err == nil {
+		t.Fatal("NormalizeModelAdapterDrafts should still reject empty displayName")
+	}
+}
+
 func TestMaxConcurrentRequestsDefaultsMissingAndZero(t *testing.T) {
 	adapters := []ModelAdapterConfig{testModelAdapter("ch-a", 1)}
 	got, err := NormalizeModelAdapterConfigs(adapters)
@@ -1025,5 +1093,83 @@ func TestNormalizeModelAdapterConfigsOpenAIImageGenerationEnabled(t *testing.T) 
 				t.Fatalf("NormalizeModelAdapterConfigs() error = %v, want %q", err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestOutboundProxyJSONYAMLRoundtripAndDefaults(t *testing.T) {
+	missing, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if missing.OutboundProxy.Enabled || missing.OutboundProxy.URL != "" {
+		t.Fatalf("missing outboundProxy = %+v", missing.OutboundProxy)
+	}
+
+	input := DefaultConfig()
+	input.OutboundProxy = netproxy.Config{Enabled: false, URL: "http://user:s3cret@proxy.example:8080"}
+	adapter := testModelAdapter("proxy-model", 1)
+	adapter.OutboundProxy = netproxy.Config{Enabled: true, URL: "socks5://127.0.0.1:1080"}
+	input.ModelAdapters = []ModelAdapterConfig{adapter}
+
+	normalized, err := NormalizeConfig(input)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.OutboundProxy.Enabled || normalized.OutboundProxy.URL != "http://user:s3cret@proxy.example:8080" {
+		t.Fatalf("disabled global must retain URL: %+v", normalized.OutboundProxy)
+	}
+	if !normalized.ModelAdapters[0].OutboundProxy.Enabled || normalized.ModelAdapters[0].OutboundProxy.URL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("model outboundProxy = %+v", normalized.ModelAdapters[0].OutboundProxy)
+	}
+
+	yamlPayload, err := yaml.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if !strings.Contains(string(yamlPayload), "outboundProxy:") {
+		t.Fatalf("yaml lost outboundProxy:\n%s", yamlPayload)
+	}
+	var fromYAML Config
+	if err := yaml.Unmarshal(yamlPayload, &fromYAML); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	roundtrip, err := NormalizeConfig(fromYAML)
+	if err != nil {
+		t.Fatalf("yaml roundtrip normalize: %v", err)
+	}
+	if roundtrip.OutboundProxy != normalized.OutboundProxy || roundtrip.ModelAdapters[0].OutboundProxy != normalized.ModelAdapters[0].OutboundProxy {
+		t.Fatalf("yaml roundtrip = %+v / %+v", roundtrip.OutboundProxy, roundtrip.ModelAdapters[0].OutboundProxy)
+	}
+
+	jsonPayload, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(jsonPayload), `"outboundProxy"`) {
+		t.Fatalf("json lost outboundProxy: %s", jsonPayload)
+	}
+	var fromJSON Config
+	if err := json.Unmarshal(jsonPayload, &fromJSON); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	jsonRoundtrip, err := NormalizeConfig(fromJSON)
+	if err != nil {
+		t.Fatalf("json roundtrip normalize: %v", err)
+	}
+	if jsonRoundtrip.OutboundProxy != normalized.OutboundProxy || jsonRoundtrip.ModelAdapters[0].OutboundProxy != normalized.ModelAdapters[0].OutboundProxy {
+		t.Fatalf("json roundtrip = %+v / %+v", jsonRoundtrip.OutboundProxy, jsonRoundtrip.ModelAdapters[0].OutboundProxy)
+	}
+}
+
+func TestNormalizeConfigRejectsInvalidEnabledOutboundProxy(t *testing.T) {
+	_, err := NormalizeConfig(Config{OutboundProxy: netproxy.Config{Enabled: true, URL: "ftp://proxy.example"}})
+	if err == nil || !strings.Contains(err.Error(), "outboundProxy.url") || strings.Contains(err.Error(), "ftp://") {
+		t.Fatalf("global invalid error = %v", err)
+	}
+	adapter := testModelAdapter("bad-proxy", 1)
+	adapter.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://user:s3cret@"}
+	_, err = NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("model invalid error = %v", err)
 	}
 }

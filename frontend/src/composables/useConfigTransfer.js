@@ -3,8 +3,10 @@ import { Dialogs } from "@wailsio/runtime";
 import { showModal } from "@/composables/useModal";
 import {
   appState,
+  applyImportedModelAdapters,
   exportUserConfigToFile,
   importUserConfigFromFile,
+  readModelAdaptersForImportFromFile,
   toUserError,
 } from "@/state/appState";
 
@@ -12,6 +14,18 @@ const YAML_FILE_FILTER = [{ DisplayName: "YAML 配置文件", Pattern: "*.yaml;*
 
 export function useConfigTransfer({ message, showActionError }) {
   const busy = ref(false);
+
+  function beginImport() {
+    if (busy.value) {
+      return false;
+    }
+    if (appState.configSaving) {
+      showActionError("导入失败", "已有配置操作正在进行，请稍后再试");
+      return false;
+    }
+    busy.value = true;
+    return true;
+  }
 
   async function exportConfig() {
     const confirmed = await showModal({
@@ -51,6 +65,9 @@ export function useConfigTransfer({ message, showActionError }) {
       showActionError("导入失败", "服务运行中不能导入完整配置，请先停止服务");
       return;
     }
+    if (!beginImport()) {
+      return;
+    }
     try {
       const path = await Dialogs.OpenFile({
         Title: "导入 cursor-byok 配置",
@@ -74,9 +91,39 @@ export function useConfigTransfer({ message, showActionError }) {
         return;
       }
 
-      busy.value = true;
       const imported = await importUserConfigFromFile(path);
       message(`配置导入成功，共导入 ${imported.modelAdapters.length} 个模型`);
+    } catch (error) {
+      showActionError("导入失败", toUserError(error));
+    } finally {
+      busy.value = false;
+    }
+  }
+
+  async function importModelAdapters() {
+    if (!beginImport()) {
+      return;
+    }
+    try {
+      const path = await Dialogs.OpenFile({
+        Title: "导入模型配置",
+        Filters: YAML_FILE_FILTER,
+        CanChooseFiles: true,
+        CanChooseDirectories: false,
+        AllowsMultipleSelection: false,
+        AllowsOtherFiletypes: false,
+      });
+      if (!path) {
+        return;
+      }
+
+      const imported = await readModelAdaptersForImportFromFile(path);
+      const result = applyImportedModelAdapters(imported);
+      if (!result.ok) {
+        showActionError("导入失败", result.error);
+        return;
+      }
+      message(`模型已合并到草稿：新增 ${result.added} 个，更新 ${result.updated} 个。保存本页后才会写入配置。`);
     } catch (error) {
       showActionError("导入失败", toUserError(error));
     } finally {
@@ -88,5 +135,6 @@ export function useConfigTransfer({ message, showActionError }) {
     configTransferBusy: busy,
     handleExportConfig: exportConfig,
     handleImportConfig: importConfig,
+    handleImportModelAdapters: importModelAdapters,
   };
 }

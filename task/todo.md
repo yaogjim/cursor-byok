@@ -4,6 +4,20 @@
 
 ## 当前焦点
 
+### 模型导入、全部测试与分层代理（2026-09-08）
+
+- 授权：用户确认访谈结果及计划后选择 Build；实现与本轮定向验证已收口，交付 `verified-partial`（真实 Wails 文件对话框及外部代理实机验收未完成）。
+- 需求锚点：工作决策基线 §10.14「模型导入导出与全部测试」「分层出站代理」；设计锚点：系统架构 §14.19 `DESIGN-MODEL-IMPORT-PROXY-001`。
+- 范围：运行中可用的模型专用 YAML 导入→合并草稿→模型分区保存；全量物理模型测试；默认关闭的全局/模型自定义代理→真实出站请求。沿用现有保存、测试和网络层。
+- [completed] `record-contracts`：同步用户已确认需求和设计；保留历史任务及工作区既有版本/发布/翻译变更。
+- [completed] `fix-model-import`：只读 YAML 提取后复用 `NormalizeModelAdapterDrafts` 恢复 yaml 不序列化的派生 ID，跨模型引用校验延至合并后；同身份/唯一同名更新并映射导入 fallback 引用，保留当前未命中模型及引用。失败/取消不改草稿，导入对话框阶段即防重复，保存仍走模型分区。真实导出→读回 ID、部分 alias、前端合并/保存投影回归通过。
+- [completed] `wire-test-all`：按钮接全部草稿快照，沿用并发 10、逐项结果与超时；停止后续调度、等待在途结束，逻辑 alias/空列表明确提示。浏览器仅显示 1 个搜索结果时实际批次仍处理 2 个模拟模型，两个本地校验错误分别展示，模型数保持 2。
+- [completed] `wire-layered-proxy`：`outboundProxy` 配置、设置/编辑 UI、分区保存、请求级覆盖、全局热更新、推理/测试/发现/fallback 与共用网络层接线；修复候选请求在 liveness/retry 替换 context 时丢失模型代理。已保存全局使用响应式独立快照，保留设置草稿/仅模型重载时也更新真实已保存代理，旧测试结果正确标记需重测。
+- [completed] `verify-and-document`：九个相关 Go 包完整测试通过；最终导入修正后 config/client/bridge 再验证通过。`node frontend/scripts/test-config-projection.mjs`、`node frontend/scripts/test-client-api-logging.mjs`（54 call sites）、`npm run build --prefix frontend`、`git diff --check` 通过。浏览器验证开关、草稿、非法代理提示、全量调度及关闭保留地址；使用合成内存数据，无桌面桥接或配置写入。详情与告警见 `docs/process.md`。
+- 保留缺口：真实 Wails 文件选择器/保存桥接和外部 HTTP/HTTPS/SOCKS 实机未验证；本地 HTTP/SOCKS 代理与假上游已覆盖，不当作外部实机证据。未做完整仓库测试/race、打包部署或 macOS 低版本实测。
+- 非目标：超时、SSL、Task 恢复、PAC 引擎、修改 OS/其他进程代理、打包部署、commit/push。既有服务/真实配置未改变；隔离浏览器预览已清理。
+- 回退：未保存导入可重新加载；关闭模型/全局自定义代理恢复继承。代码仅回退本任务改动，保留既有工作及用户配置。
+
 ### 🎯 Active Work Package
 
 **main-gateway-value-migration-20260907** (completed, verified-partial)

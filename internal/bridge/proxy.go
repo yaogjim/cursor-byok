@@ -186,6 +186,11 @@ func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
 	return serverconfig.RedactGatewayTokenForUI(cfg), nil
 }
 
+// ReadModelAdaptersForImport 只读取 YAML 中的 modelAdapters，不写盘、不停服务。
+func (s *ProxyService) ReadModelAdaptersForImport(path string) ([]ModelAdapterConfig, error) {
+	return s.core.ReadModelAdaptersForImport(path)
+}
+
 // GetCursorAccountStatus 返回 cursor-byok 独立 Cursor 账号的脱敏状态。
 func (s *ProxyService) GetCursorAccountStatus() CursorAccountStatus {
 	return s.core.GetCursorAccountStatus()

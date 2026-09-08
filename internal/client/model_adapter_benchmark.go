@@ -133,12 +133,13 @@ type ModelAdapterTestResult struct {
 
 // ModelAdapterModelsRequest 定义从兼容接口读取模型列表所需的最小配置。
 type ModelAdapterModelsRequest struct {
-	Type                 string `json:"type"`
-	BaseURL              string `json:"baseURL"`
-	APIKey               string `json:"apiKey"`
-	CredentialSource     string `json:"credentialSource"`
-	CustomHeadersEnabled bool   `json:"customHeadersEnabled"`
-	CustomHeadersJSON    string `json:"customHeadersJSON"`
+	Type                 string          `json:"type"`
+	BaseURL              string          `json:"baseURL"`
+	APIKey               string          `json:"apiKey"`
+	CredentialSource     string          `json:"credentialSource"`
+	CustomHeadersEnabled bool            `json:"customHeadersEnabled"`
+	CustomHeadersJSON    string          `json:"customHeadersJSON"`
+	OutboundProxy        netproxy.Config `json:"outboundProxy"`
 }
 
 // ModelAdapterModelsResult 定义可供前端下拉选择的模型列表。
@@ -348,6 +349,7 @@ func requestModelListPayload(
 	}
 	req.Header.Set("Accept", "application/json")
 	applyModelListCustomHeaders(req.Header, input)
+	req = netproxy.AttachRequest(req, input.OutboundProxy)
 
 	resp, err := modelListHTTPDo(req)
 	if err != nil {
@@ -431,6 +433,7 @@ func fetchCodexModelList(ctx context.Context, apiKey string, chatgptAccountID st
 	req.Header.Set(chatgptAccountIDHeader, accountID)
 	req.Header.Set("Accept", "application/json")
 	applyModelListCustomHeaders(req.Header, input)
+	req = netproxy.AttachRequest(req, input.OutboundProxy)
 
 	resp, err := modelListHTTPDo(req)
 	if err != nil {
@@ -649,6 +652,7 @@ func (s *ProxyService) resolveModelAdapterTestCredentials(ctx context.Context, a
 func (s *ProxyService) runModelAdapterTest(adapter serverconfig.ModelAdapterConfig, requestHash string) (ModelAdapterTestResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), modelAdapterTestTimeout)
 	defer cancel()
+	ctx = netproxy.WithRequestConfig(ctx, adapter.OutboundProxy)
 
 	cred, err := s.resolveModelAdapterTestCredentials(ctx, adapter)
 	if err != nil {
@@ -748,6 +752,7 @@ func (s *ProxyService) executeOpenAIStreamingTest(ctx context.Context, adapter s
 		OpenAIImageGenerationEnabled: adapter.OpenAIImageGenerationEnabled,
 		CustomHeadersEnabled:         adapter.CustomHeadersEnabled,
 		CustomHeadersJSON:            strings.TrimSpace(adapter.CustomHeadersJSON),
+		OutboundProxy:                adapter.OutboundProxy,
 		Messages:                     []modeladapter.Message{{Role: "user", Content: modelAdapterTestPrompt}},
 		MaxTokens:                    maxTokens,
 		Stream:                       true,
@@ -822,6 +827,7 @@ func (s *ProxyService) executeAnthropicStreamingTest(ctx context.Context, adapte
 		AnthropicExtraParamsEnabled: adapter.AnthropicExtraParamsEnabled,
 		AnthropicExtraParamsJSON:    strings.TrimSpace(adapter.AnthropicExtraParamsJSON),
 		ThinkingBudgetTokens:        adapter.ThinkingBudgetTokens,
+		OutboundProxy:               adapter.OutboundProxy,
 		Messages:                    []modeladapter.Message{{Role: "user", Content: modelAdapterTestPrompt}},
 		MaxTokens:                   maxTokens,
 		Stream:                      true,
@@ -1088,6 +1094,11 @@ func buildModelAdapterTestCacheKey(adapter serverconfig.ModelAdapterConfig, requ
 
 func buildModelAdapterTestRequestHash(adapter serverconfig.ModelAdapterConfig) string {
 	source := normalizeModelAdapterTestHashSource(adapter)
+	effectiveProxy := netproxy.Effective(adapter.OutboundProxy, netproxy.GlobalConfig())
+	proxyURL := ""
+	if effectiveProxy.Enabled {
+		proxyURL = effectiveProxy.URL
+	}
 	payload := strings.Join([]string{
 		source.Type,
 		source.BaseURL,
@@ -1107,6 +1118,8 @@ func buildModelAdapterTestRequestHash(adapter serverconfig.ModelAdapterConfig) s
 		strconv.Itoa(source.MaxCompletionTokens),
 		strconv.Itoa(source.AnthropicMaxTokens),
 		source.AnthropicThinkingEffort,
+		strconv.FormatBool(effectiveProxy.Enabled),
+		proxyURL,
 	}, "\n")
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(payload))

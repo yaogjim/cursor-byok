@@ -254,6 +254,7 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 			AnthropicThinkingEffort:      item.AnthropicThinkingEffort,
 			ThinkingBudgetTokens:         item.ThinkingBudgetTokens,
 			MaxConcurrentRequests:        item.MaxConcurrentRequests,
+			OutboundProxy:                item.OutboundProxy,
 		})
 	}
 	return legacyruntime.RuntimeConfigSnapshot{

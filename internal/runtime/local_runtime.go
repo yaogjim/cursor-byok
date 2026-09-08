@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
 	"cursor/internal/subscriptionauth"
 )
 
@@ -162,6 +163,8 @@ type ModelAdapterConfig struct {
 	ThinkingBudgetTokens int `json:"thinkingBudgetTokens"`
 	// MaxConcurrentRequests 是物理上游组共享的可选并发上限。缺失/0 表示不限制，非零合法范围 1–16。
 	MaxConcurrentRequests int `json:"maxConcurrentRequests,omitempty"`
+	// OutboundProxy 是该模型出站请求的可选自定义代理。
+	OutboundProxy netproxy.Config `json:"outboundProxy"`
 }
 
 // RuntimeConfigSnapshot 定义了当前模块中的 RuntimeConfigSnapshot 类型。
@@ -216,6 +219,11 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
 		next.OpenAIImageGenerationEnabled = item.OpenAIImageGenerationEnabled
+		outboundProxy, err := netproxy.Normalize(item.OutboundProxy)
+		if err != nil {
+			return nil, err
+		}
+		next.OutboundProxy = outboundProxy
 		source := subscriptionauth.NormalizeCredentialSource(next.CredentialSource)
 		if source == "" {
 			return nil, errors.New("模型适配器 credentialSource 仅支持 static、codex 或 grok")
@@ -461,6 +469,8 @@ type ResolvedChannel struct {
 	UpstreamCapacityGroupKey string
 	// CredentialSource 表示渠道凭据来源。
 	CredentialSource string
+	// OutboundProxy 是该渠道出站请求的自定义代理；关闭表示继承全局。
+	OutboundProxy netproxy.Config
 }
 
 // ChannelUsageRecordCreatePayload 定义了一次渠道使用记录的最小载荷。
@@ -586,6 +596,7 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 			ThinkingBudgetTokens:         configurableChannelThinkingBudgetTokens,
 			MaxConcurrentRequests:        adapter.MaxConcurrentRequests,
 			UpstreamCapacityGroupKey:     BuildUpstreamCapacityGroupKey(adapter.Type, adapter.BaseURL, adapter.APIKey),
+			OutboundProxy:                adapter.OutboundProxy,
 		}
 		if adapter.ContextWindowTokens > 0 {
 			resolved.ContextWindowTokens = adapter.ContextWindowTokens

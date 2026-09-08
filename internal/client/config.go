@@ -5,6 +5,7 @@ import (
 
 	"cursor/internal/appdata"
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/netproxy"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -28,13 +29,23 @@ func (s *ProxyService) loadUserConfig() (UserConfig, error) {
 	if app != nil {
 		ctx = app.Context()
 	}
-	if s.backendHost != nil {
-		return s.backendHost.LoadConfig(ctx)
+	var (
+		cfg UserConfig
+		err error
+	)
+	switch {
+	case s.backendHost != nil:
+		cfg, err = s.backendHost.LoadConfig(ctx)
+	case s.store != nil:
+		cfg, err = s.store.Load(ctx)
+	default:
+		cfg = serverconfig.DefaultConfig()
 	}
-	if s.store == nil {
-		return serverconfig.DefaultConfig(), nil
+	if err != nil {
+		return cfg, err
 	}
-	return s.store.Load(ctx)
+	applySavedOutboundProxy(cfg)
+	return cfg, nil
 }
 
 // SaveUserConfig 用于处理与 SaveUserConfig 相关的逻辑。
@@ -264,11 +275,16 @@ func (s *ProxyService) reconcileGatewayIfServiceRunning(cfg UserConfig) {
 }
 
 func (s *ProxyService) emitUserConfigChanged(cfg UserConfig) {
+	applySavedOutboundProxy(cfg)
 	app := application.Get()
 	if app == nil {
 		return
 	}
 	app.Event.Emit("user-config:changed", serverconfig.RedactGatewayTokenForUI(cfg))
+}
+
+func applySavedOutboundProxy(cfg UserConfig) {
+	netproxy.SetGlobal(cfg.OutboundProxy)
 }
 
 // resolveUserConfigPath 用于处理与 resolveUserConfigPath 相关的逻辑。

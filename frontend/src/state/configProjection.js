@@ -600,3 +600,241 @@ export function gatewayPublicModelInvalid(model, adapters) {
   const list = Array.isArray(adapters) ? adapters : [];
   return !list.some((adapter) => asString(adapter?.id) === target);
 }
+
+export const DEFAULT_OUTBOUND_PROXY = Object.freeze({
+  enabled: false,
+  url: "",
+});
+
+export function normalizeOutboundProxy(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  return {
+    enabled: asBoolean(raw.enabled),
+    url: asString(raw.url),
+  };
+}
+
+export function validateOutboundProxy(source, prefix = "自定义代理") {
+  const proxy = normalizeOutboundProxy(source);
+  if (!proxy.enabled) {
+    return "";
+  }
+  if (!proxy.url) {
+    return `${prefix} URL 不能为空`;
+  }
+  let parsed;
+  try {
+    parsed = new URL(proxy.url);
+  } catch (_error) {
+    return `${prefix} URL 无效`;
+  }
+  const protocol = asString(parsed.protocol).toLowerCase();
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "socks5:") {
+    return `${prefix} URL 仅支持 http、https 或 socks5`;
+  }
+  if (!parsed.host) {
+    return `${prefix} URL 无效`;
+  }
+  return "";
+}
+
+export function resolveEffectiveOutboundProxy(modelProxy, savedGlobalProxy) {
+  const model = normalizeOutboundProxy(modelProxy);
+  if (model.enabled) {
+    return {
+      enabled: true,
+      url: model.url,
+    };
+  }
+  const savedGlobal = normalizeOutboundProxy(savedGlobalProxy);
+  if (savedGlobal.enabled) {
+    return {
+      enabled: true,
+      url: savedGlobal.url,
+    };
+  }
+  return {
+    enabled: false,
+    url: "",
+  };
+}
+
+export function outboundProxyHashFields(modelProxy, savedGlobalProxy) {
+  const effective = resolveEffectiveOutboundProxy(modelProxy, savedGlobalProxy);
+  return [
+    effective.enabled ? "true" : "false",
+    effective.enabled ? effective.url : "",
+  ];
+}
+
+export function describeOutboundProxyInheritance(modelProxy, savedGlobalProxy) {
+  const model = normalizeOutboundProxy(modelProxy);
+  if (model.enabled) {
+    return "当前使用模型自定义代理";
+  }
+  if (normalizeOutboundProxy(savedGlobalProxy).enabled) {
+    return "当前继承已保存的全局自定义代理";
+  }
+  return "当前继承环境变量/系统代理或直连";
+}
+
+function rewriteImportedChannelID(id, idMap) {
+  const key = asString(id);
+  if (!key) {
+    return asString(id);
+  }
+  return idMap.has(key) ? idMap.get(key) : key;
+}
+
+function rememberImportedChannelID(incomingID, assignedID, idMap) {
+  const from = asString(incomingID);
+  const to = asString(assignedID);
+  if (!from || !to) {
+    return;
+  }
+  idMap.set(from, to);
+}
+
+function remapImportedProviderFallback(source, idMap) {
+  const fb = normalizeProviderFallback(source);
+  return {
+    ...fb,
+    primaryChannelID: rewriteImportedChannelID(fb.primaryChannelID, idMap),
+    candidateChannelIDs: fb.candidateChannelIDs.map((id) => rewriteImportedChannelID(id, idMap)),
+  };
+}
+
+function assignImportedAdapter(currentAdapter, incoming, idMap) {
+  const assignedID = asString(currentAdapter.id);
+  rememberImportedChannelID(incoming.id, assignedID, idMap);
+  return {
+    ...incoming,
+    id: assignedID,
+    sort: currentAdapter.sort,
+  };
+}
+
+export function mergeImportedModelAdapters(currentAdapters, importedAdapters, { identityKey } = {}) {
+  if (typeof identityKey !== "function") {
+    return {
+      ok: false,
+      error: "导入失败：缺少渠道身份计算",
+      adapters: [],
+      added: 0,
+      updated: 0,
+    };
+  }
+
+  const current = (Array.isArray(currentAdapters) ? currentAdapters : []).map((item) => (
+    item && typeof item === "object" ? { ...item } : {}
+  ));
+  const imported = Array.isArray(importedAdapters) ? importedAdapters : [];
+  const identityToIndexes = new Map();
+  const nameToIndexes = new Map();
+
+  current.forEach((adapter, index) => {
+    const key = identityKey(adapter);
+    identityToIndexes.set(key, [...(identityToIndexes.get(key) || []), index]);
+    const name = asString(adapter?.displayName);
+    if (!name) {
+      return;
+    }
+    nameToIndexes.set(name, [...(nameToIndexes.get(name) || []), index]);
+  });
+
+  const used = new Set();
+  const idMap = new Map();
+  let updated = 0;
+  const appended = [];
+
+  for (const raw of imported) {
+    const incoming = raw && typeof raw === "object" ? { ...raw } : {};
+    const identityHits = identityToIndexes.get(identityKey(incoming)) || [];
+    if (identityHits.length > 1) {
+      return {
+        ok: false,
+        error: "导入失败：当前草稿存在重复渠道身份，无法唯一匹配",
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (identityHits.length === 1) {
+      const index = identityHits[0];
+      if (used.has(index)) {
+        return {
+          ok: false,
+          error: "导入失败：多个导入项匹配到同一模型，已取消合并",
+          adapters: [],
+          added: 0,
+          updated: 0,
+        };
+      }
+      current[index] = assignImportedAdapter(current[index], incoming, idMap);
+      used.add(index);
+      updated += 1;
+      continue;
+    }
+
+    const name = asString(incoming.displayName);
+    const nameHits = name ? (nameToIndexes.get(name) || []) : [];
+    const availableHits = nameHits.filter((index) => !used.has(index));
+    if (name && nameHits.length === 1 && used.has(nameHits[0])) {
+      return {
+        ok: false,
+        error: `导入失败：显示名称「${name}」匹配到多个导入项，已取消合并`,
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (name && (availableHits.length > 1 || (nameHits.length > 1 && availableHits.length !== 1))) {
+      return {
+        ok: false,
+        error: `导入失败：显示名称「${name}」无法唯一匹配，已取消合并`,
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (availableHits.length === 1) {
+      const index = availableHits[0];
+      current[index] = assignImportedAdapter(current[index], incoming, idMap);
+      used.add(index);
+      updated += 1;
+      continue;
+    }
+
+    const assignedID = asString(incoming.id);
+    rememberImportedChannelID(incoming.id, assignedID, idMap);
+    appended.push({
+      ...incoming,
+      id: assignedID,
+      sort: 0,
+    });
+  }
+
+  const adapters = current.concat(appended);
+  const remapped = idMap.size
+    ? adapters.map((adapter, index) => {
+      if (!used.has(index) && index < current.length) {
+        return adapter;
+      }
+      if (!adapter?.providerFallback) {
+        return adapter;
+      }
+      return {
+        ...adapter,
+        providerFallback: remapImportedProviderFallback(adapter.providerFallback, idMap),
+      };
+    })
+    : adapters;
+
+  return {
+    ok: true,
+    error: "",
+    adapters: remapped,
+    added: appended.length,
+    updated,
+  };
+}

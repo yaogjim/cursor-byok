@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/netproxy"
 )
 
 func TestSaveUserConfigPreservesLastAgentModelHash(t *testing.T) {
@@ -113,5 +114,40 @@ func TestSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 	cleared.ModelAdapters = []serverconfig.ModelAdapterConfig{}
 	if err := service.SaveModelAdapters(cleared); err == nil || !strings.Contains(err.Error(), "公开模型") {
 		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+}
+
+func TestSaveSystemSettingsAppliesGlobalOutboundProxy(t *testing.T) {
+	t.Cleanup(func() { netproxy.SetGlobal(netproxy.Config{}) })
+	service := newConfigTransferTestService(t)
+	seed := serverconfig.DefaultConfig()
+	seed.Appearance.Theme = "light"
+	if _, err := service.store.Save(context.Background(), seed); err != nil {
+		t.Fatalf("seed Save() error = %v", err)
+	}
+
+	cfg := seed
+	cfg.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://user:s3cret@global.example:8080"}
+	if err := service.SaveSystemSettings(cfg); err != nil {
+		t.Fatalf("SaveSystemSettings() error = %v", err)
+	}
+	got := netproxy.GlobalConfig()
+	if !got.Enabled || got.URL != "http://user:s3cret@global.example:8080" {
+		t.Fatalf("applied global = %+v", got)
+	}
+	status := service.GetState()
+	if status.NetProxySource != "custom" || !status.NetProxyUsingCustom || !status.NetProxyActive {
+		t.Fatalf("state = %+v", status)
+	}
+	if strings.Contains(status.NetProxyHTTP, "s3cret") || strings.Contains(status.NetProxyDescription, "s3cret") {
+		t.Fatalf("status leaked credentials: %+v", status)
+	}
+
+	cfg.OutboundProxy.Enabled = false
+	if err := service.SaveSystemSettings(cfg); err != nil {
+		t.Fatalf("disable SaveSystemSettings() error = %v", err)
+	}
+	if netproxy.GlobalConfig().Enabled || service.GetState().NetProxyUsingCustom {
+		t.Fatal("disabling global custom did not restore inherit")
 	}
 }

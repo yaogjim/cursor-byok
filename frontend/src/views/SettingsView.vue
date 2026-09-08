@@ -4,6 +4,7 @@ import Card from "@/components/ui/Card.vue";
 import LocaleSelect from "@/components/LocaleSelect.vue";
 import Select from "@/components/ui/Select.vue";
 import Switch from "@/components/ui/Switch.vue";
+import Input from "@/components/ui/Input.vue";
 import { useMessage } from "@/composables/useMessage";
 import { showModal } from "@/composables/useModal";
 import {
@@ -364,13 +365,29 @@ onMounted(async () => {
             disabled
           />
         </div>
-        <div class="setting-row is-planned" inert>
-          <div>
-            <div class="text-sm font-medium text-[var(--color-text-muted)]">HTTP 代理</div>
-            <div class="text-xs text-[var(--color-text-muted)]">配置 HTTP/HTTPS/SOCKS5 代理</div>
-          </div>
-          <Button disabled>配置</Button>
+        <div class="setting-row">
+          <Switch
+            compact
+            :show-state="false"
+            class="w-full"
+            label="自定义出站代理"
+            description="启用后，本进程对外请求使用该 HTTP/HTTPS/SOCKS5 代理，不再叠加环境变量或系统代理。关闭后保留地址并继承环境/系统代理；模型仍可单独启用。"
+            :enabled="appState.outboundProxy.enabled"
+            :disabled="appState.configSaving"
+            @change="appState.outboundProxy.enabled = $event"
+          />
         </div>
+        <label class="field">
+          <span class="field-l">代理 URL</span>
+          <Input
+            v-model="appState.outboundProxy.url"
+            type="password"
+            allow-visibility-toggle
+            :disabled="appState.configSaving"
+            placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
+          />
+          <span class="field-h">仅在启用时校验协议；支持标准 URL 认证。关闭时保留输入但不使用。</span>
+        </label>
         <div class="setting-row is-planned" inert>
           <div>
             <div class="text-sm font-medium text-[var(--color-text-muted)]">请求超时（秒）</div>

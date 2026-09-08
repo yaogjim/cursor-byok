@@ -28,12 +28,18 @@ const netProxyEndpoint = computed(
   () => appState.netProxyHttps || appState.netProxyHttp || "",
 );
 const proxyBadgeText = computed(() => {
+  if (appState.netProxyUsingCustomProxy || appState.netProxySource === "custom") {
+    return "已使用自定义代理";
+  }
   if (appState.netProxyUsingSystem) {
     return "已识别系统代理";
   }
   return "";
 });
 const proxyBadgeTitle = computed(() => {
+  if (appState.netProxyUsingCustomProxy || appState.netProxySource === "custom") {
+    return appState.netProxyDescription || "当前出站请求使用自定义代理";
+  }
   if (appState.netProxyUsingSystem) {
     return netProxyEndpoint.value
       ? `当前出站请求使用系统代理：${netProxyEndpoint.value}`

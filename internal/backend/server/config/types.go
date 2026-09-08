@@ -11,6 +11,7 @@ import (
 
 	"cursor/internal/appearance"
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
 	"cursor/internal/subscriptionauth"
 )
 
@@ -104,6 +105,8 @@ type ModelAdapterConfig struct {
 	MaxConcurrentRequests int `json:"maxConcurrentRequests,omitempty" yaml:"maxConcurrentRequests,omitempty"`
 	// ProviderFallback 表示该渠道的 provider fallback 配置；默认关闭。
 	ProviderFallback ProviderFallbackConfig `json:"providerFallback,omitempty" yaml:"providerFallback,omitempty"`
+	// OutboundProxy 是该模型出站请求的可选自定义代理；关闭表示继承全局。
+	OutboundProxy netproxy.Config `json:"outboundProxy" yaml:"outboundProxy"`
 }
 
 type RoutingConfig struct {
@@ -217,6 +220,8 @@ type Config struct {
 	Gateway            GatewayConfig            `json:"gateway" yaml:"gateway"`
 	StreamContinuation StreamContinuationConfig `json:"streamContinuation,omitempty" yaml:"streamContinuation,omitempty"`
 	SubagentReschedule SubagentRescheduleConfig `json:"subagentReschedule,omitempty" yaml:"subagentReschedule,omitempty"`
+	// OutboundProxy 是 BYOK 进程全局自定义出站代理；关闭表示继承 env/OS。
+	OutboundProxy netproxy.Config `json:"outboundProxy" yaml:"outboundProxy"`
 }
 
 func DefaultConfig() Config {
@@ -241,7 +246,8 @@ func DefaultConfig() Config {
 		Updates: UpdatesConfig{
 			CheckOnStartup: false,
 		},
-		Gateway: DefaultGatewayConfig(),
+		Gateway:       DefaultGatewayConfig(),
+		OutboundProxy: netproxy.Config{Enabled: false, URL: ""},
 	}
 }
 
@@ -299,6 +305,11 @@ func normalizeConfig(input Config, previousAdapters []ModelAdapterConfig) (Confi
 	output.LastAgentModelHash = rewriteChannelID(strings.TrimSpace(input.LastAgentModelHash), remap)
 	output.StreamContinuation = normalizeStreamContinuationConfig(input.StreamContinuation)
 	output.SubagentReschedule.Enabled = input.SubagentReschedule.Enabled
+	outboundProxy, err := netproxy.Normalize(input.OutboundProxy)
+	if err != nil {
+		return Config{}, err
+	}
+	output.OutboundProxy = outboundProxy
 	return output, nil
 }
 
@@ -314,6 +325,17 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 	if err := validateUpstreamCapacityGroups(adapters); err != nil {
 		return nil, err
 	}
+	return adapters, nil
+}
+
+// NormalizeModelAdapterDrafts 为导入草稿计算每行规范 ID 并完成字段级归一化。
+// 跨行 fallback/容量校验推迟到与当前草稿合并后再做，因为候选渠道可能仍在现有配置中。
+func NormalizeModelAdapterDrafts(input []ModelAdapterConfig) ([]ModelAdapterConfig, error) {
+	adapters, _, err := normalizeModelAdapterIdentities(input)
+	if err != nil {
+		return nil, err
+	}
+	normalizeModelAdapterSorts(adapters)
 	return adapters, nil
 }
 
@@ -421,6 +443,11 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 		seenChannelIDs[next.ID] = struct{}{}
 		// 原样复制 ProviderFallback；引用重写在 normalizeConfig 中、校验在 validateProviderFallbacks。
 		next.ProviderFallback = item.ProviderFallback
+		outboundProxy, err := netproxy.Normalize(item.OutboundProxy)
+		if err != nil {
+			return nil, nil, err
+		}
+		next.OutboundProxy = outboundProxy
 		normalized = append(normalized, next)
 	}
 	return normalized, seenChannelIDs, nil

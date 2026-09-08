@@ -15,6 +15,7 @@ import {
   createEmptyModelAdapter,
   deleteModelAdapterAt,
   duplicateModelAdapterAt,
+  getModelAdapterTestResult,
   getModelAdapterTestResultByID,
   persistScopedUserConfig,
   reloadUserConfig,
@@ -71,9 +72,20 @@ const batchButtonText = computed(() => {
     return "停止中...";
   }
   if (!batchTesting.value) {
-    return "测试全部";
+    return "全部测试";
   }
   return `停止测试 ${batchCompleted.value}/${batchTotal.value}`;
+});
+const endpointTestPlan = computed(() => selectAdaptersForEndpointTest(appState.modelAdapters));
+const hasTestableModelAdapters = computed(() => endpointTestPlan.value.toTest.length > 0);
+const testAllUnavailableText = computed(() => {
+  if (hasTestableModelAdapters.value) {
+    return "";
+  }
+  if ((appState.modelAdapters || []).length === 0) {
+    return "当前没有可测试的物理模型";
+  }
+  return "当前没有可测试的物理渠道；逻辑路由 alias 自身不会调用虚拟 endpoint。";
 });
 const editorTitle = computed(() => (editorIndex.value >= 0 ? "编辑模型配置" : "新增模型配置"));
 const modelsFooterStatus = computed(() => {
@@ -111,7 +123,7 @@ function showActionError(title, error) {
 const {
   configTransferBusy,
   handleExportConfig,
-  handleImportConfig,
+  handleImportModelAdapters,
 } = useConfigTransfer({ message, showActionError });
 
 function maskSecret(value) {
@@ -143,6 +155,9 @@ function formatHost(value) {
 }
 
 function openEditor(index = -1) {
+  if (appState.configSaving || batchTesting.value) {
+    return;
+  }
   editorIndex.value = index;
   editorAdapter.value = index >= 0
     ? appState.modelAdapters[index]
@@ -263,25 +278,10 @@ watch(
   { flush: "post" },
 );
 
-async function handleClearAllModelAdapters() {
-  const count = appState.modelAdapters.length;
-  if (count === 0) {
-    return;
-  }
-  const confirmed = await showModal({
-    title: "清除全部模型",
-    content: `确定移除当前 ${count} 个模型配置吗？移除后需要保存本页才会写入配置。`,
-    confirmText: "清除全部",
-    cancelText: "取消",
-  });
-  if (!confirmed) {
-    return;
-  }
-  appState.modelAdapters = [];
-  activeType.value = "all";
-}
-
 async function handleDeleteModelAdapter(index) {
+  if (appState.configSaving || batchTesting.value) {
+    return;
+  }
   const target = appState.modelAdapters[index];
   if (!target) {
     showActionError("删除失败", "模型配置不存在，无法删除");
@@ -303,6 +303,9 @@ async function handleDeleteModelAdapter(index) {
 }
 
 function handleDuplicateModelAdapter(index) {
+  if (appState.configSaving || batchTesting.value) {
+    return;
+  }
   const target = appState.modelAdapters[index];
   if (!target) {
     showActionError("复制失败", "模型配置不存在，无法复制");
@@ -332,7 +335,7 @@ async function handleReloadPage() {
 }
 
 function getAdapterTestResult(adapter) {
-  return getModelAdapterTestResultByID(adapter?.id);
+  return getModelAdapterTestResult(adapter) || getModelAdapterTestResultByID(adapter?.id);
 }
 
 function adapterEndpoint(adapter) {
@@ -362,6 +365,9 @@ function isAdapterTesting(adapter) {
 }
 
 async function handleTestModelAdapter(adapter) {
+  if (batchTesting.value) {
+    return;
+  }
   const plan = selectAdaptersForEndpointTest([adapter]);
   if (plan.skippedLogical.length) {
     message(LOGICAL_ROUTING_RUNTIME_VERIFY_HINT);
@@ -374,20 +380,13 @@ async function handleTestModelAdapter(adapter) {
   }
 }
 
-function isCancelError(error) {
-  return String(error?.name || "").trim() === "CancelError";
-}
-
 async function stopBatchTesting() {
   if (!batchTesting.value || batchStopping.value) {
     return;
   }
   batchStopRequested = true;
   batchStopping.value = true;
-  const activeCalls = Array.from(batchActiveCalls);
-  await Promise.allSettled(
-    activeCalls.map((call) => (typeof call?.cancel === "function" ? call.cancel("batch-stop") : undefined)),
-  );
+  await Promise.allSettled(Array.from(batchActiveCalls));
 }
 
 async function handleTestAllModelAdapters() {
@@ -395,9 +394,12 @@ async function handleTestAllModelAdapters() {
     await stopBatchTesting();
     return;
   }
-  const plan = selectAdaptersForEndpointTest(filteredAdapters.value);
+  editorOpen.value = false;
+  const snapshot = appState.modelAdapters.slice();
+  const plan = selectAdaptersForEndpointTest(snapshot);
   const adapters = plan.toTest.slice();
   if (adapters.length === 0) {
+    message(testAllUnavailableText.value);
     return;
   }
   batchStopRequested = false;
@@ -419,10 +421,8 @@ async function handleTestAllModelAdapters() {
         batchActiveCalls.add(call);
         try {
           await call;
-        } catch (error) {
-          if (!isCancelError(error) && !batchStopRequested) {
-            // 单个失败结果由卡片自行展示，这里继续后续测试。
-          }
+        } catch (_error) {
+          // 单个失败结果由卡片自行展示，这里继续后续测试。
         } finally {
           batchActiveCalls.delete(call);
           batchCompleted.value += 1;
@@ -475,9 +475,9 @@ onBeforeUnmount(() => {
             <Button
               variant="default"
               class="btn-sm"
-              :disabled="appState.configSaving || batchTesting || configTransferBusy || appState.serviceRunning || appState.backendRunning || appState.proxyRunning"
-              title="导入完整配置"
-              @click="handleImportConfig"
+              :disabled="appState.configSaving || batchTesting || configTransferBusy"
+              title="导入模型配置"
+              @click="handleImportModelAdapters"
             >
               导入
             </Button>
@@ -493,10 +493,11 @@ onBeforeUnmount(() => {
             <Button
               variant="default"
               class="btn-sm"
-              :disabled="appState.configSaving || batchTesting || configTransferBusy || appState.modelAdapters.length === 0"
-              @click="handleClearAllModelAdapters"
+              :disabled="appState.configSaving || configTransferBusy || (!batchTesting && !hasTestableModelAdapters)"
+              :title="batchTesting ? '停止后续测试' : (hasTestableModelAdapters ? '测试当前全部模型草稿' : testAllUnavailableText)"
+              @click="handleTestAllModelAdapters"
             >
-              清除全部
+              {{ batchButtonText }}
             </Button>
             <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || batchTesting || configTransferBusy" @click="openEditor()">
               <span class="icon-[mdi--plus] text-[14px]" aria-hidden="true" />
@@ -628,14 +629,14 @@ onBeforeUnmount(() => {
                 >
                   {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
                 </Button>
-                <Button variant="default" class="btn-sm" :disabled="appState.configSaving" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
+                <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
                 <details class="model-more-menu">
                   <summary aria-label="更多操作" title="更多操作">
                     <span class="icon-[mdi--dots-vertical] text-[16px]" aria-hidden="true" />
                   </summary>
                   <div class="model-more-menu-popover">
-                    <button type="button" :disabled="appState.configSaving" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</button>
-                    <button type="button" class="is-risk" :disabled="appState.configSaving" @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</button>
+                    <button type="button" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</button>
+                    <button type="button" class="is-risk" :disabled="appState.configSaving || batchTesting" @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</button>
                   </div>
                 </details>
               </div>
@@ -700,9 +701,9 @@ onBeforeUnmount(() => {
                 >
                   {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
                 </Button>
-                <Button variant="default" class="btn-sm" :disabled="appState.configSaving" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
-                <Button variant="default" class="btn-sm" :disabled="appState.configSaving" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
-                <Button variant="text" class="btn-sm" :disabled="appState.configSaving"
+                <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
+                <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
+                <Button variant="text" class="btn-sm" :disabled="appState.configSaving || batchTesting"
                   @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</Button>
               </div>
             </div>

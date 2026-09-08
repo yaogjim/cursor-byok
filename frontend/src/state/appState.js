@@ -1,4 +1,4 @@
-import { computed, reactive, watchSyncEffect } from "vue";
+import { computed, reactive, ref, watchSyncEffect } from "vue";
 import { Events, Window } from "@wailsio/runtime";
 import dayjs from "dayjs";
 import {
@@ -11,8 +11,12 @@ import {
   normalizeSubagentRescheduleConfig,
   normalizeProviderFallback,
   normalizeMaxConcurrentRequests,
+  normalizeOutboundProxy,
+  outboundProxyHashFields,
+  mergeImportedModelAdapters,
   prepareModelAdaptersForPersist,
   shouldTestModelAdapterEndpoint,
+  validateOutboundProxy,
   validateProviderFallbackAdapters,
   validateUpstreamCapacityAdapters,
   normalizeGatewayConfig,
@@ -38,6 +42,7 @@ import {
   installReadyUpdate,
   getProxyState,
   importUserConfig as importUserConfigFile,
+  readModelAdaptersForImport as readModelAdaptersForImportFile,
   openConfigWindow as openConfig,
   loadUserConfig,
   openLogsDirectory,
@@ -254,6 +259,16 @@ function hashStringFNV32a(value) {
   return hash.toString(16).padStart(8, "0");
 }
 
+const savedOutboundProxy = ref(normalizeOutboundProxy());
+
+export function getSavedOutboundProxy() {
+  return normalizeOutboundProxy(savedOutboundProxy.value);
+}
+
+function rememberSavedOutboundProxy(source) {
+  savedOutboundProxy.value = normalizeOutboundProxy(source);
+}
+
 export function buildModelAdapterTestRequestHash(source) {
   const adapter = normalizeModelAdapter(source);
   return hashStringFNV32a([
@@ -275,6 +290,7 @@ export function buildModelAdapterTestRequestHash(source) {
     String(asPositiveInteger(adapter.maxCompletionTokens)),
     String(asPositiveInteger(adapter.anthropicMaxTokens)),
     adapter.type === "anthropic" ? asString(adapter.anthropicThinkingEffort || ANTHROPIC_THINKING_EFFORT_DEFAULT) : "",
+    ...outboundProxyHashFields(adapter.outboundProxy, savedOutboundProxy.value),
   ].join("\n"));
 }
 
@@ -380,6 +396,7 @@ export function createEmptyModelAdapter() {
       streamIdleTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.streamIdleTimeoutSeconds,
       callTimeoutSeconds: DEFAULT_PROVIDER_FALLBACK.callTimeoutSeconds,
     },
+    outboundProxy: normalizeOutboundProxy(),
   };
 }
 
@@ -536,6 +553,7 @@ export function normalizeModelAdapter(source) {
       raw.maxConcurrentRequests ?? raw.max_concurrent_requests,
     ),
     providerFallback: normalizeProviderFallback(raw.providerFallback ?? raw.provider_fallback),
+    outboundProxy: normalizeOutboundProxy(raw.outboundProxy ?? raw.outbound_proxy),
   };
 }
 
@@ -624,6 +642,10 @@ export function validateModelAdapters(source, { allAdapters } = {}) {
         return `${prefix} 的 ${customHeadersError}`;
       }
     }
+    const proxyError = validateOutboundProxy(adapter.outboundProxy, `${prefix} 的自定义代理`);
+    if (proxyError) {
+      return proxyError;
+    }
     if (!adapter.tooltipData) {
       return `${prefix} 的悬停提示不能为空`;
     }
@@ -705,6 +727,7 @@ function normalizeConfig(source) {
     subagentReschedule: normalizeSubagentRescheduleConfig(raw.subagentReschedule),
     lastAgentModelHash: asString(raw.lastAgentModelHash),
     gateway: normalizeGatewayConfig(raw.gateway),
+    outboundProxy: normalizeOutboundProxy(raw.outboundProxy ?? raw.outbound_proxy),
   };
 }
 
@@ -732,6 +755,7 @@ function serializeConfigPayload(normalized) {
       tokenConfigured: normalized.gateway.tokenConfigured,
       publicModels: normalized.gateway.publicModels,
     },
+    outboundProxy: normalizeOutboundProxy(normalized.outboundProxy),
   };
 }
 
@@ -763,6 +787,7 @@ function buildConfigPayloadFromState(source = appState) {
       tokenConfigured: source.gatewayTokenConfigured,
       publicModels: source.gatewayPublicModels,
     },
+    outboundProxy: source.outboundProxy,
   }));
 }
 
@@ -816,6 +841,7 @@ function snapshotSettingsSection(source = appState) {
     advertisingEnabled: Boolean(source.advertisingEnabled),
     updateCheckOnStartup: Boolean(source.updateCheckOnStartup),
     subagentRescheduleEnabled: Boolean(source.subagentRescheduleEnabled),
+    outboundProxy: normalizeOutboundProxy(source.outboundProxy),
   });
 }
 
@@ -866,6 +892,7 @@ function applyConfigSectionSnapshot(scope, raw) {
     appState.advertisingEnabled = Boolean(parsed.advertisingEnabled);
     appState.updateCheckOnStartup = Boolean(parsed.updateCheckOnStartup);
     appState.subagentRescheduleEnabled = Boolean(parsed.subagentRescheduleEnabled);
+    appState.outboundProxy = normalizeOutboundProxy(parsed.outboundProxy);
   }
 }
 
@@ -874,6 +901,9 @@ function captureConfigSectionSnapshot(scope) {
     return;
   }
   savedConfigSectionSnapshots[scope] = snapshotConfigSection(scope);
+  if (scope === "settings") {
+    rememberSavedOutboundProxy(appState.outboundProxy);
+  }
 }
 
 function captureAllConfigSectionSnapshots() {
@@ -945,6 +975,7 @@ export function discardConfigSectionDraft(scope) {
 
 function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = "" } = {}) {
   const normalized = normalizeConfig(config);
+  rememberSavedOutboundProxy(normalized.outboundProxy);
   if (modelAdaptersOnly) {
     const preserveModelsDraft = savedScope !== "all" && savedScope !== "models" && isConfigSectionDirty("models");
     const preservedModels = preserveModelsDraft ? snapshotConfigSection("models") : "";
@@ -981,6 +1012,7 @@ function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = ""
   appState.gatewayListenAddr = normalized.gateway.listenAddr;
   appState.gatewayTokenConfigured = normalized.gateway.tokenConfigured;
   appState.gatewayPublicModels = normalized.gateway.publicModels.map((item) => ({ ...item }));
+  appState.outboundProxy = normalizeOutboundProxy(normalized.outboundProxy);
   for (const scope of CONFIG_SECTION_SCOPES) {
     if (preserved[scope]) {
       applyConfigSectionSnapshot(scope, preserved[scope]);
@@ -1077,6 +1109,12 @@ async function persistScopedConfig(scope) {
     }
     payload.modelAdapters = prepared.payloadAdapters;
   }
+  if (scope === "settings") {
+    const proxyError = validateOutboundProxy(appState.outboundProxy, "全局自定义代理");
+    if (proxyError) {
+      return { ok: false, error: proxyError };
+    }
+  }
   const runners = {
     cursor: saveCursorConfig,
     gateway: saveGatewayConfig,
@@ -1114,6 +1152,9 @@ function applyProxyState(raw) {
   appState.netProxyActive = asBoolean(state.netProxyActive);
   appState.netProxyUsingSystem = asBoolean(state.netProxyUsingSystem);
   appState.netProxyUsingEnv = asBoolean(state.netProxyUsingEnv);
+  appState.netProxyUsingCustomProxy = asBoolean(
+    state.netProxyUsingCustomProxy ?? state.netProxyUsingCustom ?? state.usingCustomProxy,
+  );
   appState.netProxyHttp = asString(state.netProxyHttp);
   appState.netProxyHttps = asString(state.netProxyHttps);
   appState.netProxyPacIgnored = asBoolean(state.netProxyPacIgnored);
@@ -1325,6 +1366,7 @@ export const appState = reactive({
   advertisingEnabled: cachedConfig.advertising.enabled,
   updateCheckOnStartup: cachedConfig.updates.checkOnStartup,
   subagentRescheduleEnabled: cachedConfig.subagentReschedule.enabled,
+  outboundProxy: normalizeOutboundProxy(cachedConfig.outboundProxy),
 
   serviceRunning: asBoolean(cachedState.serviceRunning),
   backendRunning: asBoolean(cachedState.backendRunning),
@@ -1340,6 +1382,9 @@ export const appState = reactive({
   netProxyActive: asBoolean(cachedState.netProxyActive),
   netProxyUsingSystem: asBoolean(cachedState.netProxyUsingSystem),
   netProxyUsingEnv: asBoolean(cachedState.netProxyUsingEnv),
+  netProxyUsingCustomProxy: asBoolean(
+    cachedState.netProxyUsingCustomProxy ?? cachedState.netProxyUsingCustom ?? cachedState.usingCustomProxy,
+  ),
   netProxyHttp: asString(cachedState.netProxyHttp),
   netProxyHttps: asString(cachedState.netProxyHttps),
   netProxyPacIgnored: asBoolean(cachedState.netProxyPacIgnored),
@@ -1488,6 +1533,7 @@ watchSyncEffect(() => {
         netProxyActive: appState.netProxyActive,
         netProxyUsingSystem: appState.netProxyUsingSystem,
         netProxyUsingEnv: appState.netProxyUsingEnv,
+        netProxyUsingCustomProxy: appState.netProxyUsingCustomProxy,
         netProxyHttp: appState.netProxyHttp,
         netProxyHttps: appState.netProxyHttps,
         netProxyPacIgnored: appState.netProxyPacIgnored,
@@ -1729,7 +1775,7 @@ export function startModelAdapterTest(adapter) {
   }
   const validationError = validateModelAdapters([normalized]);
   if (validationError) {
-    return Promise.reject(new Error(validationError));
+    return Promise.resolve(recordLocalModelAdapterTestFailure(normalized, validationError));
   }
   return testModelAdapter(normalized).then((rawResult) => {
     const result = normalizeModelAdapterTestResult(rawResult);
@@ -1741,6 +1787,22 @@ export function startModelAdapterTest(adapter) {
     }
     return result;
   });
+}
+
+function recordLocalModelAdapterTestFailure(adapter, error) {
+  const requestHash = buildModelAdapterTestRequestHash(adapter);
+  const adapterID = asString(adapter.id) || `pending:${requestHash}`;
+  const result = normalizeModelAdapterTestResult({
+    adapterID,
+    requestHash,
+    status: "error",
+    error: asString(error) || "模型测试失败",
+  });
+  appState.modelAdapterTestResults = {
+    ...appState.modelAdapterTestResults,
+    [result.adapterID]: result,
+  };
+  return result;
 }
 
 export async function runModelAdapterTest(adapter) {
@@ -1769,6 +1831,7 @@ export async function persistUserConfig() {
     updates: {
       checkOnStartup: asBoolean(appState.updateCheckOnStartup),
     },
+    outboundProxy: appState.outboundProxy,
     gateway: {
       enabled: appState.gatewayEnabled,
       listenAddr: appState.gatewayListenAddr,
@@ -1801,6 +1864,39 @@ export async function importUserConfigFromFile(path) {
   } finally {
     appState.configSaving = false;
   }
+}
+
+export async function readModelAdaptersForImportFromFile(path) {
+  return asArray(await readModelAdaptersForImportFile(path));
+}
+
+export function applyImportedModelAdapters(source) {
+  const current = normalizeModelAdapters(appState.modelAdapters);
+  const incoming = normalizeModelAdapters(source);
+  const merged = mergeImportedModelAdapters(current, incoming, {
+    identityKey: buildModelAdapterIdentityKey,
+  });
+  if (!merged.ok) {
+    return merged;
+  }
+  const error = validateModelAdapters(merged.adapters);
+  if (error) {
+    return {
+      ok: false,
+      error,
+      adapters: current,
+      added: 0,
+      updated: 0,
+    };
+  }
+  appState.modelAdapters = normalizeModelAdapters(merged.adapters);
+  return {
+    ok: true,
+    error: "",
+    added: merged.added,
+    updated: merged.updated,
+    adapters: appState.modelAdapters,
+  };
 }
 
 export async function saveIncludeCacheWriteInHitRate(value) {
@@ -1879,6 +1975,7 @@ export async function fetchAvailableModelIDs(payload) {
     credentialSource,
     customHeadersEnabled: asBoolean(source.customHeadersEnabled),
     customHeadersJSON: asString(source.customHeadersJSON),
+    outboundProxy: normalizeOutboundProxy(source.outboundProxy),
   });
   return asArray(result?.models)
     .map((item) => asString(item))

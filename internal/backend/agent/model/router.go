@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
 	legacyruntime "cursor/internal/runtime"
 	"cursor/internal/subscriptionauth"
 )
@@ -75,6 +76,7 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 // streamPreResolved 使用已完整填充的 StreamRequest（Provider 字段已设置）直接选择适配器。
 // 供 FallbackAwareRouter 使用，跳过 SelectChannelForModel 解析步骤。
 func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	resolved, err := router.applyRuntimeCredentials(ctx, req)
 	if err != nil {
 		return err
@@ -276,6 +278,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.AnthropicMaxTokens = channel.AnthropicMaxTokens
 	resolved.AnthropicThinkingEffort = strings.TrimSpace(channel.AnthropicThinkingEffort)
 	resolved.ThinkingBudgetTokens = channel.ThinkingBudgetTokens
+	resolved.OutboundProxy = channel.OutboundProxy
 	runtimeThinkingEffort := normalizeRuntimeThinkingEffort(req.ThinkingEffort)
 	if runtimeThinkingEffort != "" {
 		resolved.ThinkingEffort = runtimeThinkingEffort

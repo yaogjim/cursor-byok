@@ -112,12 +112,17 @@ func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationP
 		logger.Errorf("初始化链路日志采集失败 error_category=recorder_init_failed")
 	} else {
 		host.observability = controller
-		host.stopConfigObserver = configs.Subscribe(func(next serverconfig.Config) {
-			if err := controller.Reconfigure(observabilitySettings(next)); err != nil {
+	}
+	netproxy.SetGlobal(cfg.OutboundProxy)
+	unsubProxy := configs.Subscribe(func(next serverconfig.Config) {
+		netproxy.SetGlobal(next.OutboundProxy)
+		if host.observability != nil {
+			if err := host.observability.Reconfigure(observabilitySettings(next)); err != nil {
 				logger.Errorf("更新链路日志采集配置失败 error_category=recorder_reconfigure_failed")
 			}
-		})
-	}
+		}
+	})
+	host.stopConfigObserver = unsubProxy
 	if err := host.rebuild(cfg); err != nil {
 		if host.stopConfigObserver != nil {
 			host.stopConfigObserver()
