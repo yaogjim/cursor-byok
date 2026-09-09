@@ -65,6 +65,46 @@ func TestCursorBackendContractHealthzTracesAndProcedures(t *testing.T) {
 	}
 }
 
+type unsignedControlPlaneAuth struct{}
+
+func (unsignedControlPlaneAuth) Authorization(context.Context) (string, error) {
+	return "", errors.New("unsigned control plane Authorization must not be used")
+}
+
+func (unsignedControlPlaneAuth) SignedIn() bool { return false }
+
+func TestHostGetManagedSkillsUnsignedFallbackEmptySkills(t *testing.T) {
+	manager := newHostConfigTestManager(t)
+	cfg := DefaultHostTestConfig(t, manager, nil)
+	host := &Host{configs: manager, controlPlaneAuth: unsignedControlPlaneAuth{}}
+	if err := host.rebuild(cfg); err != nil {
+		t.Fatalf("rebuild() error = %v", err)
+	}
+	const path = "/aiserver.v1.DashboardService/GetManagedSkills"
+	for _, contentType := range []string{"application/proto", "application/json"} {
+		t.Run(contentType, func(t *testing.T) {
+			body := ""
+			if contentType == "application/json" {
+				body = "{}"
+			}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			req.Header.Set("Content-Type", contentType)
+			recorder := httptest.NewRecorder()
+			host.mux.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
+			}
+			response := &aiserverv1.GetManagedSkillsResponse{}
+			if err := proto.Unmarshal(recorder.Body.Bytes(), response); err != nil {
+				t.Fatalf("unmarshal: %v body=%q", err, recorder.Body.String())
+			}
+			if len(response.GetSkills()) != 0 {
+				t.Fatalf("skills=%v want empty", response.GetSkills())
+			}
+		})
+	}
+}
+
 func TestGatewayDuoHostCatalogIdentity(t *testing.T) {
 	const officialID = "model-a" // Deliberately collides with the local provider model, not its channel ID.
 	for _, mode := range []string{"local", "upstream"} {

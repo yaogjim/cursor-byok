@@ -7,6 +7,38 @@
 
 ## 一、待完成的内容
 
+### 0.0.71.1 下载日志异常诊断与 GetManagedSkills 修复（2026-09-09；verified-partial）
+
+用户要求分析 `/Users/yaogj/Downloads/logs`、根因和最小方案，由主控安排执行、review、验证与必要修复。开工 `gateway@5926cc4` 工作区干净。三个有界工作流分别负责日志取证、模型故障链、控制接口/TLS；主控独立复核原始数据、源码 diff 和验证。以下 UTC 时间均指日志事件日期，不混用本机时区。
+
+**覆盖及计数口径**：六份 app 日志；旧会话 `20260909T035825.861070000Z-4041ee8bee13` 为 0.0.71.0，当前 848 事件（03:58:26–06:33:37Z）；新会话 `20260909T064243.292774000Z-09262a3c9dde` 为 0.0.71.1，183889 事件（06:42:43–08:34:09Z）。两份 JSONL 均完整解析且序号连续；新 manifest 仍 open、basic，无失败正文重放材料，结论限定于这个导出快照。旧版 56 次 BidiAppend 502 是历史问题；新版为 9495 个 200 完成事件、1 个 502，唯一失败已走到官方上游且传输失败，不是已修的入站 gzip/JSON 分流故障。请求 ID 会被多次 BidiAppend/RunSSE 复用，不跨层加总为独立故障次数。
+
+**已核实模型事实**：新版 183 个不同 `model_call_id` 的最终事件为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra` 82/82 成功，`grok-4.6` 89 成功/3 partial，`gpt-6-astra-211` 7 failed/1 canceled，`gpt-6-astra-local` 1 transport EOF。取消不计为已证实服务故障。这是调用终态统计，不等于用户任务或子任务成功率；8 个 subagent_run_id 无 attempt ID，不能据此还原五次续跑或副作用完整性。
+
+- `gpt-6-astra-211`：5 次最终 HTTP 500（新 events 行 4690、55622、107584、129656、178552），脱敏 `provider_error_summary` 均为请求 ChatGPT Codex 端点的 `utls: TLS handshake: EOF`；1 次 503（行 56396）为 `auth_unavailable: no auth available`，附 `198.18.0.49:443` 连接超时。六次均实际执行了两次 HTTP attempt，随后 exhausted / chain_exhausted；无证据表明漏重试或漏切可用候选。第 7 次失败是收到 HTTP 200 后的 provider_terminal（行 181191），有 82350 raw bytes，但没有具体终态错误摘要；取消在行 108820。
+- 推断及方案：优先检查该上游转发服务的 Codex 出站 TLS、DNS/代理路由和账号可用性。198.18 地址支持排查代理 fake-IP 路径的假设，不能单凭它确认是哪台机器/哪层代理，更不能认定本机 7890 是根因；auth_unavailable 也不等于已证实账号过期。短期可由用户选择本样本表现正常且能力适用的渠道，或配置兼容备用渠道，不自动换模型/改账号。增加网关重试无法修复持续上游出站失败。
+- Grok：三条 HTTP/2 + gzip 流在 `08:01:33.501544/501545/501587Z` 结束（最终事件行 107331/107334/107337），分别已收 87456/79053/85267 raw bytes，已解析 SSE delta，关闭原因为 unexpected_eof。支持共享服务/代理/连接中断假设；没有 connection ID，不能确认同一物理连接或断点。成功对照也使用 gzip，因此不是旧版入站解析同型问题，但仍不能排除响应尾部 gzip 截断。保持已收数据后不重放；先查同时间上游/代理日志，必要时使用已有 provider-only 单变量传输诊断，不默认禁用 HTTP/2 或 gzip，不新建续跑状态机。
+
+**控制接口及证书**：
+
+- GetDefaultModel 48 次 backend 502（代表行 506、180345），来自本地 `handleOfficialDefaultModel` 的统一失败响应。`FetchUpstream` 不走常规 upstream 事件记录，源码将网络错误、非 2xx、空 payload、解包/投影错误合并为同一异常（`catalog.go`）；因此不能认定“官方返回了 48 次 502”，也不能从约 250ms 耗时或 AvailableModels 200 推断上游成功（目录允许本地降级）。最小下一步为既有 fetch 路径补脱敏阶段、HTTP 状态、媒体类型/编码和长度，拿到证据再修；不将官方默认静默替换成本地默认。
+- GetEffectiveUserPlugins 191 次 404、GetKnownServers 66 次 404，均无官方转发，控制面账号管理器未登录时当前 helper 明确返回本地 NotFound；插件路径还存在前面 EmptyMock 被后注册控制面路由覆盖。它使用的登录判断与入站官方身份判断不同。需按真实需求确认哪些只读接口无账号时应该合法空响应、哪些应保留官方数据后再修；不把所有 404 改成假 200，也不扩大真实身份透传。
+- AnalyticsService/Batch 1139 次 MITM 转本地后 404，Host 没有该精确路由；属于遥测接口缺口，不是 1139 次模型失败。是否提供最小兼容响应需核实该 RPC 协议及既有遥测策略，本轮未新增接口。
+- TLS `client_unknown_ca` 1403 次：api3 987、metrics 352、api2 64。方向为 Cursor→MITM，说明部分客户端拒绝代理证书；api3/metrics 本样本全部停在握手，而 api2 存在大量成功 HTTP。握手没有请求 path，不能说都只是遥测，也不能把这些错误与 provider TLS EOF 合并为一个根因。最小处理为确认具体进程的 CA 信任/加载和代理域名范围，必要时在用户允许的窗口重启相关客户端；保留证书校验，不自动重装 CA 或绕过验证。
+
+**确定缺陷与修复闭环**：新会话 GetManagedSkills 有 7 次 502。`host.go` 已为未登录定义成功空 skills fallback，但 `client.go/newProtoMessage` 未注册已存在的 `aiserverv1.GetManagedSkillsResponse`，编码错误由中间件变为 `bad gateway\n`。在既有 `cursor_contract_test.go` 增加真实 Host mux 回归，隔离账号及 HOME；proto/JSON Content-Type 两例在原源码都 502，补 2 行类型分支后都 200、protobuf 可解码且 skills 为空。JSON 仅作为入站类型对照，响应仍为既有 protobuf 行为；没有改变协议协商、已登录转发、其他 404、CA、重试或默认模型语义。
+
+独立 review 未发现具体 bug、回归或本次改动的阻塞测试缺口；主控修正了初步分析中的过强归因。最终 `retryable=true` 与 exhausted 的观测字段差异暂记为诊断语义待核实，不证明实际再发 HTTP/重启 Cursor 任务，也没有为改统计而改运行行为。GetManagedSkills 只是局部控制面修复，不能解释或解决模型渠道失败。
+
+**运行验证证据**（全部使用临时 HOME、原缓存路径和 `GOPROXY=off GOSUMDB=off`）：
+
+- 回归 RED→GREEN：`go test ./internal/backend/ -count=1 -timeout 60s -run TestHostGetManagedSkillsUnsignedFallbackEmptySkills -v`，前者退出 1（两例 502），后者退出 0；日志 `/tmp/gateway-control-review-20260909/test-logs/managed-skills-{RED,GREEN}.log`。
+- 主控最终验证：`go test -count=1 -timeout=90s ./internal/backend ./internal/backend/server/upstream -run 'HostGetManagedSkills|CursorBackendContract|ControlPlane|MockProto|OfficialDefaultModel' -v`，两个包通过（0.448s/0.666s）；`go vet ./internal/backend ./internal/backend/server/upstream` 退出 0。日志 `/tmp/gateway-log-final-tests.log`、`/tmp/gateway-log-final-vet.log`；主控原始日志独立聚合 `/tmp/gateway-log-final-census.json` 与取证结果一致。
+- 模型方向隔离表征：model/forwarder 定向覆盖 503 exhausted、零字节 EOF 恢复、已收字节不重试、Responses EOF/完成终态、gzip 元数据及脱敏错误摘要，两个包通过（0.741s/0.543s）。初次因隔离 HOME 后未完整保留模块缓存而 setup failed，修正环境后通过；不是产品失败或执行服务中断。控制面另跑默认模型成功/失败不降级、TLS 分类及 chi 重复路由隔离测试通过；测试不替代真实上游与 CA 现场证据。
+- `git diff --check` 与当前编辑器诊断通过。未运行无关前端、独立 module、整仓/race/build 或真实网络模型故障注入。
+
+**交付边界与下一步**：分析/复核/定向验证完成，最小修复在工作区；整体 `verified-partial`。上游根因精确断点、默认模型实际失败阶段和证书进程信任为 data/env gap，404 空响应/官方回源为待确认语义。没有部署/重启实例、修改用户日志和配置、调用真实模型、commit/push。执行与 review 无服务中断，未触发 20/40/80/160/320 秒恢复策略；该策略仅用于本轮协作任务，不引入产品自动重调度功能。教训：分开统计请求完成、模型终态、TLS 握手和任务结果；统一 502 不能代替上游错误证据；已有字节不代表完整压缩流成功，微秒级同时断流不代表已确认物理连接复用。
+
 ### 0.0.71.0 连接回归修复收口（源码与隔离验证完成；实机待验收）
 
 用户批准计划并要求主控协调执行、独立 review、验证及修复。按系统架构 §18 D2.1 完成最小改动：`agent_action.go` 将 HTTP Content-Encoding 传入 BidiAppend/RunSSE 解析；`agent_route.go` 依次处理 HTTP 压缩、Connect 帧和 protobuf/JSON。只读取解码结果用于路由，原始 body、媒体类型、编码与身份仍用于后续转发；选模、会话归属、超时、账号和证书逻辑不变。下两节保留首次取证与临时实验的历史状态，以本节为最新执行结果。

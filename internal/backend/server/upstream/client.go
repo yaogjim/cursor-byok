@@ -781,6 +781,8 @@ func newProtoMessage(typeName string) (proto.Message, error) {
 		return &aiserverv1.GetGlobalCommandsResponse{}, nil
 	case "aiserver.v1.GetEffectiveUserPluginsResponse":
 		return &aiserverv1.GetEffectiveUserPluginsResponse{}, nil
+	case "aiserver.v1.GetManagedSkillsResponse":
+		return &aiserverv1.GetManagedSkillsResponse{}, nil
 	case "aiserver.v1.RegisterMarketplaceAndPluginsResponse":
 		return &aiserverv1.RegisterMarketplaceAndPluginsResponse{}, nil
 	case "aiserver.v1.GetCliDownloadUrlResponse":

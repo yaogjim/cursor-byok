@@ -4,6 +4,16 @@
 
 ## 当前焦点
 
+### 0.0.71.1 下载日志异常诊断与最小修复（2026-09-09）
+
+- 范围：用户要求主控安排取证、根因分析、review、验证及必要修复；读取 `/Users/yaogj/Downloads/logs` 六份 app 日志和两个 trace 会话，对照 `5926cc4`。不改真实模型/账号/CA/代理配置，不重启或部署，不 commit/push；未启动产品级自动恢复能力。
+- [completed] `log-triage`：旧版 0.0.71.0 当前样本 848 事件，新版 0.0.71.1 为 183889 事件；序号连续，JSON 解析无错误。新版 183 个唯一模型终态为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra-211` 是 7 失败加 1 取消，不能表述成 8 次故障。
+- [completed] `root-cause`：5 次 500 的上游摘要为 Codex TLS handshake EOF；1 次 503 为 auth_unavailable 并附 198.18.0.49 连接超时。六次均已有两次 HTTP attempt，候选耗尽；三条 Grok 流同时 unexpected_eof 支持共享链路中断，但具体网络节点未知。另有 1403 次客户端 CA 握手拒绝、默认模型 48 次本地 502、插件/MCP 本地 404、遥测 Batch 缺路由。
+- [completed] `managed-skills-fix`：Host 实际入口先复现未登录 GetManagedSkills fallback 在 proto/JSON Content-Type 下都返回 502；只补 `newProtoMessage` 的现有 `GetManagedSkillsResponse` 类型注册，两例转为 200、protobuf 可解码且 skills 为空。生产改动 2 行、既有测试增加 40 行；JSON 入站使用合法 `{}` 正文，保留其他控制面与身份语义。
+- [completed] `review-verify`：独立只读 review 未发现具体缺陷；主控复核 diff、原始日志统计、RED/GREEN，并运行相关两个包的定向契约测试与 vet，均通过。修正“gzip 已完全排除”“确定共用物理连接”“默认接口耗时证明上游成功”等过强诊断，详见 `docs/process.md` 最新节。
+- [completed] `closeout`：分析与源码最小修复完成；交付状态 `verified-partial`，真实现场、上游服务和证书尚未验收。下一步为失败渠道出站/DNS/账号取证、Grok 同时断流关联及默认接口脱敏错误阶段取证；404 的回源/空响应策略属于待确认建议，不擅自实施。
+- 恢复规则：本轮执行及 review 未发生服务中断，无需退避重试；若发生则在原 ID 按 20/40/80/160/320 秒最多五次恢复，持续失败暂停。测试环境的首次依赖缓存路径缺失已修正，不属于执行服务中断。
+
 ### 0.0.71.0 对话连接回归取证（2026-09-08；日志 UTC 日期 09-09）
 
 - 范围：分析用户提供的 `/Users/yaogj/Downloads/logs`、本机应用和 Cursor 日志，对照 `4e4f2f1`（0.0.61.1）与 `818e293`（0.0.71.0）；保留用户已回退的实例，不改账号、证书、配置或服务。
