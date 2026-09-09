@@ -250,11 +250,9 @@ func (s *ProxyService) doShutdownForQuit(initiator string) {
 			finalErr = errors.Join(finalErr, err)
 		}
 	}
-	if s.ownsAppliedCursorSettings() {
-		if err := s.ClearCursorSettings(); err != nil {
-			finalErr = errors.Join(finalErr, err)
-		}
-	}
+	// App quit pauses services but preserves Cursor's applied settings and CA
+	// environment for the next start. Explicit StopProxy remains the disconnect
+	// action and clears settings only after this instance has acquired ownership.
 	if s.cursorAccount != nil {
 		s.cursorAccount.Shutdown()
 	}

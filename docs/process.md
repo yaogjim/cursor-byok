@@ -7,6 +7,33 @@
 
 ## 一、待完成的内容
 
+### 重开确认、订阅状态及模型代理回归（2026-09-08 发起，09-09 收口；verified-partial）
+
+用户要求修复三项缺陷并由主控安排独立执行、review、验证。代码仍处于工作区，未打包/安装/提交。用户经选项确认：退出 BYOK 保留 Cursor 接入配置，接受暂停期间本地代理不可用；需要断开须在本实例成功接管设置后显式停止。该决定已同步工作决策基线 §10.14 和系统架构 §6.0。
+
+根因与修复边界：
+
+1. 重开重复确认：`doShutdownForQuit` 原先清除 settings.json，下一次 `Plan.NeedsChange` 因键缺失而要求 Cursor 重启。移除退出清理，保留显式 `StopProxy` 所有权清理、真正变更的确认及失败补偿。隔离生命周期先复现、修复；主控强化新实例 backend host、backend/proxy 运行、新 owner 接管、接管后停止清理与 CA 清理替身不得调用的断言。强化阶段发生测试字段名拼错及配置写在 host 快照创建后造成的失败，已修正测试并重新通过，未为迎合测试改变生产配置逻辑。
+2. 订阅状态：原 UI 仅在 active 且 ready 时显示当前使用，并用禁用动作承载状态；auth_required 时刷新被禁用，刷新失败后列表也可能滞后。面板独立显示当前激活及账号健康状态/名称，失败后加载最新列表且保留错误、解除 busy 允许重试，成功激活后同步徽标和页脚。`subscriptionAccounts` helper 接入真实 Vue 模板；补 provider 切换响应代数保护。PascalCase 仅兼容测试，正式 AccountStatus JSON 使用 camelCase，不能将大小写猜测记作现场根因。
+3. 代理：`FetchModelAdapterModels` 在 Resolve 前未挂 `OutboundProxy`，导致订阅 token 刷新使用默认代理；补 `WithRequestConfig`。这只证明模型发现链路缺陷。`TestModelAdapter` 原有刷新与推理已挂代理；新增成功链路使用真实入口、过期合成 JWT、本地 HTTP CONNECT 代理和 TLS 假上游，断言刷新后的 token 被推理使用、`success`、两个目标 host 与 env 零命中。**用户真实 7890 测速失败仍未复现，根因未知**，等待不含凭据的原始错误和受控实机取证，不能宣称第三项完整修复。
+4. 构建 review 附带修复：静态翻译扫描将新增测试中的 `one@example.test` 文案打入 catalog。主控用临时目录通过 `syncCatalogFiles` 建立失败回归，再在扫描/transform 共用排除条件中排除 `.test`/`.spec` 文件。重新生成 catalog/locales 并构建，断言无测试 ref/该示例账号。没有把 fixture 注入产品运行时。
+
+独立复审：Spec 与 Standards 两路均未报告新增阻塞生产缺陷；Spec 指出的生命周期/网络证据边界保留，并补新 owner/运行断言。两路初次启动均 503、浏览器初次启动 stream_decode 失败，均未返回 ID；执行 `sleep 20` 后各第 1 次重试成功，后续按已返回 ID 恢复结果收集，未使用其余四次重试。浏览器在独立临时 Vite、合成账号及 stub API 中验证三账号当前异常标记、refresh 两次（先失败后成功）、busy 禁用/恢复、切换激活及页脚；consoleErrors/forbiddenCalls 均为空。三次截图工具成功但无可用磁盘路径，不虚构截图链接；没有独立 Network 抓包或真实 API 证据。临时 tab/Vite 与 fixture 已清理（执行方验证端口 43187 无监听）。
+
+主控最终验证（最后源码/测试修正后）：
+
+收口核验范围：文档更新后另行执行差异格式、任务阻塞状态和已生成发布资源的只读检查；这些检查不替代真实 7890 或桌面实机验收。
+
+- `go test -count=1 -timeout=120s ./internal/client ./internal/cursor ./internal/subscriptionauth ./internal/backend/agent/model ./internal/netproxy`：五包均 `ok`，分别 12.936s/1.908s/0.671s/6.558s/1.797s。
+- 同五包 `go vet` 通过；`go test -count=1 -timeout=60s ./internal/app -run 'Tray|AutoStart'` 通过（0.449s）。
+- 在 frontend：`node --test plugins/static-i18n-plugin.test.js src/components/SubscriptionAuthPanel.test.js src/state/subscriptionAccounts.test.js`：10/10；`node scripts/test-config-projection.mjs` 与 `node scripts/test-client-api-logging.mjs`（54 call sites）通过。
+- `npm run build`：136 modules，3.00s；构建后的 catalog 无 test/spec ref 及测试账号文本断言通过。保留 >500kB chunk、Node localstorage-file 与测试 renderer Vue feature flags 告警；Go 保留 macOS 14.0 object/11.0 link target 告警，不作为兼容性实测。
+- 原先的代理回 502、仅验证命中测试只证明路由，不作模型成功证据；完整成功证据限定于本地 CONNECT/TLS fixture（注入测试 RootCAs），不能外推真实服务。
+
+测试隔离事件与教训：执行方报告首次 RED 曾调用真实 `launchctl unsetenv NODE_EXTRA_CA_CERTS` 成功；主控随后只读检查当前确为 unset，但没有调用前的值证据，不自动猜测恢复。已为 fixture 加系统 CA 环境清理替身，退出保留测试断言不调用该替身。今后 lifecycle 回归必须在第一次运行前隔离设置、账号、钥匙串和 launchctl；测试命中网络不等于业务成功；提取 helper 必须实际接入组件并有真实渲染交互验证；生产资源扫描不能收录测试文案。本项目无既有 lessons.md，本次记录复用教训于此，不新建文档。
+
+剩余缺口：env/test gap 为真实 Wails、Cursor 正常重启/钥匙串授权与用户 7890 模型失败；无整仓/race/桌面打包验收。没有停止生产 Gateway/Cursor，因此无需恢复服务；已恢复本轮因连接失败中断的 review/浏览器工作。历史只读重调度缺可稳定关联的 Cursor typed failure 证据，ACP 缺真实客户端，继续 blocked，不把本轮授权当作前置条件已满足。
+
 ### 模型导入、全部测试与分层代理（2026-09-08，verified-partial）
 
 用户确认访谈及计划后授权 Build。需求和设计已同步至工作决策基线 §10.14、系统架构 §14.19；本次只实现模型专用导入、全部测试和分层出站代理，没有启用全局超时、跳过 SSL、Task 恢复或 PAC 引擎。

@@ -2,6 +2,8 @@ package modeladapter
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	"cursor/internal/netproxy"
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 func TestApplyChannelToRequestIsolatesOutboundProxy(t *testing.T) {
@@ -273,4 +276,166 @@ func TestOpenAIStreamCustomProxyFailureDoesNotUseEnv(t *testing.T) {
 	if strings.Contains(fmt.Sprint(err), "user:") {
 		t.Fatalf("error leaked userinfo: %v", err)
 	}
+}
+
+func TestOpenAICodexHTTPSStreamUsesRequestCustomProxyNotEnv(t *testing.T) {
+	envProxy := startRecordingHTTPProxy(t)
+	modelProxy := startRecordingHTTPProxy(t)
+	isolateModelOutboundProxyEnv(t, envProxy.URL)
+
+	adapter := &OpenAIAdapter{client: netproxy.NewHTTPClient(3 * time.Second)}
+	_ = adapter.Stream(context.Background(), StreamRequest{
+		RequestID:        "req-codex-proxy",
+		ModelCallID:      "call-codex-proxy",
+		BaseURL:          subscriptionauth.CodexResponsesURL,
+		APIKey:           "codex-token",
+		CredentialSource: "codex",
+		ChatGPTAccountID: "acct-proxy",
+		ProviderModelID:  "gpt-5.1",
+		OpenAIEndpoint:   "/v1/responses",
+		Messages:         []Message{{Role: "user", Content: "hi"}},
+		MaxTokens:        8,
+		Stream:           true,
+		OutboundProxy:    netproxy.Config{Enabled: true, URL: modelProxy.URL},
+		RecoverySettings: RecoverySettings{
+			MaxTotalAttempts:      1,
+			MaxAttemptsPerChannel: 1,
+			ConnectTimeout:        time.Second,
+			FirstEventTimeout:     time.Second,
+			StreamIdleTimeout:     time.Second,
+			CallTimeout:           2 * time.Second,
+		},
+	}, func(ModelEvent) error { return nil })
+	assertRecordingProxyUsedNotEnv(t, "openai codex HTTPS stream", modelProxy, envProxy)
+}
+
+func TestCodexRouterRefreshUsesRequestCustomProxyNotEnv(t *testing.T) {
+	envProxy := startRecordingHTTPProxy(t)
+	modelProxy := startRecordingHTTPProxy(t)
+	isolateModelOutboundProxyEnv(t, envProxy.URL)
+
+	creds := newExpiredCodexAuthService(t, netproxy.NewHTTPClient(3*time.Second))
+	channel := legacyruntime.ResolvedChannel{
+		ID:               "channel-codex",
+		Name:             "managed-codex",
+		Provider:         "openai",
+		BaseURL:          subscriptionauth.CodexResponsesURL,
+		CredentialSource: "codex",
+		Model:            "gpt-5.1",
+		OpenAIEndpoint:   "/v1/responses",
+		OutboundProxy:    netproxy.Config{Enabled: true, URL: modelProxy.URL},
+	}
+	router := &Router{
+		openai:      &OpenAIAdapter{client: netproxy.NewHTTPClient(3 * time.Second), retry: fallbackTestRetry()},
+		resolver:    staticChannelResolver{channel: &channel},
+		credentials: creds,
+	}
+	_ = router.Stream(context.Background(), StreamRequest{
+		RequestID:   "req-codex-refresh-proxy",
+		ModelCallID: "call-codex-refresh-proxy",
+		ModelID:     "channel-codex",
+		Messages:    []Message{{Role: "user", Content: "hi"}},
+		MaxTokens:   8,
+		Stream:      true,
+		RecoverySettings: RecoverySettings{
+			MaxTotalAttempts:      1,
+			MaxAttemptsPerChannel: 1,
+			ConnectTimeout:        time.Second,
+			FirstEventTimeout:     time.Second,
+			StreamIdleTimeout:     time.Second,
+			CallTimeout:           2 * time.Second,
+		},
+	}, func(ModelEvent) error { return nil })
+	assertRecordingProxyUsedNotEnv(t, "router Codex credential refresh", modelProxy, envProxy)
+}
+
+type recordingHTTPProxy struct {
+	URL   string
+	hits  atomic.Int32
+	mu    sync.Mutex
+	hosts []string
+}
+
+func (proxy *recordingHTTPProxy) snapshot() (int, []string) {
+	proxy.mu.Lock()
+	defer proxy.mu.Unlock()
+	return int(proxy.hits.Load()), append([]string{}, proxy.hosts...)
+}
+
+func startRecordingHTTPProxy(t *testing.T) *recordingHTTPProxy {
+	t.Helper()
+	proxy := &recordingHTTPProxy{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		host := strings.TrimSpace(request.Host)
+		if request.URL != nil && strings.TrimSpace(request.URL.Host) != "" {
+			host = request.URL.Host
+		}
+		proxy.hits.Add(1)
+		proxy.mu.Lock()
+		proxy.hosts = append(proxy.hosts, request.Method+" "+host)
+		proxy.mu.Unlock()
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(server.Close)
+	proxy.URL = server.URL
+	return proxy
+}
+
+func isolateModelOutboundProxyEnv(t *testing.T, envProxyURL string) {
+	t.Helper()
+	t.Setenv("HTTP_PROXY", envProxyURL)
+	t.Setenv("http_proxy", envProxyURL)
+	t.Setenv("HTTPS_PROXY", envProxyURL)
+	t.Setenv("https_proxy", envProxyURL)
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("all_proxy", "")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	t.Setenv("REQUEST_METHOD", "")
+	netproxy.SetGlobal(netproxy.Config{})
+	t.Cleanup(func() { netproxy.SetGlobal(netproxy.Config{}) })
+}
+
+func assertRecordingProxyUsedNotEnv(t *testing.T, label string, modelProxy, envProxy *recordingHTTPProxy) {
+	t.Helper()
+	modelHits, modelHosts := modelProxy.snapshot()
+	envHits, envHosts := envProxy.snapshot()
+	if modelHits == 0 {
+		t.Fatalf("%s did not use model outbound proxy; envHits=%d envHosts=%v", label, envHits, envHosts)
+	}
+	if envHits != 0 {
+		t.Fatalf("%s fell back to env/system proxy: modelHosts=%v envHosts=%v", label, modelHosts, envHosts)
+	}
+}
+
+func newExpiredCodexAuthService(t *testing.T, client subscriptionauth.HTTPDoer) *subscriptionauth.Service {
+	t.Helper()
+	service := subscriptionauth.NewService(t.TempDir(), client)
+	payload, err := json.Marshal(map[string]any{
+		"email": "codex-proxy@example.test",
+		"sub":   "codex-proxy-user",
+		"exp":   time.Now().Add(-time.Minute).Unix(),
+		"https://api.openai.com/auth": map[string]any{
+			"chatgpt_account_id": "acct-proxy",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := "eyJhbGciOiJub25lIn0." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+	body, err := json.Marshal(map[string]any{
+		"auth_mode":          "chatgpt",
+		"chatgpt_account_id": "acct-proxy",
+		"tokens": map[string]string{
+			"access_token":  token,
+			"refresh_token": "refresh-proxy",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ImportCodexAuth(context.Background(), body); err != nil {
+		t.Fatalf("ImportCodexAuth: %v", err)
+	}
+	return service
 }

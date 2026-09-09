@@ -20,8 +20,15 @@ import {
   startGrokDeviceAuth,
 } from "@/services/clientApi";
 import { toUserError } from "@/state/appState";
+import {
+  activeSubscriptionFooter,
+  normalizeSubscriptionAccountList,
+  panelUsageRefreshDisabled,
+  subscriptionAccountActions,
+  subscriptionAccountHeadline,
+} from "@/state/subscriptionAccounts";
 import { Browser, Dialogs } from "@wailsio/runtime";
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
 const props = defineProps({
   provider: {
@@ -47,62 +54,24 @@ let pollTimer = null;
 
 const JSON_FILE_FILTER = [{ DisplayName: "JSON", Pattern: "*.json" }];
 
-function asAccount(value) {
-  const raw = value && typeof value === "object" ? value : {};
-  return {
-    accountId: String(raw.accountId || ""),
-    provider: String(raw.provider || ""),
-    state: String(raw.state || "missing"),
-    email: String(raw.email || ""),
-    displayName: String(raw.displayName || ""),
-    planLabel: String(raw.planLabel || ""),
-    chatgptAccountId: String(raw.chatgptAccountId || ""),
-    lastRefresh: raw.lastRefresh || "",
-    expiresAt: raw.expiresAt || "",
-    hasRefreshToken: Boolean(raw.hasRefreshToken),
-    remainingPercent: Number(raw.remainingPercent || 0),
-    usedPercent: Number(raw.usedPercent || 0),
-    resetAt: raw.resetAt || "",
-    sessionRemainingPercent: Number(raw.sessionRemainingPercent || 0),
-    sessionResetAt: raw.sessionResetAt || "",
-    limitReached: Boolean(raw.limitReached),
-    active: Boolean(raw.active),
-    error: String(raw.error || ""),
-  };
-}
-
 const isCodex = computed(() => props.provider === "codex");
 const accounts = computed(() => isCodex.value ? codexAccounts.value : grokAccounts.value);
-const activeAccount = computed(() => accounts.value.find((item) => item.active) || null);
 const accountCount = computed(() => accounts.value.length);
 const panelTitle = computed(() => isCodex.value ? "Codex 接入" : "Grok 接入");
 const selectedSub2APICount = computed(() => sub2apiSelected.value.length);
+const usageRefreshDisabled = computed(() => panelUsageRefreshDisabled({
+  busy: busy.value,
+  accounts: accounts.value,
+}));
+const accountFooterText = computed(() => activeSubscriptionFooter(accounts.value));
+let loadGeneration = 0;
 
-function stateLabel(state) {
-  switch (state) {
-    case "ready":
-      return "已就绪";
-    case "auth_required":
-      return "需要重新授权";
-    case "quota_exhausted":
-      return "配额已用尽";
-    case "pending":
-      return "等待授权";
-    case "error":
-      return "异常";
-    default:
-      return "未配置";
-  }
+function accountHeadline(account) {
+  return subscriptionAccountHeadline(account);
 }
 
-function accountStateLabel(account) {
-  if (account?.active && account.state === "ready") {
-    return "当前使用";
-  }
-  if (!account?.active && account?.state === "ready") {
-    return "备用";
-  }
-  return stateLabel(account?.state);
+function accountActions(account) {
+  return subscriptionAccountActions(account, { busy: busy.value });
 }
 
 function showActionError(title, error) {
@@ -110,15 +79,24 @@ function showActionError(title, error) {
   message(`${title}：${lastError.value}`);
 }
 
+async function loadAccounts() {
+  const provider = props.provider;
+  const generation = ++loadGeneration;
+  const providerAccounts = await listSubscriptionAccounts(provider);
+  if (generation !== loadGeneration || props.provider !== provider) {
+    return;
+  }
+  const normalized = normalizeSubscriptionAccountList(providerAccounts);
+  if (provider === "codex") {
+    codexAccounts.value = normalized;
+  } else {
+    grokAccounts.value = normalized;
+  }
+}
+
 async function refreshAll() {
   try {
-    const providerAccounts = await listSubscriptionAccounts(props.provider);
-    const normalized = Array.isArray(providerAccounts) ? providerAccounts.map(asAccount) : [];
-    if (isCodex.value) {
-      codexAccounts.value = normalized;
-    } else {
-      grokAccounts.value = normalized;
-    }
+    await loadAccounts();
     lastError.value = "";
   } catch (error) {
     showActionError("读取订阅认证失败", toUserError(error));
@@ -362,9 +340,15 @@ async function handleRefreshUsage(provider) {
   try {
     busy.value = true;
     await refreshSubscriptionUsage(provider);
-    await refreshAll();
+    await loadAccounts();
+    lastError.value = "";
   } catch (error) {
     showActionError("刷新用量失败", toUserError(error));
+    try {
+      await loadAccounts();
+    } catch (_error) {
+      // keep the refresh error
+    }
   } finally {
     busy.value = false;
   }
@@ -374,19 +358,31 @@ async function handleRefreshAccountUsage(accountID) {
   try {
     busy.value = true;
     await refreshSubscriptionAccountUsage("codex", accountID);
-    await refreshAll();
+    await loadAccounts();
+    lastError.value = "";
   } catch (error) {
     showActionError("刷新账号用量失败", toUserError(error));
+    try {
+      await loadAccounts();
+    } catch (_error) {
+      // keep the refresh error
+    }
   } finally {
     busy.value = false;
   }
 }
+
+watch(() => props.provider, () => {
+  lastError.value = "";
+  void refreshAll();
+});
 
 onMounted(() => {
   void refreshAll();
 });
 
 onUnmounted(() => {
+  loadGeneration += 1;
   stopPolling();
 });
 </script>
@@ -435,7 +431,7 @@ onUnmounted(() => {
         </div>
         <Button :disabled="busy" @click="handleStartDevice(provider)">设备码授权</Button>
         <Button
-          :disabled="busy || !activeAccount || activeAccount.state === 'auth_required'"
+          :disabled="usageRefreshDisabled"
           @click="handleRefreshUsage(provider)"
         >
           刷新用量
@@ -459,14 +455,25 @@ onUnmounted(() => {
         <li
           v-for="account in accounts"
           :key="account.accountId"
-          class="flex items-center justify-between gap-2 rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3"
+          :aria-current="account.active ? 'true' : undefined"
+          class="flex items-center justify-between gap-2 rounded-[8px] border bg-[var(--color-surface)] px-3 py-3"
+          :class="account.active ? 'border-[var(--color-primary)]' : 'border-[var(--color-border)]'"
         >
           <div class="min-w-0">
-            <div class="truncate text-sm font-semibold text-[var(--color-text)]">
-              {{ account.displayName || account.email || account.accountId }}
+            <div class="flex min-w-0 items-center gap-2">
+              <div class="truncate text-sm font-semibold text-[var(--color-text)]">
+                {{ account.displayName || account.email || account.accountId }}
+              </div>
+              <span
+                v-if="account.active"
+                class="shrink-0 rounded-full bg-[var(--color-primary)]/10 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-primary)]"
+              >
+                {{ accountHeadline(account).selectionLabel }}
+              </span>
             </div>
             <div class="mt-1 text-xs text-[var(--color-text-secondary)]">
-              {{ accountStateLabel(account) }}
+              {{ accountHeadline(account).stateLabel }}
+              <span v-if="!account.active"> · {{ accountHeadline(account).selectionLabel }}</span>
               <span v-if="account.planLabel"> · {{ account.planLabel }}</span>
               <span v-if="isCodex && account.chatgptAccountId"> · {{ account.chatgptAccountId }}</span>
             </div>
@@ -484,14 +491,15 @@ onUnmounted(() => {
             <Button
               v-if="isCodex"
               variant="text"
-              :disabled="busy || account.state === 'auth_required'"
+              :disabled="accountActions(account).refreshDisabled"
               @click="handleRefreshAccountUsage(account.accountId)"
             >
               刷新用量
             </Button>
             <Button
+              v-if="accountActions(account).showActivate"
               variant="text"
-              :disabled="busy || account.active || account.state !== 'ready'"
+              :disabled="accountActions(account).activateDisabled"
               @click="handleActivate(account.accountId)"
             >
               激活
@@ -515,11 +523,11 @@ onUnmounted(() => {
         正在等待 {{ isCodex ? "Codex" : "Grok" }} 授权，用户码
         <strong>{{ deviceChallenge.userCode }}</strong>
       </div>
-      <div v-if="lastError" class="mx-7 mb-4 note">{{ lastError }}</div>
+      <div v-if="lastError" class="mx-7 mb-4 note text-[var(--color-error-text)]">{{ lastError }}</div>
 
       <div class="subscription-account-footer">
         <span class="config-action-status">
-          {{ activeAccount ? stateLabel(activeAccount.state) : "未配置" }}
+          {{ accountFooterText }}
         </span>
         <Button
           v-if="isCodex && accountCount"

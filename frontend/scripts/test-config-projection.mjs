@@ -2050,7 +2050,7 @@ assert(!subscriptionFooterSource.includes("导入 sub2api"), "account footer mus
 assert(!subscriptionFooterSource.includes("设备码授权"), "account footer must not duplicate device authorization");
 assert(subscriptionAuthSource.includes("导入 auth.json"), "Codex auth.json import stays in the Codex pane");
 assert(subscriptionAuthSource.includes("设备码授权"), "Codex and Grok panes expose device authorization");
-assert(subscriptionAuthSource.includes('listSubscriptionAccounts(props.provider)'), "Codex and Grok panes must both load account lists");
+assert(subscriptionAuthSource.includes("listSubscriptionAccounts(provider)"), "Codex and Grok panes must both load account lists");
 assert(subscriptionAuthSource.includes('v-for="account in accounts"'), "subscription panes must render managed account lists");
 assert(subscriptionAuthSource.includes("refreshSubscriptionAccountUsage"), "Codex accounts must support account-specific usage refresh");
 assert(subscriptionAuthSource.includes("导入 sub2api"), "Codex and Grok panes must expose sub2api import");
@@ -2061,7 +2061,11 @@ assert(sub2apiImportHandler.includes("resetSub2APIImport();"), "sub2api success 
 assert(!sub2apiImportHandler.includes("closeSub2APIImport();"), "sub2api success path must not use the busy-guarded manual close handler");
 assert(subscriptionAuthSource.includes('class="subscription-account-list"'), "managed account list must use its scroll container class");
 assert(subscriptionAuthSource.includes("已按当前接入类型过滤"), "sub2api selection must explain provider filtering");
-assert(subscriptionAuthSource.includes("当前使用"), "subscription account list must show the active account");
+assert(subscriptionAuthSource.includes("subscriptionAccountHeadline"), "subscription pane uses shared active/state headlines");
+assert(subscriptionAuthSource.includes("subscriptionAccountActions"), "subscription pane uses shared row action state");
+assert(subscriptionAuthSource.includes("generation !== loadGeneration || props.provider !== provider"), "stale account loads must not overwrite a newer provider");
+assert(!subscriptionAuthSource.includes("account.state === 'auth_required'"), "refresh must not be disabled just because state is auth_required");
+assert(!subscriptionAuthSource.includes("account.active || account.state !== 'ready'"), "activate must not use a disabled button as the current-account indicator");
 assert(clientApiSource.includes("RefreshSubscriptionAccountUsage"), "client API must expose account-specific usage refresh");
 assert(clientApiSource.includes("PreviewSub2APIImport"), "client API must expose provider-filtered sub2api preview");
 assert(clientApiSource.includes("ImportSub2APIAccounts"), "client API must expose selected sub2api import");

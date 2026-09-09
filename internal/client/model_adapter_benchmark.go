@@ -208,6 +208,7 @@ func (s *ProxyService) FetchModelAdapterModels(input ModelAdapterModelsRequest) 
 
 	ctx, cancel := context.WithTimeout(context.Background(), modelAdapterListTimeout)
 	defer cancel()
+	ctx = netproxy.WithRequestConfig(ctx, input.OutboundProxy)
 
 	if source == subscriptionauth.CredentialSourceCodex {
 		apiKey, chatgptAccountID, err := resolveManagedModelListCredential(s, ctx, source)

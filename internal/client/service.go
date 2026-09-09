@@ -95,6 +95,8 @@ type ProxyService struct {
 	emitProxyStateFn func(ProxyState)
 	// injectCursorUserInfoFn 可注入账号同步，测试不得写入真实 state.vscdb。
 	injectCursorUserInfoFn func(email, token string) error
+	// clearSystemNodeExtraCACertsFn 可注入 Darwin CA 环境清理，测试不得改真实 launchctl。
+	clearSystemNodeExtraCACertsFn func() error
 
 	gatewayMu                sync.Mutex
 	gateway                  *gateway.Server

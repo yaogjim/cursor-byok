@@ -712,3 +712,20 @@ func TestFetchModelAdapterModelsUsesOutboundProxy(t *testing.T) {
 		t.Fatalf("models = %#v", result.Models)
 	}
 }
+
+func TestFetchModelAdapterModelsCodexRefreshUsesModelOutboundProxyNotEnv(t *testing.T) {
+	netproxy.SetGlobal(netproxy.Config{})
+	t.Cleanup(func() { netproxy.SetGlobal(netproxy.Config{}) })
+
+	envProxy := startRecordingOutboundProxy(t)
+	modelProxy := startRecordingOutboundProxy(t)
+	isolateOutboundProxyEnv(t, envProxy.URL)
+
+	service := newCodexProxyServiceWithExpiredAuth(t)
+	_, _ = service.FetchModelAdapterModels(ModelAdapterModelsRequest{
+		Type:             "openai",
+		CredentialSource: "codex",
+		OutboundProxy:    netproxy.Config{Enabled: true, URL: modelProxy.URL},
+	})
+	assertUsedModelProxyNotEnv(t, "FetchModelAdapterModels credential refresh", modelProxy, envProxy)
+}

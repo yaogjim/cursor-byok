@@ -80,11 +80,39 @@ func newLifecycleTestService(t *testing.T) *ProxyService {
 	})
 	settingsPath := filepath.Join(root, "Cursor", "User", "settings.json")
 	return &ProxyService{
-		backendHost:           host,
-		store:                 store,
-		configPath:            configPath,
-		cursorSettingsStore:   cursor.NewUserProxySettingsStore(settingsPath),
-		cursorSettingsOwnerID: "lifecycle-test-owner",
+		backendHost:                   host,
+		store:                         store,
+		configPath:                    configPath,
+		cursorSettingsStore:           cursor.NewUserProxySettingsStore(settingsPath),
+		cursorSettingsOwnerID:         "lifecycle-test-owner",
+		clearSystemNodeExtraCACertsFn: func() error { return nil },
+	}
+}
+
+func TestShutdownForQuitKeepsAppliedCursorSettings(t *testing.T) {
+	service := newLifecycleTestService(t)
+	service.clearSystemNodeExtraCACertsFn = func() error {
+		t.Fatal("app quit must preserve the applied CA environment")
+		return nil
+	}
+	if err := service.cursorSettingsStore.Apply("http://127.0.0.1:18080", service.cursorSettingsOwnerID); err != nil {
+		t.Fatal(err)
+	}
+	service.setCursorSettingsApplied(true)
+	settingsPath := filepath.Join(filepath.Dir(service.configPath), "Cursor", "User", "settings.json")
+	before, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	service.ShutdownForQuit()
+
+	after, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("ShutdownForQuit() cleared applied Cursor settings:\n%s", after)
 	}
 }
 

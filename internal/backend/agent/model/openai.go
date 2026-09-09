@@ -239,9 +239,15 @@ func sseDataPayload(block []byte) ([]byte, bool) {
 
 // NewOpenAIAdapter 创建一个 OpenAI 兼容适配器。
 func NewOpenAIAdapter() *OpenAIAdapter {
-	return &OpenAIAdapter{
-		client: netproxy.NewProviderHTTPClient(0),
+	return NewOpenAIAdapterWithClient(nil)
+}
+
+// NewOpenAIAdapterWithClient 供测试注入出站 client；nil 时使用默认 Provider transport。
+func NewOpenAIAdapterWithClient(client *http.Client) *OpenAIAdapter {
+	if client == nil {
+		client = netproxy.NewProviderHTTPClient(0)
 	}
+	return &OpenAIAdapter{client: client}
 }
 
 func openAIModelSupportsPromptCacheKey(modelID string) bool {

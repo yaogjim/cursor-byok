@@ -274,6 +274,14 @@ managed Codex 只在稳定本地账号身份、稳定 conversation 和逻辑 `Mo
 
 ## 6. 服务生命周期
 
+### 6.0 重开 BYOK 复用已应用配置（2026-09-08）
+
+用户确认退出保留接入配置，替代旧实现中已注入实例退出即清盘的行为。`ShutdownForQuitFrom` 仍幂等停止服务和 drain 请求，但不调用 `ClearCursorSettings`，代理设置、owner 文件及 `NODE_EXTRA_CA_CERTS` 保留。下一实例 `StartProxy` 继续由 `Plan.NeedsChange` 检查实际键值；一致时启动服务并按现有 `ApplyPlanned` 接管 owner，不触发退出 Cursor。首次/真变更仍走确认、正常退出、应用设置、重启及失败补偿，所有权锁不变。
+
+显式 `StopProxy` 仍只清理本实例成功应用且持有所有权的配置；新进程未成功 Start 时不清理旧 owner。用户接受暂停期间代理不可用（包括期间重新打开 Cursor）；彻底断开需成功启动接管后停止。本次不引入遗留 owner 强制接管/自动清理，不将确认永久持久化。回退只恢复退出清理调用，原配置及所有权格式不迁移。
+
+验收用隔离设置目录和服务端口验证“确认启动→退出→新实例启动”不再确认、backend/proxy 正常运行，并验证显式停止清理、真实设置变更仍确认和跨 owner 保护。系统 CA/钥匙串/launchctl/真实 Cursor 使用替身，实机证据另记。需求见工作决策基线 §10.14「Cursor 启动与重启」，执行与缺口见 `task/todo.md`。
+
 服务启动链路由控制面发起，核心顺序如下：
 
 ```mermaid

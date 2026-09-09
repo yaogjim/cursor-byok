@@ -74,7 +74,7 @@ function isExcludedFile(rootDir, id) {
     return true;
   }
 
-  return relativePath.startsWith("src/i18n/");
+  return relativePath.startsWith("src/i18n/") || /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(relativePath);
 }
 
 function readJSONFile(filePath, fallback) {

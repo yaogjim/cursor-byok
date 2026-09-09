@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"cursor/internal/backend"
 	"cursor/internal/cursor"
 	"cursor/internal/mitm"
 )
@@ -91,9 +92,16 @@ func newCursorStartTestService(t *testing.T, startBackend bool) (*ProxyService, 
 		id:           cursor.AppIdentity{BundleID: "com.example.fake-cursor", AppPath: filepath.Join(t.TempDir(), "FakeCursor.app")},
 		supportsQuit: true,
 	}
+	configureCursorStartTestService(t, service, fake)
+	return service, fake
+}
+
+func configureCursorStartTestService(t *testing.T, service *ProxyService, fake *fakeCursorApp) {
+	t.Helper()
 	service.cursorAppController = fake
 	service.cursorQuitTimeout = 80 * time.Millisecond
 	service.injectCursorUserInfoFn = func(string, string) error { return nil }
+	service.clearSystemNodeExtraCACertsFn = func() error { return nil }
 	service.applyCursorSettingsFn = func() error {
 		if service.proxy == nil {
 			return errors.New("proxy is not initialized")
@@ -114,7 +122,30 @@ func newCursorStartTestService(t *testing.T, startBackend bool) (*ProxyService, 
 			_ = service.proxy.Stop(ctx)
 		}
 	})
-	return service, fake
+}
+
+func rebuildCursorStartTestService(t *testing.T, previous *ProxyService, fake *fakeCursorApp) *ProxyService {
+	t.Helper()
+	settingsPath := filepath.Join(filepath.Dir(previous.configPath), "Cursor", "User", "settings.json")
+	host, err := backend.NewHost(previous.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = host.Stop(ctx)
+		_ = host.CloseObservability()
+	})
+	service := &ProxyService{
+		backendHost:           host,
+		store:                 previous.store,
+		configPath:            previous.configPath,
+		cursorSettingsStore:   cursor.NewUserProxySettingsStore(settingsPath),
+		cursorSettingsOwnerID: previous.cursorSettingsOwnerID + "-restarted",
+	}
+	configureCursorStartTestService(t, service, fake)
+	return service
 }
 
 func desiredProxyURL(t *testing.T, service *ProxyService) string {
@@ -187,6 +218,111 @@ func TestStartProxySettingsUnchangedDoesNotRestart(t *testing.T) {
 	}
 	if fake.quitCalls != 0 || fake.launchCalls != 0 {
 		t.Fatalf("unchanged restart quit=%d launch=%d", fake.quitCalls, fake.launchCalls)
+	}
+}
+
+func TestStartProxyAfterAppShutdownDoesNotRequireRepeatConfirmation(t *testing.T) {
+	service, fake := newCursorStartTestService(t, true)
+	fake.running = true
+	if _, err := service.StartProxyAfterRestartConfirm(); err != nil {
+		t.Fatal(err)
+	}
+	wantURL := desiredProxyURL(t, service)
+	if readSettingsMap(t, service)["http.proxy"] != wantURL {
+		t.Fatalf("pre-shutdown http.proxy = %#v", readSettingsMap(t, service)["http.proxy"])
+	}
+	fake.quitCalls = 0
+	fake.launchCalls = 0
+	service.ShutdownForQuit()
+
+	restarted := rebuildCursorStartTestService(t, service, fake)
+	fake.running = true
+	ins, err := restarted.InspectCursorProxyStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ins.NeedsRestart || ins.SettingsNeedChange || ins.ManualAction {
+		t.Fatalf("unchanged app restart inspection = %+v", ins)
+	}
+	state, err := restarted.StartProxy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.BackendRunning || !state.ProxyRunning || !state.CursorSettingsApplied {
+		t.Fatalf("restarted services not ready: %+v", state)
+	}
+	plan, err := restarted.cursorSettingsStore.Plan(wantURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Owner.Present || plan.Owner.Value != restarted.cursorSettingsOwnerID {
+		t.Fatalf("new instance did not take ownership: %+v", plan.Owner)
+	}
+	if fake.quitCalls != 0 || fake.launchCalls != 0 {
+		t.Fatalf("unchanged app restart quit=%d launch=%d", fake.quitCalls, fake.launchCalls)
+	}
+	if readSettingsMap(t, restarted)["http.proxy"] != wantURL {
+		t.Fatalf("http.proxy = %#v", readSettingsMap(t, restarted)["http.proxy"])
+	}
+	if _, err := restarted.StopProxy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := readSettingsMap(t, restarted)["http.proxy"]; exists {
+		t.Fatal("new owner could not disconnect after restart")
+	}
+}
+
+func TestStartProxyAfterStopProxyStillRequiresConfirmationWhenRunning(t *testing.T) {
+	service, fake := newCursorStartTestService(t, true)
+	fake.running = true
+	if _, err := service.StartProxyAfterRestartConfirm(); err != nil {
+		t.Fatal(err)
+	}
+	fake.quitCalls = 0
+	fake.launchCalls = 0
+	if _, err := service.StopProxy(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readSettingsMap(t, service)["http.proxy"]; ok {
+		t.Fatal("StopProxy must clear injected proxy settings")
+	}
+	fake.running = true
+	_, err := service.StartProxy()
+	if !errors.Is(err, ErrCursorRestartConfirmationRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	if fake.quitCalls != 0 {
+		t.Fatal("unconfirmed must not quit")
+	}
+}
+
+func TestStartProxyAfterAppShutdownRequiresConfirmationWhenProxyURLChanges(t *testing.T) {
+	service, fake := newCursorStartTestService(t, true)
+	fake.running = true
+	if _, err := service.StartProxyAfterRestartConfirm(); err != nil {
+		t.Fatal(err)
+	}
+	service.ShutdownForQuit()
+
+	// Change the persisted config before constructing the new host, just as an
+	// application restart loads its config before publishing the host snapshot.
+	cfg, err := service.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ProxyListenAddr = mustFreeListenAddr(t)
+	if _, err := service.store.Save(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	restarted := rebuildCursorStartTestService(t, service, fake)
+	fake.running = true
+	fake.quitCalls = 0
+	_, err = restarted.StartProxy()
+	if !errors.Is(err, ErrCursorRestartConfirmationRequired) {
+		t.Fatalf("err = %v", err)
+	}
+	if fake.quitCalls != 0 {
+		t.Fatal("unconfirmed must not quit")
 	}
 }
 

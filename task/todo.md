@@ -4,6 +4,17 @@
 
 ## 当前焦点
 
+### 重开确认、订阅状态与模型代理回归修复（2026-09-08）
+
+- 授权：用户要求修复三项缺陷，后明确主控安排独立执行、review 和验证；服务中断按 20/40/80/160/320 秒在原上下文最多重试五次，持续失败暂停。两项复审启动 503、浏览器启动连接中断均无 ID；等待 20 秒后各首次重试成功，后续沿同一 ID 收集结果，未用到后四次重试。
+- 已确认退出语义：退出暂停服务且保留 Cursor 接入配置；用户接受暂停期间代理不可用，显式停止清理仍保留 owner 边界。需求锚点为工作决策基线 §10.14，设计为系统架构 §6.0、§5.1、§14.19。
+- [completed] `restart`（隔离验证）：退出不再清设置和 CA 环境；新实例构造真实隔离 backend host，断言免确认、backend/proxy 运行、新 owner 接管及接管后显式停止能清配置；首次/真变更确认和所有权保护仍通过。CA/账号注入/真实 Cursor 用替身，不当作桌面实机证据。
+- [completed] `accounts`（组件及隔离浏览器验证）：active 与 ready/auth_required/quota 状态独立；刷新失败可再点击，错误保留后成功清除；激活后列表/页脚一致，旧 provider 响应不覆盖新列表。camelCase 为正式 DTO，PascalCase 仅兼容性覆盖，不当作已证实根因。
+- [blocked] `proxy`（原场景未复现）：模型列表刷新凭据漏传代理已修复；真实 TestModelAdapter 入口通过假 CONNECT/TLS 完成刷新→推理→success，模型代理两个目标 host 命中且 env 代理零命中。用户真实 7890 测速失败仍待原始错误/受控实机诊断，不能用模型列表修复替代该验收。
+- [completed] `verify`：独立 Spec/Standards review，无新增阻塞生产缺陷；主控补足新 owner/服务运行/不清 CA 的断言，并修复构建扫描将测试示例账号收进翻译资源的问题（RED/GREEN）。最终五个相关 Go 包完整测试及 vet、app Tray/AutoStart、十项前端测试、配置投影、54 调用点日志契约、production build 与发布 catalog 测试数据排除断言通过。命令/告警详见 `docs/process.md`。
+- 状态：`verified-partial`。未打包安装、未验证真实 Wails/系统 CA/真实 7890，未停止或重启真实服务，未 commit/push。历史自动重调度仍缺 typed Cursor 证据，ACP 仍缺真实客户端，不擅自解锁。
+- 测试隔离事件：早期复现曾调用真实 launchctl unsetenv NODE_EXTRA_CA_CERTS（执行方报告）；已补替身。主控只读确认当前 unset，清除前值无证据，不自动恢复。临时浏览器/Vite 已清理；复用教训与事件边界详见过程记录。
+
 ### 模型导入、全部测试与分层代理（2026-09-08）
 
 - 授权：用户确认访谈结果及计划后选择 Build；实现与本轮定向验证已收口，交付 `verified-partial`（真实 Wails 文件对话框及外部代理实机验收未完成）。

@@ -7,7 +7,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 342,
+          "line": 320,
           "column": 14
         }
       ]
@@ -43,7 +43,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 146,
+          "line": 124,
           "column": 21
         },
         {
@@ -152,7 +152,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 250,
+          "line": 228,
           "column": 13
         }
       ]
@@ -646,7 +646,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 297,
+          "line": 275,
           "column": 21
         }
       ]
@@ -830,8 +830,8 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 88,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 106,
           "column": 14
         }
       ]
@@ -1031,7 +1031,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 341,
+          "line": 319,
           "column": 12
         }
       ]
@@ -1238,7 +1238,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 207,
+          "line": 185,
           "column": 21
         }
       ]
@@ -1289,7 +1289,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 509,
+          "line": 517,
           "column": 16
         }
       ]
@@ -1325,7 +1325,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 321,
+          "line": 299,
           "column": 21
         }
       ]
@@ -1393,7 +1393,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 432,
+          "line": 428,
           "column": 47
         },
         {
@@ -1410,7 +1410,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 588,
+          "line": 596,
           "column": 1
         }
       ]
@@ -1619,8 +1619,8 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 86,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 104,
           "column": 14
         }
       ]
@@ -1644,7 +1644,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 333,
+          "line": 311,
           "column": 21
         }
       ]
@@ -1656,7 +1656,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 252,
+          "line": 230,
           "column": 21
         }
       ]
@@ -1704,7 +1704,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 78,
+          "line": 60,
           "column": 64
         }
       ]
@@ -1716,7 +1716,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 367,
+          "line": 346,
           "column": 21
         }
       ]
@@ -1743,17 +1743,17 @@
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 240,
+          "line": 218,
           "column": 17
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 344,
+          "line": 322,
           "column": 17
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 582,
+          "line": 590,
           "column": 66
         },
         {
@@ -1892,12 +1892,12 @@
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 343,
+          "line": 321,
           "column": 18
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 499,
+          "line": 507,
           "column": 94
         },
         {
@@ -1960,7 +1960,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 229,
+          "line": 207,
           "column": 21
         }
       ]
@@ -2177,7 +2177,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 131,
+          "line": 109,
           "column": 14
         }
       ]
@@ -2276,7 +2276,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 549,
+          "line": 557,
           "column": 16
         }
       ]
@@ -2411,7 +2411,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 178,
+          "line": 156,
           "column": 14
         }
       ]
@@ -2539,7 +2539,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 580,
+          "line": 588,
           "column": 68
         }
       ]
@@ -2655,7 +2655,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 573,
+          "line": 581,
           "column": 59
         }
       ]
@@ -2671,8 +2671,8 @@
           "column": 12
         },
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 92,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 110,
           "column": 14
         },
         {
@@ -2691,18 +2691,6 @@
           "file": "src/components/ModelAdapterTestCard.vue",
           "line": 144,
           "column": 93
-        }
-      ]
-    },
-    "431c2364cef8f462": {
-      "source": "模型 {0} 的模型标识不能为空",
-      "kind": "template",
-      "placeholders": 1,
-      "refs": [
-        {
-          "file": "src/state/modelAdapterTypeChange.test.js",
-          "line": 14,
-          "column": 14
         }
       ]
     },
@@ -3024,7 +3012,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 238,
+          "line": 216,
           "column": 14
         }
       ]
@@ -3053,7 +3041,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 546,
+          "line": 554,
           "column": 76
         }
       ]
@@ -3166,12 +3154,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 453,
+          "line": 449,
           "column": 36
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 580,
+          "line": 588,
           "column": 99
         }
       ]
@@ -3279,7 +3267,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 436,
+          "line": 432,
           "column": 71
         }
       ]
@@ -3315,7 +3303,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 545,
+          "line": 553,
           "column": 65
         }
       ]
@@ -3327,7 +3315,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 379,
+          "line": 364,
           "column": 21
         }
       ]
@@ -3351,7 +3339,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 530,
+          "line": 538,
           "column": 1
         }
       ]
@@ -3457,7 +3445,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 515,
+          "line": 523,
           "column": 47
         }
       ]
@@ -3640,18 +3628,6 @@
         }
       ]
     },
-    "5ddff4afab2765c3": {
-      "source": "当前使用",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 100,
-          "column": 12
-        }
-      ]
-    },
     "5e2f0d90dc3c6b2f": {
       "source": "按提供商筛选",
       "kind": "text",
@@ -3782,7 +3758,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 537,
+          "line": 545,
           "column": 15
         }
       ]
@@ -3869,7 +3845,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 144,
+          "line": 122,
           "column": 13
         }
       ]
@@ -4143,7 +4119,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 416,
+          "line": 412,
           "column": 1
         }
       ]
@@ -4372,7 +4348,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 425,
+          "line": 421,
           "column": 1
         },
         {
@@ -4507,7 +4483,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 546,
+          "line": 554,
           "column": 46
         }
       ]
@@ -4732,7 +4708,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 291,
+          "line": 269,
           "column": 21
         }
       ]
@@ -4780,7 +4756,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 408,
+          "line": 404,
           "column": 1
         }
       ]
@@ -4821,12 +4797,12 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 441,
+          "line": 437,
           "column": 1
         },
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 490,
+          "line": 497,
           "column": 1
         }
       ]
@@ -4849,8 +4825,8 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 90,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 108,
           "column": 14
         }
       ]
@@ -4898,7 +4874,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 515,
+          "line": 523,
           "column": 1
         }
       ]
@@ -5022,7 +4998,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 454,
+          "line": 450,
           "column": 14
         }
       ]
@@ -5241,14 +5217,14 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 94,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 112,
           "column": 14
         },
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 522,
-          "column": 14
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 146,
+          "column": 12
         },
         {
           "file": "src/views/UnsupportedClientPanel.vue",
@@ -5618,7 +5594,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 317,
+          "line": 295,
           "column": 13
         }
       ]
@@ -5719,7 +5695,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 192,
+          "line": 170,
           "column": 15
         }
       ]
@@ -5833,7 +5809,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 451,
+          "line": 447,
           "column": 48
         },
         {
@@ -5862,7 +5838,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 237,
+          "line": 215,
           "column": 12
         }
       ]
@@ -5987,7 +5963,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 454,
+          "line": 450,
           "column": 14
         }
       ]
@@ -6033,6 +6009,18 @@
         }
       ]
     },
+    "9980b18ec5ec76d3": {
+      "source": "当前激活",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 119,
+          "column": 35
+        }
+      ]
+    },
     "9a0463d886ce0b04": {
       "source": "测试可用性",
       "kind": "text",
@@ -6042,18 +6030,6 @@
           "file": "src/components/GatewayCard.vue",
           "line": 295,
           "column": 18
-        }
-      ]
-    },
-    "9a170fc046bf2a34": {
-      "source": "模型 1 的模型标识不能为空",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/state/modelAdapterTypeChange.test.js",
-          "line": 39,
-          "column": 47
         }
       ]
     },
@@ -6546,7 +6522,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 227,
+          "line": 205,
           "column": 13
         }
       ]
@@ -6606,7 +6582,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 507,
+          "line": 515,
           "column": 57
         },
         {
@@ -6731,8 +6707,8 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 84,
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 102,
           "column": 14
         }
       ]
@@ -7325,7 +7301,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 445,
+          "line": 441,
           "column": 1
         }
       ]
@@ -7385,7 +7361,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 239,
+          "line": 217,
           "column": 18
         }
       ]
@@ -7517,7 +7493,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 355,
+          "line": 333,
           "column": 21
         },
         {
@@ -7551,7 +7527,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 280,
+          "line": 258,
           "column": 38
         }
       ]
@@ -7604,7 +7580,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 78,
+          "line": 60,
           "column": 51
         }
       ]
@@ -7961,7 +7937,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 479,
+          "line": 486,
           "column": 1
         }
       ]
@@ -8267,7 +8243,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 477,
+          "line": 484,
           "column": 1
         }
       ]
@@ -8477,7 +8453,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 497,
+          "line": 505,
           "column": 1
         }
       ]
@@ -8638,7 +8614,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 124,
+          "line": 102,
           "column": 21
         }
       ]
@@ -8996,7 +8972,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 291,
+          "line": 269,
           "column": 67
         }
       ]
@@ -9008,7 +8984,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 280,
+          "line": 258,
           "column": 55
         }
       ]
@@ -9078,7 +9054,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 545,
+          "line": 553,
           "column": 1
         }
       ]
@@ -9244,7 +9220,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 509,
+          "line": 517,
           "column": 16
         }
       ]
@@ -9437,7 +9413,7 @@
       "refs": [
         {
           "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 549,
+          "line": 557,
           "column": 16
         }
       ]
@@ -9811,6 +9787,18 @@
         }
       ]
     },
+    "fcabce63ced96696": {
+      "source": "当前激活：{0} · {1}",
+      "kind": "template",
+      "placeholders": 2,
+      "refs": [
+        {
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 149,
+          "column": 10
+        }
+      ]
+    },
     "fcabeb55a0240164": {
       "source": "导入模型配置",
       "kind": "text",
@@ -9846,9 +9834,9 @@
       "placeholders": 0,
       "refs": [
         {
-          "file": "src/components/SubscriptionAuthPanel.vue",
-          "line": 103,
-          "column": 12
+          "file": "src/state/subscriptionAccounts.js",
+          "line": 119,
+          "column": 44
         }
       ]
     },

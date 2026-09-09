@@ -978,3 +978,156 @@ func TestExpiredPendingAuthIsRemoved(t *testing.T) {
 		t.Fatalf("expired pending auth was not removed: %#v", service.pending)
 	}
 }
+
+func TestCodexAccountStatusActiveIsIndependentOfReadyExpiredAndAuthRequired(t *testing.T) {
+	unexpired := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	expired := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(-time.Minute).Unix()})
+
+	readyActive := (storedCodexAuth{Active: true, Tokens: storedTokenBundle{AccessToken: unexpired, RefreshToken: "refresh"}}).status()
+	if !readyActive.Active || readyActive.State != StateReady {
+		t.Fatalf("ready active = %#v", readyActive)
+	}
+	assertNoSecrets(t, readyActive)
+
+	expiredRefreshable := (storedCodexAuth{Active: true, Tokens: storedTokenBundle{AccessToken: expired, RefreshToken: "refresh"}}).status()
+	if !expiredRefreshable.Active || expiredRefreshable.State != StateReady {
+		t.Fatalf("expired access with refresh token must stay ready: %#v", expiredRefreshable)
+	}
+
+	expiredNoRefresh := (storedCodexAuth{Active: true, Tokens: storedTokenBundle{AccessToken: expired}}).status()
+	if !expiredNoRefresh.Active || expiredNoRefresh.State != StateAuthRequired {
+		t.Fatalf("expired access without refresh token = %#v", expiredNoRefresh)
+	}
+
+	authRequired := (storedCodexAuth{Active: true, AuthRequired: true, Tokens: storedTokenBundle{AccessToken: unexpired, RefreshToken: "refresh"}}).status()
+	if !authRequired.Active || authRequired.State != StateAuthRequired {
+		t.Fatalf("auth_required must keep the active flag: %#v", authRequired)
+	}
+
+	standby := (storedCodexAuth{Active: false, Tokens: storedTokenBundle{AccessToken: unexpired, RefreshToken: "refresh"}}).status()
+	if standby.Active || standby.State != StateReady {
+		t.Fatalf("ready standby = %#v", standby)
+	}
+}
+
+func TestCodexListKeepsActiveFlagWhenCurrentAccountNeedsAuth(t *testing.T) {
+	service := NewService(t.TempDir(), nil)
+	first := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	second := testJWT(t, map[string]any{"sub": "two", "email": "two@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	third := testJWT(t, map[string]any{"sub": "three", "email": "three@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	for _, token := range []string{first, second, third} {
+		if _, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+token+`","refresh_token":"refresh"}}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil || len(accounts) != 3 {
+		t.Fatalf("list = %#v %v", accounts, err)
+	}
+	if err := service.markCodexAuthRequired(accounts[0].AccountID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := service.ListAccounts(context.Background(), ProviderCodex)
+	if err != nil || len(listed) != 3 {
+		t.Fatalf("list after auth = %#v %v", listed, err)
+	}
+	if !listed[0].Active || listed[0].State != StateAuthRequired {
+		t.Fatalf("current account should stay active while auth_required: %#v", listed[0])
+	}
+	if listed[1].Active || listed[1].State != StateReady || listed[2].Active || listed[2].State != StateReady {
+		t.Fatalf("standby accounts drifted: %#v", listed)
+	}
+	assertNoSecrets(t, listed)
+}
+
+func TestCodexRefreshAccountUsageNetworkErrorDoesNotMarkAuthRequired(t *testing.T) {
+	var calls atomic.Int32
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if req.URL.String() != codexOAuthTokenURL {
+			t.Fatalf("unexpected url %s", req.URL)
+		}
+		return nil, errors.New("dial tcp: i/o timeout")
+	})
+	service := NewService(t.TempDir(), client)
+	expired := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(-time.Minute).Unix()})
+	imported, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+expired+`","refresh_token":"old-refresh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.RefreshAccountUsage(context.Background(), ProviderCodex, imported.AccountID)
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+	if errors.Is(err, ErrAuthRequired) {
+		t.Fatalf("network error classified as auth required: %v", err)
+	}
+	if strings.Contains(err.Error(), expired) || strings.Contains(err.Error(), "eyJ") {
+		t.Fatalf("token leaked: %v", err)
+	}
+	accounts, listErr := service.ListAccounts(context.Background(), ProviderCodex)
+	if listErr != nil || len(accounts) != 1 {
+		t.Fatalf("list = %#v %v", accounts, listErr)
+	}
+	if accounts[0].State != StateReady || !accounts[0].Active {
+		t.Fatalf("network failure changed account state: %#v", accounts[0])
+	}
+	assertNoSecrets(t, accounts[0])
+	_, retryErr := service.RefreshAccountUsage(context.Background(), ProviderCodex, imported.AccountID)
+	if retryErr == nil || errors.Is(retryErr, ErrAuthRequired) {
+		t.Fatalf("retry should remain a network error: %v", retryErr)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls=%d want 2", calls.Load())
+	}
+}
+
+func TestCodexRefreshAccountUsageLookupNetworkErrorDoesNotMarkAuthRequired(t *testing.T) {
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != codexUsageURL {
+			t.Fatalf("unexpected url %s", req.URL)
+		}
+		return nil, errors.New("connection reset")
+	})
+	service := NewService(t.TempDir(), client)
+	fresh := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(time.Hour).Unix()})
+	imported, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+fresh+`","refresh_token":"old-refresh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.RefreshAccountUsage(context.Background(), ProviderCodex, imported.AccountID)
+	if err == nil {
+		t.Fatal("expected usage lookup network error")
+	}
+	if errors.Is(err, ErrAuthRequired) {
+		t.Fatalf("usage lookup network error classified as auth required: %v", err)
+	}
+	accounts, listErr := service.ListAccounts(context.Background(), ProviderCodex)
+	if listErr != nil || len(accounts) != 1 || accounts[0].State != StateReady || !accounts[0].Active {
+		t.Fatalf("usage lookup failure changed account state: %#v %v", accounts, listErr)
+	}
+}
+
+func TestCodexRefreshAccountUsageUnauthorizedMarksAuthRequiredAndKeepsActive(t *testing.T) {
+	client := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusUnauthorized, map[string]any{"error": "invalid_grant"}), nil
+	})
+	service := NewService(t.TempDir(), client)
+	expired := testJWT(t, map[string]any{"sub": "one", "email": "one@example.com", "exp": time.Now().Add(-time.Minute).Unix()})
+	imported, err := service.ImportCodexAuth(context.Background(), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"`+expired+`","refresh_token":"old-refresh"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.RefreshAccountUsage(context.Background(), ProviderCodex, imported.AccountID)
+	if !errors.Is(err, ErrAuthRequired) {
+		t.Fatalf("unauthorized refresh = %v, want ErrAuthRequired", err)
+	}
+	accounts, listErr := service.ListAccounts(context.Background(), ProviderCodex)
+	if listErr != nil || len(accounts) != 1 {
+		t.Fatalf("list = %#v %v", accounts, listErr)
+	}
+	if accounts[0].State != StateAuthRequired || !accounts[0].Active {
+		t.Fatalf("unauthorized refresh should keep account active and mark auth_required: %#v", accounts[0])
+	}
+	assertNoSecrets(t, accounts[0])
+}

@@ -78,6 +78,9 @@ func (s *ProxyService) ClearCursorSettings() error {
 	var beforeClear func() error
 	if goruntime.GOOS == "darwin" {
 		beforeClear = cursor.ClearSystemNodeExtraCACerts
+		if s.clearSystemNodeExtraCACertsFn != nil {
+			beforeClear = s.clearSystemNodeExtraCACertsFn
+		}
 	}
 	cleared, err := s.cursorSettingsStore.ClearOwned(s.cursorSettingsOwnerID, beforeClear)
 	if err != nil {
