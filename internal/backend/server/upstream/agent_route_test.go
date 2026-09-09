@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,12 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"cursor/gen/agentv1"
 	"cursor/gen/aiserverv1"
 	"cursor/internal/backend/server"
 	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -956,7 +959,7 @@ func TestForwardOfficialAgentDoesNotWriteWhenTargetMissing(t *testing.T) {
 func TestParseBidiAppendRoutingFromConnectEnvelope(t *testing.T) {
 	t.Parallel()
 	body := bidiAppendRunBody(t, "req-parse", agentTestLocalChannel+":high")
-	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", body)
+	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", "", body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -967,14 +970,14 @@ func TestParseBidiAppendRoutingFromConnectEnvelope(t *testing.T) {
 
 func TestParseBidiAppendRoutingDistinguishesEmptyRunFromFollowup(t *testing.T) {
 	t.Parallel()
-	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", bidiAppendRunBody(t, "req-empty-run", ""))
+	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", "", bidiAppendRunBody(t, "req-empty-run", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if requestID != "req-empty-run" || modelID != "" || !runOrPrewarm {
 		t.Fatalf("empty run request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
 	}
-	requestID, modelID, runOrPrewarm, err = parseBidiAppendRouting("application/connect+proto", bidiAppendFollowupBody(t, "req-follow"))
+	requestID, modelID, runOrPrewarm, err = parseBidiAppendRouting("application/connect+proto", "", bidiAppendFollowupBody(t, "req-follow"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +988,7 @@ func TestParseBidiAppendRoutingDistinguishesEmptyRunFromFollowup(t *testing.T) {
 
 func TestParseRunSSERequestIDFromConnectEnvelope(t *testing.T) {
 	t.Parallel()
-	requestID, err := parseRunSSERequestID("application/connect+proto", runSSEBody(t, "req-sse"))
+	requestID, err := parseRunSSERequestID("application/connect+proto", "", runSSEBody(t, "req-sse"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,10 +997,257 @@ func TestParseRunSSERequestIDFromConnectEnvelope(t *testing.T) {
 	}
 }
 
+func TestAgentRouteWireEncodingIdentityMatrix(t *testing.T) {
+	t.Parallel()
+	identities := []struct {
+		name      string
+		modelID   string
+		auth      string
+		wantLocal bool
+	}{
+		{name: "local-identity-byok", modelID: agentTestLocalChannel, auth: agentTestLocalAuth, wantLocal: true},
+		{name: "official-identity-byok", modelID: agentTestLocalChannel, auth: agentTestInboundAuth, wantLocal: true},
+		{name: "official-model", modelID: agentTestOfficialModel, auth: agentTestInboundAuth, wantLocal: false},
+		{name: "auto", modelID: "auto", auth: agentTestInboundAuth, wantLocal: false},
+	}
+	formats := []struct {
+		name string
+		ct   string
+		enc  string
+	}{
+		{name: "protobuf", ct: "application/proto"},
+		{name: "protobuf-gzip", ct: "application/proto", enc: "gzip"},
+		{name: "json", ct: "application/json"},
+	}
+	for _, identity := range identities {
+		for _, format := range formats {
+			identity := identity
+			format := format
+			t.Run(identity.name+"/"+format.name, func(t *testing.T) {
+				t.Parallel()
+				requestID := "wire-" + identity.name + "-" + format.name
+				protoBytes := bidiAppendRunProtoBody(t, requestID, identity.modelID)
+				body := protoBytes
+				switch format.name {
+				case "protobuf-gzip":
+					body = gzipCatalogBytes(t, protoBytes)
+				case "json":
+					body = protoJSONFromBytes(t, protoBytes, &aiserverv1.BidiAppendRequest{})
+				}
+				runAgentWireRouteCase(t, agentWireRouteCase{
+					requestID:  requestID,
+					auth:       identity.auth,
+					wantLocal:  identity.wantLocal,
+					bidiBody:   body,
+					bidiType:   format.ct,
+					bidiEnc:    format.enc,
+					streamBody: runSSEBody(t, requestID),
+					streamType: "application/connect+proto",
+				})
+			})
+		}
+	}
+}
+
+func TestAgentRouteWireEncodingFailClosedAndConnectFrames(t *testing.T) {
+	t.Parallel()
+	t.Run("invalid gzip", func(t *testing.T) {
+		t.Parallel()
+		assertAgentRouteNoDispatch(t, []byte("not-gzip"), "application/proto", "gzip")
+	})
+	t.Run("invalid json", func(t *testing.T) {
+		t.Parallel()
+		assertAgentRouteNoDispatch(t, []byte("{"), "application/json", "")
+	})
+	t.Run("unsupported encoding", func(t *testing.T) {
+		t.Parallel()
+		assertAgentRouteNoDispatch(t, bidiAppendRunProtoBody(t, "req-br", agentTestOfficialModel), "application/proto", "br")
+	})
+	t.Run("json media type params", func(t *testing.T) {
+		t.Parallel()
+		const requestID = "wire-json-params"
+		payload := bidiAppendRunProtoBody(t, requestID, agentTestLocalChannel)
+		runAgentWireRouteCase(t, agentWireRouteCase{
+			requestID:  requestID,
+			auth:       agentTestLocalAuth,
+			wantLocal:  true,
+			bidiBody:   protoJSONFromBytes(t, payload, &aiserverv1.BidiAppendRequest{}),
+			bidiType:   "application/json; charset=utf-8",
+			streamBody: runSSEBody(t, requestID),
+			streamType: "application/connect+proto",
+		})
+	})
+	t.Run("runsse connect proto http gzip", func(t *testing.T) {
+		t.Parallel()
+		const requestID = "wire-sse-gzip"
+		got, err := parseRunSSERequestID("application/connect+proto", "gzip", gzipCatalogBytes(t, runSSEBody(t, requestID)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != requestID {
+			t.Fatalf("request=%q", got)
+		}
+	})
+	t.Run("runsse connect json", func(t *testing.T) {
+		t.Parallel()
+		const requestID = "wire-sse-json"
+		runAgentWireRouteCase(t, agentWireRouteCase{
+			requestID:  requestID,
+			auth:       agentTestLocalAuth,
+			wantLocal:  true,
+			bidiBody:   bidiAppendRunProtoBody(t, requestID, agentTestLocalChannel),
+			bidiType:   "application/proto",
+			streamBody: encodeConnectEnvelope(0, marshalProtoJSON(t, &aiserverv1.BidiRequestId{RequestId: requestID})),
+			streamType: "application/connect+json",
+		})
+	})
+}
+
+func TestParseAgentRouteJSONAndConnectFrames(t *testing.T) {
+	t.Parallel()
+	t.Run("bidi proto charset", func(t *testing.T) {
+		t.Parallel()
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/proto; charset=utf-8", "", bidiAppendRunProtoBody(t, "req-proto-charset", agentTestLocalChannel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requestID != "req-proto-charset" || modelID != agentTestLocalChannel || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("bidi json", func(t *testing.T) {
+		t.Parallel()
+		body := protoJSONFromBytes(t, bidiAppendRunProtoBody(t, "req-json", agentTestLocalChannel+":high"), &aiserverv1.BidiAppendRequest{})
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/json", "", body)
+		if err != nil {
+			t.Fatalf("json bidi parse: %v", err)
+		}
+		if requestID != "req-json" || modelID != agentTestLocalChannel+":high" || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("bidi json charset", func(t *testing.T) {
+		t.Parallel()
+		body := protoJSONFromBytes(t, bidiAppendRunProtoBody(t, "req-json-charset", agentTestLocalChannel), &aiserverv1.BidiAppendRequest{})
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/json; charset=utf-8", "", body)
+		if err != nil {
+			t.Fatalf("json charset bidi parse: %v", err)
+		}
+		if requestID != "req-json-charset" || modelID != agentTestLocalChannel || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("runsse json", func(t *testing.T) {
+		t.Parallel()
+		body := marshalProtoJSON(t, &aiserverv1.BidiRequestId{RequestId: "req-sse-json"})
+		requestID, err := parseRunSSERequestID("application/json", "", body)
+		if err != nil {
+			t.Fatalf("json runsse parse: %v", err)
+		}
+		if requestID != "req-sse-json" {
+			t.Fatalf("request=%q", requestID)
+		}
+	})
+	t.Run("runsse json charset", func(t *testing.T) {
+		t.Parallel()
+		body := marshalProtoJSON(t, &aiserverv1.BidiRequestId{RequestId: "req-sse-json-charset"})
+		requestID, err := parseRunSSERequestID("application/json; charset=utf-8", "", body)
+		if err != nil {
+			t.Fatalf("json charset runsse parse: %v", err)
+		}
+		if requestID != "req-sse-json-charset" {
+			t.Fatalf("request=%q", requestID)
+		}
+	})
+	t.Run("bidi connect json", func(t *testing.T) {
+		t.Parallel()
+		payload := bidiAppendRunProtoBody(t, "req-cjson", agentTestOfficialModel)
+		body := encodeConnectEnvelope(0, protoJSONFromBytes(t, payload, &aiserverv1.BidiAppendRequest{}))
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+json", "", body)
+		if err != nil {
+			t.Fatalf("connect json bidi parse: %v", err)
+		}
+		if requestID != "req-cjson" || modelID != agentTestOfficialModel || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("runsse connect json", func(t *testing.T) {
+		t.Parallel()
+		body := encodeConnectEnvelope(0, marshalProtoJSON(t, &aiserverv1.BidiRequestId{RequestId: "req-sse-cjson"}))
+		requestID, err := parseRunSSERequestID("application/connect+json", "", body)
+		if err != nil {
+			t.Fatalf("connect json runsse parse: %v", err)
+		}
+		if requestID != "req-sse-cjson" {
+			t.Fatalf("request=%q", requestID)
+		}
+	})
+	t.Run("bidi connect proto envelope gzip", func(t *testing.T) {
+		t.Parallel()
+		payload := bidiAppendRunProtoBody(t, "req-env-gzip", agentTestLocalChannel)
+		body := encodeConnectEnvelope(connectFlagCompressed, gzipCatalogBytes(t, payload))
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", "", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requestID != "req-env-gzip" || modelID != agentTestLocalChannel || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("runsse connect proto envelope gzip", func(t *testing.T) {
+		t.Parallel()
+		payload := runSSEProtoBody(t, "req-sse-env-gzip")
+		body := encodeConnectEnvelope(connectFlagCompressed, gzipCatalogBytes(t, payload))
+		requestID, err := parseRunSSERequestID("application/connect+proto", "", body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requestID != "req-sse-env-gzip" {
+			t.Fatalf("request=%q", requestID)
+		}
+	})
+	t.Run("bidi connect json envelope gzip", func(t *testing.T) {
+		t.Parallel()
+		payload := bidiAppendRunProtoBody(t, "req-cjson-gzip", "auto")
+		jsonBody := protoJSONFromBytes(t, payload, &aiserverv1.BidiAppendRequest{})
+		body := encodeConnectEnvelope(connectFlagCompressed, gzipCatalogBytes(t, jsonBody))
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+json", "", body)
+		if err != nil {
+			t.Fatalf("connect json gzip bidi parse: %v", err)
+		}
+		if requestID != "req-cjson-gzip" || modelID != "auto" || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+	t.Run("runsse connect json envelope gzip", func(t *testing.T) {
+		t.Parallel()
+		jsonBody := marshalProtoJSON(t, &aiserverv1.BidiRequestId{RequestId: "req-sse-cjson-gzip"})
+		body := encodeConnectEnvelope(connectFlagCompressed, gzipCatalogBytes(t, jsonBody))
+		requestID, err := parseRunSSERequestID("application/connect+json", "", body)
+		if err != nil {
+			t.Fatalf("connect json gzip runsse parse: %v", err)
+		}
+		if requestID != "req-sse-cjson-gzip" {
+			t.Fatalf("request=%q", requestID)
+		}
+	})
+	t.Run("bidi connect proto charset", func(t *testing.T) {
+		t.Parallel()
+		requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto; charset=utf-8", "", bidiAppendRunBody(t, "req-ct-params", agentTestLocalChannel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if requestID != "req-ct-params" || modelID != agentTestLocalChannel || !runOrPrewarm {
+			t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+		}
+	})
+}
+
 type agentRouteInvoke struct {
 	path          string
 	body          []byte
 	contentType   string
+	encoding      string
 	authorization string
 	checksum      string
 	officialURL   string
@@ -1022,6 +1272,10 @@ func invokeAgentRouteErr(t *testing.T, action server.HandlerFunc, options agentR
 	}
 	request.Header.Set("Authorization", options.authorization)
 	request.Header.Set("content-type", options.contentType)
+	request.Header.Set("Connect-Protocol-Version", "1")
+	if options.encoding != "" {
+		request.Header.Set("Content-Encoding", options.encoding)
+	}
 	if options.checksum != "" {
 		request.Header.Set("x-cursor-checksum", options.checksum)
 	}
@@ -1146,4 +1400,318 @@ func waitForAgentWaiter(t *testing.T, store *AgentSessionStore, requestID string
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("RunSSE waiter was not registered")
+}
+
+func invokeAgentRouteWire(t *testing.T, action server.HandlerFunc, options agentRouteInvoke) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder, err := invokeAgentRouteErr(t, server.ErrorEncoder()(action), options)
+	if err != nil {
+		t.Fatalf("agent route ErrorEncoder: %v", err)
+	}
+	return recorder
+}
+
+type agentWireRouteCase struct {
+	requestID  string
+	auth       string
+	wantLocal  bool
+	bidiBody   []byte
+	bidiType   string
+	bidiEnc    string
+	streamBody []byte
+	streamType string
+	streamEnc  string
+}
+
+type agentWireHit struct {
+	path          string
+	body          []byte
+	contentType   string
+	encoding      string
+	authorization string
+}
+
+type agentWireHits struct {
+	mu   sync.Mutex
+	hits []agentWireHit
+}
+
+func (h *agentWireHits) handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		hit := agentWireHit{
+			path:          request.URL.Path,
+			body:          append([]byte(nil), body...),
+			contentType:   request.Header.Get("Content-Type"),
+			encoding:      request.Header.Get("Content-Encoding"),
+			authorization: request.Header.Get("Authorization"),
+		}
+		h.mu.Lock()
+		h.hits = append(h.hits, hit)
+		h.mu.Unlock()
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func (h *agentWireHits) snapshot() []agentWireHit {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]agentWireHit, len(h.hits))
+	copy(out, h.hits)
+	return out
+}
+
+func newAgentBidiConnectHandler(requestID string) http.Handler {
+	return connect.NewUnaryHandler(bidiAppendProcedure, func(ctx context.Context, req *connect.Request[aiserverv1.BidiAppendRequest]) (*connect.Response[aiserverv1.BidiAppendResponse], error) {
+		if req.Msg.GetRequestId().GetRequestId() != requestID {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("bidi request_id=%q", req.Msg.GetRequestId().GetRequestId()))
+		}
+		return connect.NewResponse(&aiserverv1.BidiAppendResponse{}), nil
+	})
+}
+
+func newAgentRunSSEConnectHandler(requestID string) http.Handler {
+	return connect.NewServerStreamHandler(runSSEProcedure, func(ctx context.Context, req *connect.Request[aiserverv1.BidiRequestId], stream *connect.ServerStream[agentv1.AgentServerMessage]) error {
+		if req.Msg.GetRequestId() != requestID {
+			return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("sse request_id=%q", req.Msg.GetRequestId()))
+		}
+		return stream.Send(&agentv1.AgentServerMessage{})
+	})
+}
+
+func agentConnectDestination(bidi http.Handler, stream http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case bidiAppendProcedure:
+			bidi.ServeHTTP(writer, request)
+		case runSSEProcedure:
+			stream.ServeHTTP(writer, request)
+		default:
+			http.NotFound(writer, request)
+		}
+	})
+}
+
+func newAgentWireRequest(path string, body []byte, contentType string, encoding string, auth string) *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "http://backend.local"+path, bytes.NewReader(body))
+	request.Header.Set("Content-Type", contentType)
+	request.Header.Set("Authorization", auth)
+	request.Header.Set("Connect-Protocol-Version", "1")
+	if encoding != "" {
+		request.Header.Set("Content-Encoding", encoding)
+	}
+	return request
+}
+
+func assertConnectControlOK(t *testing.T, handler http.Handler, request *http.Request) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("control decoder rejected fixture: %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func runAgentWireRouteCase(t *testing.T, tc agentWireRouteCase) {
+	t.Helper()
+	bidiHandler := newAgentBidiConnectHandler(tc.requestID)
+	streamHandler := newAgentRunSSEConnectHandler(tc.requestID)
+	assertConnectControlOK(t, bidiHandler, newAgentWireRequest(bidiAppendProcedure, tc.bidiBody, tc.bidiType, tc.bidiEnc, tc.auth))
+	assertConnectControlOK(t, streamHandler, newAgentWireRequest(runSSEProcedure, tc.streamBody, tc.streamType, tc.streamEnc, tc.auth))
+
+	destination := agentConnectDestination(bidiHandler, streamHandler)
+	var localHits, officialHits agentWireHits
+	official := httptest.NewServer(officialHits.handler(destination))
+	t.Cleanup(official.Close)
+	local := localHits.handler(destination)
+	sessions := NewAgentSessionStore()
+	action := AgentRouteAction(agentRouteDeps(t, official.Client()), sessions, local)
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	streamDone := make(chan int, 1)
+	streamFinished := make(chan struct{})
+	go func() {
+		defer close(streamFinished)
+		recorder := invokeAgentRouteWire(t, action, agentRouteInvoke{
+			path:          runSSEProcedure,
+			body:          tc.streamBody,
+			contentType:   tc.streamType,
+			encoding:      tc.streamEnc,
+			authorization: tc.auth,
+			officialURL:   official.URL + runSSEProcedure,
+			mode:          server.ModeLocal,
+			ctx:           streamCtx,
+		})
+		streamDone <- recorder.Code
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-streamFinished:
+		case <-time.After(2 * time.Second):
+			t.Error("RunSSE goroutine did not exit")
+		}
+	})
+	waitForAgentWaiter(t, sessions, tc.requestID)
+
+	bidi := invokeAgentRouteWire(t, action, agentRouteInvoke{
+		path:          bidiAppendProcedure,
+		body:          tc.bidiBody,
+		contentType:   tc.bidiType,
+		encoding:      tc.bidiEnc,
+		authorization: tc.auth,
+		officialURL:   official.URL + bidiAppendProcedure,
+		mode:          server.ModeLocal,
+	})
+	if bidi.Code != http.StatusOK {
+		t.Fatalf("bidi status=%d body=%q, want 200", bidi.Code, bidi.Body.String())
+	}
+	var streamCode int
+	select {
+	case streamCode = <-streamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunSSE did not dispatch after BidiAppend")
+	}
+	if streamCode != http.StatusOK {
+		t.Fatalf("runsse status=%d, want 200", streamCode)
+	}
+
+	gotLocal := localHits.snapshot()
+	gotOfficial := officialHits.snapshot()
+	if tc.wantLocal {
+		if len(gotOfficial) != 0 {
+			t.Fatalf("official hits=%d", len(gotOfficial))
+		}
+		assertAgentWireHits(t, gotLocal, tc)
+		return
+	}
+	if len(gotLocal) != 0 {
+		t.Fatalf("local hits=%d", len(gotLocal))
+	}
+	assertAgentWireHits(t, gotOfficial, tc)
+}
+
+func assertAgentWireHits(t *testing.T, hits []agentWireHit, tc agentWireRouteCase) {
+	t.Helper()
+	if len(hits) != 2 {
+		t.Fatalf("hits=%d, want bidi and runsse", len(hits))
+	}
+	var bidi *agentWireHit
+	var stream *agentWireHit
+	for i := range hits {
+		switch hits[i].path {
+		case bidiAppendProcedure:
+			bidi = &hits[i]
+		case runSSEProcedure:
+			stream = &hits[i]
+		}
+	}
+	if bidi == nil || stream == nil {
+		t.Fatalf("paths=%s,%s want bidi and runsse", hits[0].path, hits[1].path)
+	}
+	if !bytes.Equal(bidi.body, tc.bidiBody) {
+		t.Fatal("bidi body changed")
+	}
+	if bidi.contentType != tc.bidiType {
+		t.Fatalf("bidi content-type=%q want %q", bidi.contentType, tc.bidiType)
+	}
+	if bidi.encoding != tc.bidiEnc {
+		t.Fatalf("bidi encoding=%q want %q", bidi.encoding, tc.bidiEnc)
+	}
+	if bidi.authorization != tc.auth {
+		t.Fatalf("bidi authorization=%q", bidi.authorization)
+	}
+	if !bytes.Equal(stream.body, tc.streamBody) {
+		t.Fatal("runsse body changed")
+	}
+	if stream.contentType != tc.streamType {
+		t.Fatalf("runsse content-type=%q want %q", stream.contentType, tc.streamType)
+	}
+	if stream.encoding != tc.streamEnc {
+		t.Fatalf("runsse encoding=%q want %q", stream.encoding, tc.streamEnc)
+	}
+	if stream.authorization != tc.auth {
+		t.Fatalf("runsse authorization=%q", stream.authorization)
+	}
+}
+
+func assertAgentRouteNoDispatch(t *testing.T, body []byte, contentType string, encoding string) {
+	t.Helper()
+	officialHits := int32(0)
+	official := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		atomic.AddInt32(&officialHits, 1)
+	}))
+	t.Cleanup(official.Close)
+	localHits := int32(0)
+	action := AgentRouteAction(agentRouteDeps(t, official.Client()), NewAgentSessionStore(), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		atomic.AddInt32(&localHits, 1)
+	}))
+	recorder := invokeAgentRouteWire(t, action, agentRouteInvoke{
+		path:          bidiAppendProcedure,
+		body:          body,
+		contentType:   contentType,
+		encoding:      encoding,
+		authorization: agentTestInboundAuth,
+		officialURL:   official.URL + bidiAppendProcedure,
+		mode:          server.ModeLocal,
+	})
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%q, want 502", recorder.Code, recorder.Body.String())
+	}
+	if atomic.LoadInt32(&localHits) != 0 || atomic.LoadInt32(&officialHits) != 0 {
+		t.Fatalf("dispatched local=%d official=%d", localHits, officialHits)
+	}
+}
+
+func bidiAppendRunProtoBody(t *testing.T, requestID string, modelID string) []byte {
+	t.Helper()
+	runRequest := &agentv1.AgentRunRequest{}
+	if strings.TrimSpace(modelID) != "" {
+		runRequest.RequestedModel = &agentv1.RequestedModel{ModelId: modelID}
+	}
+	encoded, err := proto.Marshal(&agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: runRequest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := proto.Marshal(&aiserverv1.BidiAppendRequest{
+		RequestId: &aiserverv1.BidiRequestId{RequestId: requestID},
+		Data:      hex.EncodeToString(encoded),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func runSSEProtoBody(t *testing.T, requestID string) []byte {
+	t.Helper()
+	payload, err := proto.Marshal(&aiserverv1.BidiRequestId{RequestId: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func protoJSONFromBytes(t *testing.T, protoBytes []byte, message proto.Message) []byte {
+	t.Helper()
+	if err := proto.Unmarshal(protoBytes, message); err != nil {
+		t.Fatal(err)
+	}
+	return marshalProtoJSON(t, message)
+}
+
+func marshalProtoJSON(t *testing.T, message proto.Message) []byte {
+	t.Helper()
+	encoded, err := protojson.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }

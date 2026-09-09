@@ -40,7 +40,7 @@ func AgentRouteAction(deps Dependencies, sessions *AgentSessionStore, local http
 }
 
 func routeBidiAppend(reqCtx *RequestContext, sessions *AgentSessionStore, local http.Handler) error {
-	requestID, modelID, runOrPrewarm, parseErr := parseBidiAppendRouting(reqCtx.ContentType, reqCtx.RequestBody)
+	requestID, modelID, runOrPrewarm, parseErr := parseBidiAppendRouting(reqCtx.ContentType, inboundContentEncoding(reqCtx), reqCtx.RequestBody)
 	if strings.TrimSpace(requestID) == "" {
 		if parseErr != nil {
 			return parseErr
@@ -70,7 +70,7 @@ func routeBidiAppend(reqCtx *RequestContext, sessions *AgentSessionStore, local 
 }
 
 func routeRunSSE(reqCtx *RequestContext, sessions *AgentSessionStore, local http.Handler) error {
-	requestID, err := parseRunSSERequestID(reqCtx.ContentType, reqCtx.RequestBody)
+	requestID, err := parseRunSSERequestID(reqCtx.ContentType, inboundContentEncoding(reqCtx), reqCtx.RequestBody)
 	if err != nil {
 		return err
 	}
@@ -127,4 +127,17 @@ func forwardOfficialAgent(reqCtx *RequestContext) error {
 	reqCtx.TargetURL = target
 	_, err := ForwardToUpstream(reqCtx, ForwardOptions{PreserveInboundIdentity: true})
 	return err
+}
+
+func inboundContentEncoding(reqCtx *RequestContext) string {
+	if reqCtx == nil {
+		return ""
+	}
+	if reqCtx.Headers != nil {
+		return strings.TrimSpace(reqCtx.Headers.Get("Content-Encoding"))
+	}
+	if reqCtx.Request != nil {
+		return strings.TrimSpace(reqCtx.Request.Header.Get("Content-Encoding"))
+	}
+	return ""
 }

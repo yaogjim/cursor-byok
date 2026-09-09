@@ -2019,6 +2019,12 @@ Tab/Cpp/FileSync/Git RPC 可能包含当前文件全文、路径、diff、worksp
 
 复用内存 AgentSessionStore，request_id 首次 Local/Official 决策保持。存储归属 Host 生命周期，在既有 runMu 保护下初始化并跨配置重建复用，使旧 mux 的等待流与新 mux 的上行共享路由事实。后续工具/心跳/取消先读已决策路由，不因无模型重新默认；必须区分空模型 run/prewarm 与不携带选模的后续消息。未知后续请求报错不猜。RunSSE 先到等待 BidiAppend，取消清理等待；保留来源清理机制，不新增持久化或调度器，重启需新运行请求建立归属。官方目标只来自现有原始 URL，缺失报错不猜地址。
 
+### D2.1 分流前请求编码兼容（0.0.71.0 回归修复，已批准）
+
+BidiAppend 与 RunSSE 的分流解析显式接收 Content-Type、HTTP Content-Encoding 和原始 body；在只读解码副本上按 HTTP 整体解压 → Connect 帧解析（若适用）→ protobuf/JSON codec 顺序处理。支持本次 Cursor Connect 路径使用的 unary application/proto、application/json 和流式 application/connect+proto、application/connect+json；HTTP 空/identity 与 gzip 按实际含义处理，已有帧内 gzip 与 HTTP gzip 区分，复用现有有界解压，不新增协议栈或配置。JSON 未知字段与既有 Connect codec 一致忽略；媒体类型参数不得影响格式识别。损坏/不支持的编码使用现有错误链路，不猜渠道、不新增错误协议。
+
+路由决策只消费解码结果，后续本地处理器/官方请求保留原始 body、Content-Type、Content-Encoding 和身份；D1、D2 的首决策保持、已知会话后续消息及取消语义不变。此次不修改 AgentSessionStore、等待时限、CA、账号、客户端压缩或代理。实现落点限定 agent_action.go/agent_route.go 与既有回归文件；单元/处理器测试和真实 Host 模拟 provider 回复共同验证，不将临时 overlay 或任意返回 200 的替身当作完整入口成功证据。实际官方/Auto/BYOK 对话在另行确认的实机窗口验收。
+
 ### D3 目录、默认与显示
 
 纯本地不请求官方，返回当前本地完整目录/默认。官方成功保留官方 metadata、默认和 protobuf unknown fields，官方原顺序后追加本地配置顺序；按 ID 去重，同 ID 本地替换官方，同名不同 ID 并列。官方目录失败返回本地可选项，但移除合成本地默认/fallback 推荐配置；官方默认接口失败保持错误，不默认本地。AvailableModels、两命名空间 GetUsableModels/GetDefaultModelForCli、GetDefaultModel/GetDefaultModelNudgeData 接线一致。现有 newProtoMessage 兼容类型映射不变。

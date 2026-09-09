@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"cursor/gen/agentv1"
 	"cursor/gen/aiserverv1"
 	modeladapter "cursor/internal/backend/agent/model"
@@ -353,6 +355,40 @@ func TestGatewayDuoHostAgentRouteIdentity(t *testing.T) {
 	if strings.Contains(localRec.Body.String(), "official-ok") {
 		t.Fatalf("local catalog id returned official body %q", localRec.Body.String())
 	}
+}
+
+func TestGatewayDuoHostGzipUnaryWire(t *testing.T) {
+	const (
+		officialAuth = "Bearer official-test-token"
+		providerID   = "model-a"
+		officialID   = "official-opus"
+		reply        = "wire-byok-local-reply"
+	)
+	t.Run("plainLocalBYOK", func(t *testing.T) {
+		assertGatewayDuoGzipLocalRun(t, officialAuth, providerID, reply, false)
+	})
+	t.Run("gzipLocalBYOK", func(t *testing.T) {
+		assertGatewayDuoGzipLocalRun(t, officialAuth, providerID, reply, true)
+	})
+	t.Run("gzipOfficialAndAuto", func(t *testing.T) {
+		_, _, official, mux, sink := newGatewayDuoGzipWireHost(t, providerID, reply)
+		for _, modelID := range []string{officialID, "auto"} {
+			payload := duoAgentBidiUnaryPayload(t, "gzip-"+modelID, modelID, "", "")
+			assertGatewayDuoUnaryBidiControlOK(t, payload, "")
+			body := gzipHTTPBody(t, payload)
+			assertGatewayDuoUnaryBidiControlOK(t, body, "gzip")
+			hit := postGatewayDuoUnaryBidi(t, mux, official.URL, officialAuth, body, "gzip", sink)
+			if hit.status != http.StatusOK {
+				t.Fatalf("model %q status=%d body=%q", modelID, hit.status, hit.response)
+			}
+			if hit.path != "/aiserver.v1.BidiService/BidiAppend" {
+				t.Fatalf("model %q official path=%q", modelID, hit.path)
+			}
+			if !bytes.Equal(hit.body, body) || hit.encoding != "gzip" || hit.auth != officialAuth {
+				t.Fatalf("model %q official wire changed path=%q encoding=%q auth=%q body_eq=%t", modelID, hit.path, hit.encoding, hit.auth, bytes.Equal(hit.body, body))
+			}
+		}
+	})
 }
 
 func TestCursorCLIModelCatalogDualProtocolPaths(t *testing.T) {
@@ -1131,6 +1167,256 @@ func (stub *cliCatalogCredentialStub) MarkQuotaExhausted(context.Context, string
 
 func (stub *cliCatalogCredentialStub) RefreshUsage(context.Context, subscriptionauth.ProviderKind) (subscriptionauth.UsageSnapshot, error) {
 	return subscriptionauth.UsageSnapshot{}, nil
+}
+
+func assertGatewayDuoGzipLocalRun(t *testing.T, officialAuth, providerID, reply string, gzipBody bool) {
+	t.Helper()
+	host, localID, official, mux, sink := newGatewayDuoGzipWireHost(t, providerID, reply)
+	streamCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+
+	requestID := "gzip-local-byok"
+	if !gzipBody {
+		requestID = "plain-local-byok"
+	}
+	payload := duoAgentBidiUnaryPayload(t, requestID, localID, "conv-"+requestID, "hello wire")
+	assertGatewayDuoUnaryBidiControlOK(t, payload, "")
+	encoding := ""
+	body := payload
+	if gzipBody {
+		encoding = "gzip"
+		body = gzipHTTPBody(t, payload)
+		assertGatewayDuoUnaryBidiControlOK(t, body, "gzip")
+	}
+	hit := postGatewayDuoUnaryBidi(t, mux, official.URL, officialAuth, body, encoding, sink)
+	if hit.path != "" {
+		t.Fatalf("local catalog id reached official path=%q", hit.path)
+	}
+	if hit.status != http.StatusOK {
+		t.Fatalf("bidi status=%d body=%q", hit.status, hit.response)
+	}
+	got := collectGatewayDuoRunSSEText(t, streamCtx, mux, officialAuth, official.URL, requestID, reply)
+	if !strings.Contains(got, reply) {
+		t.Fatalf("RunSSE text %q missing %q", got, reply)
+	}
+	if err := host.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newGatewayDuoGzipWireHost(t *testing.T, providerID, reply string) (*Host, string, *httptest.Server, *httptest.Server, *gatewayDuoOfficialSink) {
+	t.Helper()
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(writer, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\n", reply)
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	t.Cleanup(provider.Close)
+
+	manager := newHostConfigTestManager(t)
+	cfg := DefaultHostTestConfig(t, manager, func(cfg *serverconfig.Config) {
+		cfg.Routing.Mode = "local"
+		cfg.ModelAdapters = []serverconfig.ModelAdapterConfig{
+			cliCatalogStaticAdapter("Model A", provider.URL, "provider-secret", providerID, 1),
+		}
+	})
+	host := &Host{configs: manager}
+	if err := host.rebuild(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	usable := &agentv1.GetUsableModelsResponse{}
+	if err := proto.Unmarshal(postLocalCLICatalog(t, host, "/agent.v1.AgentService/GetUsableModels"), usable); err != nil {
+		t.Fatal(err)
+	}
+	if len(usable.GetModels()) != 1 {
+		t.Fatalf("catalog count=%d", len(usable.GetModels()))
+	}
+	localID := usable.GetModels()[0].GetModelId()
+	if localID == "" || localID == providerID {
+		t.Fatalf("catalog id %q should be the local channel hash", localID)
+	}
+
+	sink := &gatewayDuoOfficialSink{}
+	official := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		sink.record(request.URL.Path, request.Header.Get("Content-Encoding"), request.Header.Get("Authorization"), body)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(official.Close)
+	mux := httptest.NewServer(host.mux)
+	t.Cleanup(mux.Close)
+	t.Cleanup(func() { _ = host.Stop(context.Background()) })
+	return host, localID, official, mux, sink
+}
+
+func assertGatewayDuoUnaryBidiControlOK(t *testing.T, body []byte, encoding string) {
+	t.Helper()
+	handler := connect.NewUnaryHandler("/aiserver.v1.BidiService/BidiAppend", func(context.Context, *connect.Request[aiserverv1.BidiAppendRequest]) (*connect.Response[aiserverv1.BidiAppendResponse], error) {
+		return connect.NewResponse(&aiserverv1.BidiAppendResponse{}), nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/aiserver.v1.BidiService/BidiAppend", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/proto")
+	req.Header.Set("Connect-Protocol-Version", "1")
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("control decoder rejected fixture encoding=%q: %d %s", encoding, recorder.Code, recorder.Body.String())
+	}
+}
+
+type gatewayDuoOfficialSink struct {
+	mu  sync.Mutex
+	hit gatewayDuoOfficialHit
+}
+
+func (sink *gatewayDuoOfficialSink) record(path, encoding, auth string, body []byte) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.hit.path = path
+	sink.hit.encoding = encoding
+	sink.hit.auth = auth
+	sink.hit.body = append([]byte(nil), body...)
+}
+
+func (sink *gatewayDuoOfficialSink) snapshot() gatewayDuoOfficialHit {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	out := sink.hit
+	out.body = append([]byte(nil), sink.hit.body...)
+	return out
+}
+
+type gatewayDuoOfficialHit struct {
+	status   int
+	response string
+	path     string
+	encoding string
+	auth     string
+	body     []byte
+}
+
+func postGatewayDuoUnaryBidi(t *testing.T, mux *httptest.Server, officialURL, auth string, body []byte, encoding string, sink *gatewayDuoOfficialSink) gatewayDuoOfficialHit {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, mux.URL+"/aiserver.v1.BidiService/BidiAppend", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/proto")
+	req.Header.Set("Connect-Protocol-Version", "1")
+	req.Header.Set("Authorization", auth)
+	req.Header.Set(server.HeaderServerUpstreamURL, officialURL+"/aiserver.v1.BidiService/BidiAppend")
+	if encoding != "" {
+		req.Header.Set("Content-Encoding", encoding)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := mux.Client().Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(resp.Body)
+	hit := sink.snapshot()
+	hit.status = resp.StatusCode
+	hit.response = string(payload)
+	return hit
+}
+
+func collectGatewayDuoRunSSEText(t *testing.T, ctx context.Context, mux *httptest.Server, auth, officialURL, requestID, want string) string {
+	t.Helper()
+	client := connect.NewClient[aiserverv1.BidiRequestId, agentv1.AgentServerMessage](
+		&http.Client{Transport: gatewayDuoLegacyStreamTransport{base: mux.Client().Transport}},
+		mux.URL+"/agent.v1.AgentService/RunSSE",
+	)
+	req := connect.NewRequest(&aiserverv1.BidiRequestId{RequestId: requestID})
+	req.Header().Set("Authorization", auth)
+	req.Header().Set(server.HeaderServerUpstreamURL, officialURL+"/agent.v1.AgentService/RunSSE")
+	stream, err := client.CallServerStream(ctx, req)
+	if err != nil {
+		t.Fatalf("RunSSE CallServerStream() error = %v", err)
+	}
+	defer stream.Close()
+
+	var builder strings.Builder
+	for stream.Receive() {
+		msg := stream.Msg()
+		if msg == nil {
+			continue
+		}
+		update := msg.GetInteractionUpdate()
+		if update == nil || update.GetTextDelta() == nil {
+			continue
+		}
+		builder.WriteString(update.GetTextDelta().GetText())
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("RunSSE receive failed: %v", err)
+	}
+	text := builder.String()
+	if !strings.Contains(text, want) {
+		t.Fatalf("RunSSE text %q missing %q", text, want)
+	}
+	return text
+}
+
+type gatewayDuoLegacyStreamTransport struct {
+	base http.RoundTripper
+}
+
+func (tr gatewayDuoLegacyStreamTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := tr.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		resp.Header.Set("Content-Type", "application/connect+proto")
+	}
+	return resp, nil
+}
+
+func duoAgentBidiUnaryPayload(t *testing.T, requestID, modelID, conversationID, userText string) []byte {
+	t.Helper()
+	run := &agentv1.AgentRunRequest{}
+	if strings.TrimSpace(modelID) != "" {
+		run.RequestedModel = &agentv1.RequestedModel{ModelId: modelID}
+	}
+	if strings.TrimSpace(conversationID) != "" {
+		run.ConversationId = proto.String(conversationID)
+	}
+	if strings.TrimSpace(userText) != "" {
+		run.Action = &agentv1.ConversationAction{
+			Action: &agentv1.ConversationAction_UserMessageAction{
+				UserMessageAction: &agentv1.UserMessageAction{
+					UserMessage: &agentv1.UserMessage{Text: userText, MessageId: requestID + "-msg"},
+				},
+			},
+		}
+	}
+	envelope := duoAgentMarshalBidi(t, requestID, &agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: run},
+	})
+	return envelope[5:]
+}
+
+func gzipHTTPBody(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := gzip.NewWriter(&buffer)
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func duoAgentBidiRunBody(t *testing.T, requestID, modelID string) []byte {

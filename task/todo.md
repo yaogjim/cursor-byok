@@ -4,6 +4,17 @@
 
 ## 当前焦点
 
+### 0.0.71.0 对话连接回归取证（2026-09-08；日志 UTC 日期 09-09）
+
+- 范围：分析用户提供的 `/Users/yaogj/Downloads/logs`、本机应用和 Cursor 日志，对照 `4e4f2f1`（0.0.61.1）与 `818e293`（0.0.71.0）；保留用户已回退的实例，不改账号、证书、配置或服务。
+- [completed] `connection-log-triage`：下载样本 841 条事件，56 次后端 `bidi_append` 完成全部为 502；7 次已结束 `run_sse` 均约 60 秒后 canceled。本机 0.0.71.0 会话有同型 8 次 502，未见模型调用事件；回退 0.0.61.1 的读取快照已有 226 次 BidiAppend 200，较早快照有 6 次 provider request/response 和 521 条回复 chunk。
+- [completed] `connection-wire-probe`：继续分析时使用 `/tmp/gateway-wire-probe.d2P9ex` 的 Go overlay 与隔离 HOME，在原始 AgentRouteAction 上复现 gzip Protobuf / JSON 解码失败、502 与 RunSSE 等待；四种身份/选模×三种编码共 12 例，原源码 8 失败、4 通过。临时修正传入 Content-Encoding 并区分 JSON/Protobuf 后 12 例通过，转发 body/encoding 保持不变，相关分流与 Host 定向契约测试通过。不是实际官方/模型端到端验证。
+- [completed] `connection-root-cause-and-fix`（源码与隔离验证）：按批准计划修复 agent_action.go/agent_route.go 的 Content-Encoding 接线和 protobuf/JSON 解码；原始请求与分流规则不变。既有测试固化 12 组合、Connect 真解码、损坏/不支持编码及 Host gzip→模拟 provider 回复。最终两个包测试、定向 race、vet 通过；真实 Cursor 实机未执行，整体仍为 verified-partial。
+- 执行结果：`wire-regression` completed（分流 gzip/JSON RED；Host 普通请求成功、gzip 502）；`fix-wire-decoding` completed；`verify-and-record` completed；`runtime-acceptance` pending（需另行确认窗口）。独立 Spec 复审未发现生产缺陷；Standards 复审发现 Host 测试超时后接收协程收尾不可靠，主控移除不必要协程并检查 stream.Err，复审确认关闭，随后重跑全部计划内验证通过。
+- 中断恢复：Host 测试任务两次 provider_terminal/status=not_recorded，均未返回可恢复 ID，但已写入测试；实际等待 20 秒、40 秒后基于同一工作区保留改动继续剩余任务，第 2 次重试成功，未用到 80/160/320 秒。有 ID 的实现与复审沿原 ID 继续；没有持续失败或暗中跳过恢复。未改真实运行实例、未打包/安装、未 commit/push。
+- 最终收口证据：测试接收逻辑清理后，两个相关包完整测试、`AgentRoute|GatewayDuo` 定向 race、vet 再次退出 0；日志为 `/tmp/gateway-wire-closeout-{test,race,vet}.log`，命令及证据边界见 `docs/process.md` 最新修复收口节。
+- 真实验收状态：双渠道对话仍属阻塞回归，继续保留用户已回退实例。上线前需确认官方、Auto、官方身份下 BYOK 以及后续工具/取消均正常，真实 502 消失且有首段回复；证书告警独立排查。详细实验命令、证据与建议见 `docs/process.md`。
+
 ### gateway-duo 合并（2026-09-08）
 
 - 工作包：`gateway-duo-merge-20260908`；`DESIGN_READINESS=approved`，`DELIVERY_STATUS=verified-partial`。用户已批准实施并要求主控安排最多两个并发执行任务、独立 review、验证与修复；源码移植、接线和隔离验证已收口，真实 Cursor 验收待完成。

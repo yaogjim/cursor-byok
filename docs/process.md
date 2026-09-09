@@ -7,6 +7,60 @@
 
 ## 一、待完成的内容
 
+### 0.0.71.0 连接回归修复收口（源码与隔离验证完成；实机待验收）
+
+用户批准计划并要求主控协调执行、独立 review、验证及修复。按系统架构 §18 D2.1 完成最小改动：`agent_action.go` 将 HTTP Content-Encoding 传入 BidiAppend/RunSSE 解析；`agent_route.go` 依次处理 HTTP 压缩、Connect 帧和 protobuf/JSON。只读取解码结果用于路由，原始 body、媒体类型、编码与身份仍用于后续转发；选模、会话归属、超时、账号和证书逻辑不变。下两节保留首次取证与临时实验的历史状态，以本节为最新执行结果。
+
+- 回归先红后绿：既有 `agent_route_test.go` 固化四种身份/选模×三种编码共 12 组合，以及真实 Connect 解码、流先到、原始请求保留、损坏/不支持编码和帧压缩；原源码 gzip/JSON 失败，未压缩对照通过。`cursor_contract_test.go` 新增 `TestGatewayDuoHostGzipUnaryWire`，原源码普通 BYOK 可收到模拟模型回复、gzip 返回 502。RED 日志为 `/tmp/gateway-wire-route-red.log` 与 `/tmp/gateway-wire-host-red.log`，实现后转绿。
+- 独立 review：行为复审 `82d08664-e6b5-45fe-869d-cb63d2fc74cc` 未报告生产缺陷；测试复审 `ae54043f-d363-4cc4-b9e6-9fa706c5f0c7` 指出接收协程超时收尾不可靠。主控移除多余协程/通道，改为同步 `stream.Receive`、延迟关闭流并检查 `stream.Err`；沿原复审任务确认问题关闭，无剩余已证实生产缺陷。
+- 中断恢复：Host 测试任务两次 provider_terminal/status=not_recorded，未返回可恢复 ID；实际等待 20、40 秒后基于保留的工作区改动继续同一任务，第 2 次重试成功。有 ID 的任务沿原 ID 继续；未触及后续三次退避或持续失败停止条件。
+
+文档收口核验：计划索引与 `task/todo.md` 均将 `verify-and-record` 标为 completed、`runtime-acceptance` 保持 pending；最终内容断言已通过。此检查仅证明记录一致，不替代实机验收。
+
+最后测试清理修改后的验证均退出 0：
+
+- `go test -count=1 -timeout=120s ./internal/backend/server/upstream ./internal/backend`：两个包通过（0.439s / 11.031s）。
+- `go test -race -count=1 -timeout=120s ./internal/backend/server/upstream ./internal/backend -run 'AgentRoute|GatewayDuo'`：定向竞态检测通过（1.522s / 12.485s）。
+- `go vet ./internal/backend/server/upstream ./internal/backend`、`git diff --check` 通过。
+- 环境使用 `mktemp -d /tmp/gateway-wire-closeout.XXXXXX` 创建的隔离 HOME，复用 `GOCACHE=/Users/yaogj/Library/Caches/go-build`、`GOPATH=/Users/yaogj/go`、`GOMODCACHE=/Users/yaogj/go/pkg/mod`，设置 `GOPROXY=off GOSUMDB=off`。日志为 `/tmp/gateway-wire-closeout-test.log`、`/tmp/gateway-wire-closeout-race.log`、`/tmp/gateway-wire-closeout-vet.log`。
+
+证据边界：Host 本地链可证明实际后端入口→模拟 provider→流中指定文本；官方/Auto 的 Host 替身只证明路由和原始请求保留，不是官方服务真实解码/回复。checkpoint blob 测试中仍有约 5 秒等待后跳过，不代表完整 checkpoint 验收。gzip 是现场首要触发判断，basic 日志缺失败首包，不能对全部 502 逐条归因。源码修复、review 与计划内隔离验证完成，整体保持 `verified-partial`；官方、Auto、官方身份下 BYOK 的实机首段回复、后续工具/取消仍待另行确认窗口。
+
+本轮没有打包、安装、替换或重启当前 0.0.61.1，没有改真实配置/账号，也未 commit/push。未增加重试、等待状态机、安全门禁或无关前端/独立模块验证。复用教训：前置分流必须覆盖原 Connect 入口接受的真实编码，模型成功须断言实际回复，测试异步收尾能同步实现时优先保持简单。
+
+### 0.0.71.0 对话连接回归：日志取证（2026-09-08；当时未修复）
+
+用户报告官方账号模型、Auto、本地 BYOK 均持续连接，已自行回退 0.0.61.1。本轮仅检查既有日志与版本代码差异，并记录结论；未切换运行实例、修改真实配置/身份/证书或调用模型。
+
+- 下载证据：`/Users/yaogj/Downloads/logs/traces/20260909T035825.861070000Z-4041ee8bee13/{manifest.json,events.jsonl}`，版本 0.0.71.0、basic、darwin-arm64，共 841 条事件。按 `layer=backend / event=request_finished / route=bidi_append` 聚合，56 次均为 502、handler_error；7 次已结束 RunSSE 均在 60000～60002 ms 后 canceled。没有 upstream 或 provider 调用事件。应用日志显示本地后端健康检查和代理启动成功，首次 BidiAppend 11:58:37 +08:00 失败，随后重复请求。
+- 本机交叉证据：`~/.cursor-local-assistant-v2/logs/traces/20260909T035041.036672000Z-8ecec8326698`（0.0.71.0）8 次 BidiAppend 502、两次 RunSSE 60001 ms 后 canceled；`20260909T040419.301580000Z-2e2c6bad54f0`（0.0.61.1）读取快照已有 226 次 BidiAppend 200，前一次读取有 6 次 provider request/response、521 条 llm_response_chunk。旧版会话仍在增长，数量是读取时快照，不是固定最终总量。Cursor 3.15.19 同期日志另有 stream_stall、等待流活动超过 30 秒的记录。
+- 定位边界：`git log` 确认两版相邻提交为 `4e4f2f1` 与 `818e293`。新增 `AgentRouteAction` 在 BidiAppend 分流前解析请求；解析或未知渠道错误直接返回，`writeServerError` 默认统一编码为 12 字节的 `bad gateway\n`；RunSSE 则等待同 request_id 的渠道决策。这与现场现象一致，但不是具体异常的证明。basic 记录只保留 handler_error，无原始异常/请求体，尚未建立可重放失败回归。
+- 证书问题单独处理：下载样本有 24 次 client_unknown_ca，本机新版与已产生模型输出的旧版也均有该告警，不能把它直接认定为本轮共同主因。下载与本机日志来自不同用户路径，按 UTC 时间核对，不混用本地时区。
+- 本轮命令证据：使用 Python 标准库逐行解析 JSONL，以 event/route/status_code 聚合并关联 RunSSE；读取应用与 Cursor 结构化日志；`git diff --stat 4e4f2f1 HEAD` 和分流/错误编码源码检查。未运行 Go 测试或真实请求重放，没有修复完成声明。
+- 记录核验：诊断结论已写入本节与 `task/todo.md`，文件内容断言及 `git diff --check` 已通过；该结果仅证明文档记录，不证明连接故障已修复。
+
+结论：0.0.71.0 实机对话已有阻塞回归证据，双渠道交付仍为 verified-partial，真实对话验收失败。下一步需要脱敏失败请求样本或受控诊断获取底层错误，先建立能复现 502 与等待现象的入口测试，再修复并覆盖官方、Auto、BYOK；继续保留用户当前回退状态。复用教训：模拟封装的路由测试通过不能替代真实 Cursor 请求编码与首包时序验证；通用错误类别不足以定位解析失败，不把猜测登记为现场根因。
+
+### 0.0.71.0 编码回归：隔离复现与修复建议（续查；生产源码未修改）
+
+以下证据更新前节首次取证时的“未复现”状态。用户要求继续分析并给出方案；实验只在 `/tmp/gateway-wire-probe.d2P9ex` 创建诊断测试、候选源码和 Go overlay，未替换仓库 Go 文件或真实代理实例。
+
+- 已证实代码缺陷：`agent_route.go` 的 BidiAppend/RunSSE 解析调用 `extractCatalogProtoPayload(contentType, "", body)`，未传 HTTP Content-Encoding；并固定 `proto.Unmarshal`，不区分 application/json。旧入口所用 `connect.NewUnaryHandler` 能正确读取这些合法 unary 编码，而新增分流在它之前失败。路由尚未 Remember，先到的 RunSSE 因而继续 Wait。这是隔离测试已复现的 502 与等待因果链，不是根据错误名称推测。
+- 本机运行关联：`Cursor/logs/20260908T205102/window1/exthost/anysphere.cursor-always-local/Cursor Structured Logs.log` 第 35、70、123 行均记录 HTTP/1.1 transport 的 `compression.sendCompression=gzip`。安装包传输构造另设置 useBinaryFormat=true 和 gzip；因此 gzip 兼容性是现场首要原因。没有失败首包，不能宣称下载日志每条请求都已证明用了 gzip；JSON 是同次发现的兼容性缺陷，不声称现场使用 JSON。
+- 复现矩阵：纯本地身份选 BYOK、官方身份选 BYOK、官方身份选官方模型、官方身份选 Auto，分别使用未压缩 Protobuf、HTTP gzip Protobuf、JSON，共 12 例。相同 payload 先由 Connect unary 解码器验证合法，再经实际 AgentRouteAction + ErrorEncoder，RunSSE 先到。原源码未压缩四例成功，gzip/JSON 八例全部 502，错误为 `proto: cannot parse invalid wire-format data`，等待流未被唤醒；30ms 是隔离测试的观察窗口，不是产品超时。
+- 单变量实验：先只传入 HTTP Content-Encoding，gzip 恢复、JSON 仍失败；再增加按 Content-Type 的 JSON 解码，全部恢复。最终候选断言 BidiAppend 200、等待流成功转发且状态 200、原始 body 和 Content-Encoding 不被修改。官方/provider 均为本机替身，不触发真实模型消费。
+- 最新验证：原源码 `final-red.log`：12 例中 8 FAIL / 4 PASS，退出 1 是预期缺陷信号。临时候选 `final-green-contract.log`：12/12 PASS，既有 TestAgentRoute、TestParseBidiAppendRouting、TestParseRunSSE 和四项 TestGatewayDuo Host 测试通过，两个包退出 0。只证明隔离入口兼容性与所选契约，没有执行整仓、race、构建或真实 Cursor 对话。
+- 可复跑命令：环境为 `HOME=/tmp/gateway-wire-probe.d2P9ex/home GOCACHE=/Users/yaogj/Library/Caches/go-build GOPATH=/Users/yaogj/go GOMODCACHE=/Users/yaogj/go/pkg/mod GOPROXY=off GOSUMDB=off`；原源码运行 `go test -overlay /tmp/gateway-wire-probe.d2P9ex/overlay.json -count=1 -timeout=45s ./internal/backend/server/upstream -run '^TestDiagnosticAgentWireCompatibility$' -v`；候选运行 `go test -overlay /tmp/gateway-wire-probe.d2P9ex/candidate-overlay.json -count=1 -timeout=90s ./internal/backend/server/upstream ./internal/backend -run '^(TestDiagnosticAgentWireCompatibility|TestAgentRoute|TestParseBidiAppendRouting|TestParseRunSSE|TestGatewayDuo)' -v`。临时文件保留便于转正式回归，不当作已交付源码。
+
+建议正式修复范围（待实施，不将建议当作新批准 Design）：
+
+1. 在 `agent_action.go` 向两个解析入口传递真实 Content-Encoding；`agent_route.go` 在只读副本上先处理 HTTP 压缩、再处理已有 Connect 帧、最后按实际媒体类型解码。复用既有 gzip 有界解压；JSON 用 protobuf JSON codec。保留既有 Connect 帧压缩与 HTTP 整体压缩的区分，unsupported/损坏数据明确报错，不猜渠道。
+2. 保留原始请求体、Content-Type/Content-Encoding 和身份用于后续转发；不改本地 ID 优先、官方/Auto 选择、已决策会话归属或官方失败不跨渠道规则。无需禁用 Cursor 压缩、调整系统代理/CA，也不以增加重试/延长等待掩盖解析错误。
+3. 将诊断测试固化为真实 Host 入口的回归，覆盖登录身份下 BYOK、gzip/JSON、stream-first、后续消息及取消。既有 Host 本地分支只检查未请求官方，不严格断言本地 200/模型输出，正式回归应补上这些成功条件，避免假上游接受任意请求而掩盖格式错误。
+4. 正式落库并定向测试后，在获准实机窗口测试官方、Auto、BYOK 的首段回复和后续工具/取消；确认 502 消失后才将产品标为已修复。安全诊断可记录媒体类型、编码、长度、阶段和脱敏错误类别，不记录身份令牌/完整对话；当前不引入新的等待状态机、超时策略或日志框架。
+
+当前结论：兼容性缺陷已定位、最小修正方向已获隔离验证；实际产品未修复、未打包部署。关联需求/设计仍为工作决策基线 §10.17 / 系统架构 §18 D1–D2；方案保持这些既有路由契约。复用教训：路由前置解析必须覆盖旧 Connect 入口真实接受的压缩与编码；构造 application/connect+proto 的合成首包不能替代 unary application/proto + Content-Encoding:gzip 验证。
+
 ### gateway-duo 双渠道移植（2026-09-08 发起，09-09 收口；verified-partial）
 
 已在 `gateway@4e4f2f1` 工作区移植 `gateway-duo@18ef0e2` 相对 `334f538` 的双渠道功能，保留目标分支现有订阅、模型解析/变体/备用渠道、CLI 占位、API 与代理能力。没有整体覆盖旧文件，没有修改版本、前端管理页面或配置格式，没有提交、发布、替换正在运行的代理。契约真源为工作决策基线 §10.17、系统架构 §18「gateway-duo 合并」D1–D4；活动执行见 `task/todo.md`。

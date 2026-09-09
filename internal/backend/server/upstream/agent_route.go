@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"fmt"
 	"strings"
 
 	"cursor/gen/agentv1"
@@ -9,6 +10,7 @@ import (
 	"cursor/internal/modelchannel"
 	legacyruntime "cursor/internal/runtime"
 
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -100,14 +102,14 @@ func routingIDCandidates(modelID string) map[string]struct{} {
 	return ids
 }
 
-func parseBidiAppendRouting(contentType string, body []byte) (requestID string, modelID string, runOrPrewarm bool, err error) {
-	payload, err := extractCatalogProtoPayload(contentType, "", body)
+func parseBidiAppendRouting(contentType string, encoding string, body []byte) (requestID string, modelID string, runOrPrewarm bool, err error) {
+	payload, err := decodeAgentRoutePayload(contentType, encoding, body)
 	if err != nil {
 		return "", "", false, err
 	}
 	message := &aiserverv1.BidiAppendRequest{}
 	if len(payload) > 0 {
-		if err := proto.Unmarshal(payload, message); err != nil {
+		if err := unmarshalAgentRouteMessage(contentType, payload, message); err != nil {
 			return "", "", false, err
 		}
 	}
@@ -125,16 +127,51 @@ func parseBidiAppendRouting(contentType string, body []byte) (requestID string, 
 	return requestID, protocol.ReadRequestedModelID(clientMessage), protocol.HasRunOrPrewarmRequest(clientMessage), nil
 }
 
-func parseRunSSERequestID(contentType string, body []byte) (string, error) {
-	payload, err := extractCatalogProtoPayload(contentType, "", body)
+func parseRunSSERequestID(contentType string, encoding string, body []byte) (string, error) {
+	payload, err := decodeAgentRoutePayload(contentType, encoding, body)
 	if err != nil {
 		return "", err
 	}
 	message := &aiserverv1.BidiRequestId{}
 	if len(payload) > 0 {
-		if err := proto.Unmarshal(payload, message); err != nil {
+		if err := unmarshalAgentRouteMessage(contentType, payload, message); err != nil {
 			return "", err
 		}
 	}
 	return protocol.NormalizeRequestID(protocol.ReadBidiRequestID(message)), nil
+}
+
+// decodeAgentRoutePayload is a read-only copy: HTTP Content-Encoding first,
+// then Connect frames when the media type is framed. Frame gzip is not HTTP gzip.
+func decodeAgentRoutePayload(contentType string, encoding string, body []byte) ([]byte, error) {
+	payload, err := decodeAgentRouteHTTPBody(encoding, body)
+	if err != nil {
+		return nil, err
+	}
+	switch connectMediaType(contentType) {
+	case "application/connect+proto", "application/connect+json":
+		return extractConnectUnaryMessage(payload)
+	default:
+		return payload, nil
+	}
+}
+
+func decodeAgentRouteHTTPBody(encoding string, body []byte) ([]byte, error) {
+	switch strings.ToLower(strings.TrimSpace(encoding)) {
+	case "", "identity":
+		return body, nil
+	case "gzip", "x-gzip":
+		return gunzipBytes(body)
+	default:
+		return nil, fmt.Errorf("unsupported content encoding %q", encoding)
+	}
+}
+
+func unmarshalAgentRouteMessage(contentType string, payload []byte, message proto.Message) error {
+	switch connectMediaType(contentType) {
+	case "application/json", "application/connect+json":
+		return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(payload, message)
+	default:
+		return proto.Unmarshal(payload, message)
+	}
 }
