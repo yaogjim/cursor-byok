@@ -743,3 +743,15 @@ subagentReschedule:
 只有 typed evidence 能稳定关联 parent tool call、subagent run、child/agent identity、attempt 与终态，且证明 Task 为 readonly、前一 child 已结束、无 mutation/tool side effect 时，才允许重启。真实 fixture 核查已确认当前生产链没有稳定 typed failure producer，也没有可消费该关联并安全决策 relaunch 的 consumer；现有零散字段或错误文本不能替代该合同。因此当前状态是 `blocked`：关联不稳定、证据缺失或冲突时一律 fail closed，配置保持默认关闭且运行时不接线。
 
 `attempts.json` 是该逻辑 Task 的 attempt ledger 与回滚边界：关闭开关后停止创建新 attempt，但保留既有 ledger、run/result 和 parent history 供审计；回滚不得删除已完成 child、重写结果或把未终结 run 自动重派。真实 Cursor 的 readonly Task relaunch、取消、断连和 resume fixture 仍是完成证据缺口，在补齐前不得把运行时重调度写成已解决或默认启用。
+
+### 10.17 gateway-duo 合并：Cursor 官方与 BYOK 共存
+
+用户已于本次讨论确认并授权实施：本地渠道 ID 优先；有官方身份时，其余模型与自动选择交给官方；纯本地身份保留现有本地解析与默认行为。官方身份只说明入站持有非本地占位令牌，实际有效期/模型权限/额度由 Cursor 官方决定，不新增登录预检。
+
+- 明确选择本地配置（包括静态 API Key、Codex/Grok 订阅、备用渠道逻辑模型和思考变体）继续由当前 gateway 调用配置服务商；明确选择官方模型用 Cursor 身份回源，不借用本地 provider 凭据。官方/BYOK 失败互不自动切换，现有本地备用渠道不变。
+- 官方身份下 auto/fast/default 和空初始运行请求交给官方；纯本地身份沿用首个本地配置作为默认，provider 原始 ID 仅唯一匹配时使用，未知或歧义报错。后续消息按原请求渠道继续，不能因没有模型字段重新选默认。
+- 官方目录与本地目录合并，显示名追加 `[官方]` 或 `[BYOK]`，桌面、CLI、默认模型详情和变体保持来源一致；不改模型 ID、磁盘配置名、历史或调用参数。相同显示名可以并列。
+- 纯本地返回本地目录/默认；官方目录失败仍保留可明确选择的本地条目，但不把本地模型推荐成官方默认，官方默认请求失败不悄悄走本地。
+- 启动时保留已有非空 Cursor 身份整组字段，仅缺失时注入本地身份。存量占位身份需正常登录才获得官方能力，不自动删除身份，不承诺恢复过去被覆盖的 token。真实 OAuth 刷新透传，只有本地占位刷新使用模拟响应。
+- 保留现有 CLI、订阅、代理、恢复、生命周期和非聊天服务；来源标识仅改目录显示，不新增管理 UI、统计、账号系统、配置开关或 Tab 双模式。本次不升级版本、不发布、不提交。
+- 验收：身份×模型选路、官方/BYOK 同名区分、默认/错误行为、目录至实际调用、请求流顺序/取消、认证保留/刷新和 CLI 占位契约；自动验证与真实 Cursor 登录/显示/对话证据分开记录。具体设计见系统架构 §18，执行证据见活动任务与过程记录。

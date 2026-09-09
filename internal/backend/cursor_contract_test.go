@@ -3,6 +3,8 @@ package backend
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -58,6 +60,298 @@ func TestCursorBackendContractHealthzTracesAndProcedures(t *testing.T) {
 		if recorder.Code == http.StatusNotFound {
 			t.Fatalf("%s was not registered", path)
 		}
+	}
+}
+
+func TestGatewayDuoHostCatalogIdentity(t *testing.T) {
+	const officialID = "model-a" // Deliberately collides with the local provider model, not its channel ID.
+	for _, mode := range []string{"local", "upstream"} {
+		t.Run(mode, func(t *testing.T) {
+			manager := newHostConfigTestManager(t)
+			cfg := DefaultHostTestConfig(t, manager, func(cfg *serverconfig.Config) {
+				cfg.Routing.Mode = mode
+				cfg.ModelAdapters = []serverconfig.ModelAdapterConfig{cliCatalogStaticAdapter("Model A", "https://provider.example/v1", "provider-secret", officialID, 1)}
+			})
+			host := &Host{configs: manager}
+			if err := host.rebuild(cfg); err != nil {
+				t.Fatal(err)
+			}
+			var officialHits cliCatalogAtomicInt
+			official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				officialHits.Add(1)
+				if got := r.Header.Get("Authorization"); got != "Bearer official-test-token" {
+					t.Errorf("official received identity %q", got)
+				}
+				model := &agentv1.ModelDetails{ModelId: officialID, DisplayModelId: officialID, DisplayName: "Model A", DisplayNameShort: "A"}
+				var response proto.Message = &agentv1.GetUsableModelsResponse{Models: []*agentv1.ModelDetails{model}}
+				if strings.HasSuffix(r.URL.Path, "/GetDefaultModelForCli") {
+					response = &agentv1.GetDefaultModelForCliResponse{Model: model}
+				}
+				body, err := proto.Marshal(response)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				w.Header().Set("Content-Type", "application/proto")
+				_, _ = w.Write(body)
+			}))
+			defer official.Close()
+			for _, auth := range []string{"", "Bearer " + legacyruntime.LocalRelayToken, "Bearer official-test-token"} {
+				for _, service := range []string{"/aiserver.v1.AiService/", "/agent.v1.AgentService/"} {
+					for _, method := range []string{"GetUsableModels", "GetDefaultModelForCli"} {
+						path := service + method
+						before := officialHits.Load()
+						req := httptest.NewRequest(http.MethodPost, path, nil)
+						req.Header.Set("Content-Type", "application/proto")
+						req.Header.Set("Authorization", auth)
+						req.Header.Set(server.HeaderServerUpstreamURL, official.URL+path)
+						recorder := httptest.NewRecorder()
+						host.mux.ServeHTTP(recorder, req)
+						if recorder.Code != http.StatusOK {
+							t.Fatalf("%s status=%d body=%s", path, recorder.Code, recorder.Body.String())
+						}
+						isOfficial := auth == "Bearer official-test-token"
+						var models []*agentv1.ModelDetails
+						if method == "GetUsableModels" {
+							response := &agentv1.GetUsableModelsResponse{}
+							if err := proto.Unmarshal(recorder.Body.Bytes(), response); err != nil {
+								t.Fatal(err)
+							}
+							models = response.GetModels()
+							want := 1
+							if isOfficial {
+								want = 2
+							}
+							if len(models) != want {
+								t.Fatalf("%s model count=%d want=%d", path, len(models), want)
+							}
+						} else {
+							response := &agentv1.GetDefaultModelForCliResponse{}
+							if err := proto.Unmarshal(recorder.Body.Bytes(), response); err != nil {
+								t.Fatal(err)
+							}
+							models = []*agentv1.ModelDetails{response.GetModel()}
+						}
+						for _, model := range models {
+							if model.GetModelId() == officialID {
+								if !isOfficial || model.GetDisplayName() != "Model A [官方]" || model.GetApiKeyCredentials() != nil {
+									t.Fatalf("invalid official model: %v", model)
+								}
+							} else if model.GetDisplayName() != "Model A [BYOK]" || model.GetApiKeyCredentials().GetApiKey() != "cursor-byok-local" {
+								t.Fatalf("invalid local model: %v", model)
+							}
+						}
+						if (officialHits.Load() > before) != isOfficial {
+							t.Fatalf("%s identity did not control upstream fetch", path)
+						}
+						if strings.Contains(recorder.Body.String(), "provider-secret") || strings.Contains(recorder.Body.String(), "provider.example") {
+							t.Fatal("provider credentials leaked")
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayDuoRunSSESurvivesConfigRebuild(t *testing.T) {
+	manager := newHostConfigTestManager(t)
+	cfg := DefaultHostTestConfig(t, manager, nil)
+	host := &Host{configs: manager}
+	if err := host.rebuild(cfg); err != nil {
+		t.Fatal(err)
+	}
+	oldMux := host.mux
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer official-test-token" {
+			t.Error("official identity changed")
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, "official-rebuilt")
+	}))
+	defer official.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request := func(path string, body []byte) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/connect+proto")
+		req.Header.Set("Authorization", "Bearer official-test-token")
+		req.Header.Set(server.HeaderServerUpstreamURL, official.URL+path)
+		return req
+	}
+	const requestID = "stream-across-rebuild"
+	stream := request("/agent.v1.AgentService/RunSSE", duoAgentRunSSEBody(t, requestID))
+	streamResult := httptest.NewRecorder()
+	started, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		close(started)
+		oldMux.ServeHTTP(streamResult, stream)
+		close(done)
+	}()
+	<-started
+	// The request keeps its old handler even if it is scheduled after rebuild.
+	cfg.Appearance.Theme = "dark"
+	if _, err := host.SaveConfig(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	appendResult := httptest.NewRecorder()
+	host.mux.ServeHTTP(appendResult, request("/aiserver.v1.BidiService/BidiAppend", duoAgentBidiRunBody(t, requestID, "auto")))
+	if appendResult.Code != http.StatusAccepted {
+		t.Fatalf("append status=%d: %s", appendResult.Code, appendResult.Body.String())
+	}
+	<-done
+	if streamResult.Code != http.StatusAccepted || streamResult.Body.String() != "official-rebuilt" {
+		t.Fatalf("old stream lost route across config rebuild: status=%d body=%q", streamResult.Code, streamResult.Body.String())
+	}
+}
+
+func TestGatewayDuoHostOAuthBothModes(t *testing.T) {
+	for _, mode := range []string{"local", "upstream"} {
+		t.Run(mode, func(t *testing.T) {
+			manager := newHostConfigTestManager(t)
+			cfg := DefaultHostTestConfig(t, manager, func(cfg *serverconfig.Config) { cfg.Routing.Mode = mode })
+			host := &Host{configs: manager}
+			if err := host.rebuild(cfg); err != nil {
+				t.Fatal(err)
+			}
+			var hits cliCatalogAtomicInt
+			official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				body, _ := io.ReadAll(r.Body)
+				if string(body) != `{"refresh_token":"real-refresh"}` || r.Header.Get("Authorization") != "Bearer official-test-token" {
+					t.Error("OAuth body or identity was changed, or local refresh reached official")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"access_token":"refreshed-official"}`)
+			}))
+			defer official.Close()
+			for _, local := range []bool{true, false} {
+				token, auth := "real-refresh", "Bearer official-test-token"
+				if local {
+					token, auth = legacyruntime.LocalRelayToken, "Bearer "+legacyruntime.LocalRelayToken
+				}
+				body := fmt.Sprintf(`{"refresh_token":%q}`, token)
+				req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", auth)
+				req.Header.Set(server.HeaderServerUpstreamURL, official.URL+"/oauth/token")
+				recorder := httptest.NewRecorder()
+				host.mux.ServeHTTP(recorder, req)
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("oauth status=%d", recorder.Code)
+				}
+				if local {
+					if hits.Load() != 0 || !strings.Contains(recorder.Body.String(), token) {
+						t.Fatal("local OAuth did not stay local")
+					}
+				} else if hits.Load() != 1 || !strings.Contains(recorder.Body.String(), "refreshed-official") {
+					t.Fatal("real OAuth was not forwarded")
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayDuoHostAgentRouteIdentity(t *testing.T) {
+	const (
+		officialAuth = "Bearer official-test-token"
+		providerID   = "model-a"
+		officialID   = "official-opus"
+	)
+	manager := newHostConfigTestManager(t)
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"local-ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer provider.Close()
+
+	cfg := DefaultHostTestConfig(t, manager, func(cfg *serverconfig.Config) {
+		cfg.Routing.Mode = "local"
+		cfg.ModelAdapters = []serverconfig.ModelAdapterConfig{
+			cliCatalogStaticAdapter("Model A", provider.URL, "provider-secret", providerID, 1),
+		}
+	})
+	host := &Host{configs: manager}
+	if err := host.rebuild(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	usable := &agentv1.GetUsableModelsResponse{}
+	if err := proto.Unmarshal(postLocalCLICatalog(t, host, "/agent.v1.AgentService/GetUsableModels"), usable); err != nil {
+		t.Fatal(err)
+	}
+	if len(usable.GetModels()) != 1 {
+		t.Fatalf("catalog count=%d", len(usable.GetModels()))
+	}
+	localID := usable.GetModels()[0].GetModelId()
+	if localID == "" || localID == providerID {
+		t.Fatalf("catalog id %q should be the local channel hash", localID)
+	}
+
+	var officialHits cliCatalogAtomicInt
+	official := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		officialHits.Add(1)
+		if got := request.Header.Get("Authorization"); got != officialAuth {
+			t.Errorf("official identity %q", got)
+		}
+		writer.WriteHeader(http.StatusAccepted)
+		_, _ = writer.Write([]byte("official-ok"))
+	}))
+	defer official.Close()
+
+	post := func(path, auth, requestID, modelID string, run bool) *httptest.ResponseRecorder {
+		t.Helper()
+		var body []byte
+		if path == "/agent.v1.AgentService/RunSSE" {
+			body = duoAgentRunSSEBody(t, requestID)
+		} else if run {
+			body = duoAgentBidiRunBody(t, requestID, modelID)
+		} else {
+			body = duoAgentBidiFollowupBody(t, requestID)
+		}
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/connect+proto")
+		req.Header.Set("Authorization", auth)
+		req.Header.Set(server.HeaderServerUpstreamURL, official.URL+path)
+		recorder := httptest.NewRecorder()
+		host.mux.ServeHTTP(recorder, req)
+		return recorder
+	}
+
+	bidi := "/aiserver.v1.BidiService/BidiAppend"
+	sse := "/agent.v1.AgentService/RunSSE"
+	for i, modelID := range []string{officialID, providerID, "auto", ""} {
+		rec := post(bidi, officialAuth, fmt.Sprintf("req-official-%d", i), modelID, true)
+		if rec.Code != http.StatusAccepted || rec.Body.String() != "official-ok" {
+			t.Fatalf("official model %q status=%d body=%q", modelID, rec.Code, rec.Body.String())
+		}
+	}
+	if officialHits.Load() != 4 {
+		t.Fatalf("official initial hits=%d", officialHits.Load())
+	}
+
+	const followID = "req-follow"
+	if rec := post(bidi, officialAuth, followID, officialID, true); rec.Code != http.StatusAccepted {
+		t.Fatalf("follow seed status=%d", rec.Code)
+	}
+	if rec := post(bidi, officialAuth, followID, "", false); rec.Code != http.StatusAccepted || rec.Body.String() != "official-ok" {
+		t.Fatalf("follow-up status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if rec := post(sse, officialAuth, followID, "", false); rec.Code != http.StatusAccepted || rec.Body.String() != "official-ok" {
+		t.Fatalf("runsse status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if officialHits.Load() != 7 {
+		t.Fatalf("official hits after follow/sse=%d", officialHits.Load())
+	}
+
+	beforeLocal := officialHits.Load()
+	localRec := post(bidi, officialAuth, "req-local-catalog", localID, true)
+	if officialHits.Load() != beforeLocal {
+		t.Fatalf("local catalog id hit official; status=%d body=%q", localRec.Code, localRec.Body.String())
+	}
+	if strings.Contains(localRec.Body.String(), "official-ok") {
+		t.Fatalf("local catalog id returned official body %q", localRec.Body.String())
 	}
 }
 
@@ -362,11 +656,11 @@ func TestCLICatalogLocalAndUpstreamPolicyWithTargetHeader(t *testing.T) {
 	}
 	for _, path := range paths {
 		body := postLocalCLICatalogWithUpstream(t, host, path, official.URL+path)
-		if !bytes.Contains(body, []byte("official-catalog")) {
-			t.Fatalf("%s upstream mode with target did not use existing fallback: %q", path, body)
+		if bytes.Contains(body, []byte("official-catalog")) || !bytes.Contains(body, []byte("Model A [BYOK]")) {
+			t.Fatalf("%s without official identity must keep local catalog in upstream mode: %q", path, body)
 		}
-		if _, hit := officialHits.Load(path); !hit {
-			t.Fatalf("%s upstream mode with target did not hit official", path)
+		if _, hit := officialHits.Load(path); hit {
+			t.Fatalf("%s without official identity hit official", path)
 		}
 	}
 }
@@ -445,10 +739,10 @@ func TestCLICatalogIDsApplyRuntimeCredentialsToSyntheticProvider(t *testing.T) {
 		assertCLICatalogSentinel(t, model.GetDisplayName(), model.GetApiKeyCredentials(), nil)
 		modelByName[model.GetDisplayName()] = model
 	}
-	staticModel := modelByName["static-byok"]
-	managedModel := modelByName["managed-codex"]
-	grokModel := modelByName["managed-grok"]
-	logicalModel := modelByName["logical-alias"]
+	staticModel := modelByName["static-byok [BYOK]"]
+	managedModel := modelByName["managed-codex [BYOK]"]
+	grokModel := modelByName["managed-grok [BYOK]"]
+	logicalModel := modelByName["logical-alias [BYOK]"]
 	if staticModel == nil || managedModel == nil || grokModel == nil || logicalModel == nil {
 		t.Fatalf("catalog missing expected models: %#v", modelByName)
 	}
@@ -626,8 +920,8 @@ func TestCLICatalogRuntimeConsistencyWithoutManagedRefresh(t *testing.T) {
 		{display: "logical-alias", providerID: "logical-model", source: "static", fallbackPlan: true},
 	}
 	for _, tc := range cases {
-		cli := cliByName[tc.display]
-		avail := availableByName[tc.display]
+		cli := cliByName[tc.display+" [BYOK]"]
+		avail := availableByName[tc.display+" [BYOK]"]
 		if cli == nil || avail == nil {
 			t.Fatalf("%s missing from catalogs cli=%v available=%v", tc.display, cli != nil, avail != nil)
 		}
@@ -689,7 +983,7 @@ func TestCLICatalogRuntimeConsistencyWithoutManagedRefresh(t *testing.T) {
 			t.Fatalf("%s managed catalog leaked runtime key %q", tc.display, channel.APIKey)
 		}
 	}
-	if cliByName["fallback-primary"] == nil || cliByName["fallback-candidate"] == nil {
+	if cliByName["fallback-primary [BYOK]"] == nil || cliByName["fallback-candidate [BYOK]"] == nil {
 		t.Fatal("fallback pool restriction changed: physical channels missing from CLI catalog")
 	}
 
@@ -837,4 +1131,52 @@ func (stub *cliCatalogCredentialStub) MarkQuotaExhausted(context.Context, string
 
 func (stub *cliCatalogCredentialStub) RefreshUsage(context.Context, subscriptionauth.ProviderKind) (subscriptionauth.UsageSnapshot, error) {
 	return subscriptionauth.UsageSnapshot{}, nil
+}
+
+func duoAgentBidiRunBody(t *testing.T, requestID, modelID string) []byte {
+	t.Helper()
+	run := &agentv1.AgentRunRequest{}
+	if strings.TrimSpace(modelID) != "" {
+		run.RequestedModel = &agentv1.RequestedModel{ModelId: modelID}
+	}
+	return duoAgentMarshalBidi(t, requestID, &agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: run},
+	})
+}
+
+func duoAgentBidiFollowupBody(t *testing.T, requestID string) []byte {
+	t.Helper()
+	return duoAgentMarshalBidi(t, requestID, &agentv1.AgentClientMessage{})
+}
+
+func duoAgentMarshalBidi(t *testing.T, requestID string, message *agentv1.AgentClientMessage) []byte {
+	t.Helper()
+	encoded, err := proto.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := proto.Marshal(&aiserverv1.BidiAppendRequest{
+		RequestId: &aiserverv1.BidiRequestId{RequestId: requestID},
+		Data:      hex.EncodeToString(encoded),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return duoAgentConnectEnvelope(payload)
+}
+
+func duoAgentRunSSEBody(t *testing.T, requestID string) []byte {
+	t.Helper()
+	payload, err := proto.Marshal(&aiserverv1.BidiRequestId{RequestId: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return duoAgentConnectEnvelope(payload)
+}
+
+func duoAgentConnectEnvelope(payload []byte) []byte {
+	envelope := make([]byte, 5+len(payload))
+	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(payload)))
+	copy(envelope[5:], payload)
+	return envelope
 }

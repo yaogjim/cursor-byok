@@ -215,7 +215,7 @@ func buildUpstreamRequest(reqCtx *RequestContext, body []byte, options ForwardOp
 	}
 	upstreamRequest.Host = reqCtx.TargetURL.Host
 
-	if reqCtx.Mode == server.ModeLocal && shouldRewriteHost(reqCtx.TargetURL.Hostname()) {
+	if !options.PreserveInboundIdentity && reqCtx.Mode == server.ModeLocal && shouldRewriteHost(reqCtx.TargetURL.Hostname()) {
 		auth := formatBearerAuthorization(legacyruntime.LocalRelayToken)
 		if auth == "" {
 			return nil, nil, legacyruntime.ErrInvalidSystemSetting
@@ -358,6 +358,29 @@ func formatBearerAuthorization(raw string) string {
 	return "Bearer " + value
 }
 
+func hasOfficialIdentity(headers http.Header) bool {
+	if headers == nil {
+		return false
+	}
+	raw := strings.TrimSpace(headers.Get("Authorization"))
+	if raw == "" {
+		return false
+	}
+	scheme, token, found := strings.Cut(raw, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return false
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	local := strings.TrimSpace(legacyruntime.LocalRelayToken)
+	if local != "" && token == local {
+		return false
+	}
+	return true
+}
+
 func shouldRequestCarryBody(method string) bool {
 	switch strings.ToUpper(strings.TrimSpace(method)) {
 	case http.MethodGet, http.MethodHead, http.MethodDelete:
@@ -387,42 +410,155 @@ func handleMockJSON(reqCtx *RequestContext, route *Route) error {
 
 func handleMockProto(reqCtx *RequestContext, route *Route) error {
 	payload := map[string]any{}
-	if route.MockPayloadBuilder != nil {
+	if route != nil && route.MockPayloadBuilder != nil {
 		built, err := route.MockPayloadBuilder(reqCtx)
 		if err != nil {
 			return err
 		}
 		payload = built
 	}
-	responseBody, err := encodeMockProto(route.MockProtoType, payload)
+	protoType := ""
+	if route != nil {
+		protoType = route.MockProtoType
+	}
+	responseBody, err := encodeMockProto(protoType, payload)
 	if err != nil {
 		return err
 	}
-	reqCtx.ResponseWriter.Header().Set("content-type", "application/proto")
+	return writeMockProtoResponse(reqCtx, route, responseBody)
+}
+
+func writeMockProtoResponse(reqCtx *RequestContext, route *Route, responseBody []byte) error {
+	if reqCtx == nil || reqCtx.ResponseWriter == nil {
+		return fmt.Errorf("upstream request context is unavailable")
+	}
+	statusCode := http.StatusOK
+	if route != nil && route.StatusCode > 0 {
+		statusCode = route.StatusCode
+	}
+	contentType, body := protoResponseForInbound(reqCtx, responseBody)
+	reqCtx.ResponseWriter.Header().Set("content-type", contentType)
 	reqCtx.ResponseWriter.Header().Del("content-encoding")
-	reqCtx.ResponseWriter.Header().Set("content-length", strconv.Itoa(len(responseBody)))
-	reqCtx.ResponseWriter.WriteHeader(route.StatusCode)
-	_, _ = reqCtx.ResponseWriter.Write(responseBody)
+	reqCtx.ResponseWriter.Header().Set("content-length", strconv.Itoa(len(body)))
+	reqCtx.ResponseWriter.WriteHeader(statusCode)
+	_, _ = reqCtx.ResponseWriter.Write(body)
 	return nil
 }
 
+const maxFetchedUpstreamBody = 8 << 20
+
+// FetchUpstream issues a transparent official request and returns the raw body
+// without writing to the inbound client. Catalog merge uses this helper so
+// Agent routes can stay unchanged.
+func FetchUpstream(reqCtx *RequestContext, options ForwardOptions) (*FetchedUpstream, error) {
+	if reqCtx == nil || reqCtx.Request == nil || reqCtx.TargetURL == nil {
+		return nil, fmt.Errorf("upstream request context is unavailable")
+	}
+	requestBody := reqCtx.RequestBody
+	if options.BodyOverride != nil {
+		requestBody = options.BodyOverride
+	}
+	if !shouldRequestCarryBody(reqCtx.Method) {
+		requestBody = []byte{}
+	}
+	upstreamRequest, upstreamClient, err := buildUpstreamRequest(reqCtx, requestBody, options)
+	if err != nil {
+		return nil, err
+	}
+	upstreamResponse, err := upstreamClient.Do(upstreamRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer upstreamResponse.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(upstreamResponse.Body, maxFetchedUpstreamBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxFetchedUpstreamBody {
+		return nil, fmt.Errorf("upstream response exceeds %d bytes", maxFetchedUpstreamBody)
+	}
+	return &FetchedUpstream{
+		StatusCode:  upstreamResponse.StatusCode,
+		ContentType: upstreamResponse.Header.Get("content-type"),
+		Encoding:    strings.TrimSpace(upstreamResponse.Header.Get("content-encoding")),
+		Body:        body,
+	}, nil
+}
+
 func handleMockOAuth(reqCtx *RequestContext, route *Route) error {
+	_ = route
+	if reqCtx == nil {
+		return fmt.Errorf("oauth request context is unavailable")
+	}
+	refreshToken := oauthRefreshToken(reqCtx.ContentType, reqCtx.RequestBody)
+	if isKnownPlaceholderRefreshToken(refreshToken) {
+		responseBody, err := marshalJSONBody(map[string]any{
+			"access_token": refreshToken,
+			"id_token":     refreshToken,
+			"shouldLogout": false,
+		})
+		if err != nil {
+			return err
+		}
+		reqCtx.ResponseWriter.Header().Set("content-type", "application/json")
+		reqCtx.ResponseWriter.WriteHeader(http.StatusOK)
+		_, _ = reqCtx.ResponseWriter.Write(responseBody)
+		return nil
+	}
+	target := catalogFetchTarget(reqCtx)
+	if target == nil {
+		return fmt.Errorf("oauth upstream is unavailable")
+	}
+	fetchCtx := *reqCtx
+	fetchCtx.TargetURL = target
+	_, err := ForwardToUpstream(&fetchCtx, ForwardOptions{PreserveInboundIdentity: true})
+	return err
+}
+
+func oauthRefreshToken(contentType string, body []byte) string {
+	media := connectMediaType(contentType)
+	switch {
+	case media == "application/json" || strings.HasSuffix(media, "+json"):
+		return oauthRefreshTokenJSON(body)
+	case media == "application/x-www-form-urlencoded":
+		return oauthRefreshTokenForm(body)
+	default:
+		if token := oauthRefreshTokenJSON(body); token != "" {
+			return token
+		}
+		return oauthRefreshTokenForm(body)
+	}
+}
+
+func oauthRefreshTokenJSON(body []byte) string {
 	payload := struct {
 		RefreshToken string `json:"refresh_token"`
 	}{}
-	_ = json.Unmarshal(reqCtx.RequestBody, &payload)
-	responseBody, err := marshalJSONBody(map[string]any{
-		"access_token": payload.RefreshToken,
-		"id_token":     payload.RefreshToken,
-		"shouldLogout": false,
-	})
-	if err != nil {
-		return err
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
 	}
-	reqCtx.ResponseWriter.Header().Set("content-type", "application/json")
-	reqCtx.ResponseWriter.WriteHeader(http.StatusOK)
-	_, _ = reqCtx.ResponseWriter.Write(responseBody)
-	return nil
+	return strings.TrimSpace(payload.RefreshToken)
+}
+
+func oauthRefreshTokenForm(body []byte) string {
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(values.Get("refresh_token"))
+}
+
+func isKnownPlaceholderRefreshToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return false
+	}
+	for _, known := range []string{legacyruntime.InjectAuthToken, legacyruntime.LocalRelayToken} {
+		if candidate := strings.TrimSpace(known); candidate != "" && token == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func handleMockAuthFullStripeProfile(reqCtx *RequestContext, route *Route) error {

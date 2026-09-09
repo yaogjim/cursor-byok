@@ -48,8 +48,8 @@ func TestBuildCLIModelDetailsPreservesChannelMetadata(t *testing.T) {
 
 	got := buildCLIModelDetails(adapters)
 	want := []map[string]any{
-		{"modelId": "channel-a", "displayModelId": "channel-a", "displayName": "Model A", "displayNameShort": "Model A", "apiKeyCredentials": map[string]any{"apiKey": "cursor-byok-local"}},
-		{"modelId": "channel-b", "displayModelId": "channel-b", "displayName": "Model B", "displayNameShort": "Model B", "apiKeyCredentials": map[string]any{"apiKey": "cursor-byok-local"}},
+		{"modelId": "channel-a", "displayModelId": "channel-a", "displayName": "Model A [BYOK]", "displayNameShort": "Model A [BYOK]", "apiKeyCredentials": map[string]any{"apiKey": "cursor-byok-local"}},
+		{"modelId": "channel-b", "displayModelId": "channel-b", "displayName": "Model B [BYOK]", "displayNameShort": "Model B [BYOK]", "apiKeyCredentials": map[string]any{"apiKey": "cursor-byok-local"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("build CLI model details: got %v, want %v", got, want)
@@ -116,6 +116,9 @@ func TestCursorAvailableModelsProjectsChannelHashNotProviderModelID(t *testing.T
 	if entries[0]["name"] == "grok-3" || entries[0]["serverModelName"] == "grok-3" {
 		t.Fatal("cursor model projection used provider modelID")
 	}
+	if entries[0]["clientDisplayName"] != "Grok [BYOK]" || entries[0]["inputboxShortModelName"] != "Grok [BYOK]" {
+		t.Fatalf("local display missing BYOK: %#v", entries[0])
+	}
 }
 
 func TestCatalogCLIAndAvailableModelsShareChannelIDThinkingAndCapability(t *testing.T) {
@@ -143,12 +146,18 @@ func TestCatalogCLIAndAvailableModelsShareChannelIDThinkingAndCapability(t *test
 		if credentials["apiKey"] != "cursor-byok-local" {
 			t.Fatalf("%s CLI apiKey = %#v", adapter.DisplayName, credentials["apiKey"])
 		}
+		if cli[i]["displayName"] != adapter.DisplayName+" [BYOK]" || cli[i]["displayNameShort"] != adapter.DisplayName+" [BYOK]" {
+			t.Fatalf("%s CLI display missing BYOK: %#v", adapter.DisplayName, cli[i])
+		}
 		if _, hasBaseURL := credentials["baseUrl"]; hasBaseURL {
 			t.Fatalf("%s CLI included baseUrl", adapter.DisplayName)
 		}
 		entry := available[i]
 		if entry["name"] != adapter.ID || entry["serverModelName"] != adapter.ID {
 			t.Fatalf("%s available ID = %#v", adapter.DisplayName, entry)
+		}
+		if entry["clientDisplayName"] != adapter.DisplayName+" [BYOK]" || entry["inputboxShortModelName"] != adapter.DisplayName+" [BYOK]" {
+			t.Fatalf("%s available display missing BYOK: %#v", adapter.DisplayName, entry)
 		}
 		if entry["name"] == adapter.ModelID {
 			t.Fatalf("%s available catalog used provider modelID", adapter.DisplayName)
@@ -163,6 +172,13 @@ func TestCatalogCLIAndAvailableModelsShareChannelIDThinkingAndCapability(t *test
 		variants, _ := entry["variants"].([]map[string]any)
 		if len(variants) == 0 || variants[0]["isDefaultNonMaxConfig"] != true || variants[0]["variantStringRepresentation"] != adapter.ID+":medium" {
 			t.Fatalf("%s default thinking variant = %#v", adapter.DisplayName, variants)
+		}
+		variantName, _ := variants[0]["displayName"].(string)
+		if !strings.Contains(variantName, "[BYOK]") {
+			t.Fatalf("%s variant display missing BYOK: %q", adapter.DisplayName, variantName)
+		}
+		if span := strings.Index(variantName, "<span"); span >= 0 && strings.Index(variantName, "[BYOK]") > span {
+			t.Fatalf("%s variant suffix after HTML: %q", adapter.DisplayName, variantName)
 		}
 	}
 	if cli[3]["modelId"] != "logical-id" || available[3]["name"] != "logical-id" {
@@ -194,7 +210,7 @@ func TestEncodeCLIModelsUsesAgentModelDetailsWireFormat(t *testing.T) {
 	if model.GetModelId() != "channel-a" || model.GetDisplayModelId() != "channel-a" {
 		t.Fatalf("decoded channel IDs: model=%q display=%q", model.GetModelId(), model.GetDisplayModelId())
 	}
-	if model.GetDisplayName() != "Model A" || model.GetDisplayNameShort() != "Model A" {
+	if model.GetDisplayName() != "Model A [BYOK]" || model.GetDisplayNameShort() != "Model A [BYOK]" {
 		t.Fatalf("decoded display names: name=%q short=%q", model.GetDisplayName(), model.GetDisplayNameShort())
 	}
 	credentials := model.GetApiKeyCredentials()

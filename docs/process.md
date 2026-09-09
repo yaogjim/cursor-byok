@@ -7,6 +7,32 @@
 
 ## 一、待完成的内容
 
+### gateway-duo 双渠道移植（2026-09-08 发起，09-09 收口；verified-partial）
+
+已在 `gateway@4e4f2f1` 工作区移植 `gateway-duo@18ef0e2` 相对 `334f538` 的双渠道功能，保留目标分支现有订阅、模型解析/变体/备用渠道、CLI 占位、API 与代理能力。没有整体覆盖旧文件，没有修改版本、前端管理页面或配置格式，没有提交、发布、替换正在运行的代理。契约真源为工作决策基线 §10.17、系统架构 §18「gateway-duo 合并」D1–D4；活动执行见 `task/todo.md`。
+
+已接线与隔离验证的链路：身份 DB 保留已有非空官方身份 → 桌面/CLI 协议目录合并并显示 `[官方]`/`[BYOK]` → Host 按本地渠道 ID 优先、其余按官方身份分流 → 本地现有 provider 或模拟官方上游 → 同 request_id 的流与后续消息保持渠道。纯本地身份保留原有解析和默认行为；官方目录失败可展示本地可选项，但不推荐本地默认；官方默认或对话失败不自动切成本地。CLI 本地条目保留无秘密凭据 `cursor-byok-local`。
+
+review 与修复：
+
+1. Spec review 未报告已证实契约违规；质量 review 发现 P2：配置重建创建新 `AgentSessionStore`，重建前到达的 RunSSE 无法收到新 mux 上的 BidiAppend 路由。回归先失败，随后将存储提升到 Host 生命周期，在既有 `runMu` 保护下只初始化一次，两处理器共用；回归和复审通过。
+2. 主控补 `TestGatewayDuoHostOAuthBothModes` 复现另一接线缺陷：`Routing.Mode=upstream` 绕过只挂在 Local 上的 OAuth 分流器，把本地占位 refresh 发给官方。为 `/oauth/token` 的 Upstream 分支挂相同 `MockOAuthAction`；local/upstream 两个子测试均通过，断言本地零官方命中、真实刷新保留请求体/身份且返回官方响应。最新独立只读复审 `2d96e06f-54ab-4bc8-9ca4-4c2d7f9fce5e` 确认关闭，未报告其他已证实缺陷。
+3. 目录构造编译问题、旧测试无来源后缀的断言在集成阶段修正；纯本地目录也统一 `[BYOK]`，没有为迎合断言改变模型 ID 或去掉 CLI 占位。
+
+最终源码验证（OAuth 修复之后，命令均退出 0）：
+
+- `go test -count=1 -timeout=90s ./internal/backend -run TestGatewayDuoHostOAuthBothModes -v`：两个模式通过。
+- `go test -count=1 -timeout=5m ./internal/...`：internal 全量包通过；不是根模块 `./...` 或独立 module 全量验收。
+- `go test -race -count=1 -timeout=5m ./internal/backend ./internal/cursor ./internal/mitm ./internal/backend/server/upstream ./internal/backend/agent/protocol`：五包通过。
+- `go vet ./internal/backend/... ./internal/cursor ./internal/mitm` 与 `git diff --check` 通过。
+- 最终完整日志：`/tmp/gateway-duo-close-test.log`、`/tmp/gateway-duo-close-race.log`、`/tmp/gateway-duo-close-vet.log`。先取得 `GOCACHE/GOPATH/GOMODCACHE`，再使用临时 `HOME=/tmp/gateway-duo-close.yebSJ5` 执行；不通过真实身份或真实官方服务验证。
+
+协作恢复：目录执行任务曾遇到 `stream_idle_timeout`，等待 20 秒并定位已有上下文后恢复成功；没有重新创建替代任务掩盖中断，没有触及最多五次恢复的停止条件。并发执行不超过两个；最终复审正常完成。
+
+测试隔离事件：早期直接运行后端契约测试时，既有 Host 初始化清理触碰真实用户目录，日志报告删除 8 个过期 debug 文件。已向用户说明；没有原始内容不能凭空恢复。已为 `newHostConfigTestManager` 等辅助入口补临时 HOME，之后 Go 测试/race/vet 均在临时 HOME 下执行。复用教训：任何可能构造 Host 的测试，第一次运行前就隔离应用数据目录；会话相关路由存储不能随配置重建丢失；模式分流必须从真实 Host mux 入口分别验证，孤立处理器测试不等于接线完成。本项目没有既有 lessons.md，教训记录在本节，不另建文件。
+
+当前交付为 `verified-partial`：代码移植、接线、隔离契约验证、review 和文档收口完成；test/env gap 是真实 Cursor 登录保留、桌面与 CLI 来源字段消费、官方/本地/Auto 对话及真实官方 OAuth 刷新。后续在获准实机窗口按 D1–D4 逐项验收，不能将模拟官方 HTTP 响应升级为真实端到端证据。本次没有执行打包安装、前端构建或独立模块测试；无相关代码变更。未恢复以前被覆盖的真实令牌，未解锁其他历史 blocked 工作包。
+
 ### 重开确认、订阅状态及模型代理回归（2026-09-08 发起，09-09 收口；verified-partial）
 
 用户要求修复三项缺陷并由主控安排独立执行、review、验证。代码仍处于工作区，未打包/安装/提交。用户经选项确认：退出 BYOK 保留 Cursor 接入配置，接受暂停期间本地代理不可用；需要断开须在本实例成功接管设置后显式停止。该决定已同步工作决策基线 §10.14 和系统架构 §6.0。

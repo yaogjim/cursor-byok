@@ -2006,3 +2006,33 @@ Tab/Cpp/FileSync/Git RPC 可能包含当前文件全文、路径、diff、worksp
 - Tab/Cpp/FileSync/Git relay 能力被明确标注为外部依赖或待决策，不宣称为纯本地能力。
 
 本文作为系统架构分析基线，后续每次重大路由、Agent 状态机、持久化、provider 或外部出口变化，都应同步更新。
+
+## 18. gateway-duo 合并（已批准设计，2026-09-08）
+
+固定来源 `18ef0e2` 相对 `334f538` 的功能增量移入 `gateway@4e4f2f1`，以当前 gateway 为 owner；保留订阅、provider fallback、分层代理、生命周期、CLI 双路径和观测。对应需求 §10.17，实施与证据见 `task/todo.md` 的 `gateway-duo-merge-20260908`。不改版本、schema、前端页面或独立 module。
+
+### D1 模型与身份
+
+官方身份定义为非空且非 LocalRelayToken 的 Bearer；这不预检过期/额度，缺失与占位身份维持现有本地入口语义。首次 run/prewarm 先匹配本地当前渠道 ID、变体、唯一旧渠道 ID；命中走现有带 CredentialResolver 的 forwarder。其余有官方身份的请求（含与 provider ModelID 同名、auto/fast/default、空初始选模）原样透传官方；纯本地沿用 ResolveAdapterIndex 的唯一 provider ID/旧 ID 与首模型默认行为。配置解析错误返回错误，不误分官方。共享本地 resolver 不增加官方逻辑；已配置 fallback 不变，不新增跨官方/BYOK 切换。
+
+### D2 请求级路由
+
+复用内存 AgentSessionStore，request_id 首次 Local/Official 决策保持。存储归属 Host 生命周期，在既有 runMu 保护下初始化并跨配置重建复用，使旧 mux 的等待流与新 mux 的上行共享路由事实。后续工具/心跳/取消先读已决策路由，不因无模型重新默认；必须区分空模型 run/prewarm 与不携带选模的后续消息。未知后续请求报错不猜。RunSSE 先到等待 BidiAppend，取消清理等待；保留来源清理机制，不新增持久化或调度器，重启需新运行请求建立归属。官方目标只来自现有原始 URL，缺失报错不猜地址。
+
+### D3 目录、默认与显示
+
+纯本地不请求官方，返回当前本地完整目录/默认。官方成功保留官方 metadata、默认和 protobuf unknown fields，官方原顺序后追加本地配置顺序；按 ID 去重，同 ID 本地替换官方，同名不同 ID 并列。官方目录失败返回本地可选项，但移除合成本地默认/fallback 推荐配置；官方默认接口失败保持错误，不默认本地。AvailableModels、两命名空间 GetUsableModels/GetDefaultModelForCli、GetDefaultModel/GetDefaultModelNudgeData 接线一致。现有 newProtoMessage 兼容类型映射不变。
+
+名称只修饰响应投影：桌面 clientDisplayName/inputboxShortModelName、CLI displayName/displayNameShort、默认 ModelDetails，以及模型变体名称增加 `[官方]`/`[BYOK]`；空值回退名称/ID，同来源后缀不重复。本地变体从修饰名称生成，官方保留 HTML/参数和强度展示。name/serverModelName/modelId/displayModelId/aliases/variantStringRepresentation、磁盘 DisplayName 和 hash 一律不改。Cursor 固定不读目录的 Auto 文案不通过二进制补丁处理。
+
+本地 CLI Credentials 只重建 apiKey=cursor-byok-local 的既有占位，无真实 key/baseURL；官方 Credentials 不注入该占位。保留静态/托管订阅/备用渠道运行时凭据解析，不全盘照搬来源的 Credentials=nil。
+
+### D4 身份与代理
+
+state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入本地组；Statsig override 保持。存量占位保留至用户正常登录，不能恢复以前被覆盖的真实 token。ForwardOptions.PreserveInboundIdentity 用于官方 Fetch/Forward。OAuth 仅已知本地占位 refresh token 保持 mock，其余 grant/refresh 按原体、原 URL、原身份透传；无目标报错，不新增令牌存储/刷新调度。MITM 保留 CONNECT 范围，解密后未分类路径透明回源，原受管服务/日志关联不扩大；backend 直接访问的本地 auth 兼容入口不删除。
+
+### 验证、迁移与回退
+
+无 schema/config 迁移；只撤销本次代码，不覆盖新增登录身份，旧版本启动会重新注入本地身份。验证链为实际 Host 路由→目录→模拟 provider/官方、身份×模型×初始/后续消息、stream-first/取消、CLI 占位不外发、Connect gzip/trailer、同名/同 ID/空名称/变体、官方失败不降级默认及 auth 事务/OAuth。定向 TDD 后一次 internal 全量、四核心包 race 与相关 vet。真实 Cursor 登录/刷新、Auto 支持、目录视觉消费与真实对话独立取证；环境不可用保留 test/env gap，不以 synthetic 测试冒充。
+
+设计复核：主控及独立只读检查已识别并闭合旧分支拒绝 Auto、provider 同名拦截、空 run/后续消息混淆、CLI 占位清空、OAuth 模拟刷新与目录降级默认等差异；用户确认语义和来源标识并批准实施。低层实现保持现有结构，不增加能力注册表、审批、功能开关或额外发布门禁。

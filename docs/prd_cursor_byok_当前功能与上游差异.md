@@ -1,5 +1,19 @@
 # Cursor BYOK 当前功能与上游差异 PRD
 
+> 最新 `gateway` 快照（2026-09-09）：以 `4e4f2f1` 为基底移植 `gateway-duo@18ef0e2` 的双渠道能力，代码与隔离验证已完成，尚未提交/发布，真实 Cursor 验收待完成（`verified-partial`）。下方 `noad`/发布 SHA 及 §2–§16 保留为对应日期的历史记录，不代表当前 gateway 工作区或运行中实例。
+
+## gateway-duo 功能移植现状（2026-09-09）
+
+- **当前能力**：保留已有 Cursor 官方身份；官方与本地目录共存，桌面/CLI 显示字段追加 `[官方]`/`[BYOK]`，模型 ID 不变。纯本地目录同样标来源。
+- **调用规则**：本地渠道 ID 优先；持官方身份的其余模型（含自动选择）交官方；纯本地身份沿用现有本地解析/默认。后续消息保持请求级渠道，配置重建不丢失路由存储；两渠道失败不自动互换。
+- **相对来源的适配**：保留 gateway 的唯一旧渠道 ID、变体、空模型/auto 本地默认、订阅和 provider fallback；保留 CLI 无秘密占位 `cursor-byok-local`。OAuth 只模拟已知本地占位 refresh，其余请求保持官方身份透传，local/upstream 两种模式均接线。没有照搬来源的版本元数据或清空 CLI Credentials 的行为。
+- **验证边界**：Host→模拟 provider/官方的目录、Agent、OAuth 契约及 internal 全量、五包 race、相关 vet 已通过；真实 Cursor 登录、桌面/CLI 来源显示、官方与 Auto 对话、真实 token 刷新尚未验收。未更新运行中程序，当前源码能力不能当作已安装实例能力。
+- **追踪**：产品规则见工作决策基线 §10.17；设计见系统架构 §18「gateway-duo 合并」D1–D4；执行、修复及命令证据见 `task/todo.md` 和 `docs/process.md` 的 `gateway-duo` 记录。
+
+历史 §16 将「官方模型/BYOK 切换」笼统判断为已等价；应按本节区分本地 provider/订阅多渠道能力与真实 Cursor 官方身份、目录、对话共存，不能用前者证明后者已经接线或实机通过。本次仅用目录来源后缀实现可辨识显示，不增加管理 UI、自定义分组或新开关。
+
+## 历史 noad 同步元数据
+
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
 - **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`

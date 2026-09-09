@@ -64,6 +64,19 @@ type RequestContext struct {
 type ForwardOptions struct {
 	BodyOverride []byte
 	PatchHeaders func(headers http.Header)
+	// PreserveInboundIdentity skips the local-mode Cursor Authorization rewrite
+	// so official catalog fetches keep the inbound token.
+	PreserveInboundIdentity bool
+}
+
+// FetchedUpstream is an official response captured without writing to the client.
+type FetchedUpstream struct {
+	StatusCode  int
+	ContentType string
+	// Encoding is HTTP Content-Encoding only. Connect-Content-Encoding is a
+	// per-envelope codec and must not be stored here.
+	Encoding string
+	Body     []byte
 }
 
 type ForwardMeta struct {

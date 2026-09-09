@@ -4,6 +4,20 @@
 
 ## 当前焦点
 
+### gateway-duo 合并（2026-09-08）
+
+- 工作包：`gateway-duo-merge-20260908`；`DESIGN_READINESS=approved`，`DELIVERY_STATUS=verified-partial`。用户已批准实施并要求主控安排最多两个并发执行任务、独立 review、验证与修复；源码移植、接线和隔离验证已收口，真实 Cursor 验收待完成。
+- 基线：目标 `4e4f2f176efee5b1f094b3b9ccd6f07182480375`，来源 `18ef0e219d7875fa2012d23b9774562ea8d7960c`，共同祖先 `334f538bedab3a27ce82e4c7ef772e2553c40be2`。仅功能移植，版本文件不变，不 commit/push，不替换真实代理实例。
+- 需求：工作决策基线 §10.17；设计：系统架构 §18「gateway-duo 合并」D1–D4。完整链路：保留/注入身份 → 标注来源的目录 → 按模型与身份分流 → 本地现有 provider 管线或官方透传 → 同 request_id 流与后续消息返回。
+- [completed] `record-dual-contract`：固化选模、身份、默认与 `[官方]`/`[BYOK]` 显示契约；不增加配置/UI/账号系统。
+- [completed] `merge-dual-routing`：D1/D2/D4；协议选模/运行消息识别、请求级记忆、auth DB、MITM、官方转发、OAuth 分流及 Host 接线；身份×模型×消息、先流后上行与取消由隔离测试覆盖。复审修复路由存储跨配置重建分裂，Host 生命周期共用存储；OAuth local/upstream 两模式都接入同一身份分流处理器。
+- [completed] `merge-labeled-catalog`：D3；目录合并与同 ID 本地优先、身份默认、失败不推荐本地默认、来源名称及 CLI 占位。纯本地目录同样标 `[BYOK]`，保留模型 ID 和 `cursor-byok-local`；目录及 Host 契约测试通过。
+- [completed] `verify-close-merge`（代码与隔离验证）：完成 Spec/质量只读 review、缺陷修复与复审。OAuth 最终接线后 `go test -count=1 -timeout=5m ./internal/...`、backend/cursor/mitm/upstream/protocol 五包 race、`go vet ./internal/backend/... ./internal/cursor ./internal/mitm` 及 `git diff --check` 均退出 0。测试统一隔离 HOME，完整命令和日志见 `docs/process.md`。
+- [pending] `real-cursor-acceptance`（test/env gap）：工作决策基线 §10.17 / 设计 D1–D4；在后续获准的实机窗口验证保留真实登录、桌面/CLI 来源显示、显式本地/官方及 Auto 对话、真实 OAuth 刷新、失败不跨渠道。当前无发布/替换实例授权，模拟官方服务不替代真实验收。
+- 执行恢复：每个中断任务在原 ID 上按 20/40/80/160/320 秒最多恢复五次；持续失败停止等待用户调整。本轮目录任务中断后等待 20 秒，从已有上下文恢复成功，未发生持续无法恢复；收尾复审未中断。
+- 测试隔离事件：早期后端测试构造 Host 触发真实用户目录过期 debug 清理，日志报告删除 8 个文件；已告知用户，没有原始内容不能恢复。测试 helper 已加临时 HOME，后续所有 Go 验证均隔离。复用教训记录于 `docs/process.md`。
+- 回退：仅撤销本次 diff，不整树 reset，不覆盖用户后续修改或新登录身份；旧版本会重新注入本地身份的风险保留。阶段结果与命令证据收口到 `docs/process.md`。
+
 ### 重开确认、订阅状态与模型代理回归修复（2026-09-08）
 
 - 授权：用户要求修复三项缺陷，后明确主控安排独立执行、review 和验证；服务中断按 20/40/80/160/320 秒在原上下文最多重试五次，持续失败暂停。两项复审启动 503、浏览器启动连接中断均无 ID；等待 20 秒后各首次重试成功，后续沿同一 ID 收集结果，未用到后四次重试。
