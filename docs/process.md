@@ -7,6 +7,18 @@
 
 ## 一、待完成的内容
 
+### 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+
+**触发与日志证据**：用户提供 `/Users/yaogj/Downloads/logs 2`，现象为同一 Agent 会话先使用模型 A 完成讨论和任务，再切换高级模型分析时出现 `[internal] decode imported replay messages: invalid character '>'/'h' looking for beginning of value`。导出中找到请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e`：`run_request` 的原始 Bidi 数据长 7,773,530 字节，解码成功后约 0.5ms 即进入 `dispatch_error(kind=run)` 并返回 500，随后 heartbeat 仍为 200；该请求没有进入 provider 调用。用户列出的另外三个请求 ID 不在本次导出中，payload 因配额降级未保留正文，所以无法从日志直接恢复报错字节。
+
+**根因**：Cursor 当前本机 Agent runtime 的 `fromConversationStateStructure` 对 `rootPromptMessagesJson` 中每个元素调用 `getBlob`，再把 Blob 内容反序列化为 `coreMessage`，说明该字段在当前客户端中承载的是内容寻址 Blob ID。网关 `importedConversationStateModelMessagesWithBlobs` 原先无条件把这些元素交给 `DecodeReplayMessages` 做 JSON 解码，导致 32 字节 SHA-256 ID 的随机首字节被报告为 `>`、`h` 或其他非法 JSON 字符。模型切换/会话 fork 首次导入 `conversation_state` 时触发该路径。日志中的独立 `server_5xx status=502` 是 provider/上游错误，不是本地 replay 解码失败的原因。
+
+**最小修复**：`internal/backend/forwarder/token_usage.go` 仅在 `root_prompt_messages_json` 的全部非空元素均为 32 字节 Blob 引用且 `turns` 非空时，跳过旧 JSON replay 分支并落入现有 Blob-aware turns 导入路径。普通非 JSON、JSON/Blob 混合内容，以及没有 turns 可回退的 Blob 引用仍保持错误，不静默丢失历史；未新增依赖、配置、协议抽象或迁移逻辑。
+
+**回归与验证**：新增 `TestImportedConversationStateFallsBackFromBlobRootPromptsToTurns`，修复前稳定失败并复现同型错误：`decode imported replay messages: invalid character '\u008b' looking for beginning of value`；修复后恢复父会话 user/assistant 两条消息。另增加普通非法 replay 和无 turns Blob 引用继续拒绝的边界用例。最终 `go test ./internal/backend/forwarder -count=1` 通过（18.388s），`go vet ./internal/backend/forwarder` 与 `git diff --check` 退出 0。
+
+**边界与交付状态**：交付状态 `verified-partial`。本轮未安装、部署或重启 Gateway/Cursor，未执行真实桌面“模型 A→高级模型”切换验收，未修改用户日志/配置，未 commit/push。范围外的 provider 502 只记录，不处理。
+
 ### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
 
 **触发与结论**：修复 Responses 流仅收到 `[DONE]`（缺 `response.completed`）时的两条缺陷路径：普通成功收尾不补发 `TurnFinished` 导致客户端等待终态直到超时；`completeTool` 因参数非法 JSON 静默跳过后，`[DONE]` 兜底路径不再复查工具累加器，截断的 `function_call` 参数流被误判为普通成功收尾。

@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -120,8 +121,26 @@ func importedConversationStateModelMessagesWithBlobs(state *agentv1.Conversation
 	if state == nil {
 		return nil, nil
 	}
-	if len(state.GetRootPromptMessagesJson()) > 0 {
-		decoded, err := promptengine.DecodeReplayMessages(state.GetRootPromptMessagesJson())
+	rootPromptMessages := state.GetRootPromptMessagesJson()
+	if len(rootPromptMessages) > 0 {
+		allBlobReferences := true
+		hasBlobReference := false
+		for _, raw := range rootPromptMessages {
+			if len(raw) == 0 {
+				continue
+			}
+			if len(raw) != sha256.Size {
+				allBlobReferences = false
+				break
+			}
+			hasBlobReference = true
+		}
+		if allBlobReferences && hasBlobReference && len(state.GetTurns()) > 0 {
+			rootPromptMessages = nil
+		}
+	}
+	if len(rootPromptMessages) > 0 {
+		decoded, err := promptengine.DecodeReplayMessages(rootPromptMessages)
 		if err != nil {
 			return nil, fmt.Errorf("decode imported replay messages: %w", err)
 		}

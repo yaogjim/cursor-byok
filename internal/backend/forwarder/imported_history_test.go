@@ -53,6 +53,51 @@ func TestImportedConversationStateRestoresBlobOnlyForkAndCheckpointPrefix(t *tes
 	}
 }
 
+func TestImportedConversationStateFallsBackFromBlobRootPromptsToTurns(t *testing.T) {
+	parent := compactionAppendOnlyConversation(t)
+	parent.Entries = parent.Entries[:2]
+	parent.NextEntrySeq = 3
+	parent.NextTurnSeq = 2
+	projection, err := NewHistoryProjector().ProjectCheckpointProjection(parent)
+	if err != nil {
+		t.Fatalf("ProjectCheckpointProjection() error = %v", err)
+	}
+	prefetched := make([]*agentv1.PreFetchedBlob, 0, len(projection.Blobs))
+	for _, blob := range projection.Blobs {
+		prefetched = append(prefetched, &agentv1.PreFetchedBlob{Id: blob.ID, Value: blob.Data})
+	}
+	state := proto.Clone(projection.State).(*agentv1.ConversationStateStructure)
+	state.RootPromptMessagesJson = cloneByteSlices(state.GetTurns())
+	conversation, err := newRuntimeConversation("fork-conversation", agentv1.AgentMode_AGENT_MODE_AGENT)
+	if err != nil {
+		t.Fatalf("newRuntimeConversation() error = %v", err)
+	}
+	entries, err := (&Service{}).importConversationState(conversation, state, prefetched)
+	if err != nil {
+		t.Fatalf("importConversationState() error = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("imported model entries = %d, want parent user and assistant", len(entries))
+	}
+}
+
+func TestImportedConversationStateRejectsMalformedNonBlobRootPrompt(t *testing.T) {
+	if _, err := importedConversationStateModelMessages(&agentv1.ConversationStateStructure{
+		RootPromptMessagesJson: [][]byte{[]byte("hello")},
+	}); err == nil {
+		t.Fatal("importedConversationStateModelMessages() accepted malformed non-Blob replay data")
+	}
+}
+
+func TestImportedConversationStateRejectsBlobRootPromptWithoutTurnFallback(t *testing.T) {
+	blobID := sha256.Sum256([]byte("root prompt"))
+	if _, err := importedConversationStateModelMessages(&agentv1.ConversationStateStructure{
+		RootPromptMessagesJson: [][]byte{blobID[:]},
+	}); err == nil {
+		t.Fatal("importedConversationStateModelMessages() discarded a Blob replay reference without fallback turns")
+	}
+}
+
 func TestImportedConversationStateRejectsUnresolvedBlobTurn(t *testing.T) {
 	turnID := sha256.Sum256([]byte("missing imported turn"))
 	conversation, err := newRuntimeConversation("fork-conversation", agentv1.AgentMode_AGENT_MODE_AGENT)
