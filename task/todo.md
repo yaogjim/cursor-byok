@@ -4,6 +4,13 @@
 
 ## 当前焦点
 
+### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
+
+- [completed] `responses-done-fallback`：`streamResponses` 的 `[DONE]` 兜底路径仿照 Chat 路径补发 `TurnFinished`（无工具普通成功默认 `stop`，已发工具完成保留空值交由 `effectiveFinishReason` 归一为 `tool_calls`）；`completeTool` 参数不完整改为返回 `StreamTruncatedError` fail-closed，不再静默跳过；`[DONE]` 兜底先复查全部 `tools` 累加器，任一参数未收口即按流截断 fail。正常 `response.completed` 终态路径与 Chat 路径行为不变。
+- [completed] `regression-tests`：新增 `TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished` 与 `TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates`；`go test ./internal/backend/agent/model/ -run 'TestOpenAIResponses' -count=1` 通过。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.1`。
+- [pending] `runtime-evidence`：真实上游 Responses 截断/正常混合流实机验收待后续窗口。
+
 ### 0.0.71.2 日志增强与异常保留（2026-09-10；verified-partial）
 
 - **本次复核更正**：此前“全部完成”证据不足；旧复核中的 manifest 准入返回值被忽略、异常预检查阻断轮转、队列无异常预留等问题已由本次回归复现并修复。以下历史构建记录不代表当前源码已重新打包；现有 `79ce4e99…` DMG **不包含本次复核修复**。

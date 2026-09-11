@@ -506,6 +506,47 @@ func TestOpenAIResponsesNormalCompletionStillSucceeds(t *testing.T) {
 	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
 }
 
+func TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+
+	finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+	if finished == nil {
+		t.Fatalf("turn finished event missing: %#v", events)
+	}
+	if finished.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", finished.FinishReason)
+	}
+}
+
+func TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"Ls\",\"arguments\":\"\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	assertOpenAIStreamTruncated(t, err, "missing completion marker")
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 0)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
 func collectOpenAIStreamEvents(t *testing.T, adapter *OpenAIAdapter, endpoint string) ([]ModelEvent, error) {
 	t.Helper()
 	return collectOpenAIStreamEventsWithServer(t, adapter, "https://example.test", endpoint)

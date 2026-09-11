@@ -1336,7 +1336,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			}
 		}
 		if !openAIToolArgsComplete(accumulator.Args.String()) {
-			return nil
+			return newStreamTruncatedError("openai", nil)
 		}
 		completedTools[completionKey] = struct{}{}
 		if strings.TrimSpace(accumulator.CallID) != "" {
@@ -1598,6 +1598,22 @@ responsesScan:
 				if err := completeImageGeneration(key, accumulator); err != nil {
 					return fail(err)
 				}
+			}
+			for _, accumulator := range tools {
+				if accumulator == nil || openAIToolArgsComplete(accumulator.Args.String()) {
+					continue
+				}
+				// [DONE] 兜底路径下仍有未收口的 function_call 参数：completeTool 已因非法 JSON 跳过，
+				// 不能当作普通成功收尾，必须 fail-closed。
+				return fail(newStreamTruncatedError("openai", nil))
+			}
+			if !turnFinishedPending {
+				// 仿照 Chat 路径：仅收到 [DONE]（缺 response.completed）时兜底补发 TurnFinished。
+				// 无工具普通成功默认 stop；已发工具完成时保留空值交由 effectiveFinishReason 归一为 tool_calls。
+				if !emittedToolInvocation && strings.TrimSpace(finishReason) == "" {
+					finishReason = "stop"
+				}
+				turnFinishedPending = true
 			}
 			if err := flushTurnFinished(); err != nil {
 				return fail(err)

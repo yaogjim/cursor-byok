@@ -7,6 +7,18 @@
 
 ## 一、待完成的内容
 
+### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
+
+**触发与结论**：修复 Responses 流仅收到 `[DONE]`（缺 `response.completed`）时的两条缺陷路径：普通成功收尾不补发 `TurnFinished` 导致客户端等待终态直到超时；`completeTool` 因参数非法 JSON 静默跳过后，`[DONE]` 兜底路径不再复查工具累加器，截断的 `function_call` 参数流被误判为普通成功收尾。
+
+**修复内容**：`internal/backend/agent/model/openai.go`/`streamResponses`：`completeTool` 参数不完整时返回 `newStreamTruncatedError("openai", nil)` fail-closed，不再静默跳过；`[DONE]` 兜底路径先复查全部 `tools` 累加器，任一参数未收口即按流截断 fail；全部收口且尚未发 `TurnFinished` 时兜底补发（无工具普通成功默认 `stop`，已发工具完成保留空值交由 `effectiveFinishReason` 归一为 `tool_calls`）。正常 `response.completed` 终态路径与 Chat 路径行为不变。
+
+**回归测试**：`TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished`（仅 `output_text.delta` + `[DONE]` 仍发出 1 次 `TurnFinished` 且 finish reason 为 `stop`）、`TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates`（`function_call` 参数半截后 `[DONE]` 判定流截断 `missing completion marker`，不发 `ToolLikeCompleted`/`TurnFinished`）。
+
+**验证证据**：`go test ./internal/backend/agent/model/ -run 'TestOpenAIResponses' -count=1` 通过。证据边界：Host 本地模拟上游证明两条兜底路径行为；真实上游截断/正常混合实机验收待后续窗口。
+
+**边界与交付状态**：交付状态 `verified-partial`。未改变 Chat 路径、Anthropic 适配器、重试/fallback、证书与账号业务逻辑。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `0.0.72.1`，发布说明见 `releaselog/0.0.72.1.md`。
+
 ### 0.0.71.2 日志增强复核与范围内部署缺陷修复（2026-09-10；verified-partial）
 
 **复核触发与结论**：用户要求复核完成情况并修复问题。本次对已实施的日志增强做独立只读复核，确认“已全部完成”的表述证据不足：先前收口只跑了定向测试与构建，未覆盖配额拒绝、持续轮转、异常队列预留和逐条追踪到真实入口的边界。复核确认并修复以下范围内缺陷。
