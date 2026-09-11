@@ -7,7 +7,7 @@
 
 ## 一、待完成的内容
 
-### 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 **触发与日志证据**：用户提供 `/Users/yaogj/Downloads/logs 2`，现象为同一 Agent 会话先使用模型 A 完成讨论和任务，再切换高级模型分析时出现 `[internal] decode imported replay messages: invalid character '>'/'h' looking for beginning of value`。导出中找到请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e`：`run_request` 的原始 Bidi 数据长 7,773,530 字节，解码成功后约 0.5ms 即进入 `dispatch_error(kind=run)` 并返回 500，随后 heartbeat 仍为 200；该请求没有进入 provider 调用。用户列出的另外三个请求 ID 不在本次导出中，payload 因配额降级未保留正文，所以无法从日志直接恢复报错字节。
 
@@ -17,7 +17,7 @@
 
 **回归与验证**：新增 `TestImportedConversationStateFallsBackFromBlobRootPromptsToTurns`，修复前稳定失败并复现同型错误：`decode imported replay messages: invalid character '\u008b' looking for beginning of value`；修复后恢复父会话 user/assistant 两条消息。另增加普通非法 replay 和无 turns Blob 引用继续拒绝的边界用例。最终 `go test ./internal/backend/forwarder -count=1` 通过（18.388s），`go vet ./internal/backend/forwarder` 与 `git diff --check` 退出 0。
 
-**边界与交付状态**：交付状态 `verified-partial`。本轮未安装、部署或重启 Gateway/Cursor，未执行真实桌面“模型 A→高级模型”切换验收，未修改用户日志/配置，未 commit/push。范围外的 provider 502 只记录，不处理。
+**边界与交付状态**：交付状态 `verified-partial`。本轮未安装、部署或重启 Gateway/Cursor，未执行真实桌面“模型 A→高级模型”切换验收，未修改用户日志/配置；代码与文档已提交并推送（版本 0.0.72.2）。范围外的 provider 502 只记录，不处理。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `0.0.72.2`，发布说明见 `releaselog/0.0.72.2.md`。
 
 ### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
 

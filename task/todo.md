@@ -4,12 +4,13 @@
 
 ## 当前焦点
 
-### 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 - 范围：用户提供 `/Users/yaogj/Downloads/logs 2`，要求定位同一 Agent 会话从模型 A 切换到高级模型后出现 `decode imported replay messages: invalid character ...` 的问题；只修复 replay 导入格式误判，不处理独立 provider 502，不部署、不重启、不 commit/push。
 - [completed] `log-and-code-triage`：请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e` 在约 7.77 MiB `run_request` 解码后 0.5ms 内进入 `dispatch_error` 并返回 500，未到 provider 调用；另外三个用户列出的请求 ID 不在本次导出中。Cursor 本机运行时代码确认 `rootPromptMessagesJson` 元素会作为 Blob ID 调用 `getBlob`，再反序列化为 `coreMessage`；网关原实现却直接交给 JSON 解码，因此随机 SHA-256 首字节被报告为 `>`、`h` 或其他非法字符。
 - [completed] `minimal-fix`：仅当全部非空 `root_prompt_messages_json` 元素均为 32 字节 Blob 引用且存在 `turns` 回退数据时，跳过 JSON replay 分支并复用既有 Blob-aware turns 导入；混合/普通非 JSON 数据及缺少 turns 的 Blob 引用继续报错，避免静默丢失历史。
 - [completed] `regression-and-verification`：新增 Blob root prompts→turns 回退、普通非法 replay 拒绝、无 turns 的 Blob replay 拒绝用例。目标回归在修复前稳定失败：`invalid character '\u008b' looking for beginning of value`；修复后目标四例通过，`go test ./internal/backend/forwarder -count=1` 与 `go vet ./internal/backend/forwarder` 通过，`git diff --check` 通过。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.2`；代码修复与版本元数据已提交并推送。
 - [pending] `runtime-acceptance`：未安装或替换当前 Gateway，未在真实 Cursor 会话执行“模型 A 完成任务→切换高级模型分析”的桌面实机验收；交付状态为 `verified-partial`。独立的 `server_5xx status=502` 属于 provider/上游问题，本轮只报告、不修改。
 
 ### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
