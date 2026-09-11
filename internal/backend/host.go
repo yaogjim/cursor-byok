@@ -113,6 +113,10 @@ func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationP
 		logger.Errorf("初始化链路日志采集失败 error_category=recorder_init_failed")
 	} else {
 		host.observability = controller
+		// logger.Init runs before the config is known; now that the controller
+		// holds the real observability budget, enable application file output so
+		// every app log byte shares the same normal partition as traces.
+		logger.ConfigureAppLogWriter(controller)
 	}
 	netproxy.SetGlobal(cfg.OutboundProxy)
 	unsubProxy := configs.Subscribe(func(next serverconfig.Config) {
@@ -557,10 +561,49 @@ func observabilityRuntimeFingerprint(cfg serverconfig.Config) string {
 	return observability.ConfigFingerprint(fingerprintValues...)
 }
 
+// observabilitySummaryFieldKeys is the closed whitelist of provider/retry
+// diagnostic fields that may reach the human-readable app log. It deliberately
+// excludes raw blobs, request bodies, full URLs and credential-bearing keys.
+var observabilitySummaryFieldKeys = []string{
+	"status_code", "http_status",
+	"attempt", "max_attempts", "retry_decision", "retryable",
+	"failure_category", "failure_cause", "failure_phase", "failure_stage",
+	"recovery_action", "business_outcome", "protocol_final_status",
+	"model_call_final_status", "retry_suppression_reason", "skip_reason",
+	"missing_blob_key_count", "missing_blob_count", "checkpoint_request_id",
+	"phase", "checkpoint_result", "blob_count", "pending_blob_count",
+	"error_summary", "provider_error_summary", "provider_error_summary_type",
+}
+
+const observabilitySummaryMaxRunes = 512
+
+// observabilitySummaryValue re-sanitizes a scalar field and caps it so a
+// credential or oversized body cannot leak into the summary line.
+func observabilitySummaryValue(value any) (string, bool) {
+	if value == nil {
+		return "", false
+	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return "", false
+	}
+	text = observability.SanitizeText(text)
+	runes := []rune(text)
+	if len(runes) > observabilitySummaryMaxRunes {
+		text = string(runes[:observabilitySummaryMaxRunes])
+	}
+	return text, true
+}
+
 func logObservabilityEvent(event observability.Event) {
 	args := []any{
 		"layer", event.Layer,
 		"event", event.Event,
+		"app_session_id", strings.TrimSpace(event.AppSessionID),
+		"sequence", event.Sequence,
+		"severity", strings.TrimSpace(event.Severity),
+		"semantic_outcome", strings.TrimSpace(event.SemanticOutcome),
+		"direction", strings.TrimSpace(event.Direction),
 		"trace_id", event.TraceID,
 		"route", event.Route,
 		"execution_target", event.ExecutionTarget,
@@ -578,10 +621,16 @@ func logObservabilityEvent(event observability.Event) {
 	if category := strings.TrimSpace(event.ErrorCategory); category != "" {
 		args = append(args, "error_category", category)
 	}
-	if event.Fields != nil {
-		if status, ok := event.Fields["http_status"]; ok && status != nil && strings.TrimSpace(fmt.Sprint(status)) != "" {
-			args = append(args, "http_status", status)
+	for _, key := range observabilitySummaryFieldKeys {
+		value, ok := event.Fields[key]
+		if !ok {
+			continue
 		}
+		text, ok := observabilitySummaryValue(value)
+		if !ok {
+			continue
+		}
+		args = append(args, key, text)
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Severity)) {
 	case observability.SeverityError:

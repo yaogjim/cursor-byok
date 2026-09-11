@@ -102,6 +102,10 @@ type Summary struct {
 	EventCount   int64
 	TraceCount   int64
 	FindingCount int64
+	// Warnings carries the dataset loader/completeness warnings so the GUI can
+	// disclose partial material without a new page or schema. The values are
+	// already sanitized upstream.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type targetAggregate struct {
@@ -187,7 +191,14 @@ func Workspace(ctx context.Context, store *workspace.Workspace, includeBaseline 
 	if err != nil {
 		return Summary{}, err
 	}
-	return Summary{EventCount: stats.EventCount, TraceCount: traceCount, FindingCount: findingCount}, nil
+	var warnings []string
+	if err := store.ForEachWarning(ctx, currentID, func(message string) error {
+		warnings = append(warnings, message)
+		return nil
+	}); err != nil {
+		return Summary{}, err
+	}
+	return Summary{EventCount: stats.EventCount, TraceCount: traceCount, FindingCount: findingCount, Warnings: warnings}, nil
 }
 
 func analyzeCurrent(ctx context.Context, store *workspace.Workspace, datasetID int64) error {

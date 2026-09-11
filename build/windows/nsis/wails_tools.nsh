@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "Gateway-byok"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.0.71.2"
+    !define INFO_PRODUCTVERSION "0.0.72.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2026, Gateway-byok"

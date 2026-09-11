@@ -135,8 +135,19 @@ func isSCMOrFileSync(event workspace.EventRecord, fields map[string]any) bool {
 }
 
 func shouldEmitRequestError(event workspace.EventRecord) bool {
+	if isRetryingAttempt(event) {
+		return false
+	}
 	if event.ErrorCategory == "" && !strings.EqualFold(event.Status, "error") {
 		return false
 	}
 	return !isExpectedNoise(event)
+}
+
+// isRetryingAttempt reports a provider attempt that is being retried and is
+// already downgraded to warning. Its degraded semantic outcome is enough; only
+// the terminal model_call_final failure should raise an ERROR request_error.
+func isRetryingAttempt(event workspace.EventRecord) bool {
+	return strings.EqualFold(strings.TrimSpace(event.Status), "retrying") &&
+		strings.EqualFold(strings.TrimSpace(event.Severity), "warning")
 }

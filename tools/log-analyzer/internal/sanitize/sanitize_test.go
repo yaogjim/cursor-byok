@@ -181,6 +181,86 @@ func TestAllowlistedFieldsKeepsAttemptPolicyFacts(t *testing.T) {
 	}
 }
 
+func TestAllowlistedFieldsKeepsDiagnosticSummaryFacts(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"error_summary":               "upstream unavailable",
+		"provider_error_summary":      "status_4xx status=401",
+		"provider_error_summary_type": "json_error",
+		"skip_reason":                 "blob_sync",
+		"missing_blob_key_count":      3,
+		"attempt":                     1,
+		"max_attempts":                2,
+		"retry_decision":              "retry",
+		"retryable":                   true,
+		"failure_category":            "transport",
+		"failure_cause":               "unexpected_eof",
+		"failure_phase":               "read",
+		"failure_stage":               "response_body",
+		"recovery_action":             "fallback",
+		"business_outcome":            "failed",
+		"protocol_final_status":       "error",
+		"model_call_final_status":     "failed",
+		"retry_suppression_reason":    "output_or_tool_progress",
+		"status":                      "error",
+		"provider_pass":               0,
+		"http_attempt":                2,
+		"checkpoint_result":           "unmatched",
+	})
+	for _, key := range []string{"error_summary", "provider_error_summary", "provider_error_summary_type", "skip_reason", "missing_blob_key_count", "attempt", "max_attempts", "retry_decision", "retryable", "failure_category", "failure_cause", "failure_phase", "failure_stage", "recovery_action", "business_outcome", "protocol_final_status", "model_call_final_status", "retry_suppression_reason", "status", "provider_pass", "http_attempt", "checkpoint_result"} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("diagnostic summary field %q dropped: %#v", key, fields)
+		}
+	}
+}
+
+func TestAllowlistedFieldsRejectsRawKeysAndKeepsSummaryBounded(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"missing_blob_keys": "blob-a,blob-b",
+		"body":              `{"prompt":"secret"}`,
+		"url":               "https://api.example.test/v1/messages?token=sk-secret",
+		"raw_url":           "https://api.example.test/v1/messages?token=sk-secret",
+		"authorization":     "Bearer sk-secret",
+		"credential":        "sk-secret",
+		"message":           "arbitrary free text with /secret/path",
+		"error_summary":     "upstream https://api.example.test/v1/messages?token=sk-secret",
+	})
+	for _, key := range []string{"missing_blob_keys", "body", "url", "raw_url", "authorization", "credential", "message"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("raw key %q leaked: %#v", key, fields)
+		}
+	}
+	summary, _ := fields["error_summary"].(string)
+	if summary == "" {
+		t.Fatalf("error_summary dropped: %#v", fields)
+	}
+	for _, leaked := range []string{"sk-secret", "token=", "?", "https://"} {
+		if strings.Contains(summary, leaked) {
+			t.Fatalf("error_summary leaked %q: %q", leaked, summary)
+		}
+	}
+}
+
+func TestSummaryCapsRunesAndStillStripsSecrets(t *testing.T) {
+	long := strings.Repeat("错误详情", 200) + " https://api.example.test/v1/messages?token=sk-secret"
+	summary := Summary(long)
+	if !strings.HasSuffix(summary, "...") {
+		t.Fatalf("Summary() did not truncate long text: %q", summary)
+	}
+	body := strings.TrimSuffix(summary, "...")
+	if runes := len([]rune(body)); runes > 512 {
+		t.Fatalf("Summary() body runes = %d, want <= 512", runes)
+	}
+	if strings.Contains(summary, "sk-secret") || strings.Contains(summary, "token=") || strings.Contains(summary, "https://") {
+		t.Fatalf("Summary() leaked secret or URL: %q", summary)
+	}
+	if got := Summary("upstream unavailable"); got != "upstream unavailable" {
+		t.Fatalf("Summary() short text = %q", got)
+	}
+	if got := Summary(""); got != "" {
+		t.Fatalf("Summary() empty = %q", got)
+	}
+}
+
 func TestPathStripsQueryFragmentAndKeepsDeterministicShape(t *testing.T) {
 	cases := []struct {
 		in, want string

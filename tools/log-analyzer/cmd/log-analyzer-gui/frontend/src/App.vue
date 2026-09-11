@@ -46,6 +46,11 @@ const summary = computed(() => field(state.value, "Summary", "summary") || {});
 const eventCount = computed(() => Number(field(summary.value, "EventCount", "event_count") || 0));
 const traceCount = computed(() => Number(field(summary.value, "TraceCount", "trace_count") || 0));
 const findingCount = computed(() => Number(field(summary.value, "FindingCount", "finding_count") || 0));
+const summaryWarnings = computed(() => {
+  const value = field(summary.value, "Warnings", "warnings");
+  if (!Array.isArray(value)) return [];
+  return value.filter((item) => typeof item === "string" && item.trim() !== "");
+});
 
 function field(value, ...keys) {
   if (!value) return undefined;
@@ -172,6 +177,24 @@ async function selectEvent(event) {
   selectedEvent.value = event;
   payload.value = null;
 }
+
+function formatFieldValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+const selectedSafeFields = computed(() => {
+  const raw = field(selectedEvent.value, "SafeFieldsJSON", "safe_fields_json");
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return [];
+    return Object.entries(parsed).map(([key, value]) => [key, formatFieldValue(value)]);
+  } catch {
+    return [];
+  }
+});
 
 async function readPayload() {
   const order = Number(field(selectedEvent.value, "IngestOrder", "ingest_order") || 0);
@@ -341,6 +364,10 @@ onMounted(async () => {
             <article class="stat-card"><span>Finding</span><strong>{{ findingCount.toLocaleString() }}</strong><small>需人工确认</small></article>
             <article class="stat-card"><span>Baseline</span><strong>{{ field(state, 'HasBaseline', 'has_baseline') ? 'ON' : 'OFF' }}</strong><small>修复前后比较</small></article>
           </div>
+          <article v-if="summaryWarnings.length" class="panel">
+            <div class="panel-heading"><div><h2>材料完整性提示</h2><p>仅提供异常诊断分片的会话材料不完整，统计仅覆盖已提供的事件。</p></div><span>{{ summaryWarnings.length }}</span></div>
+            <ul class="warning-list"><li v-for="(warning, index) in summaryWarnings" :key="index">{{ warning }}</li></ul>
+          </article>
           <article class="panel">
             <div class="panel-heading"><div><h2>多维诊断指标</h2><p>项目、能力、操作、路由和目标维度的完成量与延迟。</p></div><span>{{ metrics.length }} / {{ metricTotal }}</span></div>
             <div class="table-wrap">
@@ -406,8 +433,14 @@ onMounted(async () => {
 
     <aside v-if="selectedEvent" class="drawer-backdrop" @click.self="selectedEvent = null">
       <section class="drawer"><header><div><span class="eyebrow">EVENT DETAIL</span><h2>{{ field(selectedEvent, 'Event', 'event') }}</h2></div><button @click="selectedEvent = null">×</button></header><dl>
-        <template v-for="key in ['Timestamp','ProjectID','AppSessionID','ConversationID','TurnID','TraceID','SpanID','ParentSpanID','Capability','Operation','Direction','Route','ExecutionTarget','Status','SemanticOutcome','ImplementationState','ErrorCategory','DurationMS','RequestBytes','ResponseBytes']" :key="key"><dt>{{ key }}</dt><dd class="mono">{{ field(selectedEvent, key) ?? '—' }}</dd></template>
-      </dl><button v-if="field(selectedEvent, 'PayloadRef', 'payload_ref')" class="button warning-button wide" :disabled="payloadBusy" @click="readPayload">{{ payloadBusy ? '正在读取…' : '显式读取敏感 payload' }}</button><div v-if="payload" class="payload-box"><strong>敏感正文，仅本次查看</strong><pre>{{ field(payload, 'Content', 'content') }}</pre></div></section>
+        <template v-for="key in ['Timestamp','Severity','ProjectID','AppSessionID','ConversationID','TurnID','TraceID','SpanID','ParentSpanID','Capability','Operation','Direction','Route','ExecutionTarget','Status','SemanticOutcome','ImplementationState','ErrorCategory','DurationMS','RequestBytes','ResponseBytes']" :key="key"><dt>{{ key }}</dt><dd class="mono">{{ field(selectedEvent, key) ?? '—' }}</dd></template>
+      </dl>
+      <section v-if="selectedSafeFields.length" class="safe-fields">
+        <h3>安全 Fields</h3>
+        <dl>
+          <template v-for="item in selectedSafeFields" :key="item[0]"><dt>{{ item[0] }}</dt><dd class="mono">{{ item[1] }}</dd></template>
+        </dl>
+      </section><button v-if="field(selectedEvent, 'PayloadRef', 'payload_ref')" class="button warning-button wide" :disabled="payloadBusy" @click="readPayload">{{ payloadBusy ? '正在读取…' : '显式读取敏感 payload' }}</button><div v-if="payload" class="payload-box"><strong>敏感正文，仅本次查看</strong><pre>{{ field(payload, 'Content', 'content') }}</pre></div></section>
     </aside>
   </div>
 </template>

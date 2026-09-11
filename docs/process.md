@@ -7,6 +7,70 @@
 
 ## 一、待完成的内容
 
+### 0.0.71.2 日志增强复核与范围内部署缺陷修复（2026-09-10；verified-partial）
+
+**复核触发与结论**：用户要求复核完成情况并修复问题。本次对已实施的日志增强做独立只读复核，确认“已全部完成”的表述证据不足：先前收口只跑了定向测试与构建，未覆盖配额拒绝、持续轮转、异常队列预留和逐条追踪到真实入口的边界。复核确认并修复以下范围内缺陷。
+
+- 普通写入准入与回收：manifest 原先忽略准入返回值，在普通分区被保护文件占满时仍会写盘；现改为真正拒绝超额写入，失败时保留上一份完好 manifest，临时文件在写入/权限/重命名任一失败时清理，任一写入失败都使缓存用量失效并在下次准入重新扫描；关闭时 manifest 落盘失败不再被静默吞掉，而由 `Status` 和关闭返回值上报。app 与事件写入保留普通分区内既有的 1 MiB 事件预留，仅供元数据与原子替换使用，总额度不变。
+- 异常分区轮转：此前预留检查在追加之前执行，目录一旦接近 D 就再也不会触发轮转，形成永久冻结；现改为先回收最旧封存分片，必要时封存当前写入器自己的分片后重试准入，仍超出才丢弃并报告。超大单条记录不再先删除历史分片。其他写入器的活跃分片通过预算内的活跃路径登记得到保护，日志轮转不再删除同目录其他写入器正在使用的文件，且不再跟随或删除 symlink。
+- 未知 manifest 保护：回收只接受受支持的 schema 版本（v1/v2）和已知 mode（full/basic）且身份与目录一致的已结束会话；未知 schema、未知 mode、身份不符或开始时间为零的会话一律保留。
+- 队列异常预留：原先普通事件可以占满整个队列，导致 WARN/ERROR 在队列饱和时被丢弃。现保留单个 FIFO 与原有 `QueueSize`，普通入队不得占用 `max(1, QueueSize/8)` 的异常预留；队列丢弃总数维持原口径，异常队列丢弃另计入 `DiagnosticDropped` 并在排空或关闭后保持可见；`off` 模式不启用预留。
+- 消费端完整性：跨全部输入路径统一排序，确保 trace 事件先于异常副本装载，full trace 的 `payload_ref` 不再因输入顺序丢失；冲突识别改用净化前事件的规范化摘要，只忽略 `payload_ref`，仍保留指向敏感差异的冲突报告但不保存原始数值；仅有异常分片（含缺身份记录）时通过既有 warning、报告与 GUI 总览提示材料不完整，不输出原始会话标识。
+- checkpoint 拒绝 ACK：此前把 blob key 的十六进制和客户端任意错误正文写入 `error_summary`，会进入事件、异常副本和应用日志白名单；现只记录固定类别 `client rejected checkpoint blob`，待确认 checkpoint 丢弃与业务终态行为不变。
+
+**验证证据**：隔离 HOME 下运行根模块定向测试、共享状态 race 与 vet，最终收口输出 `FINAL_ROOT_REVIEW_PASS`：`go test -count=1 -timeout=3m ./internal/observability ./internal/logsink ./internal/logger ./internal/backend/forwarder ./internal/client` 五包 `ok`；`go test -race -count=1 -timeout=3m ./internal/observability ./internal/logsink` 两包 `ok`；`go vet ./internal/observability ./internal/logsink ./internal/backend/forwarder` 退出 0。分析器侧运行 `go test -count=1 -timeout=3m ./internal/load ./internal/report ./internal/gui ./internal/analyze ./internal/project`、`go vet ./internal/load ./internal/report ./internal/gui ./internal/analyze` 与 GUI 前端 `npm run build`，均通过。新增回归包括：`TestReservedHeadroomKeepsTerminalManifestWritable`、`TestManifestRewriteRemovesTempAfterFailedRename`、`TestManifestRewriteCountsLeftoverTempAtNextAdmission`、`TestClosedWriterRewriteDoesNotReclaimOwnSession`、`TestReclaimableManifestAcceptsKnownSchemaVersions`、`TestNormalReclaimRemovesKnownV1Session`、`TestDiagnosticsReclaimsSealedShardsInsteadOfFreezing`、`TestDiagnosticsOverlappingWriterActiveShardSurvives`、`TestDiagnosticsSealOwnActiveShard`、`TestNormalReclaimProtectsUnknownManifests`、`TestRotatingFileCleanupKeepsProtectedShards`、`TestRotatingFileCleanupSkipsSymlinkedShards`、`TestRecorderQueueReservesDiagnosticSlots`、`TestRecorderQueueReserveClampsWithTinyQueue`、`TestRecorderQueueReserveDisabledInOffMode`，以及分析器的跨输入顺序、原始字段冲突和材料不完整用例。修复 ACK 泄露时先以 `TestCheckpointBlobEventsDistinguishRejectAndUnmatchedAck` 复现失败（断言拒绝 ACK 只能记录固定类别），再改为固定类别使该用例通过。
+
+**边界与交付状态**：交付状态保持 `verified-partial`。本轮未重新打包，现有 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`（`79ce4e99…`）早于本次修复，不能作为本次修复的验收产物。未安装或替换运行实例、未重启、未读取或修改真实日志与配置、未 commit/push。真实 checkpoint ACK/超时、客户端 CA 信任来源、上游中断断点以及桌面/浏览器交互仍未验证。范围外问题仅在复核中记录，未做修改。
+
+### 0.0.71.2 日志增强实施收口与本机构建（2026-09-10；verified-partial）
+
+**实施结果**：已按工作决策基线 §5.5 / LOG-ENH-1–4 和系统架构 §14.4 / DESIGN-LOG-ENHANCEMENT-20260910 完成计划内日志增强。异常诊断副本纳入现有总额度 B 并预留 `floor(B/8)`；app、trace/payload、diagnostics 共用预算协调和降级状态链。WARN/ERROR 副本写入受管 diagnostics 分片；普通分区按过期受管日志、closed/full trace、closed/basic trace、旧 app 分片回收，保护活跃分片、未知或损坏 manifest、归属不明文件和 symlink。分析器按 `(app_session_id, sequence)` 稳定合并副本，优先保留 full trace 的 `payload_ref`，真实内容冲突仍报错；checkpoint 使用专用安全字段 `checkpoint_result`，生产端 human sink 与分析器端均执行白名单和脱敏。GLM、checkpoint 恢复业务逻辑、证书信任及上游请求、重试、fallback 行为未改变。
+
+**验证结果**：隔离 HOME 下完成根模块相关定向测试、observability/logger 与 logsink race、受影响包 vet；`go test -count=1 -timeout=3m ./internal/observability ./internal/logger ./internal/logsink`、`go test -race -count=1 -timeout=5m ./internal/observability ./internal/logsink`、`go test -count=1 -timeout=3m ./internal/backend/forwarder ./internal/backend/server/upstream`、`go vet ./internal/observability ./internal/logger ./internal/logsink ./internal/backend/forwarder ./internal/backend/server/upstream ./internal/client`、`cd tools/log-analyzer && go test -count=1 -timeout=5m ./internal/...`、`cd tools/log-analyzer && go vet ./internal/...`、`node frontend/scripts/test-config-projection.mjs`、`gofmt -l` 和 `git diff --check` 均退出 0。forwarder 全包测试曾发现通用 `result` 字段过宽，改为 `checkpoint_result` 后重跑通过；未用不同请求后续成功冒充原请求恢复。
+
+**只读复核与修复**：收口前对本轮 diff 做独立只读复核，发现三处范围内部署缺陷并已修复：普通分区回收原先按 closed/full、closed/basic、旧 app 分片三个独立层级删除，与批准的“closed/basic 与旧 app 分片合并为按时间排序的单一层级”不符，已改为 `fullCandidates` + `mergedCandidates` 两级并补双向时间顺序用例；诊断预留 D 原先只由各 `RotatingFile` 自身限额约束，配置重载期间新旧 sink 并存时 `logs/diagnostics` 可接近 2D，已改为在共享预算锁内按磁盘实际用量准入并在达到 D 时丢弃、以 `diagnostic_reserve_exceeded` 进入既有降级状态链，同时删除死代码 `diagnosticUsageBytes`；manifest 原先直接写盘但字节被计入普通分区用量，现已与事件、payload 同样经过 `admitNormalLocked` 准入与计量（保留临时文件加 rename 与 `0o600`）。复核同时确认锁序恒为 sink → budget → RotatingFile、无反转，活跃 app 分片与未结束 trace 受保护，配置重载失败恢复旧预算，`checkpoint_result` 在生产端、human sink、host 白名单和分析器白名单四处一致且通用 `result` 已不在任何白名单。修复后上述全部验证命令重跑通过。
+
+**构建结果**：使用 Go `1.26.1`、Task `3.53.1`、Wails `v3.0.0-alpha.74`，并在隔离临时 `HOME`、既有 Go 缓存、`GOPROXY=off GOSUMDB=off GOGC=20` 环境中执行 `task build`，成功生成本机 Apple Silicon DMG，并归档为 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`。修复后重新构建，产物大小 `24292111` bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`；`hdiutil verify`、`codesign --verify --deep --strict` 通过，bundle short/build version 均为 `0.0.71.2`，Mach-O 为 arm64，签名为 adhoc。较早一次构建的产物 `988e92b9c51a0f06a767f666b829c8b34d261b138dde66c1b0246d8f41b375ee` 早于上述修复，已由本次重建取代，不再作为交付产物。构建没有改动 `go.mod`、`go.sum` 或 `build/` 受管文件；产物位于被忽略的 `bin/` 下。
+
+**剩余边界**：交付状态保持 `verified-partial`。尚未安装或替换运行实例，未重启、未读取或修改真实日志/配置，未执行 Developer ID 签名、notarization、Intel/Windows/Linux 构建或 GitHub 发布，也未 commit/push。增强版本部署后的真实 checkpoint ACK/timeout、客户端 CA 信任来源和上游中断断点仍待后续运行证据。
+
+### 0.0.71.2 日志增强授权同步与配额现实校准（2026-09-10；planned）
+
+> **已被取代**：本文件上方的《0.0.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
+
+**授权与范围**：用户已选异常独立保留本轮实现（implement），并明确纳入现有总额度（inside）；本次“继续”推进设计闭合，不重复询问这两个已确认决定。PRD §5.5 已同步为日志增强实施范围；GLM 及恢复点/证书/上游行为修复仍排除。开场“已确认优先保留分配方案”措辞过宽，随后已明确纠正为仅确认独立保留和总预算约束，比例/淘汰尚未批准。
+
+**只读结果**：config 默认采集预算 1024 MiB/7 天，app 另设 100 MiB/14 天；storage 对根目录计量但不能协调 app 写入，额度回收只额外针对 closed/full。trace append 失败设置 fatal 并跳过 human sink，因此不能只在其后加异常文件。loader 只识别原事件/manifest/app 文件名；查询与报告分别消费安全字段投影，需要全链兼容。可核实符号和方案差异已写系统架构 §14.4 / DESIGN-LOG-ENHANCEMENT-20260910；默认值不代表读取了用户真实配置。
+
+**设计结果与阻塞**：建议总额 B 内给异常预留 B/8（备选 B/4），继承现有 retentionDays，容量/期限先到先轮转；普通空间不挤占异常预留，淘汰对象/顺序、保护 open/未知文件、额度耗尽后停止超额写入并报告状态均列为待确认合同。此前额外 64 MiB/14 天不视作获批。后续还需闭合字段、状态、共享配额协调与消费者详情/案例/导出合同，`Design Readiness=not-ready`，不开始源码实施，也不声称增强日志已验证。
+
+**验证与边界**：本次只读源码及现有文档，没有重新扫描运行日志或更改日志文件；只修改 PRD、系统架构、活动任务和本过程记录。文档范围/决策状态 Python 断言退出 0（`DOC_SCOPE_AND_DECISIONS_OK`），`git diff --check` 退出 0；无源码改动，不重复运行旧功能测试冒充新功能验收。下一步请用户确认预留与淘汰取舍，之后形成可执行计划。复用教训：inside 只确定预算来源，不自动批准比例和删除范围；保留能力须沿队列、写入顺序、配额协调和消费展示逐段核实。
+
+### 0.0.71.2 本机日志复核与日志改造讨论（2026-09-10；分析完成，设计未批准）
+
+> **已被取代**：本文件上方的《0.0.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
+
+**已确认范围**：用户明确暂缓 GLM thinking 兼容性；恢复点写入超时、客户端证书信任保留为待排查方向；上游稳定性与“日志改造”不能缩减为“日志减量”，须同时评估诊断增强、异常分级与普通日志区分。范围已登记工作决策基线 §5.5，未批准运行行为修改。
+
+**既有日志证据**：本机 `~/.cursor-local-assistant-v2/logs/traces/20260909T093558.146710000Z-f2d4c7ca7972/events.jsonl`，版本 0.0.71.2，固定窗口至 `2026-09-10T09:48:28.489566Z`。此前逐行复核为 1532 个唯一 model_call_id：1522 succeeded、3 failed、4 partial、3 canceled；164 次 checkpoint blob 写入超时涉及 20 个不同请求；10076 个不同连接 client_unknown_ca。不同层日志不重复累加，取消不计为已证实故障，后续其他请求成功不证明原请求已恢复。本次复读关键行 8293、111725、405296、1189968、1190028–1190030、1323849，未刷新或混入后续运行窗口。
+
+**本轮核实的现状与缺口**：
+
+- 已有 INFO/WARN/ERROR 与结构化 trace，不需要从零新建日志框架。`internal/backend/host.go/logObservabilityEvent` 的 app 投影仅保留少量公共字段及 `http_status`，未投影 trace 已有的错误摘要、重试决策、失败阶段、连接方向、checkpoint 跳过原因；普通官方上游的 `status_code` 也未在此分支投影。
+- `tools/log-analyzer/internal/sanitize/sanitize.go/AllowlistedFields` 会进一步丢弃 `error_summary/provider_error_summary/skip_reason/missing_blob_key_count/attempt/max_attempts/retry_decision/retryable/failure_category/failure_cause/failure_phase/recovery_action` 等字段。增强产出必须同步读取、净化、查询与受限导出，不能未经脱敏直接扩大自由文本白名单。
+- 真实第 405296 行同时为 `provider_response/status=retrying/semantic_outcome=degraded/error_category=server_5xx/severity=error`，`attempt=1/max_attempts=2/retry_decision=retry`。`observability/semantics.go/projectSeverity` 先检查错误类别，覆盖后续 retrying→warning 分支；因此不能声称所有重试已按 WARN 区分。现有测试明确要求 server_5xx 不被显式 info 覆盖。调整尝试级与调用终态级的分级是待确认语义，不是直接替换一个条件。
+- 分析器 `analyze.go/addEvent` 为带真实错误类别的每条事件产生 request_error；事件条数/诊断条目数不是唯一失败请求数。`provider_response` 与 `retry_decision` 描述不同事实，不能为了降计数直接删除一类或按 model_call_id 粗暴去重。若增加独立异常投影，需要稳定事件身份与输入来源规则，保留因果事件、仅合并同一事件的副本，按 model_call_final 单独统计业务结果。
+- `server/upstream/client.go/recordUpstreamFinished` 接受 err 但仅记录粗类别和状态码；`FetchUpstream` 未调用该观测路径。第 1190028 行官方上游状态码为 0，随后两层为本地 502，不能归因为官方返回 502。需按构造/连接/响应头/读取/解包/投影等可实际观测阶段增强，而不是从耗时猜原因。
+- `forwarder/actor.go/applyProviderTerminalErrorStats` 目前从 HTTPStatusError 抽取 provider 摘要；协议终态错误缺少同等的受限摘要投影。第 111725 行只有 provider_terminal 和 HTTP 200，provider_error_summary_type 为 not_recorded，不能确定源端的具体失败原因。
+- 上游已有同渠道有界重试、抖动、Retry-After、共享 fallback 预算和输出/工具进度门禁。第 1189968 行为两次 HTTP attempt 后失败，终态 `retryable=true` 表达错误类别可重试，不能代替“本次还会重试”。应同时呈现实际恢复动作、剩余预算/耗尽或抑制原因；不新增外层整轮重放，不默认关闭 HTTP/2、gzip 或证书校验。
+- checkpoint 超时已有 error_summary、skip_reason 和 missing_blob_key_count；超时后丢弃待发布 checkpoint，保持原成功或失败终态，不是超时自动导致整轮失败。优先补投递→客户端确认→超时/取消/迟到确认的关联和阶段状态，核实恢复影响后再决定是否改行为。TLS 已有 direction/host/connection_id/tls_role/source，仍缺具体客户端信任来源证据；不得把大量拒绝都当无害遥测，也不因日志分级改变证书策略。
+
+**推荐方向（proposal，非实施合同）**：保持现有 app 运行摘要和 trace 因果链；增加内容充分、受限净化的异常摘要。独立 WARN/ERROR 诊断投影比仅靠筛选多解决“普通日志轮转覆盖异常证据”的问题，建议纳入设计，同时保留从异常回到关联上下文与恢复成功的能力。WARN 与 ERROR 先同一诊断流，以级别筛选，不急于拆为两套文件；保留总配额、独立额度和兼容读取规则待确认。高频重复告警采用首条详情、累计计数、时间范围和恢复记录；关键终态不采样、不隐藏原始错误事实。业务成功、恢复点保存结果、事件级别是不同维度。日志自身的写盘失败、队列丢弃和配额降级也应可见，避免用同一失败 sink 递归报警。
+
+**本轮验证记录**：使用临时 HOME、既有 Go 缓存及 `GOPROXY=off GOSUMDB=off` 运行 `go test -count=1 -timeout=60s ./internal/observability -run '^TestNormalizeEventSemanticsProjectsSeverity$'` 和在 `tools/log-analyzer` 运行 `go test -count=1 -timeout=60s ./internal/sanitize`，均通过。首次文档核验因 Git 对中文路径加引号而失败，改用 `git diff --name-only -z` 后通过；此为核验脚本问题，不是产品故障。文档/报告范围断言及 `git diff --check` 通过，变更仅为三份现有项目文档及仓库外辅助报告；测试没有验证新的日志功能，也没有执行实机恢复或证书修改。
+
+**证据与边界**：本轮只读源码/原始 trace；更新 PRD 范围、活动任务、过程记录与既有辅助报告。未修改业务源码/配置/原始日志，未发真实上游请求、部署、重启或 commit/push。收尾核验限定为现有 severity 与分析器字段过滤测试、文档一致性及 `git diff --check`，不替代真实 CA、客户端恢复或上游稳定性验收。当前是分析结论，`Design Readiness=not-ready`：异常投影和保留合同未确认，运行故障原因仍有事实缺口。复用教训：日志改造必须同时考虑内容、分类、关联、保留与消费端；分级不能替代终态，增强字段不能在下游白名单中再次丢失。
+
 ### 0.0.71.1 下载日志异常诊断与 GetManagedSkills 修复（2026-09-09；verified-partial）
 
 用户要求分析 `/Users/yaogj/Downloads/logs`、根因和最小方案，由主控安排执行、review、验证与必要修复。开工 `gateway@5926cc4` 工作区干净。三个有界工作流分别负责日志取证、模型故障链、控制接口/TLS；主控独立复核原始数据、源码 diff 和验证。以下 UTC 时间均指日志事件日期，不混用本机时区。

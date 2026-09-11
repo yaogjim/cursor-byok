@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -309,6 +311,189 @@ func invokeMockOAuth(t *testing.T, options oauthInvokeOptions) (*httptest.Respon
 		Deps:           &Dependencies{HTTPClient: options.client},
 	}, &Route{Name: "oauth_token"})
 	return recorder, err
+}
+
+type upstreamHTTPClientFunc func(*http.Request) (*http.Response, error)
+
+func (fn upstreamHTTPClientFunc) Do(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+type upstreamFetchCapture struct {
+	captures []observability.Capture
+}
+
+func (capture *upstreamFetchCapture) Record(_ context.Context, value observability.Capture) bool {
+	capture.captures = append(capture.captures, value)
+	return true
+}
+
+func (capture *upstreamFetchCapture) finished(t *testing.T) observability.Event {
+	t.Helper()
+	for _, item := range capture.captures {
+		if item.Event.Event == "request_finished" {
+			return item.Event
+		}
+	}
+	t.Fatalf("missing upstream request_finished event: %+v", capture.captures)
+	return observability.Event{}
+}
+
+func newFetchUpstreamTestContext(t *testing.T, rawTarget string, client HTTPClient, capture *upstreamFetchCapture, method string) *RequestContext {
+	t.Helper()
+	target, err := url.Parse(rawTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://backend.local/aiserver.v1.AiService/AvailableModels", bytes.NewReader([]byte("req")))
+	return &RequestContext{
+		ResponseWriter: httptest.NewRecorder(),
+		Request:        request,
+		TargetURL:      target,
+		Method:         method,
+		Headers:        request.Header.Clone(),
+		RequestBody:    []byte("req"),
+		Mode:           server.ModeLocal,
+		Deps:           &Dependencies{HTTPClient: client, Capture: capture},
+	}
+}
+
+func TestFetchUpstreamRecordsFailurePhaseWithoutBehaviorChange(t *testing.T) {
+	capture := &upstreamFetchCapture{}
+	fetched, err := FetchUpstream(newFetchUpstreamTestContext(t, "https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels", upstreamHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp: connection refused")
+	}), capture, http.MethodPost), ForwardOptions{PreserveInboundIdentity: true})
+	if err == nil || fetched != nil {
+		t.Fatalf("do_request failure fetched=%+v err=%v", fetched, err)
+	}
+	event := capture.finished(t)
+	if event.Status != "error" || event.ErrorCategory != "upstream_request_failed" {
+		t.Fatalf("do_request event status/category = %q/%q", event.Status, event.ErrorCategory)
+	}
+	if event.Fields["failure_phase"] != "do_request" {
+		t.Fatalf("do_request failure_phase = %v", event.Fields["failure_phase"])
+	}
+	if event.Fields["method"] != http.MethodPost || event.Fields["target_host"] != "api2.cursor.sh" || event.Fields["status_code"] != 0 {
+		t.Fatalf("do_request fields = %#v", event.Fields)
+	}
+	if event.DurationMS < 0 {
+		t.Fatalf("do_request duration = %d", event.DurationMS)
+	}
+}
+
+func TestFetchUpstreamRecordsReadResponseFailurePhase(t *testing.T) {
+	capture := &upstreamFetchCapture{}
+	fetched, err := FetchUpstream(newFetchUpstreamTestContext(t, "https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels", upstreamHTTPClientFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(errorReader{}),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	}), capture, http.MethodPost), ForwardOptions{PreserveInboundIdentity: true})
+	if err == nil || fetched != nil {
+		t.Fatalf("read_response failure fetched=%+v err=%v", fetched, err)
+	}
+	event := capture.finished(t)
+	if event.Fields["failure_phase"] != "read_response" {
+		t.Fatalf("read_response failure_phase = %v", event.Fields["failure_phase"])
+	}
+	if event.Fields["status_code"] != http.StatusOK {
+		t.Fatalf("read_response status_code = %v", event.Fields["status_code"])
+	}
+}
+
+func TestFetchUpstreamRecordsResponseTooLargePhase(t *testing.T) {
+	capture := &upstreamFetchCapture{}
+	fetched, err := FetchUpstream(newFetchUpstreamTestContext(t, "https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels", upstreamHTTPClientFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(&repeatingByteReader{remaining: maxFetchedUpstreamBody + 1}),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	}), capture, http.MethodPost), ForwardOptions{PreserveInboundIdentity: true})
+	if err == nil || fetched != nil {
+		t.Fatalf("response_too_large fetched=%+v err=%v", fetched, err)
+	}
+	if err.Error() != fmt.Sprintf("upstream response exceeds %d bytes", maxFetchedUpstreamBody) {
+		t.Fatalf("response_too_large error changed: %v", err)
+	}
+	event := capture.finished(t)
+	if event.Fields["failure_phase"] != "response_too_large" {
+		t.Fatalf("response_too_large failure_phase = %v", event.Fields["failure_phase"])
+	}
+}
+
+func TestFetchUpstreamRecordsBuildRequestFailurePhase(t *testing.T) {
+	capture := &upstreamFetchCapture{}
+	fetched, err := FetchUpstream(newFetchUpstreamTestContext(t, "https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels", upstreamHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("build_request failure must not reach the HTTP client")
+		return nil, nil
+	}), capture, "BAD METHOD"), ForwardOptions{PreserveInboundIdentity: true})
+	if err == nil || fetched != nil {
+		t.Fatalf("build_request failure fetched=%+v err=%v", fetched, err)
+	}
+	event := capture.finished(t)
+	if event.Fields["failure_phase"] != "build_request" {
+		t.Fatalf("build_request failure_phase = %v", event.Fields["failure_phase"])
+	}
+}
+
+func TestFetchUpstreamRecordsFinishedOnSuccess(t *testing.T) {
+	capture := &upstreamFetchCapture{}
+	fetched, err := FetchUpstream(newFetchUpstreamTestContext(t, "https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels", upstreamHTTPClientFunc(func(request *http.Request) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("content-type", "application/proto")
+		return &http.Response{
+			StatusCode: http.StatusCreated,
+			Body:       io.NopCloser(strings.NewReader("fixture-body")),
+			Header:     header,
+			Request:    request,
+		}, nil
+	}), capture, http.MethodPost), ForwardOptions{PreserveInboundIdentity: true})
+	if err != nil {
+		t.Fatalf("success FetchUpstream error = %v", err)
+	}
+	if fetched.StatusCode != http.StatusCreated || string(fetched.Body) != "fixture-body" {
+		t.Fatalf("fetched = %+v", fetched)
+	}
+	event := capture.finished(t)
+	if event.Status != "ok" || event.ErrorCategory != "" {
+		t.Fatalf("success event status/category = %q/%q", event.Status, event.ErrorCategory)
+	}
+	if _, hasPhase := event.Fields["failure_phase"]; hasPhase {
+		t.Fatalf("success event must not carry failure_phase: %#v", event.Fields)
+	}
+	if event.Fields["status_code"] != http.StatusCreated || event.Fields["target_host"] != "api2.cursor.sh" {
+		t.Fatalf("success fields = %#v", event.Fields)
+	}
+	if event.RequestBytes != int64(len("req")) || event.ResponseBytes != int64(len("fixture-body")) {
+		t.Fatalf("success bytes request=%d response=%d", event.RequestBytes, event.ResponseBytes)
+	}
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+type repeatingByteReader struct {
+	remaining int
+}
+
+func (reader *repeatingByteReader) Read(buffer []byte) (int, error) {
+	if reader.remaining <= 0 {
+		return 0, io.EOF
+	}
+	count := len(buffer)
+	if count > reader.remaining {
+		count = reader.remaining
+	}
+	for index := 0; index < count; index++ {
+		buffer[index] = 'x'
+	}
+	reader.remaining -= count
+	return count, nil
 }
 
 func newUpstreamTestRequest(t *testing.T) *http.Request {

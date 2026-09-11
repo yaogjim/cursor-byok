@@ -105,14 +105,23 @@ type ProxyService struct {
 }
 
 type LogCaptureStatus struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"`
-	SessionID       string `json:"sessionId,omitempty"`
-	SessionPath     string `json:"sessionPath,omitempty"`
-	LogsRoot        string `json:"logsRoot"`
-	PayloadDegraded bool   `json:"payloadDegraded"`
-	DroppedEvents   uint64 `json:"droppedEvents"`
-	LastError       string `json:"lastError,omitempty"`
+	Enabled             bool   `json:"enabled"`
+	Mode                string `json:"mode"`
+	SessionID           string `json:"sessionId,omitempty"`
+	SessionPath         string `json:"sessionPath,omitempty"`
+	LogsRoot            string `json:"logsRoot"`
+	PayloadDegraded     bool   `json:"payloadDegraded"`
+	DroppedEvents       uint64 `json:"droppedEvents"`
+	LastError           string `json:"lastError,omitempty"`
+	QuotaBlocked        bool   `json:"quotaBlocked"`
+	DiagnosticEnabled   bool   `json:"diagnosticEnabled"`
+	DiagnosticDegraded  bool   `json:"diagnosticDegraded"`
+	DiagnosticDropped   uint64 `json:"diagnosticDropped"`
+	DiagnosticLastError string `json:"diagnosticLastError,omitempty"`
+	AppLogEnabled       bool   `json:"appLogEnabled"`
+	AppLogDegraded      bool   `json:"appLogDegraded"`
+	AppLogDropped       uint64 `json:"appLogDropped"`
+	AppLogLastError     string `json:"appLogLastError,omitempty"`
 }
 
 type LogCleanupResult struct {
@@ -234,14 +243,23 @@ func (s *ProxyService) GetLogCaptureStatus() LogCaptureStatus {
 		logsRoot = s.logsRoot
 	}
 	return LogCaptureStatus{
-		Enabled:         status.Enabled,
-		Mode:            status.Mode,
-		SessionID:       status.SessionID,
-		SessionPath:     status.SessionPath,
-		LogsRoot:        logsRoot,
-		PayloadDegraded: status.PayloadDegraded,
-		DroppedEvents:   status.DroppedEvents,
-		LastError:       status.LastError,
+		Enabled:             status.Enabled,
+		Mode:                status.Mode,
+		SessionID:           status.SessionID,
+		SessionPath:         status.SessionPath,
+		LogsRoot:            logsRoot,
+		PayloadDegraded:     status.PayloadDegraded,
+		DroppedEvents:       status.DroppedEvents,
+		LastError:           status.LastError,
+		QuotaBlocked:        status.QuotaBlocked,
+		DiagnosticEnabled:   status.DiagnosticEnabled,
+		DiagnosticDegraded:  status.DiagnosticDegraded,
+		DiagnosticDropped:   status.DiagnosticDropped,
+		DiagnosticLastError: status.DiagnosticLastError,
+		AppLogEnabled:       status.AppLogEnabled,
+		AppLogDegraded:      status.AppLogDegraded,
+		AppLogDropped:       status.AppLogDropped,
+		AppLogLastError:     status.AppLogLastError,
 	}
 }
 

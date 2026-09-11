@@ -64,6 +64,9 @@ func normalizeEventSemantics(event Event) Event {
 }
 
 func projectSeverity(event Event) string {
+	if isRecoverableRetryAttempt(event) {
+		return SeverityWarning
+	}
 	if isRealFailureCategory(event.ErrorCategory) {
 		return SeverityError
 	}
@@ -84,6 +87,21 @@ func projectSeverity(event Event) string {
 		return SeverityWarning
 	default:
 		return SeverityInfo
+	}
+}
+
+// isRecoverableRetryAttempt 只匹配仍会继续恢复的 attempt：status=retrying 且
+// retry_decision 明确为同渠道 retry 或零事件流恢复。最终 exhausted/no_retry 与
+// 业务 failed 不带该组合，仍按 ERROR 投影；error_category 原样保留。
+func isRecoverableRetryAttempt(event Event) bool {
+	if strings.ToLower(strings.TrimSpace(event.Status)) != "retrying" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(eventFieldString(event, "retry_decision"))) {
+	case "retry", "retry_stream_pre_event_eof":
+		return true
+	default:
+		return false
 	}
 }
 

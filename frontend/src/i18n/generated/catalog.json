@@ -80,7 +80,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1681,
+          "line": 1690,
           "column": 14
         }
       ]
@@ -318,7 +318,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 261,
+          "line": 275,
           "column": 13
         },
         {
@@ -540,6 +540,23 @@
         }
       ]
     },
+    "0bb8e42285d258da": {
+      "source": "异常保留已降级：",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Config.vue",
+          "line": 237,
+          "column": 1
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 308,
+          "column": 1
+        }
+      ]
+    },
     "0c3b4cf7aa259edb": {
       "source": "操作失败",
       "kind": "text",
@@ -586,7 +603,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 281,
+          "line": 295,
           "column": 11
         }
       ]
@@ -961,7 +978,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1648,
+          "line": 1657,
           "column": 47
         },
         {
@@ -1067,7 +1084,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 328,
+          "line": 342,
           "column": 61
         }
       ]
@@ -1250,7 +1267,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 270,
+          "line": 284,
           "column": 11
         },
         {
@@ -1349,7 +1366,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2108,
+          "line": 2126,
           "column": 32
         }
       ]
@@ -1376,12 +1393,12 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1857,
+          "line": 1866,
           "column": 21
         },
         {
           "file": "src/state/appState.js",
-          "line": 1904,
+          "line": 1913,
           "column": 32
         }
       ]
@@ -1504,7 +1521,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1639,
+          "line": 1648,
           "column": 12
         }
       ]
@@ -1531,12 +1548,12 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 324,
+          "line": 338,
           "column": 49
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 433,
+          "line": 447,
           "column": 47
         }
       ]
@@ -1632,7 +1649,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 242,
+          "line": 256,
           "column": 1
         }
       ]
@@ -1692,7 +1709,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 254,
+          "line": 268,
           "column": 1
         }
       ]
@@ -1788,12 +1805,12 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1732,
+          "line": 1741,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 2264,
+          "line": 2282,
           "column": 17
         },
         {
@@ -1810,7 +1827,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 280,
+          "line": 294,
           "column": 11
         },
         {
@@ -2112,7 +2129,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1721,
+          "line": 1730,
           "column": 14
         }
       ]
@@ -2165,7 +2182,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 373,
+          "line": 387,
           "column": 13
         }
       ]
@@ -2189,7 +2206,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 403,
+          "line": 417,
           "column": 154
         }
       ]
@@ -2288,7 +2305,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 394,
+          "line": 408,
           "column": 65
         }
       ]
@@ -2445,7 +2462,7 @@
         },
         {
           "file": "src/views/Config.vue",
-          "line": 240,
+          "line": 254,
           "column": 70
         },
         {
@@ -2503,7 +2520,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1678,
+          "line": 1687,
           "column": 5
         }
       ]
@@ -2515,7 +2532,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 298,
+          "line": 312,
           "column": 53
         }
       ]
@@ -2578,7 +2595,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 363,
+          "line": 377,
           "column": 13
         }
       ]
@@ -2742,7 +2759,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 273,
+          "line": 287,
           "column": 11
         }
       ]
@@ -2875,7 +2892,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1696,
+          "line": 1705,
           "column": 43
         }
       ]
@@ -3106,7 +3123,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 324,
+          "line": 338,
           "column": 1
         }
       ]
@@ -3291,7 +3308,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 326,
+          "line": 340,
           "column": 36
         }
       ]
@@ -3363,7 +3380,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2263,
+          "line": 2281,
           "column": 18
         }
       ]
@@ -3409,7 +3426,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 353,
+          "line": 367,
           "column": 36
         }
       ]
@@ -3522,7 +3539,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 427,
+          "line": 441,
           "column": 34
         }
       ]
@@ -3659,7 +3676,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2215,
+          "line": 2233,
           "column": 56
         }
       ]
@@ -3787,7 +3804,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 312,
+          "line": 326,
           "column": 18
         }
       ]
@@ -3857,7 +3874,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1727,
+          "line": 1736,
           "column": 14
         }
       ]
@@ -3950,6 +3967,23 @@
         }
       ]
     },
+    "635abaf805878f4c": {
+      "source": "；配额已阻止新日志写入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Config.vue",
+          "line": 231,
+          "column": 63
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 302,
+          "column": 61
+        }
+      ]
+    },
     "636e3deffc1e960a": {
       "source": "模型 {0}",
       "kind": "template",
@@ -4020,7 +4054,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1637,
+          "line": 1646,
           "column": 14
         }
       ]
@@ -4131,7 +4165,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1670,
+          "line": 1679,
           "column": 9
         }
       ]
@@ -4288,6 +4322,23 @@
         }
       ]
     },
+    "6bc6a91163ea8f60": {
+      "source": "应用日志已降级：",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Config.vue",
+          "line": 244,
+          "column": 1
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 315,
+          "column": 1
+        }
+      ]
+    },
     "6d00f421df09ee8a": {
       "source": "活跃度",
       "kind": "text",
@@ -4401,12 +4452,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2291,
+          "line": 2309,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2311,
+          "line": 2329,
           "column": 32
         }
       ]
@@ -4524,7 +4575,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 393,
+          "line": 407,
           "column": 77
         }
       ]
@@ -4584,7 +4635,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2016,
+          "line": 2025,
           "column": 14
         }
       ]
@@ -4720,7 +4771,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 271,
+          "line": 285,
           "column": 11
         }
       ]
@@ -4850,7 +4901,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 401,
+          "line": 415,
           "column": 65
         }
       ]
@@ -4903,7 +4954,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 387,
+          "line": 401,
           "column": 13
         }
       ]
@@ -5030,12 +5081,12 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 340,
+          "line": 354,
           "column": 1
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 415,
+          "line": 429,
           "column": 1
         }
       ]
@@ -5076,7 +5127,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 314,
+          "line": 328,
           "column": 69
         }
       ]
@@ -5141,7 +5192,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1702,
+          "line": 1711,
           "column": 16
         }
       ]
@@ -5153,7 +5204,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 272,
+          "line": 286,
           "column": 11
         }
       ]
@@ -5194,7 +5245,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 312,
+          "line": 326,
           "column": 18
         }
       ]
@@ -5416,7 +5467,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1634,
+          "line": 1643,
           "column": 14
         }
       ]
@@ -5534,7 +5585,7 @@
         },
         {
           "file": "src/views/Config.vue",
-          "line": 296,
+          "line": 310,
           "column": 70
         }
       ]
@@ -5618,7 +5669,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 252,
+          "line": 266,
           "column": 70
         },
         {
@@ -5659,7 +5710,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 301,
+          "line": 315,
           "column": 66
         }
       ]
@@ -5951,7 +6002,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1698,
+          "line": 1707,
           "column": 16
         }
       ]
@@ -5975,12 +6026,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2200,
+          "line": 2218,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2274,
+          "line": 2292,
           "column": 32
         }
       ]
@@ -6052,7 +6103,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 437,
+          "line": 451,
           "column": 28
         }
       ]
@@ -6148,7 +6199,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1730,
+          "line": 1739,
           "column": 14
         }
       ]
@@ -6295,7 +6346,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 374,
+          "line": 388,
           "column": 13
         }
       ]
@@ -6307,12 +6358,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1657,
+          "line": 1666,
           "column": 12
         },
         {
           "file": "src/state/appState.js",
-          "line": 1713,
+          "line": 1722,
           "column": 87
         }
       ]
@@ -6394,7 +6445,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2065,
+          "line": 2074,
           "column": 14
         },
         {
@@ -6558,7 +6609,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1718,
+          "line": 1727,
           "column": 14
         }
       ]
@@ -6599,7 +6650,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 389,
+          "line": 403,
           "column": 33
         }
       ]
@@ -6761,7 +6812,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1696,
+          "line": 1705,
           "column": 54
         }
       ]
@@ -6889,7 +6940,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 316,
+          "line": 330,
           "column": 18
         }
       ]
@@ -6901,7 +6952,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2328,
+          "line": 2346,
           "column": 32
         }
       ]
@@ -6913,7 +6964,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2180,
+          "line": 2198,
           "column": 32
         }
       ]
@@ -7010,12 +7061,12 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 2203,
+          "line": 2221,
           "column": 32
         },
         {
           "file": "src/state/appState.js",
-          "line": 2294,
+          "line": 2312,
           "column": 32
         },
         {
@@ -7092,8 +7143,25 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1671,
+          "line": 1680,
           "column": 9
+        }
+      ]
+    },
+    "b6a3af0d115a3b86": {
+      "source": "；丢弃写入",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Config.vue",
+          "line": 244,
+          "column": 94
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 315,
+          "column": 92
         }
       ]
     },
@@ -7277,7 +7345,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 362,
+          "line": 376,
           "column": 13
         }
       ]
@@ -7349,7 +7417,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 381,
+          "line": 395,
           "column": 33
         }
       ]
@@ -7481,7 +7549,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 428,
+          "line": 442,
           "column": 33
         }
       ]
@@ -7722,17 +7790,17 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 2037,
+          "line": 2046,
           "column": 28
         },
         {
           "file": "src/state/appState.js",
-          "line": 2039,
+          "line": 2048,
           "column": 38
         },
         {
           "file": "src/state/appState.js",
-          "line": 2073,
+          "line": 2082,
           "column": 93
         },
         {
@@ -7771,7 +7839,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 282,
+          "line": 296,
           "column": 11
         }
       ]
@@ -7795,7 +7863,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1646,
+          "line": 1655,
           "column": 51
         },
         {
@@ -7889,7 +7957,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2262,
+          "line": 2280,
           "column": 14
         }
       ]
@@ -8057,7 +8125,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1991,
+          "line": 2000,
           "column": 14
         },
         {
@@ -8096,7 +8164,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1799,
+          "line": 1808,
           "column": 31
         }
       ]
@@ -8207,7 +8275,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 308,
+          "line": 322,
           "column": 36
         }
       ]
@@ -8330,7 +8398,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 283,
+          "line": 297,
           "column": 11
         }
       ]
@@ -8424,7 +8492,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1677,
+          "line": 1686,
           "column": 5
         }
       ]
@@ -8489,7 +8557,7 @@
       "refs": [
         {
           "file": "src/views/Config.vue",
-          "line": 298,
+          "line": 312,
           "column": 1
         }
       ]
@@ -8566,7 +8634,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1854,
+          "line": 1863,
           "column": 21
         }
       ]
@@ -8722,7 +8790,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1672,
+          "line": 1681,
           "column": 34
         }
       ]
@@ -8883,7 +8951,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 400,
+          "line": 414,
           "column": 77
         }
       ]
@@ -8895,12 +8963,12 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2220,
+          "line": 2238,
           "column": 53
         },
         {
           "file": "src/state/appState.js",
-          "line": 2231,
+          "line": 2249,
           "column": 55
         }
       ]
@@ -9042,7 +9110,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1700,
+          "line": 1709,
           "column": 16
         }
       ]
@@ -9090,7 +9158,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 354,
+          "line": 368,
           "column": 35
         }
       ]
@@ -9207,8 +9275,28 @@
           "column": 59
         },
         {
+          "file": "src/views/Config.vue",
+          "line": 238,
+          "column": 63
+        },
+        {
+          "file": "src/views/Config.vue",
+          "line": 245,
+          "column": 59
+        },
+        {
           "file": "src/views/SettingsView.vue",
           "line": 302,
+          "column": 57
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 309,
+          "column": 61
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 316,
           "column": 57
         }
       ]
@@ -9389,7 +9477,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1648,
+          "line": 1657,
           "column": 38
         }
       ]
@@ -9586,6 +9674,23 @@
         }
       ]
     },
+    "f5e0cff4fe42511a": {
+      "source": "；丢弃异常",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/Config.vue",
+          "line": 237,
+          "column": 101
+        },
+        {
+          "file": "src/views/SettingsView.vue",
+          "line": 308,
+          "column": 99
+        }
+      ]
+    },
     "f61e03f047b786d5": {
       "source": "{0} 的最大输出 Token 必须为正整数",
       "kind": "template",
@@ -9627,7 +9732,7 @@
         },
         {
           "file": "src/views/SettingsView.vue",
-          "line": 316,
+          "line": 330,
           "column": 18
         }
       ]
@@ -9716,7 +9821,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 435,
+          "line": 449,
           "column": 65
         }
       ]
@@ -9748,7 +9853,7 @@
         },
         {
           "file": "src/state/appState.js",
-          "line": 1723,
+          "line": 1732,
           "column": 12
         }
       ]
@@ -9760,7 +9865,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 1646,
+          "line": 1655,
           "column": 40
         },
         {
@@ -9823,7 +9928,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 307,
+          "line": 321,
           "column": 36
         }
       ]
@@ -9847,7 +9952,7 @@
       "refs": [
         {
           "file": "src/state/appState.js",
-          "line": 2261,
+          "line": 2279,
           "column": 12
         }
       ]
@@ -9895,7 +10000,7 @@
       "refs": [
         {
           "file": "src/views/SettingsView.vue",
-          "line": 433,
+          "line": 447,
           "column": 1
         }
       ]

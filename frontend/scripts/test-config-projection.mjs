@@ -1851,6 +1851,18 @@ assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must
 assert(isWindowsSource.includes("try {") && isWindowsSource.includes("catch {"), "standalone Vite previews must survive missing Wails platform detection");
 const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
+assert(
+  configViewSource.includes("diagnosticDegraded") && configViewSource.includes("diagnosticDropped"),
+  "Config page must surface diagnostics retention degradation",
+);
+assert(
+  configViewSource.includes("quotaBlocked"),
+  "Config page must surface quota-blocked log capture",
+);
+assert(
+  configViewSource.includes("appLogDegraded") && configViewSource.includes("appLogDropped"),
+  "Config page must surface application log degradation",
+);
 
 const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
 assert(clientApiSource.includes("TestGateway"), "client API must expose Gateway availability testing");
@@ -1885,6 +1897,10 @@ const unsupportedSource = readFileSync(path.join(frontendSrc, "views/Unsupported
 const subscriptionAuthSource = readFileSync(path.join(frontendSrc, "components/SubscriptionAuthPanel.vue"), "utf8");
 const globalStyleSource = readFileSync(path.join(frontendSrc, "style/global.css"), "utf8");
 const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
+assert(
+  settingsSource.includes("appLogDegraded") && settingsSource.includes("appLogDropped"),
+  "Settings page must surface application log degradation",
+);
 const layoutSource = readFileSync(path.join(frontendSrc, "layouts/MainLayout.vue"), "utf8");
 const catalogSource = readFileSync(path.join(frontendSrc, "state/modelCatalog.js"), "utf8");
 

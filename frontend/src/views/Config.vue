@@ -224,11 +224,25 @@ onMounted(async () => {
             {{ appState.logCaptureStatus.logsRoot || "~/.cursor-local-assistant-v2/logs/" }}
           </div>
           <div
-            v-if="appState.logCaptureStatus.payloadDegraded || appState.logCaptureStatus.lastError"
+            v-if="appState.logCaptureStatus.payloadDegraded || appState.logCaptureStatus.lastError || appState.logCaptureStatus.quotaBlocked"
             class="mt-2 text-xs text-amber-700 dark:text-amber-300"
           >
             采集已降级：{{ appState.logCaptureStatus.lastError || "payload_capture_disabled" }}；丢弃事件
-            {{ appState.logCaptureStatus.droppedEvents }} 条
+            {{ appState.logCaptureStatus.droppedEvents }} 条{{ appState.logCaptureStatus.quotaBlocked ? "；配额已阻止新日志写入" : "" }}
+          </div>
+          <div
+            v-if="appState.logCaptureStatus.diagnosticDegraded || appState.logCaptureStatus.diagnosticLastError"
+            class="mt-2 text-xs text-amber-700 dark:text-amber-300"
+          >
+            异常保留已降级：{{ appState.logCaptureStatus.diagnosticLastError || "diagnostic_write_failed" }}；丢弃异常
+            {{ appState.logCaptureStatus.diagnosticDropped }} 条
+          </div>
+          <div
+            v-if="appState.logCaptureStatus.appLogDegraded || appState.logCaptureStatus.appLogLastError"
+            class="mt-2 text-xs text-amber-700 dark:text-amber-300"
+          >
+            应用日志已降级：{{ appState.logCaptureStatus.appLogLastError || "app_log_write_failed" }}；丢弃写入
+            {{ appState.logCaptureStatus.appLogDropped }} 条
           </div>
         </div>
       </div>

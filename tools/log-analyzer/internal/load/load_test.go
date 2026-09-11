@@ -289,6 +289,307 @@ func TestIntoWorkspaceKeepsMitmFieldsAndDropsSecrets(t *testing.T) {
 	}
 }
 
+func TestIntoWorkspaceDiscoversDiagnosticsEvents(t *testing.T) {
+	root := t.TempDir()
+	diagnostics := filepath.Join(root, "logs", "diagnostics")
+	writeFile(t, filepath.Join(diagnostics, "diagnostics-20260910T000000.000000000Z-000001.jsonl"), []byte(strings.Join([]string{
+		`{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":1,"app_session_id":"app-diag","trace_id":"trace-diag-1","layer":"provider","event":"provider_terminal","severity":"error","status":"error","fields":{"error_summary":"upstream unavailable","retry_decision":"retry","attempt":1,"max_attempts":2}}`,
+		`{"schema_version":2,"timestamp":"2026-09-10T00:00:01Z","sequence":2,"app_session_id":"app-diag","trace_id":"trace-diag-2","layer":"provider","event":"retry_decision","severity":"warning","fields":{"retry_suppression_reason":"output_or_tool_progress","retryable":true}}`,
+	}, "\n")+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 2 || stats.WarningCount != 1 {
+		t.Fatalf("diagnostics stats = %+v, want 2 events and 1 partial-material warning", stats)
+	}
+	partialWarnings := queryStrings(t, ws.DBPath(), `SELECT message FROM warnings WHERE dataset_id = ?`, currentID)
+	if len(partialWarnings) != 1 || !strings.Contains(partialWarnings[0], "材料不完整") {
+		t.Fatalf("partial-material warnings = %#v", partialWarnings)
+	}
+	if strings.Contains(partialWarnings[0], "app-diag") {
+		t.Fatalf("partial-material warning leaked a raw session id: %q", partialWarnings[0])
+	}
+	severities := queryStrings(t, ws.DBPath(), `SELECT severity FROM events WHERE dataset_id = ? ORDER BY sequence_key`, currentID)
+	assertStrings(t, severities, []string{"error", "warning"})
+
+	direct := openWorkspace(t)
+	defer direct.CloseAndRemove()
+	file := filepath.Join(diagnostics, "diagnostics-20260910T000000.000000000Z-000001.jsonl")
+	if err := IntoWorkspace(context.Background(), direct, workspace.DatasetCurrent, []string{file}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace(direct diagnostics file) error = %v", err)
+	}
+	directID := mustDatasetID(t, direct, workspace.DatasetCurrent)
+	directStats, err := direct.Stats(context.Background(), directID)
+	if err != nil {
+		t.Fatalf("Stats(direct) error = %v", err)
+	}
+	if directStats.EventCount != 2 || directStats.WarningCount != 1 {
+		t.Fatalf("direct diagnostics stats = %+v, want 2 events and 1 partial-material warning", directStats)
+	}
+}
+
+func TestIntoWorkspaceFoldsCopiesIgnoringPayloadRef(t *testing.T) {
+	root := t.TempDir()
+	withPayload := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-copy","trace_id":"trace-copy","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","payload_ref":"payloads/7.json","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	withoutPayload := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-copy","trace_id":"trace-copy","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	writeFile(t, filepath.Join(root, "logs", "traces", "app-copy", "events.jsonl"), []byte(withPayload+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-copy.jsonl"), []byte(withoutPayload+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 1 || stats.WarningCount != 0 {
+		t.Fatalf("copy stats = %+v, want 1 folded event and 0 warnings", stats)
+	}
+	payloads := queryStrings(t, ws.DBPath(), `SELECT safe_fields_json FROM events WHERE dataset_id = ?`, currentID)
+	assertStrings(t, payloads, []string{`{"attempt":1,"error_summary":"upstream unavailable","max_attempts":2}`})
+	refs := queryStrings(t, ws.DBPath(), `SELECT COALESCE(payload_ref, '') FROM events WHERE dataset_id = ?`, currentID)
+	assertStrings(t, refs, []string{"payloads/7.json"})
+}
+
+func TestIntoWorkspaceFoldsIdenticalDiagnosticCopies(t *testing.T) {
+	root := t.TempDir()
+	event := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-identical","trace_id":"trace-copy","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(event+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-copy.jsonl"), []byte(event+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 1 || stats.WarningCount != 0 {
+		t.Fatalf("copy stats = %+v, want 1 folded event and 0 warnings", stats)
+	}
+}
+
+func TestIntoWorkspaceRejectsConflictingCopies(t *testing.T) {
+	cases := []struct {
+		name  string
+		other string
+	}{
+		{
+			name:  "different content",
+			other: `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-conflict","trace_id":"trace-conflict","layer":"provider","event":"provider_response","severity":"warning","fields":{"error_summary":"a different summary"}}`,
+		},
+		{
+			name:  "different event",
+			other: `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-conflict","trace_id":"trace-conflict","subagent_run_id":"run-1","subagent_attempt_id":"attempt-1","subagent_attempt_no":1,"layer":"provider","event":"retry_decision","severity":"warning"}`,
+		},
+		{
+			name:  "different attempt",
+			other: `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-conflict","trace_id":"trace-conflict","subagent_run_id":"run-1","subagent_attempt_id":"attempt-2","subagent_attempt_no":2,"layer":"provider","event":"provider_response","severity":"warning"}`,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "events.jsonl"), []byte(`{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-conflict","trace_id":"trace-conflict","subagent_run_id":"run-1","subagent_attempt_id":"attempt-1","subagent_attempt_no":1,"layer":"provider","event":"provider_response","severity":"warning"}`+"\n"))
+			writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-conflict.jsonl"), []byte(test.other+"\n"))
+
+			ws := openWorkspace(t)
+			defer ws.CloseAndRemove()
+			err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{})
+			if err == nil || !strings.Contains(err.Error(), "conflicting duplicate event") {
+				t.Fatalf("IntoWorkspace() error = %v, want conflicting duplicate event", err)
+			}
+		})
+	}
+}
+
+func TestIntoWorkspaceKeepsIdentitylessDuplicates(t *testing.T) {
+	root := t.TempDir()
+	withoutSequence := `{"schema_version":1,"timestamp":"2026-09-10T00:00:00Z","app_session_id":"app-legacy","trace_id":"trace-legacy","layer":"backend","event":"request_started"}`
+	withoutSession := `{"schema_version":1,"timestamp":"2026-09-10T00:00:01Z","sequence":5,"trace_id":"trace-anon","layer":"backend","event":"request_started"}`
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(strings.Join([]string{withoutSequence, withoutSession}, "\n")+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-legacy.jsonl"), []byte(strings.Join([]string{withoutSequence, withoutSession}, "\n")+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 4 {
+		t.Fatalf("identityless stats = %+v, want 4 events preserved", stats)
+	}
+}
+
+// TestIntoWorkspaceGlobalOrderKeepsTracePayloadAcrossInputArguments proves the
+// trace-over-diagnostics preference is applied across the whole dataset, not
+// only within a single input argument. The diagnostics directory is listed
+// first, so per-argument discovery would ingest the diagnostics copy before the
+// trace copy and fold the trace copy's payload_ref away.
+func TestIntoWorkspaceGlobalOrderKeepsTracePayloadAcrossInputArguments(t *testing.T) {
+	root := t.TempDir()
+	traceDir := filepath.Join(root, "traces", "app-order")
+	diagnosticsDir := filepath.Join(root, "diagnostics")
+	withPayload := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-order","trace_id":"trace-order","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","payload_ref":"payloads/7.json","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	withoutPayload := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-order","trace_id":"trace-order","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	writeFile(t, filepath.Join(traceDir, "events.jsonl"), []byte(withPayload+"\n"))
+	writeFile(t, filepath.Join(diagnosticsDir, "diagnostics-order.jsonl"), []byte(withoutPayload+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{diagnosticsDir, traceDir}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 1 {
+		t.Fatalf("stats = %+v, want 1 folded event", stats)
+	}
+	refs := queryStrings(t, ws.DBPath(), `SELECT COALESCE(payload_ref, '') FROM events WHERE dataset_id = ?`, currentID)
+	assertStrings(t, refs, []string{"payloads/7.json"})
+	if stats.WarningCount != 0 {
+		t.Fatalf("traced session must not raise a partial-material warning: %+v", stats)
+	}
+}
+
+// TestIntoWorkspaceWarnsDiagnosticsOnlySessions proves the partial-material
+// warning only counts sessions known solely from diagnostics shards: a session
+// with trace events is not warned about, and the aggregated warning carries no
+// raw session identifiers.
+func TestIntoWorkspaceWarnsDiagnosticsOnlySessions(t *testing.T) {
+	root := t.TempDir()
+	traced := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":1,"app_session_id":"app-traced","trace_id":"trace-traced","layer":"provider","event":"model_call_final","severity":"info","status":"completed","fields":{}}`
+	diagnosticOnly := `{"schema_version":2,"timestamp":"2026-09-10T00:00:01Z","sequence":1,"app_session_id":"app-diagnostic-only","trace_id":"trace-diagnostic-only","layer":"provider","event":"provider_terminal","severity":"error","status":"error","fields":{"error_summary":"upstream unavailable"}}`
+	writeFile(t, filepath.Join(root, "logs", "traces", "app-traced", "events.jsonl"), []byte(traced+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-mixed.jsonl"), []byte(diagnosticOnly+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 2 || stats.WarningCount != 1 {
+		t.Fatalf("stats = %+v, want 2 events and 1 partial-material warning", stats)
+	}
+	messages := queryStrings(t, ws.DBPath(), `SELECT message FROM warnings WHERE dataset_id = ?`, currentID)
+	if len(messages) != 1 {
+		t.Fatalf("warnings = %#v", messages)
+	}
+	if !strings.Contains(messages[0], "材料不完整") {
+		t.Fatalf("warning missing partial-material text: %q", messages[0])
+	}
+	if strings.Contains(messages[0], "app-diagnostic-only") || strings.Contains(messages[0], "app-traced") {
+		t.Fatalf("warning leaked a raw session id: %q", messages[0])
+	}
+}
+
+// TestIntoWorkspaceWarnsIdentitylessDiagnostics proves diagnostics entries with
+// no app_session_id are conservatively counted in a single unknown bucket: there
+// is no trace to prove the material is complete, so the session cannot be shown
+// to be traced. The identityless entries are never given an invented identity
+// for dedup, so repeated copies are still preserved.
+func TestIntoWorkspaceWarnsIdentitylessDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	anonymous := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":3,"trace_id":"trace-anon-diag","layer":"provider","event":"provider_terminal","severity":"error","status":"error","fields":{"error_summary":"upstream unavailable"}}`
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-anon.jsonl"), []byte(anonymous+"\n"+anonymous+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 2 {
+		t.Fatalf("identityless diagnostics must not be deduped: %+v", stats)
+	}
+	if stats.WarningCount != 1 {
+		t.Fatalf("identityless diagnostics stats = %+v, want 1 partial-material warning", stats)
+	}
+	messages := queryStrings(t, ws.DBPath(), `SELECT message FROM warnings WHERE dataset_id = ?`, currentID)
+	if len(messages) != 1 || !strings.Contains(messages[0], "材料不完整") {
+		t.Fatalf("identityless warnings = %#v", messages)
+	}
+}
+
+// TestIntoWorkspaceDetectsRawFieldConflicts proves conflicts are decided on raw
+// event content before the consumer's lossy sanitize. A trace and a diagnostics
+// copy share the allowlisted projection but differ in a non-allowlisted raw
+// field, so a sanitized fingerprint would silently fold them; the raw seed field
+// carries a secret so the test also proves the conflict is reported by digest
+// comparison without echoing raw values.
+func TestIntoWorkspaceDetectsRawFieldConflicts(t *testing.T) {
+	root := t.TempDir()
+	trace := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-raw","trace_id":"trace-raw","layer":"provider","event":"provider_response","severity":"warning","fields":{"error_summary":"upstream unavailable"}}`
+	diagnostics := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-raw","trace_id":"trace-raw","layer":"provider","event":"provider_response","severity":"warning","fields":{"error_summary":"upstream unavailable","body":"sk-leak-value"}}`
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(trace+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-raw.jsonl"), []byte(diagnostics+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{})
+	if err == nil || !strings.Contains(err.Error(), "conflicting duplicate event") {
+		t.Fatalf("IntoWorkspace() error = %v, want conflicting duplicate event", err)
+	}
+	if strings.Contains(err.Error(), "sk-leak-value") {
+		t.Fatalf("conflict error leaked a raw field value: %v", err)
+	}
+}
+
+// TestIntoWorkspaceFoldsReorderedFieldsAndPayloadRef proves the raw fingerprint
+// is stable: JSON field order does not matter and a payload_ref-only difference
+// still folds, matching the approved projection-completeness rule.
+func TestIntoWorkspaceFoldsReorderedFieldsAndPayloadRef(t *testing.T) {
+	root := t.TempDir()
+	trace := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":7,"app_session_id":"app-reorder","trace_id":"trace-reorder","layer":"provider","event":"provider_response","severity":"warning","status":"retrying","payload_ref":"payloads/7.json","fields":{"error_summary":"upstream unavailable","attempt":1,"max_attempts":2}}`
+	diagnostics := `{"fields":{"max_attempts":2,"attempt":1,"error_summary":"upstream unavailable"},"status":"retrying","severity":"warning","event":"provider_response","layer":"provider","trace_id":"trace-reorder","app_session_id":"app-reorder","sequence":7,"timestamp":"2026-09-10T00:00:00Z","schema_version":2}`
+	writeFile(t, filepath.Join(root, "events.jsonl"), []byte(trace+"\n"))
+	writeFile(t, filepath.Join(root, "logs", "diagnostics", "diagnostics-reorder.jsonl"), []byte(diagnostics+"\n"))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatalf("IntoWorkspace() error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), currentID)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	if stats.EventCount != 1 || stats.WarningCount != 0 {
+		t.Fatalf("stats = %+v, want 1 folded event and 0 warnings", stats)
+	}
+}
+
 func openWorkspace(t *testing.T) *workspace.Workspace {
 	t.Helper()
 	ws, err := workspace.Open(context.Background(), workspace.Options{TempDir: t.TempDir()})

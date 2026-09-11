@@ -959,6 +959,40 @@ new → triaged → exported → analyzed → fix_linked → verifying
 - **完成门禁**：协议、查询、案例、AI 包、GUI、启动器和独立归档均有测试；实际可用平台完成按钮启动 smoke；其他平台只能声明构建证据。
 - **verdict**：用户已确认关键产品与安全边界，`Design Readiness=approved`。实现必须按 analysis project、schema v2、query、diagnostics、case、bundle、GUI、launcher、distribution 的依赖顺序增量交付。
 
+
+#### DESIGN-LOG-ENHANCEMENT-20260910：日志增强与总额度内异常保留
+
+需求锚点：工作决策基线 §5.5 / LOG-ENH-1–4。`Design Readiness=approved`，实现状态 `verified-partial`；代码与隔离自动化验证已完成，真实运行实例与现场故障复验尚未执行。
+
+**已批准并实现的合同**
+
+- 复用 schema v2 `Event`、`logsink.RotatingFile`、现有分析器 events 表、查询和报告；WARN/ERROR 安全副本写入 `logs/diagnostics/diagnostics-*.jsonl`，不引入新平台、案例系统或外部依赖。事件在分流前固定 `(app_session_id, sequence, timestamp)`；异常副本清除 `payload_ref`，其他事实保持一致。
+- 总磁盘预算仍为配置值 B。异常预留 `D=floor(B/8)`，普通分区使用 `B-D`；app、trace、payload 与受管元数据均属于普通分区，原 app 100 MiB 轮转上限只是分区内的次级上限，不叠加到 B 之外。异常期限继承 `retentionDays`，分片容量或期限先达到即轮转最旧受管分片，不承诺保留满期限。
+- 普通分区先清理过期受管日志，再清理 closed/full trace，然后把 closed/basic trace 与旧 app 分片合并为按时间排序的单一档（时间相同以路径为稳定次序）。正在使用的 trace 和 app 分片、未知或损坏 manifest、未知普通文件及 symlink 目标受保护。保护对象占满时停止超额写入并报告配额受阻，业务请求继续。
+- app、trace/payload 与 diagnostics 写入共享预算协调；配置重载复用同一预算，创建新 recorder 失败时恢复旧预算。应用启动读取配置前只输出控制台，配置生效后文件日志通过 controller 准入；关闭与并发写入使用既有锁边界，日志失败不递归写入同一 sink。
+- 仍会继续恢复且 `status=retrying`、`retry_decision=retry|retry_stream_pre_event_eof` 的 attempt 投影为 WARN，错误类别原样保留；exhausted/no_retry 和业务失败继续为 ERROR。分析器不为该 WARN attempt 生成终态 `request_error`，最终调用统计仍以 `model_call_final` 为准，正常取消不计为失败。
+- checkpoint 只记录 `checkpoint_request_id`、计数、phase、`checkpoint_result` 与安全 error summary；ACK 无匹配 pending 项时标为 `unmatched`，不猜测 late ACK，不保存 blob key 数组，不引入持久 ACK 账本。`FetchUpstream` 与 `ForwardToUpstream` 对齐记录构造、请求、读取、响应过大等实际阶段，不改变请求、重试或 fallback 行为。
+- human sink 与分析器采用关闭白名单和二次净化；自由文本摘要上限 512 runes，完整 URL、常见凭据形态、正文、headers、查询、真实 payload 和敏感 key 不进入详情或导出。旧 v1/v2 事件缺新字段时保持 `unknown/not_recorded`。
+- 分析器目录和直接文件输入均识别 diagnostics 分片。同一 dataset 只以 `(app_session_id, sequence)` 识别副本；fingerprint 忽略 diagnostics 主动清除的 `payload_ref`，但事件、attempt 或安全字段真实不一致会报冲突。目录装载优先 trace 事件，确保 full trace 的 `payload_ref` 和来源不被异常副本覆盖；缺稳定身份的旧事件不猜测去重。
+- 状态链区分 trace/payload、队列、diagnostics 与 app 日志降级；客户端和两个设置入口显示配额阻止、丢弃计数及最近错误。磁盘整体不可写时只保证可获得的内存状态或 stderr 提示，不承诺异常持久化。
+
+**复核补齐的边界合同**
+
+- 普通分区准入覆盖事件、payload、app 文本与 manifest：任一写入被拒绝时不落盘并进入降级状态；manifest 被拒绝时保留上一份完好文件，关闭失败不再静默，由状态上报。任一写入失败使缓存用量失效，下次准入按磁盘重新计量，避免临时文件或失败清理造成隐性超额。
+- app 与事件写入保留普通分区内既有的 1 MiB 事件预留，供 manifest 等元数据与原子替换使用，总额度不变。
+- 异常分区准入先回收最旧封存分片，必要时封存当前写入器自己的分片后再判断；超大单条记录不会先触发历史分片删除。每个写入器的活跃分片在预算内登记并受保护，日志轮转不删除其他写入器正在使用的分片，也不跟随或删除 symlink。
+- 回收只接受受支持 schema 版本（v1/v2）、已知 mode（full/basic）、身份与目录一致且开始时间有效的已结束会话；未知 schema、未知 mode、身份不符或时间缺失的会话一律保留，避免较旧构建删除未来格式。
+- 队列保留原有 `QueueSize` 与单一 FIFO，异常事件预留 `max(1, QueueSize/8)` 槽位，普通事件不得占用；队列丢弃总数含义不变，异常队列丢弃另计入 `DiagnosticDropped` 并在排空和关闭后保持可见；`off` 模式不启用预留。
+- 消费端在多输入路径下统一排序，保证 trace 事件先于异常副本进入数据集；冲突按净化前事件的规范化摘要判定，只忽略 `payload_ref`；仅有异常分片的会话通过既有 warning、报告和 GUI 总览明确提示材料不完整，且不输出原始会话标识。
+- checkpoint 拒绝 ACK 只记录固定类别，不写入 blob key 或客户端原始错误正文。
+
+**验证与边界**
+
+- 隔离 HOME 下，根模块相关 Go 包测试、observability/logsink race、受影响包 vet 通过（收口输出 `FINAL_ROOT_REVIEW_PASS`）；分析器 load/report/gui/analyze/project 测试与 vet、分析器 GUI 前端 production build 通过。完整命令、回归用例清单与一次字段白名单回归见 `docs/process.md`。
+- 未读取或修改真实日志、运行配置和运行实例；未发真实上游请求、部署、重启、commit 或 push。GLM、checkpoint 恢复业务逻辑、证书信任、上游请求/重试/fallback 行为均未改变。
+- `delivery_status=verified-partial`：待增强版本实际运行后复验 checkpoint ACK/timeout、客户端 CA 来源和上游断点；不同请求后续成功仍不能作为原请求恢复证据。现有 `0.0.71.2` 本机构建产物早于本轮复核修复，不作为本次修复的验收证据；重新构建须另行安排。
+- 回退边界：仅撤销本轮代码；不改写历史事件，不删除已产生的 diagnostics 分片冒充回退，不改变业务恢复策略。自动淘汰不可恢复，因此仅删除上述明确受管且可回收的分片。
+
 ### 14.5 DESIGN-PROVIDER-DISCONNECT-001：Provider 断连终态与安全恢复
 
 - **Design Readiness**：`approved`（P0 终态、观测和安全重试）；subagent 原子结果提交为后续独立切片。

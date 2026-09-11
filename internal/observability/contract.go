@@ -127,13 +127,22 @@ type Capture struct {
 }
 
 type Status struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"`
-	SessionID       string `json:"session_id,omitempty"`
-	SessionPath     string `json:"session_path,omitempty"`
-	PayloadDegraded bool   `json:"payload_degraded"`
-	DroppedEvents   uint64 `json:"dropped_events"`
-	LastError       string `json:"last_error,omitempty"`
+	Enabled             bool   `json:"enabled"`
+	Mode                string `json:"mode"`
+	SessionID           string `json:"session_id,omitempty"`
+	SessionPath         string `json:"session_path,omitempty"`
+	PayloadDegraded     bool   `json:"payload_degraded"`
+	DroppedEvents       uint64 `json:"dropped_events"`
+	LastError           string `json:"last_error,omitempty"`
+	QuotaBlocked        bool   `json:"quota_blocked"`
+	DiagnosticEnabled   bool   `json:"diagnostic_enabled"`
+	DiagnosticDegraded  bool   `json:"diagnostic_degraded"`
+	DiagnosticDropped   uint64 `json:"diagnostic_dropped"`
+	DiagnosticLastError string `json:"diagnostic_last_error,omitempty"`
+	AppLogEnabled       bool   `json:"app_log_enabled"`
+	AppLogDegraded      bool   `json:"app_log_degraded"`
+	AppLogDropped       uint64 `json:"app_log_dropped"`
+	AppLogLastError     string `json:"app_log_last_error,omitempty"`
 }
 
 type Manifest struct {

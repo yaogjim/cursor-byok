@@ -151,6 +151,19 @@ observability:
 
 分析器不配置模型、不调用 AI、不修改仓库、不运行外部命令。日志、payload、Markdown 和导入结果都视为不可信数据，不能触发工具、命令、网络请求或代码修改。默认调查包不得包含 full payload、凭据、Prompt、源码/diff、完整路径、UUID 或完整 URL；敏感附件必须逐项确认并在 manifest 中列明。
 
+### 5.5 日志增强与异常独立保留（2026-09-10）
+
+用户已确认并实施本轮日志增强：补齐诊断内容、消费端读取/展示缺口，明确严重级别，并在现有总额度内独立保留异常证据；后续再根据增强日志决定恢复点、客户端证书和上游稳定性的实际修复。GLM thinking 兼容性继续暂缓。
+
+- **LOG-ENH-1 内容与消费**：一次异常应能说明发生阶段、影响、已采取的恢复动作和最终结果；安全诊断字段贯通采集、应用摘要、离线查询/展示和受限导出，不因下游白名单再次无声丢失。不采集真实凭据、正文、blob key 数组或真实 payload 作为诊断字段。
+- **LOG-ENH-2 分级与关联**：仍将继续恢复且 `status=retrying` 的 attempt 记为 WARN，最终失败/不完整保持 ERROR；正常取消不计为业务失败。生产者稳定身份固定为 `(app_session_id, sequence)`，分析器只合并该身份完全一致的 trace/diagnostics 副本；旧事件缺身份时不猜测去重，真实冲突明确报错。
+- **LOG-ENH-3 保留与预算**：异常独立保留本轮实现（`diagnostic-retention-scope=implement`）；异常日志纳入现有总额度（`diagnostic-quota=inside`），不增加总磁盘预算。设总额为 B，异常预留 `D=floor(B/8)`，普通日志使用 `B-D`；异常期限继承现有 `retentionDays`，容量或期限先达到即轮转最旧受管异常分片，不承诺一定保留满期限。
+- **LOG-ENH-4 失败可见**：普通分区先回收过期受管日志，再回收 closed/full trace，然后回收 closed/basic trace 与旧 app 分片合并成的时间序单一档（按时间排序，时间相同以路径为稳定次序）；正在使用的 trace/app 分片、未知或损坏 manifest、归属不明文件不擅自删除。仍无法腾出空间时停止超额日志写入并在状态页报告队列、trace/payload、app 或 diagnostics 的降级，业务请求继续。
+
+典型验收场景：一次上游尝试失败后重试成功，应显示该尝试 WARN 及同一调用的成功终态，而不是多次业务失败；普通日志轮转后，仍可从 `logs/diagnostics/diagnostics-*.jsonl` 查看独立异常副本。checkpoint 只记录投递、ACK、timeout、cancel、unknown/unmatched 等安全元数据；`FetchUpstream` 记录实际经过的构造、请求、读取或大小限制阶段，不据耗时或后续请求成功推断原请求恢复。
+
+本轮设计已批准并完成代码与隔离自动化验证，交付状态为 `verified-partial`：尚未部署、重启真实实例或用新日志重新验证现场 checkpoint、证书与上游故障。不得据此实施 GLM 适配、扩大重试/fallback、修改 checkpoint 完成语义或证书信任/代理路由；§5.1–5.4 的隐私与客户端/独立分析器边界继续有效。设计与实现见系统架构 §14.4 的 `DESIGN-LOG-ENHANCEMENT-20260910`，活动任务与验证记录分别见 `task/todo.md`、`docs/process.md`。
+
 ## 6. 功能语义决策
 
 ### 6.1 业务成功与兼容成功分离

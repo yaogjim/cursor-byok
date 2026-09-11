@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +58,15 @@ type ingestState struct {
 	batchBytes     int
 	ingestOrder    int64
 	warningOrdinal int
+	seen           map[string][32]byte
+	// traceSessions and diagnosticSessions track which app sessions contributed
+	// trace events versus diagnostics-only copies, so a session known only from
+	// diagnostics shards can be flagged as partial material. Diagnostics entries
+	// without an app_session_id cannot be matched to any trace, so they are
+	// tracked as a single conservative unknown bucket.
+	traceSessions        map[string]struct{}
+	diagnosticSessions   map[string]struct{}
+	diagnosticUnassigned bool
 }
 
 func IntoWorkspace(ctx context.Context, store *workspace.Workspace, kind workspace.DatasetKind, inputs []string, options Options) error {
@@ -68,7 +80,20 @@ func IntoWorkspace(ctx context.Context, store *workspace.Workspace, kind workspa
 	if err != nil {
 		return err
 	}
-	state := &ingestState{store: store, datasetID: datasetID, options: normalizeOptions(options)}
+	state := &ingestState{
+		store:              store,
+		datasetID:          datasetID,
+		options:            normalizeOptions(options),
+		seen:               make(map[string][32]byte),
+		traceSessions:      make(map[string]struct{}),
+		diagnosticSessions: make(map[string]struct{}),
+	}
+	// Collect every discovered file across all input arguments before ingesting
+	// anything, preserving each file's owning argument for UpsertInputFile
+	// dedup. Sorting then applies the trace-before-diagnostics preference
+	// dataset-wide, so a diagnostics copy from an earlier argument can no
+	// longer fold away the trace copy's payload_ref.
+	files := make([]discoveredFile, 0)
 	for ordinal, input := range inputs {
 		path, info, err := resolveInput(input)
 		if err != nil {
@@ -78,29 +103,51 @@ func IntoWorkspace(ctx context.Context, store *workspace.Workspace, kind workspa
 		if err != nil {
 			return err
 		}
-		if err := discoverFiles(path, info, func(file string, fileKind workspace.FileKind) error {
-			fileID, inserted, err := store.UpsertInputFile(ctx, datasetID, argumentID, file, fileKind)
-			if err != nil {
+		start := len(files)
+		if err := discoverFiles(path, info, &files); err != nil {
+			return err
+		}
+		for index := start; index < len(files); index++ {
+			files[index].argumentID = argumentID
+		}
+	}
+	sort.SliceStable(files, func(left int, right int) bool {
+		leftPriority := discoveryPriority(files[left])
+		rightPriority := discoveryPriority(files[right])
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return files[left].path < files[right].path
+	})
+	for _, file := range files {
+		fileID, inserted, err := store.UpsertInputFile(ctx, datasetID, file.argumentID, file.path, file.kind)
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			continue
+		}
+		switch file.kind {
+		case workspace.FileEvents:
+			if err := state.ingestEvents(ctx, fileID, file.path); err != nil {
 				return err
 			}
-			if !inserted {
-				return nil
+		case workspace.FileManifest:
+			if err := state.ingestManifest(ctx, fileID, file.path); err != nil {
+				return err
 			}
-			switch fileKind {
-			case workspace.FileEvents:
-				return state.ingestEvents(ctx, fileID, file)
-			case workspace.FileManifest:
-				return state.ingestManifest(ctx, fileID, file)
-			case workspace.FileAppLog:
-				return state.ingestAppLog(ctx, fileID, file)
-			default:
-				return fmt.Errorf("unsupported input file %s", file)
+		case workspace.FileAppLog:
+			if err := state.ingestAppLog(ctx, fileID, file.path); err != nil {
+				return err
 			}
-		}); err != nil {
-			return err
+		default:
+			return fmt.Errorf("unsupported input file %s", file.path)
 		}
 	}
 	if err := state.flush(ctx); err != nil {
+		return err
+	}
+	if err := state.warnIncompleteDiagnostics(ctx); err != nil {
 		return err
 	}
 	count, err := store.EventCount(ctx, datasetID)
@@ -155,12 +202,29 @@ func (state *ingestState) ingestEvents(ctx context.Context, fileID int64, path s
 		if err := contract.ValidateEventSemantics(event); err != nil {
 			return fmt.Errorf("validate %s:%d: %w", path, lineNumber, err)
 		}
+		if sessionID := strings.TrimSpace(event.AppSessionID); sessionID != "" {
+			if isDiagnosticsEventsFile(path) {
+				state.diagnosticSessions[sessionID] = struct{}{}
+			} else {
+				state.traceSessions[sessionID] = struct{}{}
+			}
+		} else if isDiagnosticsEventsFile(path) {
+			state.diagnosticUnassigned = true
+		}
 		safeFields, err := safeFieldsJSON(event.Fields)
 		if err != nil {
 			return fmt.Errorf("encode safe fields %s:%d: %w", path, lineNumber, err)
 		}
+		record := eventRecord(state.datasetID, fileID, lineNumber, 0, event, safeFields)
+		duplicate, err := state.duplicate(path, lineNumber, event)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			continue
+		}
 		state.ingestOrder++
-		record := eventRecord(state.datasetID, fileID, lineNumber, state.ingestOrder, event, safeFields)
+		record.IngestOrder = state.ingestOrder
 		if err := state.queue(ctx, record, len(line)); err != nil {
 			return err
 		}
@@ -287,6 +351,77 @@ func (state *ingestState) addWarning(ctx context.Context, message string) error 
 	return nil
 }
 
+// warnIncompleteDiagnostics records one dataset warning when any app session was
+// seen only in diagnostics shards, or when diagnostics entries had no
+// app_session_id at all. Diagnostics material omits the trace and payload
+// context, so counts derived from it are partial; the warning states that
+// explicitly and reuses the existing dataset warnings table rather than adding a
+// schema field. A session with any trace event is left alone. The message is
+// aggregated and carries no raw session identifiers, and it is bounded by the
+// existing sanitize.Summary rules (URL/credential stripping and a 512-rune cap).
+// The warning never claims a full success rate or an inferred recovery.
+func (state *ingestState) warnIncompleteDiagnostics(ctx context.Context) error {
+	if len(state.diagnosticSessions) == 0 && !state.diagnosticUnassigned {
+		return nil
+	}
+	affected := 0
+	for session := range state.diagnosticSessions {
+		if _, traced := state.traceSessions[session]; traced {
+			continue
+		}
+		affected++
+	}
+	if affected == 0 && !state.diagnosticUnassigned {
+		return nil
+	}
+	message := fmt.Sprintf("检测到 %d 个仅提供异常诊断分片的会话", affected)
+	if state.diagnosticUnassigned {
+		message += "（另含无法归属会话的诊断记录）"
+	}
+	message += "，材料不完整：统计仅覆盖已提供的事件，不推断全量成功率或恢复"
+	return state.addWarning(ctx, sanitize.Summary(message))
+}
+
+// duplicate folds only copies of the same event, identified strictly by
+// (app_session_id, sequence) within the dataset. Records missing either half of
+// that identity keep their original behavior. The fingerprint is computed from
+// the raw contract.Event before the consumer's lossy sanitize, so a policy
+// projection difference cannot hide a real content conflict. Only payload_ref
+// is normalized away, matching the approved rule that a diagnostics copy (a full
+// event copy minus payload_ref) may fold into its trace copy. Only the digest is
+// retained in memory; raw fields never persist beyond the line being read.
+func (state *ingestState) duplicate(path string, lineNumber int, event contract.Event) (bool, error) {
+	sessionID := strings.TrimSpace(event.AppSessionID)
+	if sessionID == "" || event.Sequence == 0 {
+		return false, nil
+	}
+	key := sessionID + "\x00" + strconv.FormatUint(event.Sequence, 10)
+	fingerprint := eventFingerprint(event)
+	previous, ok := state.seen[key]
+	if !ok {
+		state.seen[key] = fingerprint
+		return false, nil
+	}
+	if previous != fingerprint {
+		return false, fmt.Errorf("conflicting duplicate event %s:%d: app_session_id=%q sequence=%d event=%q already loaded with different content", path, lineNumber, sessionID, event.Sequence, event.Event)
+	}
+	return true, nil
+}
+
+// eventFingerprint hashes the raw event metadata and fields. PayloadRef is
+// cleared first because the diagnostics producer stores a full copy of the event
+// with payload_ref removed. json.Marshal sorts map keys, so field order in the
+// source JSON is irrelevant. The digest is one-way, so a conflicting secret or
+// URL is detected by comparison without being stored or reported.
+func eventFingerprint(event contract.Event) [32]byte {
+	event.PayloadRef = ""
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return sha256.Sum256([]byte(fmt.Sprintf("%+v", event)))
+	}
+	return sha256.Sum256(payload)
+}
+
 func (state *ingestState) queue(ctx context.Context, record workspace.EventRecord, lineBytes int) error {
 	state.batch = append(state.batch, record)
 	state.batchBytes += lineBytes
@@ -308,13 +443,24 @@ func (state *ingestState) flush(ctx context.Context) error {
 	return nil
 }
 
-func discoverFiles(path string, info fs.FileInfo, visit func(string, workspace.FileKind) error) error {
+type discoveredFile struct {
+	argumentID int64
+	path       string
+	kind       workspace.FileKind
+}
+
+// discoverFiles appends every supported file under path to files, tagged with
+// the owning input argument. Ordering and ingestion happen in IntoWorkspace once
+// all arguments are known, so the trace-before-diagnostics preference applies
+// dataset-wide.
+func discoverFiles(path string, info fs.FileInfo, files *[]discoveredFile) error {
 	if !info.IsDir() {
 		kind, ok := inputFileKind(path)
 		if !ok {
 			return fmt.Errorf("unsupported input file %s", path)
 		}
-		return visit(path, kind)
+		*files = append(*files, discoveredFile{path: path, kind: kind})
+		return nil
 	}
 	return filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -330,11 +476,31 @@ func discoverFiles(path string, info fs.FileInfo, visit func(string, workspace.F
 			return nil
 		}
 		kind, ok := inputFileKind(current)
-		if !ok {
-			return nil
+		if ok {
+			*files = append(*files, discoveredFile{path: current, kind: kind})
 		}
-		return visit(current, kind)
+		return nil
 	})
+}
+
+func discoveryPriority(file discoveredFile) int {
+	if file.kind == workspace.FileEvents && !isDiagnosticsEventsFile(file.path) {
+		return 0
+	}
+	if file.kind == workspace.FileManifest {
+		return 1
+	}
+	if file.kind == workspace.FileAppLog {
+		return 2
+	}
+	return 3
+}
+
+// isDiagnosticsEventsFile reports whether a FileEvents path is a diagnostics
+// shard, which the consumer treats as a partial copy of a trace event stream.
+func isDiagnosticsEventsFile(path string) bool {
+	name := filepath.Base(path)
+	return strings.HasPrefix(name, "diagnostics-") && strings.HasSuffix(name, ".jsonl")
 }
 
 func readManifest(path string, options ingestOptions) (contract.Manifest, string, error) {
@@ -484,6 +650,9 @@ func inputFileKind(path string) (workspace.FileKind, bool) {
 	default:
 		if strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".log") {
 			return workspace.FileAppLog, true
+		}
+		if strings.HasPrefix(name, "diagnostics-") && strings.HasSuffix(name, ".jsonl") {
+			return workspace.FileEvents, true
 		}
 		return "", false
 	}

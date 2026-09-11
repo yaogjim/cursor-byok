@@ -2,10 +2,9 @@ package forwarder
 
 import (
 	"context"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -144,14 +143,17 @@ func (service *Service) queueCheckpointProjectionWithTerminal(stream *ActiveStre
 		stream.Phase = TurnPhaseCheckpointing
 	}
 	stream.UpdatedAt = time.Now().UTC()
+	pendingCount := len(stream.PendingCheckpointBlobWrites)
 	stream.mu.Unlock()
 
 	for _, write := range toWrite {
 		if err := service.broker.Publish(stream.RequestID, StreamEvent{
 			Message: buildSetCheckpointBlobMessage(write.requestID, write.blob),
 		}); err != nil {
+			service.recordCheckpointBlobDelivery(stream, write.requestID, pendingCount, "publish_failed")
 			return service.finishAfterCheckpointSyncFailure(stream, fmt.Errorf("publish checkpoint blob: %w", err))
 		}
+		service.recordCheckpointBlobDelivery(stream, write.requestID, pendingCount, "sent")
 	}
 	if service.checkpointProjectionReady(stream) {
 		return service.publishReadyCheckpoint(stream)
@@ -191,6 +193,7 @@ func (service *Service) handleCheckpointBlobResult(stream *ActiveStream, message
 	if service == nil || stream == nil || message == nil || message.GetSetBlobResult() == nil {
 		return nil
 	}
+	blobErr := message.GetSetBlobResult().GetError()
 	stream.mu.Lock()
 	key, ok := stream.PendingCheckpointBlobWrites[message.GetId()]
 	if ok {
@@ -200,20 +203,27 @@ func (service *Service) handleCheckpointBlobResult(stream *ActiveStream, message
 	if ok && stream.PendingCheckpoint != nil {
 		_, required = stream.PendingCheckpoint.Required[key]
 	}
-	if ok && message.GetSetBlobResult().GetError() == nil {
+	if ok && blobErr == nil {
 		stream.ConfirmedCheckpointBlobs[key] = struct{}{}
 	}
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 	if !ok {
+		// 不在待确认表说明该 ACK 未匹配本次 pending 写入：可能是正常重复 ACK，
+		// 也可能是超时/取消后的迟到 ACK。当前状态无法可靠区分，统一记 unmatched，
+		// 不引入持久账本或超出当前进程的 timedOut 集合。
+		service.recordCheckpointBlobResultEvent(stream, "degraded", "unmatched", message.GetId())
 		return nil
 	}
-	if blobErr := message.GetSetBlobResult().GetError(); blobErr != nil && required {
-		return service.finishAfterCheckpointSyncFailure(stream, fmt.Errorf(
-			"client rejected checkpoint blob %s: %s",
-			hex.EncodeToString([]byte(key)),
-			firstNonEmpty(strings.TrimSpace(blobErr.GetMessage()), "unknown error"),
-		))
+	if blobErr != nil {
+		service.recordCheckpointBlobResultEvent(stream, "error", "rejected", message.GetId())
+	} else {
+		service.recordCheckpointBlobResultEvent(stream, "ok", "ack", message.GetId())
+	}
+	if blobErr != nil && required {
+		// This cause reaches both application logs and structured diagnostics.
+		// Keep the rejection category, never the blob key or client-provided text.
+		return service.finishAfterCheckpointSyncFailure(stream, errors.New("client rejected checkpoint blob"))
 	}
 	if service.checkpointProjectionReady(stream) {
 		return service.publishReadyCheckpoint(stream)
@@ -246,7 +256,7 @@ func (service *Service) publishReadyCheckpoint(stream *ActiveStream) error {
 	if err := service.broker.Publish(stream.RequestID, StreamEvent{Message: buildCheckpointMessage(state)}); err != nil {
 		if terminal.Kind != checkpointTerminalActionNone {
 			log.Printf("forwarder checkpoint publish skipped before terminal request_id=%s err=%v", stream.RequestID, err)
-			service.recordCheckpointSkip(stream, "checkpoint_publish_skipped", "publish_before_terminal", err, nil)
+			service.recordCheckpointSkip(stream, "checkpoint_publish_skipped", "publish_before_terminal", err, 0)
 			return service.finishCheckpointTerminalAction(stream, terminal)
 		}
 		return err
@@ -277,6 +287,10 @@ func (service *Service) handleCheckpointBlobTimeout(stream *ActiveStream) error 
 	stream.mu.Lock()
 	pendingCount := len(stream.PendingCheckpointBlobWrites)
 	stream.mu.Unlock()
+	service.recordCheckpointBlobEvent(stream, "checkpoint_blob_timeout", "error", "timeout", "timeout", map[string]any{
+		"blob_count":         pendingCount,
+		"missing_blob_count": pendingCount,
+	})
 	return service.finishAfterCheckpointSyncFailure(stream, fmt.Errorf("%d checkpoint blob writes timed out", pendingCount))
 }
 
@@ -286,7 +300,7 @@ func (service *Service) finishAfterCheckpointSyncFailure(stream *ActiveStream, c
 	}
 	stream.mu.Lock()
 	pending := stream.PendingCheckpoint
-	missingKeys := checkpointMissingBlobKeys(stream.PendingCheckpointBlobWrites)
+	missingKeyCount := checkpointMissingBlobKeyCount(stream.PendingCheckpointBlobWrites)
 	stream.PendingCheckpoint = nil
 	stream.PendingCheckpointBlobWrites = make(map[uint32]string)
 	stream.UpdatedAt = time.Now().UTC()
@@ -294,7 +308,7 @@ func (service *Service) finishAfterCheckpointSyncFailure(stream *ActiveStream, c
 	clearStreamTimer(stream, providerTimerKey(streamTimerCheckpointBlobs, ""))
 	if cause != nil {
 		log.Printf("forwarder checkpoint blob sync skipped request_id=%s conversation_id=%s err=%v", stream.RequestID, stream.ConversationID, cause)
-		service.recordCheckpointSkip(stream, "checkpoint_blob_sync_skipped", "blob_sync", cause, missingKeys)
+		service.recordCheckpointSkip(stream, "checkpoint_blob_sync_skipped", "blob_sync", cause, missingKeyCount)
 	}
 	if pending != nil {
 		return service.finishCheckpointTerminalAction(stream, pending.Terminal)
@@ -318,6 +332,7 @@ func (service *Service) discardPendingCheckpoint(stream *ActiveStream, reason st
 		return
 	}
 	stream.mu.Lock()
+	pendingCount := len(stream.PendingCheckpointBlobWrites)
 	stream.PendingCheckpoint = nil
 	stream.PendingCheckpointBlobWrites = make(map[uint32]string)
 	stream.UpdatedAt = time.Now().UTC()
@@ -326,9 +341,58 @@ func (service *Service) discardPendingCheckpoint(stream *ActiveStream, reason st
 	if strings.TrimSpace(reason) != "" {
 		log.Printf("forwarder pending checkpoint discarded request_id=%s conversation_id=%s reason=%s", stream.RequestID, stream.ConversationID, strings.TrimSpace(reason))
 	}
+	if pendingCount > 0 {
+		result := "discarded"
+		if strings.Contains(strings.ToLower(reason), "cancel") {
+			result = "canceled"
+		}
+		service.recordCheckpointBlobEvent(stream, "checkpoint_blob_canceled", "canceled", "cancel", result, map[string]any{
+			"blob_count":         pendingCount,
+			"missing_blob_count": pendingCount,
+		})
+	}
 }
 
-func (service *Service) recordCheckpointSkip(stream *ActiveStream, eventName string, reason string, cause error, missingBlobKeys []string) {
+// recordCheckpointBlobDelivery 记录一次 SetBlob 投递；只带请求标识与计数，不带 blob key。
+func (service *Service) recordCheckpointBlobDelivery(stream *ActiveStream, requestID uint32, pendingCount int, result string) {
+	status := "ok"
+	if result != "sent" {
+		status = "error"
+	}
+	service.recordCheckpointBlobEvent(stream, "checkpoint_blob_dispatch", status, "delivery", result, map[string]any{
+		"checkpoint_request_id": requestID,
+		"blob_count":            1,
+		"pending_blob_count":    pendingCount,
+	})
+}
+
+func (service *Service) recordCheckpointBlobResultEvent(stream *ActiveStream, status string, result string, requestID uint32) {
+	service.recordCheckpointBlobEvent(stream, "checkpoint_blob_result", status, "ack", result, map[string]any{
+		"checkpoint_request_id": requestID,
+		"blob_count":            1,
+	})
+}
+
+// recordCheckpointBlobEvent 仅投影安全元数据：请求标识、blob 请求 id、计数、阶段与结果。
+// 不记录 blob key 数组或正文；missing_blob_keys 已从投影与白名单移除，只保留计数。
+func (service *Service) recordCheckpointBlobEvent(stream *ActiveStream, eventName string, status string, phase string, result string, fields map[string]any) {
+	if service == nil || stream == nil {
+		return
+	}
+	payload := map[string]any{
+		"phase":             strings.TrimSpace(phase),
+		"checkpoint_result": strings.TrimSpace(result),
+	}
+	if trimmed := strings.TrimSpace(status); trimmed != "" {
+		payload["status"] = trimmed
+	}
+	for key, value := range fields {
+		payload[key] = value
+	}
+	service.debug.LogRuntime(context.Background(), stream.RequestID, stream.ConversationID, eventName, payload)
+}
+
+func (service *Service) recordCheckpointSkip(stream *ActiveStream, eventName string, reason string, cause error, missingBlobKeyCount int) {
 	if service == nil || stream == nil {
 		return
 	}
@@ -341,30 +405,22 @@ func (service *Service) recordCheckpointSkip(stream *ActiveStream, eventName str
 	if cause != nil {
 		fields["error_summary"] = cause.Error()
 	}
-	if len(missingBlobKeys) > 0 {
-		fields["missing_blob_keys"] = append([]string(nil), missingBlobKeys...)
-		fields["missing_blob_key_count"] = len(missingBlobKeys)
+	if missingBlobKeyCount > 0 {
+		fields["missing_blob_key_count"] = missingBlobKeyCount
 	}
 	service.debug.LogRuntime(context.Background(), stream.RequestID, stream.ConversationID, eventName, fields)
 }
 
-func checkpointMissingBlobKeys(writes map[uint32]string) []string {
+func checkpointMissingBlobKeyCount(writes map[uint32]string) int {
 	if len(writes) == 0 {
-		return nil
+		return 0
 	}
 	seen := make(map[string]struct{}, len(writes))
-	keys := make([]string, 0, len(writes))
 	for _, key := range writes {
-		encoded := hex.EncodeToString([]byte(key))
-		if encoded == "" {
+		if key == "" {
 			continue
 		}
-		if _, ok := seen[encoded]; ok {
-			continue
-		}
-		seen[encoded] = struct{}{}
-		keys = append(keys, encoded)
+		seen[key] = struct{}{}
 	}
-	sort.Strings(keys)
-	return keys
+	return len(seen)
 }

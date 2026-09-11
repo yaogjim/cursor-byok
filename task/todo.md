@@ -4,6 +4,28 @@
 
 ## 当前焦点
 
+### 0.0.71.2 日志增强与异常保留（2026-09-10；verified-partial）
+
+- **本次复核更正**：此前“全部完成”证据不足；旧复核中的 manifest 准入返回值被忽略、异常预检查阻断轮转、队列无异常预留等问题已由本次回归复现并修复。以下历史构建记录不代表当前源码已重新打包；现有 `79ce4e99…` DMG **不包含本次复核修复**。
+- [completed] `review-repair-storage`：manifest 真正拒绝超额写入，临时文件失败清理与计量失效重扫、关闭失败可查询且返回错误；app/event/payload 保留普通分区内既有 1 MiB 供元数据及原子替换使用。异常写满先回收封存分片、必要时封存自己的分片后再准入，保护其他写入器的活跃分片；超大单条不先删除历史。未知 schema/mode/身份 manifest 保留，已知 v1/v2 正常回收。
+- [completed] `review-repair-queue`：保留单个 FIFO 和原 QueueSize，普通入队不得占用 `max(1, QueueSize/8)` 异常预留；队列丢弃总数保持原口径，异常队列丢弃另计入 DiagnosticDropped，排空/关闭后不丢计数；off 不启用预留。
+- [completed] `review-repair-consumption`：跨全部输入路径统一排序使 trace 优先；按净化前事件的规范化摘要识别冲突，仅排除 `payload_ref`，不保存敏感原文。仅有异常分片（含身份缺失）通过现有 warning、报告和 GUI 总览提示材料不完整，不输出原始会话标识。
+- [completed] `review-repair-checkpoint`：拒绝 ACK 只记录固定 `client rejected checkpoint blob` 类别，移除 blob key 与任意客户端错误正文；待确认 checkpoint 丢弃及业务终态行为不变。
+- [completed] `review-verify`：隔离 HOME 下根模块 observability/logsink/logger/forwarder/client 定向测试、observability/logsink race、受影响包 vet；分析器 load/report/gui/analyze/project 定向测试与 vet、分析器 GUI 前端 production build 均通过。最终根模块再验证收口消息为 `FINAL_ROOT_REVIEW_PASS`。具体命令及限制见 `docs/process.md` 本次复核节。
+- [pending] `review-runtime-and-artifact`：桌面桥接/浏览器交互与真实运行尚未验证；本次不重新打包、不部署、不重启。旧 DMG 不用作本次修复的验收证据；重新构建须另行安排。
+
+- 已确认并实施：工作决策基线 §5.5 / LOG-ENH-1–4，设计锚点系统架构 §14.4 / DESIGN-LOG-ENHANCEMENT-20260910。异常纳入现有总额度 B，预留 `floor(B/8)`，不增加预算；GLM、checkpoint 恢复业务逻辑、证书信任、上游请求/重试/fallback 行为未改变。
+- [completed] `logging-reality-check` / `quota-reality` / `logging-scope-sync`：完成生产、保留、消费和状态链现实校准，并同步 implement/inside/1/8 及淘汰边界。
+- [completed] `log-consumption`：loader 识别 diagnostics 目录和直接文件；同一 dataset 仅以 `(app_session_id, sequence)` 合并副本，优先保留 full trace 的 `payload_ref`，真实冲突报错，旧身份缺失不猜测。安全字段贯通详情、查询和受限导出，v1/v2 缺失保持 unknown/not_recorded。
+- [completed] `diagnostic-retention`：WARN/ERROR 副本写入 `logs/diagnostics/diagnostics-*.jsonl`；异常预留 D 与普通 B-D 共享协调。普通分区按过期受管日志→closed/full→（closed/basic 与旧 app 分片合并为一个按时间、同时间按路径排序的层级）回收，保护活跃 trace/app、未知/损坏 manifest、未知文件和 symlink；无法腾出空间时停止超额日志写入并报告，业务继续。
+- [completed] `log-producers`：retrying 且明确继续恢复的 attempt 为 WARN，最终失败仍为 ERROR；checkpoint 增加 dispatch/ACK/timeout/cancel/unmatched 安全元数据，不记录 blob key 数组；`FetchUpstream` 增加实际失败阶段记录。human sink 和分析器双重白名单/脱敏，摘要上限 512 runes。
+- [completed] `status-and-lifecycle`：应用日志读取配置后才落盘并进入普通预算；trace/payload、diagnostics、app 降级状态可查询并在两个设置入口显示。配置重载失败恢复旧预算；日志轮转按容量或期限触发，关闭与并发写入通过定向 race 验证。
+- [completed] `verify-log-scope`：隔离 HOME 下根模块相关测试、observability/logger race、受影响包 vet；分析器 `./internal/...` test/vet；主前端配置投影和 production build、分析器 GUI build、`git diff --check` 均通过。一次 forwarder 全包测试暴露通用 `result` 白名单泄露，已改为专用 `checkpoint_result` 并重跑全包通过。
+- [completed] `review-final-diff` / `fix-integration`：独立只读复核在批准范围内发现三处缺陷并已修复——普通分区回收把 closed/basic trace 与旧 app 分片合并为按时间（同时间按路径）排序的单一层级；诊断分区改为在共享预算锁内按磁盘实际用量准入，达到 D 时丢弃并报告 `diagnostic_reserve_exceeded`；manifest 写入纳入普通分区准入与计量。删除死代码 `diagnosticUsageBytes`，补齐对应回归测试；锁序保持 sink → budget → RotatingFile，无反转。
+- [completed] `validate`：修复后于隔离 HOME 重跑 gofmt、`internal/observability|logger|logsink` 测试、observability/logsink race、forwarder 与 upstream 测试、受影响包 vet、分析器 `./internal/...` test/vet、前端配置投影和 `git diff --check`，全部退出 0。
+- [completed] `build-macos-arm64`：修复后在隔离 HOME 下重跑 `task build`，重新归档 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`（24292111 bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`）；版本 `0.0.71.2`、arm64、adhoc 签名、DMG 与深度签名校验通过。此前 `988e92b9…` 的产物早于上述修复，已被本次重建取代。未安装/重启、未做 notarization 或其他平台构建，未 commit/push。
+- [pending] `runtime-failure-evidence`：部署后的真实 checkpoint ACK/timeout、客户端 CA 具体信任来源、上游中断精确断点仍待新日志；不同请求后续成功不作为原失败恢复。当前未部署、未重启、未改真实日志/配置，未 commit/push。
+
 ### 0.0.71.1 下载日志异常诊断与最小修复（2026-09-09）
 
 - 范围：用户要求主控安排取证、根因分析、review、验证及必要修复；读取 `/Users/yaogj/Downloads/logs` 六份 app 日志和两个 trace 会话，对照 `5926cc4`。不改真实模型/账号/CA/代理配置，不重启或部署，不 commit/push；未启动产品级自动恢复能力。

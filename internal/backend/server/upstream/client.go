@@ -106,6 +106,10 @@ func ForwardToUpstream(reqCtx *RequestContext, options ForwardOptions) (*Forward
 }
 
 func recordUpstreamFinished(reqCtx *RequestContext, ctx context.Context, target string, startedAt time.Time, requestBytes int, meta *ForwardMeta, err error) {
+	recordUpstreamFinishedWithPhase(reqCtx, ctx, target, startedAt, requestBytes, meta, "", err)
+}
+
+func recordUpstreamFinishedWithPhase(reqCtx *RequestContext, ctx context.Context, target string, startedAt time.Time, requestBytes int, meta *ForwardMeta, failurePhase string, err error) {
 	statusCode := 0
 	responseBytes := int64(0)
 	if meta != nil {
@@ -125,6 +129,14 @@ func recordUpstreamFinished(reqCtx *RequestContext, ctx context.Context, target 
 			errorCategory = "upstream_client_error"
 		}
 	}
+	fields := map[string]any{
+		"method":      reqCtx.Method,
+		"status_code": statusCode,
+		"target_host": requestHost(reqCtx.TargetURL),
+	}
+	if trimmed := strings.TrimSpace(failurePhase); trimmed != "" {
+		fields["failure_phase"] = trimmed
+	}
 	recordUpstreamCapture(reqCtx, ctx, observability.Capture{Event: observability.Event{
 		Layer:           "upstream",
 		Event:           "request_finished",
@@ -139,11 +151,7 @@ func recordUpstreamFinished(reqCtx *RequestContext, ctx context.Context, target 
 		DurationMS:      time.Since(startedAt).Milliseconds(),
 		RequestBytes:    int64(requestBytes),
 		ResponseBytes:   responseBytes,
-		Fields: map[string]any{
-			"method":      reqCtx.Method,
-			"status_code": statusCode,
-			"target_host": requestHost(reqCtx.TargetURL),
-		},
+		Fields:          fields,
 	}})
 }
 
@@ -461,22 +469,43 @@ func FetchUpstream(reqCtx *RequestContext, options ForwardOptions) (*FetchedUpst
 	if !shouldRequestCarryBody(reqCtx.Method) {
 		requestBody = []byte{}
 	}
+	startedAt := time.Now()
+	target := upstreamExecutionTarget(reqCtx.TargetURL)
+	captureContext := reqCtx.Request.Context()
+	correlation := observability.ChildSpan(observability.CorrelationFromContext(captureContext))
+	captureContext = observability.WithCorrelation(captureContext, correlation)
 	upstreamRequest, upstreamClient, err := buildUpstreamRequest(reqCtx, requestBody, options)
 	if err != nil {
+		recordUpstreamFinishedWithPhase(reqCtx, captureContext, target, startedAt, len(requestBody), nil, "build_request", err)
 		return nil, err
 	}
 	upstreamResponse, err := upstreamClient.Do(upstreamRequest)
 	if err != nil {
+		recordUpstreamFinishedWithPhase(reqCtx, captureContext, target, startedAt, len(requestBody), nil, "do_request", err)
 		return nil, err
 	}
 	defer upstreamResponse.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(upstreamResponse.Body, maxFetchedUpstreamBody+1))
 	if err != nil {
+		recordUpstreamFinishedWithPhase(reqCtx, captureContext, target, startedAt, len(requestBody), &ForwardMeta{
+			StatusCode:   upstreamResponse.StatusCode,
+			ResponseSize: int64(len(body)),
+		}, "read_response", err)
 		return nil, err
 	}
 	if len(body) > maxFetchedUpstreamBody {
-		return nil, fmt.Errorf("upstream response exceeds %d bytes", maxFetchedUpstreamBody)
+		sizeErr := fmt.Errorf("upstream response exceeds %d bytes", maxFetchedUpstreamBody)
+		recordUpstreamFinishedWithPhase(reqCtx, captureContext, target, startedAt, len(requestBody), &ForwardMeta{
+			StatusCode:   upstreamResponse.StatusCode,
+			ResponseSize: int64(len(body)),
+		}, "response_too_large", sizeErr)
+		return nil, sizeErr
 	}
+	recordUpstreamFinishedWithPhase(reqCtx, captureContext, target, startedAt, len(requestBody), &ForwardMeta{
+		StatusCode:   upstreamResponse.StatusCode,
+		Status:       upstreamResponse.Status,
+		ResponseSize: int64(len(body)),
+	}, "", nil)
 	return &FetchedUpstream{
 		StatusCode:  upstreamResponse.StatusCode,
 		ContentType: upstreamResponse.Header.Get("content-type"),

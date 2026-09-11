@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,4 +149,45 @@ func TestServiceOpensSearchesAndClosesProject(t *testing.T) {
 
 func savedQuery(name string, dsl string) savedquery.Query {
 	return savedquery.Query{Name: name, DSL: dsl}
+}
+
+// TestServiceSummaryCarriesLoaderWarnings proves the existing overview summary
+// surfaces loader completeness warnings to the frontend. The fixture is a
+// diagnostics-only shard, which the loader flags as partial material; the raw
+// session id used in the fixture must not appear in the warning text.
+func TestServiceSummaryCarriesLoaderWarnings(t *testing.T) {
+	service, err := NewService(nil, filepath.Join(t.TempDir(), "saved-queries.json"))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	input := t.TempDir()
+	diagnostics := filepath.Join(input, "logs", "diagnostics")
+	if err := os.MkdirAll(diagnostics, 0o700); err != nil {
+		t.Fatalf("mkdir diagnostics: %v", err)
+	}
+	event := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":1,"app_session_id":"app-gui-partial","trace_id":"trace-gui-partial","layer":"provider","event":"provider_terminal","severity":"error","status":"error","fields":{"error_summary":"upstream unavailable"}}`
+	if err := os.WriteFile(filepath.Join(diagnostics, "diagnostics-gui.jsonl"), []byte(event+"\n"), 0o600); err != nil {
+		t.Fatalf("write diagnostics shard: %v", err)
+	}
+
+	state, err := service.OpenProject(OpenRequest{Input: input})
+	if err != nil {
+		t.Fatalf("OpenProject() error = %v", err)
+	}
+	if !state.Opened || state.Summary.EventCount != 1 {
+		t.Fatalf("unexpected state: %+v", state)
+	}
+	if len(state.Summary.Warnings) == 0 {
+		t.Fatalf("summary carried no loader warnings: %+v", state.Summary)
+	}
+	joined := strings.Join(state.Summary.Warnings, "\n")
+	if !strings.Contains(joined, "材料不完整") {
+		t.Fatalf("summary warnings missing partial-material text: %#v", state.Summary.Warnings)
+	}
+	if strings.Contains(joined, "app-gui-partial") {
+		t.Fatalf("summary warnings leaked a raw session id: %#v", state.Summary.Warnings)
+	}
+	if err := service.CloseProject(); err != nil {
+		t.Fatalf("CloseProject() error = %v", err)
+	}
 }

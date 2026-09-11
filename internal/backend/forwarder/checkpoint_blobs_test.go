@@ -210,13 +210,18 @@ func TestCheckpointBlobTimeoutEmitsDegradedEventWithoutFailingTurn(t *testing.T)
 	if skipped.Event.Fields["kind"] != "blob_sync" || skipped.Event.Fields["skip_reason"] != "blob_sync" || skipped.Event.Fields["error_summary"] == nil {
 		t.Fatalf("skip event fields = %#v", skipped.Event.Fields)
 	}
-	keys, _ := skipped.Event.Fields["missing_blob_keys"].([]string)
-	if len(keys) == 0 || skipped.Event.Fields["missing_blob_key_count"] != len(keys) {
-		t.Fatalf("missing blob keys not recorded: %#v", skipped.Event.Fields)
+	if checkpointTestFieldInt(skipped.Event, "missing_blob_key_count") == 0 {
+		t.Fatalf("missing blob key count not recorded: %#v", skipped.Event.Fields)
+	}
+	if _, leaked := skipped.Event.Fields["missing_blob_keys"]; leaked {
+		t.Fatalf("skip event must not carry blob keys: %#v", skipped.Event.Fields)
 	}
 	raw, _ := skipped.Payload.Data.(map[string]any)
 	if raw["request_id"] != stream.RequestID || raw["conversation_id"] != stream.ConversationID {
 		t.Fatalf("skip payload lost query fields: %#v", raw)
+	}
+	if _, leaked := raw["missing_blob_keys"]; leaked {
+		t.Fatalf("skip payload must not carry blob keys: %#v", raw)
 	}
 }
 
@@ -389,6 +394,230 @@ func TestCancellationDiscardsUnpublishedCheckpointAndIgnoresLateAcknowledgements
 	stream.mu.Unlock()
 	if checkpointCount != 0 || !canceledEnd || pending != nil {
 		t.Fatalf("cancel events checkpoints=%d canceled_end=%v pending=%v", checkpointCount, canceledEnd, pending != nil)
+	}
+}
+
+func TestCheckpointBlobEventsRecordSafeDeliveryAndAckMetadata(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(service.debug.Close)
+
+	if err := service.queueCheckpointProjection(stream, projection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	deliveries := checkpointTestCaptureEvents(capture, "checkpoint_blob_dispatch")
+	if len(deliveries) != len(projection.Blobs) {
+		t.Fatalf("dispatch events = %d, want %d Blobs", len(deliveries), len(projection.Blobs))
+	}
+	for _, item := range deliveries {
+		if checkpointTestFieldString(item.Event, "phase") != "delivery" || checkpointTestFieldString(item.Event, "checkpoint_result") != "sent" {
+			t.Fatalf("dispatch fields = %#v", item.Event.Fields)
+		}
+		if checkpointTestFieldInt(item.Event, "checkpoint_request_id") == 0 || checkpointTestFieldInt(item.Event, "blob_count") != 1 {
+			t.Fatalf("dispatch metadata = %#v", item.Event.Fields)
+		}
+		if _, leaked := item.Event.Fields["missing_blob_keys"]; leaked {
+			t.Fatalf("dispatch leaked blob keys: %#v", item.Event.Fields)
+		}
+	}
+
+	acknowledgeCheckpointBlobs(t, service, stream)
+	acks := checkpointTestCaptureEvents(capture, "checkpoint_blob_result")
+	if len(acks) != len(projection.Blobs) {
+		t.Fatalf("result events = %d, want %d Blobs", len(acks), len(projection.Blobs))
+	}
+	for _, item := range acks {
+		if checkpointTestFieldString(item.Event, "phase") != "ack" || checkpointTestFieldString(item.Event, "checkpoint_result") != "ack" {
+			t.Fatalf("ack fields = %#v", item.Event.Fields)
+		}
+		if _, leaked := item.Event.Fields["missing_blob_keys"]; leaked {
+			t.Fatalf("ack leaked blob keys: %#v", item.Event.Fields)
+		}
+	}
+}
+
+func TestCheckpointBlobEventsDistinguishRejectAndUnmatchedAck(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(service.debug.Close)
+
+	if err := service.queueCheckpointProjection(stream, projection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	stream.mu.Lock()
+	var firstRequestID uint32
+	for requestID := range stream.PendingCheckpointBlobWrites {
+		firstRequestID = requestID
+		break
+	}
+	stream.mu.Unlock()
+
+	if err := service.handleCheckpointBlobResult(stream, &agentv1.KvClientMessage{
+		Id: firstRequestID,
+		Message: &agentv1.KvClientMessage_SetBlobResult{
+			SetBlobResult: &agentv1.SetBlobResult{Error: &agentv1.Error{Message: "private-client-body https://private.invalid/checkpoint?token=canary"}},
+		},
+	}); err != nil {
+		t.Fatalf("reject ACK error = %v", err)
+	}
+	results := checkpointTestCaptureEvents(capture, "checkpoint_blob_result")
+	if len(results) == 0 || checkpointTestFieldString(results[len(results)-1].Event, "checkpoint_result") != "rejected" {
+		t.Fatalf("rejected result fields = %#v", capture.captures)
+	}
+	if results[len(results)-1].Event.Status != "error" {
+		t.Fatalf("rejected status = %q, want error", results[len(results)-1].Event.Status)
+	}
+
+	skips := checkpointTestCaptureEvents(capture, "checkpoint_blob_sync_skipped")
+	if len(skips) != 1 || checkpointTestFieldString(skips[0].Event, "error_summary") != "client rejected checkpoint blob" {
+		t.Fatal("rejected ACK must record only the fixed category, without blob key or client text")
+	}
+	stream.mu.Lock()
+	pendingCleared := stream.PendingCheckpoint == nil && len(stream.PendingCheckpointBlobWrites) == 0
+	stream.mu.Unlock()
+	if !pendingCleared {
+		t.Fatal("rejected ACK must still discard the pending checkpoint")
+	}
+
+	// 全部 ACK 后再收到任何不在 pending 表的 ACK：重复与超时后迟到无法可靠区分，
+	// 统一记 unmatched/degraded，不猜测 late_ack。
+	unmatchedService, unmatchedStream, unmatchedProjection := testCheckpointBlobProjection(t)
+	unmatchedCapture := &debugRecorderTestCapture{}
+	unmatchedService.debug = newDebugRecorder(t.TempDir(), unmatchedService.broker, debugRecorderTestConfig("basic"), unmatchedCapture)
+	t.Cleanup(unmatchedService.debug.Close)
+	if err := unmatchedService.queueCheckpointProjection(unmatchedStream, unmatchedProjection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	acknowledgeCheckpointBlobs(t, unmatchedService, unmatchedStream)
+	unmatchedStream.mu.Lock()
+	settledRequestID := unmatchedStream.NextCheckpointBlobRequestID
+	neverDispatchedID := unmatchedStream.NextCheckpointBlobRequestID + 1000
+	unmatchedStream.mu.Unlock()
+
+	for _, ackID := range []uint32{settledRequestID, neverDispatchedID} {
+		if err := unmatchedService.handleCheckpointBlobResult(unmatchedStream, &agentv1.KvClientMessage{
+			Id: ackID,
+			Message: &agentv1.KvClientMessage_SetBlobResult{
+				SetBlobResult: &agentv1.SetBlobResult{},
+			},
+		}); err != nil {
+			t.Fatalf("unmatched ACK %d error = %v", ackID, err)
+		}
+	}
+	seen := make(map[int]string)
+	for _, item := range checkpointTestCaptureEvents(unmatchedCapture, "checkpoint_blob_result") {
+		seen[checkpointTestFieldInt(item.Event, "checkpoint_request_id")] = checkpointTestFieldString(item.Event, "checkpoint_result")
+	}
+	for _, ackID := range []uint32{settledRequestID, neverDispatchedID} {
+		if got := seen[int(ackID)]; got != "unmatched" {
+			t.Fatalf("unmatched ACK %d result = %q, want unmatched in %#v", ackID, got, unmatchedCapture.captures)
+		}
+	}
+}
+
+func TestCheckpointBlobTimeoutAndCancelEmitSafeEvents(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(service.debug.Close)
+	if err := service.queueCheckpointProjection(stream, projection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	if err := service.handleCheckpointBlobTimeout(stream); err != nil {
+		t.Fatalf("handleCheckpointBlobTimeout() error = %v", err)
+	}
+	timeouts := checkpointTestCaptureEvents(capture, "checkpoint_blob_timeout")
+	if len(timeouts) != 1 {
+		t.Fatalf("timeout events = %d, want 1", len(timeouts))
+	}
+	if got := checkpointTestFieldString(timeouts[0].Event, "checkpoint_result"); got != "timeout" {
+		t.Fatalf("timeout result = %q", got)
+	}
+	if checkpointTestFieldInt(timeouts[0].Event, "blob_count") == 0 || timeouts[0].Event.Fields["missing_blob_count"] != timeouts[0].Event.Fields["blob_count"] {
+		t.Fatalf("timeout counts = %#v", timeouts[0].Event.Fields)
+	}
+	if _, leaked := timeouts[0].Event.Fields["missing_blob_keys"]; leaked {
+		t.Fatalf("timeout leaked blob keys: %#v", timeouts[0].Event.Fields)
+	}
+
+	cancelService, cancelStream, cancelProjection := testCheckpointBlobProjection(t)
+	cancelCapture := &debugRecorderTestCapture{}
+	cancelService.debug = newDebugRecorder(t.TempDir(), cancelService.broker, debugRecorderTestConfig("basic"), cancelCapture)
+	t.Cleanup(cancelService.debug.Close)
+	if err := cancelService.queueCheckpointProjection(cancelStream, cancelProjection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	if err := cancelService.handleCancelIntent(InboundIntent{
+		Kind:         "cancel",
+		RequestID:    cancelStream.RequestID,
+		CancelReason: "user stopped",
+	}); err != nil {
+		t.Fatalf("handleCancelIntent() error = %v", err)
+	}
+	cancels := checkpointTestCaptureEvents(cancelCapture, "checkpoint_blob_canceled")
+	if len(cancels) != 1 {
+		t.Fatalf("cancel events = %d, want 1", len(cancels))
+	}
+	if got := checkpointTestFieldString(cancels[0].Event, "checkpoint_result"); got != "canceled" {
+		t.Fatalf("cancel result = %q", got)
+	}
+	if _, leaked := cancels[0].Event.Fields["missing_blob_keys"]; leaked {
+		t.Fatalf("cancel leaked blob keys: %#v", cancels[0].Event.Fields)
+	}
+}
+
+func checkpointTestCaptureEvents(capture *debugRecorderTestCapture, name string) []observability.Capture {
+	if capture == nil {
+		return nil
+	}
+	result := make([]observability.Capture, 0, len(capture.captures))
+	for _, item := range capture.captures {
+		if item.Event.Event == name {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func checkpointTestFieldString(event observability.Event, key string) string {
+	if event.Fields == nil {
+		return ""
+	}
+	text, _ := event.Fields[key].(string)
+	return text
+}
+
+func checkpointTestFieldInt(event observability.Event, key string) int {
+	if event.Fields == nil {
+		return 0
+	}
+	switch value := event.Fields[key].(type) {
+	case int:
+		return value
+	case int8:
+		return int(value)
+	case int16:
+		return int(value)
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	case uint:
+		return int(value)
+	case uint8:
+		return int(value)
+	case uint16:
+		return int(value)
+	case uint32:
+		return int(value)
+	case uint64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
 	}
 }
 

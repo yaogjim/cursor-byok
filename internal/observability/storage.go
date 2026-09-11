@@ -19,21 +19,28 @@ const (
 	payloadsDirname   = "payloads"
 	tracesDirname     = "traces"
 	eventReserveBytes = int64(1024 * 1024)
+	// minimumSupportedSchemaVersion mirrors the log-analyzer contract, which
+	// reads schema versions 1..SchemaVersion. Older but known manifests must
+	// stay reclaimable; only truly unknown versions are protected.
+	minimumSupportedSchemaVersion = 1
 )
 
 var errSessionQuotaExceeded = errors.New("observability session quota exceeded")
 
 type sessionWriter struct {
-	mu          sync.Mutex
-	root        string
-	dir         string
-	sessionID   string
-	settings    Settings
-	eventsFile  *os.File
-	manifest    Manifest
-	usageBytes  int64
-	payloadSeq  uint64
-	maxDiskByte int64
+	mu         sync.Mutex
+	root       string
+	dir        string
+	sessionID  string
+	settings   Settings
+	eventsFile *os.File
+	manifest   Manifest
+	payloadSeq uint64
+	budget     *logBudget
+	// manifestWriteError records the last failed manifest persistence in memory
+	// only. The on-disk manifest is left untouched on failure; status readers
+	// surface this value so a failed rewrite is visible without a new schema.
+	manifestWriteError string
 }
 
 type sessionInfo struct {
@@ -44,12 +51,15 @@ type sessionInfo struct {
 	mode      string
 }
 
-func openSession(root string, settings Settings) (*sessionWriter, error) {
+func openSession(root string, settings Settings, budget *logBudget) (*sessionWriter, error) {
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "." || root == "" {
 		return nil, errors.New("observability root is required")
 	}
 	settings = normalizeSettings(settings)
+	if budget == nil {
+		budget = newLogBudget(root, settings)
+	}
 	tracesRoot := filepath.Join(root, tracesDirname)
 	if err := ensurePrivateDir(root); err != nil {
 		return nil, err
@@ -88,12 +98,12 @@ func openSession(root string, settings Settings) (*sessionWriter, error) {
 		}
 	}
 	writer := &sessionWriter{
-		root:        root,
-		dir:         dir,
-		sessionID:   sessionID,
-		settings:    settings,
-		eventsFile:  eventsFile,
-		maxDiskByte: int64(settings.MaxDiskMB) * 1024 * 1024,
+		root:       root,
+		dir:        dir,
+		sessionID:  sessionID,
+		settings:   settings,
+		eventsFile: eventsFile,
+		budget:     budget,
 		manifest: Manifest{
 			SchemaVersion:     SchemaVersion,
 			AppSessionID:      sessionID,
@@ -107,7 +117,7 @@ func openSession(root string, settings Settings) (*sessionWriter, error) {
 			ConfigFingerprint: settings.Metadata.ConfigFingerprint,
 		},
 	}
-	if writer.usageBytes, err = directorySize(root); err != nil {
+	if err := writer.budget.initialize(); err != nil {
 		_ = writer.close("open_failed")
 		_ = os.RemoveAll(dir)
 		return nil, err
@@ -134,11 +144,19 @@ func (writer *sessionWriter) appendEvent(event Event) error {
 		return err
 	}
 	payload = append(payload, '\n')
-	if !writer.canWrite(int64(len(payload)), 0) {
+	writer.budget.mu.Lock()
+	defer writer.budget.mu.Unlock()
+	// Ordinary event bytes leave the same eventReserveBytes headroom that
+	// payload writes already keep, so the normal partition can never be filled
+	// to the point where the terminal manifest rewrite is denied.
+	if !writer.budget.admitNormalLocked(int64(len(payload)), eventReserveBytes, writer.dir) {
 		return errSessionQuotaExceeded
 	}
 	written, err := writer.eventsFile.Write(payload)
-	writer.usageBytes += int64(written)
+	if written > 0 {
+		writer.budget.normalUsage += int64(written)
+		writer.budget.usageKnown = true
+	}
 	return err
 }
 
@@ -166,15 +184,20 @@ func (writer *sessionWriter) appendPayload(payload Payload, timestamp time.Time)
 		return "", err
 	}
 	encoded = append(encoded, '\n')
-	if !writer.canWritePayload(int64(len(encoded))) {
+	writer.budget.mu.Lock()
+	if !writer.budget.admitNormalLocked(int64(len(encoded)), eventReserveBytes, writer.dir) {
+		writer.budget.mu.Unlock()
 		return "", errSessionQuotaExceeded
 	}
 	path := filepath.Join(writer.dir, filepath.FromSlash(relativePath))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
+		writer.budget.mu.Unlock()
 		return "", err
 	}
 	if err := file.Chmod(0o600); err != nil {
+		writer.budget.usageKnown = false
+		writer.budget.mu.Unlock()
 		_ = file.Close()
 		_ = os.Remove(path)
 		return "", err
@@ -182,35 +205,25 @@ func (writer *sessionWriter) appendPayload(payload Payload, timestamp time.Time)
 	written, writeErr := file.Write(encoded)
 	closeErr := file.Close()
 	if writeErr != nil {
+		// The failed cleanup may have left bytes the cached counter does not
+		// know about, so force the next admission to re-scan.
+		writer.budget.usageKnown = false
+		writer.budget.mu.Unlock()
 		_ = os.Remove(path)
 		return "", writeErr
 	}
 	if closeErr != nil {
+		writer.budget.usageKnown = false
+		writer.budget.mu.Unlock()
 		_ = os.Remove(path)
 		return "", closeErr
 	}
-	writer.usageBytes += int64(written)
+	if written > 0 {
+		writer.budget.normalUsage += int64(written)
+		writer.budget.usageKnown = true
+	}
+	writer.budget.mu.Unlock()
 	return relativePath, nil
-}
-
-func (writer *sessionWriter) canWritePayload(additionalBytes int64) bool {
-	return writer.canWrite(additionalBytes, eventReserveBytes)
-}
-
-func (writer *sessionWriter) canWrite(additionalBytes int64, reserveBytes int64) bool {
-	if writer == nil || writer.maxDiskByte <= 0 {
-		return false
-	}
-	requiredBytes := additionalBytes + reserveBytes
-	if writer.usageBytes+requiredBytes <= writer.maxDiskByte {
-		return true
-	}
-	usage, err := cleanupClosedSessions(writer.root, writer.settings, requiredBytes)
-	if err != nil {
-		return false
-	}
-	writer.usageBytes = usage
-	return usage+requiredBytes <= writer.maxDiskByte
 }
 
 func (writer *sessionWriter) markDegraded(dropped uint64, lastError string) {
@@ -252,6 +265,10 @@ func (writer *sessionWriter) close(status string) error {
 	closedAt := time.Now().UTC()
 	writer.manifest.Status = firstNonEmpty(status, "closed")
 	writer.manifest.ClosedAt = &closedAt
+	// A denied terminal manifest is returned instead of swallowed so the
+	// recorder/controller can report it: a genuinely full, protected disk leaves
+	// the trace in "open" and must not hide that from the caller. The manifest
+	// admission still runs against the same hard cap, so this never bypasses it.
 	return errors.Join(closeErr, writer.writeManifestUnlocked())
 }
 
@@ -275,18 +292,110 @@ func (writer *sessionWriter) writeManifestUnlocked() error {
 	payload = append(payload, '\n')
 	path := filepath.Join(writer.dir, manifestFilename)
 	tempPath := path + ".tmp"
-	if err := os.WriteFile(tempPath, payload, 0o600); err != nil {
+	write := func() error {
+		if err := os.WriteFile(tempPath, payload, 0o600); err != nil {
+			// A failed write can leave partial temp bytes behind; drop them so
+			// they do not linger as untracked usage.
+			return errors.Join(err, removeTempManifest(tempPath))
+		}
+		if err := os.Chmod(tempPath, 0o600); err != nil {
+			return errors.Join(err, removeTempManifest(tempPath))
+		}
+		if err := os.Rename(tempPath, path); err != nil {
+			return errors.Join(err, removeTempManifest(tempPath))
+		}
+		return nil
+	}
+	budget := writer.budget
+	if budget == nil {
+		err := write()
+		writer.setManifestWriteError(err)
 		return err
 	}
-	if err := os.Chmod(tempPath, 0o600); err != nil {
-		_ = os.Remove(tempPath)
+	// Manifest bytes belong to the managed normal partition. Admission counts
+	// the full incoming payload because the previous manifest and the temp file
+	// coexist until the atomic rename. A denied admission leaves the previous
+	// good manifest untouched rather than writing over the limit, and the
+	// failure is recorded in memory for status readers.
+	budget.mu.Lock()
+	defer budget.mu.Unlock()
+	previous := int64(0)
+	if info, statErr := os.Stat(path); statErr == nil {
+		previous = info.Size()
+	}
+	if !budget.admitNormalLocked(int64(len(payload)), 0, writer.dir) {
+		writer.setManifestWriteError(errSessionQuotaExceeded)
+		return errSessionQuotaExceeded
+	}
+	if err := write(); err != nil {
+		// The in-memory usage no longer reflects disk: a partial temp file or a
+		// failed cleanup may have left bytes behind. Force the next admission to
+		// re-scan instead of trusting the cached counter.
+		budget.usageKnown = false
+		writer.setManifestWriteError(err)
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
+	budget.normalUsage += int64(len(payload)) - previous
+	if budget.normalUsage < 0 {
+		budget.normalUsage = 0
+	}
+	budget.usageKnown = true
+	writer.setManifestWriteError(nil)
+	return nil
+}
+
+// setManifestWriteError records (or clears) the last manifest persistence
+// failure. Callers must hold writer.mu; the value never reaches the on-disk
+// manifest schema.
+func (writer *sessionWriter) setManifestWriteError(err error) {
+	if err == nil {
+		writer.manifestWriteError = ""
+		return
+	}
+	if errors.Is(err, errSessionQuotaExceeded) {
+		writer.manifestWriteError = "manifest_quota_exceeded"
+		return
+	}
+	writer.manifestWriteError = "manifest_write_failed"
+}
+
+func (writer *sessionWriter) manifestError() string {
+	if writer == nil {
+		return ""
+	}
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.manifestWriteError
+}
+
+func removeTempManifest(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
+}
+
+// reclaimableManifest reports whether a closed trace is safe to reclaim. Only
+// fully identified manifests with a supported schema version and known mode are
+// eligible: unknown schema versions, unknown modes, and invalid identities are
+// protected so a future format is never silently deleted by an older build.
+func reclaimableManifest(dirName string, manifest Manifest) bool {
+	if manifest.Status != "closed" {
+		return false
+	}
+	if manifest.SchemaVersion < minimumSupportedSchemaVersion || manifest.SchemaVersion > SchemaVersion {
+		return false
+	}
+	if manifest.Mode != ModeFull && manifest.Mode != ModeBasic {
+		return false
+	}
+	if strings.TrimSpace(manifest.AppSessionID) != dirName {
+		return false
+	}
+	if manifest.StartedAt.IsZero() {
+		return false
+	}
+	return true
 }
 
 type CleanupResult struct {
@@ -324,7 +433,7 @@ func CleanupAllClosedSessions(root string) (CleanupResult, error) {
 		}
 		path := filepath.Join(tracesRoot, entry.Name())
 		manifest, readErr := readManifest(filepath.Join(path, manifestFilename))
-		if readErr != nil || manifest.Status != "closed" {
+		if readErr != nil || !reclaimableManifest(entry.Name(), manifest) {
 			continue
 		}
 		size, sizeErr := directorySize(path)
@@ -371,7 +480,7 @@ func cleanupClosedSessions(root string, settings Settings, reserveBytes int64) (
 			return 0, sizeErr
 		}
 		closed := manifest.Status == "closed"
-		if closed && manifest.StartedAt.Before(cutoff) {
+		if reclaimableManifest(entry.Name(), manifest) && manifest.StartedAt.Before(cutoff) {
 			if removeErr := os.RemoveAll(path); removeErr != nil {
 				return 0, removeErr
 			}
@@ -424,6 +533,12 @@ func directorySize(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// Files can be rotated/renamed concurrently (for example a manifest
+			// .tmp file); a transient disappearance must not discard the bytes
+			// counted so far.
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
 			return walkErr
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -434,13 +549,16 @@ func directorySize(root string) (int64, error) {
 		}
 		info, err := entry.Info()
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		total += info.Size()
 		return nil
 	})
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return total, nil
 	}
 	return total, err
 }
