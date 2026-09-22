@@ -568,6 +568,155 @@ func TestCheckpointBlobTimeoutAndCancelEmitSafeEvents(t *testing.T) {
 	}
 }
 
+func TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending(t *testing.T) {
+	service, stream, projectionA := testCheckpointBlobProjection(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(service.debug.Close)
+
+	if err := service.queueCheckpointProjection(stream, projectionA, nil); err != nil {
+		t.Fatalf("queue A error = %v", err)
+	}
+	timerKey := providerTimerKey(streamTimerCheckpointBlobs, "")
+	stream.mu.Lock()
+	tokenA := stream.TimerTokens[timerKey]
+	stream.mu.Unlock()
+	if tokenA == 0 {
+		t.Fatal("queue A did not schedule a checkpoint blob timer")
+	}
+	stale := &streamTimerEvent{
+		Key:    timerKey,
+		Kind:   streamTimerCheckpointBlobs,
+		Token:  tokenA,
+		Reason: "checkpoint blob write timeout",
+	}
+
+	acknowledgeCheckpointBlobs(t, service, stream)
+	if timerEventMatches(stream, stale) {
+		t.Fatal("stale timer still matches after publishReadyCheckpoint cleared it")
+	}
+
+	conversationB := &ConversationFile{
+		ConversationID:        "conversation-1",
+		RootConversationID:    "conversation-1",
+		Mode:                  "agent",
+		NextTurnSeq:           2,
+		NextEntrySeq:          3,
+		TokenDetailsMaxTokens: projectedConversationMaxTokens,
+		Entries: []HistoryEntry{
+			testCheckpointUserEntry(t),
+			newAssistantTextEntry(1, "request-1", "hi-b", "", ""),
+		},
+	}
+	projectionB, err := service.projector.ProjectCheckpointProjection(conversationB)
+	if err != nil {
+		t.Fatalf("ProjectCheckpointProjection B error = %v", err)
+	}
+	if len(projectionB.Blobs) == 0 {
+		t.Fatal("projection B has no blobs")
+	}
+	stream.mu.Lock()
+	confirmedB := 0
+	for _, blob := range projectionB.Blobs {
+		if _, ok := stream.ConfirmedCheckpointBlobs[string(blob.ID)]; ok {
+			confirmedB++
+		}
+	}
+	stream.mu.Unlock()
+	if confirmedB == len(projectionB.Blobs) {
+		t.Fatal("projection B blobs are already confirmed; queue B would not stay pending")
+	}
+
+	if err := service.queueCheckpointProjection(stream, projectionB, nil); err != nil {
+		t.Fatalf("queue B error = %v", err)
+	}
+	stream.mu.Lock()
+	pendingBefore := stream.PendingCheckpoint != nil
+	writesBefore := len(stream.PendingCheckpointBlobWrites)
+	stream.mu.Unlock()
+	if !pendingBefore || writesBefore == 0 {
+		t.Fatalf("queue B pending=%v writes=%d, want pending writes", pendingBefore, writesBefore)
+	}
+
+	if err := service.handleTimerEvent(stream, stale); err != nil {
+		t.Fatalf("handleTimerEvent(stale A) error = %v", err)
+	}
+
+	stream.mu.Lock()
+	pendingAfter := stream.PendingCheckpoint != nil
+	writesAfter := len(stream.PendingCheckpointBlobWrites)
+	stream.mu.Unlock()
+	if !pendingAfter || writesAfter == 0 {
+		t.Fatalf("stale timer skipped B pending=%v writes=%d", pendingAfter, writesAfter)
+	}
+	if skips := checkpointTestCaptureEvents(capture, "checkpoint_blob_sync_skipped"); len(skips) != 0 {
+		t.Fatalf("stale timer emitted skip: %+v", skips)
+	}
+
+	acknowledgeCheckpointBlobs(t, service, stream)
+	checkpointCount := 0
+	for _, event := range readCheckpointTestEvents(t, service, stream) {
+		if event.Message.GetConversationCheckpointUpdate() != nil {
+			checkpointCount++
+		}
+	}
+	if checkpointCount != 2 {
+		t.Fatalf("checkpoints after ACK B = %d, want 2", checkpointCount)
+	}
+
+	conversationC := &ConversationFile{
+		ConversationID:        "conversation-1",
+		RootConversationID:    "conversation-1",
+		Mode:                  "agent",
+		NextTurnSeq:           2,
+		NextEntrySeq:          3,
+		TokenDetailsMaxTokens: projectedConversationMaxTokens,
+		Entries: []HistoryEntry{
+			testCheckpointUserEntry(t),
+			newAssistantTextEntry(1, "request-1", "hi-c", "", ""),
+		},
+	}
+	projectionC, err := service.projector.ProjectCheckpointProjection(conversationC)
+	if err != nil {
+		t.Fatalf("ProjectCheckpointProjection C error = %v", err)
+	}
+	if err := service.queueCheckpointProjection(stream, projectionC, nil); err != nil {
+		t.Fatalf("queue C error = %v", err)
+	}
+	stream.mu.Lock()
+	tokenC := stream.TimerTokens[timerKey]
+	pendingC := stream.PendingCheckpoint != nil
+	writesC := len(stream.PendingCheckpointBlobWrites)
+	stream.mu.Unlock()
+	if tokenC == 0 || !pendingC || writesC == 0 {
+		t.Fatalf("queue C token=%d pending=%v writes=%d, want a live timer and pending writes", tokenC, pendingC, writesC)
+	}
+	if err := service.handleTimerEvent(stream, &streamTimerEvent{
+		Key:    timerKey,
+		Kind:   streamTimerCheckpointBlobs,
+		Token:  tokenC,
+		Reason: "checkpoint blob write timeout",
+	}); err != nil {
+		t.Fatalf("handleTimerEvent(current C) error = %v", err)
+	}
+	stream.mu.Lock()
+	pendingAfterTimeout := stream.PendingCheckpoint != nil
+	writesAfterTimeout := len(stream.PendingCheckpointBlobWrites)
+	stream.mu.Unlock()
+	if pendingAfterTimeout || writesAfterTimeout != 0 {
+		t.Fatalf("current timer did not time out C pending=%v writes=%d", pendingAfterTimeout, writesAfterTimeout)
+	}
+	checkpointCount = 0
+	for _, event := range readCheckpointTestEvents(t, service, stream) {
+		if event.Message.GetConversationCheckpointUpdate() != nil {
+			checkpointCount++
+		}
+	}
+	if checkpointCount != 2 {
+		t.Fatalf("checkpoints after current C timeout = %d, want 2", checkpointCount)
+	}
+}
+
 func checkpointTestCaptureEvents(capture *debugRecorderTestCapture, name string) []observability.Capture {
 	if capture == nil {
 		return nil

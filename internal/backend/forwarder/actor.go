@@ -1591,8 +1591,9 @@ func (service *Service) scheduleStreamTimer(stream *ActiveStream, key string, de
 	if stream.TimerTokens == nil {
 		stream.TimerTokens = make(map[string]uint64)
 	}
-	stream.TimerTokens[key]++
-	token := stream.TimerTokens[key]
+	stream.NextTimerToken++
+	token := stream.NextTimerToken
+	stream.TimerTokens[key] = token
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 

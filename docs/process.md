@@ -7,6 +7,32 @@
 
 ## 一、待完成的内容
 
+### 本机日志异常分诊与检查点过早超时修复（2026-09-21；verified-partial）
+
+**授权与执行边界**：用户要求主控安排独立调查及当前明确风险的最小处理。三个调查分别覆盖检查点、模型/控制面/TLS、日志配额；主控复核原始日志并统一决策，只有已得到失败回归的本地 timer 标识重用缺陷进入修复。没有新增依赖、抽象、兼容层或迁移脚本；没有修改真实配置、证书、账号或日志，没有部署/重启、版本升级或 commit/push。
+
+**取证口径及更正**：真实目录 `~/.cursor-local-assistant-v2/logs` 有 12 个 diagnostics 分片、24 个 trace 会话，先前“11/26”不准确。重点固定在主会话 `20260911T101629.967688000Z-94cff1bba964` 最新分片 `diagnostics-20260921T174246.704727000Z-000010.jsonl`，UTC `2026-09-21T17:42:46.704664Z` 至 `2026-09-22T03:58:54.477331Z`，sequence ≤ 9452300：9470 条、294 error/9176 warning。按 session+sequence 核对无重复，按 model_call/http_request 区分同链多层记录；异常分片不含普通成功事件，不能计算完整失败率。排查期间新增日志不并入统计。
+
+- **P1 检查点**：230 次 `checkpoint_blob_timeout`、230 次 `checkpoint_blob_sync_skipped`、602 次 `checkpoint_blob_result=unmatched`。这是等待客户端 `SetBlobResult` 确认，不是已证实本地磁盘写入缓慢。诊断分片过滤掉 info 级 dispatch/成功 ACK，所以不能断言全部写入失败。旧完整 trace 第 41937–42028 行，同请求新 blob 发出后约 270ms，下一次甚至不足 1ms 就 timeout，而正常等待值是 5 秒；迟到 ACK 被记 unmatched。此异常足以建立针对过早超时的最小隔离复现，不证明全部 230 次同源或真实数据已丢失。
+- **P1 模型最终失败**：8 条 summary、8 条 terminal、8 条 fallback 是 8 个 model_call 的多层记录，不能算 24 次故障。8 个 fallback 事件均 `fail_fast`（4 context_done、3 output_observed、1 chain_exhausted），无实际切渠道成功证据。明确 `model_call_final` 为 2 failed/1 partial：`c2e51372…` 两次 HTTP 502 耗尽，摘要 `Upstream service temporarily unavailable`；`88ac46a5…` HTTP 200 后 provider_terminal/failed，摘要缺失；`9a938108…` 为 partial，不能当完整成功。另有 4 个 context_canceled，不等同已证实用户主动取消；1 个 max_output_tokens 缺最终记录，另两个只有 retrying 的调用终态未知。真实渠道排查与修改重试/fallback 不在本轮修复范围。
+- **P1 观测不足**：主 events 停在 `2026-09-11T12:34:54.877038Z`、sequence 1539957，app 同时停写；diagnostics 持续增长。只读日志额度为 2048MiB/30 天，异常预留 256MiB，普通额度 1792MiB；实测普通用量约 1791MiB 加 1MiB 元数据预留，符合既有额度降级合同。进程仍持有主日志句柄，长期 open 不是进程停止或内存泄漏证据；其余 23 个历史 open 也受现有保护规则限制。`dropped_events=276372` 是队列入队失败的累计快照，不是本窗口增量，更不是 quota 拒写总数，不对逐行值求和。恢复普通日志取证需要另行确认受控操作，不删除日志、不擅自扩大额度或改变回收策略。
+- **P2 Dashboard**：9 个 GetManagedSkills、1 个 GetEffectiveUserPlugins 独立请求是 upstream status_code=0→backend/mitm 本地 502。样本行 1155–1157、3461–3463；没有收到上游 HTTP 状态，不可认定官方返回 502，也不可归因未登录的旧编码问题。已登录 `ForwardToUpstream` 事件缺明确失败阶段/摘要，需进一步受控取证，不擅自失败回空数据。
+- **P2 TLS**：7134 次入站 `client_unknown_ca`，有目标域名而无对端进程身份，不能认定是非 Cursor 进程或不影响业务。先明确客户端来源，再决定信任配置；本轮未改 CA。遥测/埋点 404 仅报告，不扩大为兼容接口开发。
+
+**失败复现与最小修复**：新增 `TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending`，通过真实 queue A→ACK/publishReadyCheckpoint→queue B→handleTimerEvent(A 旧事件)，旧源码稳定失败 `stale timer skipped B pending=false writes=0`（退出 1）。根因为 clear/delete 后，下次按 key 递增重新从 1 开始，尚未消失的旧 timer 可匹配新 pending。修复仅在 `ActiveStream` 增加 `NextTimerToken`，`scheduleStreamTimer` 在既有锁内递增后赋值到 `TimerTokens[key]`；clear 仍删除键，不积累已清理的键，也不因 map 重建重用计数。生产差异仅 `actor.go` +3/−2、`types.go` +1；既有测试文件 +149。回归同时断言 B ACK 正常发布、C 当前有效 timer 仍使未确认 checkpoint 超时而不发布。保留 5 秒期限、ACK 齐全才发布与真正超时的降级语义。
+
+**实际验证**：隔离临时 HOME，保留本机 GOPATH/GOMODCACHE/GOCACHE，设置 `GOPROXY=off GOSUMDB=off`，不访问真实业务目录。目标新回归先 RED（0.608s），修复后 GREEN（0.720s）；主控运行 `go test ./internal/backend/forwarder -count=1 -timeout=3m` 通过（18.032s），以及 `go test -race ./internal/backend/forwarder -count=1 -timeout=3m -run 'TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending|TestCheckpointBlobTimeout|TestCheckpointBlobSync|TestCancellationDiscardsUnpublishedCheckpoint'` 通过（1.740s）。完整验证进程退出 0、输出 `CHECKPOINT_VALIDATION_PASS`；`git diff --check` 通过。没有跑无关模块、前端构建或全仓测试。早期调查一次缓存未导出导致离线依赖查找失败，改为显式保留缓存后相关测试正常；该次失败不作为通过证据。
+
+**检查点专项续办（本轮，最多两个并行任务）**：用户将范围收敛为“检查点过早超时”一项。主控核实既有修复仍在工作区，安排一项独立源码复审和一项隔离验证，均实际返回成功结果。独立复审未发现阻塞问题，覆盖同 stream 的标识生命周期、map 重建、锁、共享 provider/shell/orphan timer 兼容和回归测试判别力；上一轮三次 503 导致的独立复审缺口已解除。没有继续修改运行逻辑，仅给 `NextTimerToken` 增加“同一流内递增；清理或重建 TimerTokens 时不得重置”的行内说明。
+
+**本轮验证证据**：隔离 HOME、复用现有 Go 缓存并禁用依赖下载，以 `/tmp/ckpt-overlay.tw2xLv/overlay.json` 临时映射旧 `actor.go` 逻辑，不回退或覆盖工作区。`go test -overlay=/tmp/ckpt-overlay.tw2xLv/overlay.json ./internal/backend/forwarder -run '^TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending$' -count=1 -v -timeout=2m` 预期退出 1（0.991s），失败为 `stale timer skipped B pending=false writes=0`；去掉 overlay 的同一命令退出 0（0.447s）。`go test -race ./internal/backend/forwarder -count=1 -timeout=3m -v -run 'TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending|TestCheckpointBlobTimeout|TestCheckpointBlobSync|TestCancellationDiscardsUnpublishedCheckpoint'` 的 9 个用例通过（1.715s）。主控读取并核实三份实际输出 `/tmp/ckpt-overlay.tw2xLv/{red,green,race}.stdout.txt`。本轮没有重复全仓或无关模块验证。
+
+**最终落盘验收命令**：文档及注释落盘后，在隔离 HOME、复用现有 Go 缓存且禁止依赖下载的环境中执行 `go test ./internal/backend/forwarder -run '^TestCheckpointBlobStaleTimerAfterPublishDoesNotSkipNextPending$' -count=1 -timeout=2m`，并执行 `git diff --check`；这些检查不构成真实运行实例验收。
+
+**未完成缺口与状态**：检查点专项的源码修复、独立复审及隔离验证已完成；未打包/替换/重启运行实例，真实 Cursor checkpoint 链路仍属于 test/env gap，整体保持 `verified-partial`，不能表述为现场所有过早超时均已消失。下一步仅需另行确认部署验收窗口与必要的日志取证方式。模型失败具体远端原因、Dashboard 失败阶段、TLS 进程身份及日志配额处理均不属于本轮，不追加调查或修改。
+
+**复用教训**：日志级别不是业务结果；字段值出现次数不是独立故障数；fallback 事件不证明切换成功；502 必须区分上游响应与本地映射；WARN/ERROR 分片缺少成功事件不能据此推断零成功；`open` 与累计 dropped 字段必须结合运行进程及生产端口径解释。
+
 ### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 **触发与日志证据**：用户提供 `/Users/yaogj/Downloads/logs 2`，现象为同一 Agent 会话先使用模型 A 完成讨论和任务，再切换高级模型分析时出现 `[internal] decode imported replay messages: invalid character '>'/'h' looking for beginning of value`。导出中找到请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e`：`run_request` 的原始 Bidi 数据长 7,773,530 字节，解码成功后约 0.5ms 即进入 `dispatch_error(kind=run)` 并返回 500，随后 heartbeat 仍为 200；该请求没有进入 provider 调用。用户列出的另外三个请求 ID 不在本次导出中，payload 因配额降级未保留正文，所以无法从日志直接恢复报错字节。

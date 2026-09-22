@@ -178,6 +178,7 @@ type ActiveStream struct {
 	CurrentProviderToken                        uint64
 	CurrentCompactionToken                      uint64
 	TimerTokens                                 map[string]uint64
+	NextTimerToken                              uint64 // 同一流内递增；清理或重建 TimerTokens 时不得重置。
 	ProviderAccumulatedText                     string
 	ProviderAccumulatedReasoning                string
 	ProviderAccumulatedReasoningSignature       string

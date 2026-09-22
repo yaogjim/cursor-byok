@@ -4,6 +4,18 @@
 
 ## 当前焦点
 
+### 本机日志异常分诊与检查点过早超时修复（2026-09-21；verified-partial）
+
+- 授权与边界：用户要求主控主持并安排独立调查，仅处理当前已证实异常的最小可回退修复。不开新功能，不新增依赖/抽象/兼容层，不改真实配置、账号、证书、日志数据，不部署/重启，不 commit/push；保留策略、额度、上游恢复行为变更须另行确认。
+- 固定取证窗口：主会话 `20260911T101629.967688000Z-94cff1bba964`，最新诊断分片从 `2026-09-21T17:42:46.704664Z` 至 `2026-09-22T03:58:54.477331Z`（UTC），sequence ≤ 9452300；9470 条记录，294 error、9176 warning，不据异常分片计算全量失败率。
+- [completed] `log-triage-20260921`（主控汇总，三个独立调查）：检查点 230 timeout/230 skip/602 unmatched；模型明确 final 为 2 failed/1 partial，另有取消和终态缺失，不重复累加各层事件；普通日志配额已满，diagnostics 仍写入；Dashboard 本地 502 与 provider HTTP 502 分开归因。
+- [completed] `checkpoint-red-20260921`：历史完整 trace 第 41937–42028 行显示新写入约 270ms/不足 1ms 即 timeout。通过真实 queue A→ACK 发布→queue B→投递 A 旧 timer 的隔离回归，稳定失败 `stale timer skipped B pending=false writes=0`。已确认令牌在 clear/delete 后被重用，不能据此认定所有现场 timeout 同源。
+- [completed] `checkpoint-fix-20260921`（P1，S，依赖上述 RED）：`ActiveStream.NextTimerToken` 在既有锁内递增，`TimerTokens[key]` 使用该标识；clear 继续删除键，不留永久记录，也不改变 5 秒超时和 ACK/降级语义。新增回归证明旧事件不清新检查点、ACK 可发布、当前有效超时仍生效。隔离 HOME、禁下载依赖下，forwarder 包测试通过（18.032s），检查点定向 race 通过（1.740s），`git diff --check` 通过。代码回退仅撤销本轮 diff。
+- [completed] `log-closeout-20260921`：证据、统计更正及风险登记于 `docs/process.md` 同名节。模型最终失败与日志观测不足仍值得处理；TLS 对端进程、Dashboard 失败阶段和配额操作仅报告，无擅自配置/策略变更。
+- [completed] `checkpoint-independent-review-20260921`：用户再次授权仅处理检查点过早超时、最多两个并行任务。本轮独立源码复审已实际完成且无阻塞发现，覆盖 stream 生命周期、map 重建、锁与共享 provider/shell/orphan timer 兼容；取代上一轮三次 503 导致的复审缺口。主控补充 `NextTimerToken` 不得随 map 重建而重置的行内注释，未改变运行逻辑。
+- [completed] `checkpoint-reverify-20260921`：独立验证以临时 Go overlay 还原旧逻辑、保持工作区不变，目标回归预期失败 `stale timer skipped B pending=false writes=0`（退出 1，0.991s）；当前实现同一测试通过（0.447s），9 个检查点相关 race 用例通过（1.715s）。隔离 HOME、复用缓存、禁止下载依赖；主控已读取实际输出，未重跑无关全量检查。临时证据 `/tmp/ckpt-overlay.tw2xLv/{red,green,race}.stdout.txt`。
+- [pending] `checkpoint-runtime-acceptance-20260921`（test/env gap）：尚未构建、替换或重启真实 Gateway；需另行确认部署窗口，观察同一请求中 dispatch→ACK/timeout，并确认无过早超时且正常超时仍降级。当前仅源码与隔离回归验证完成，整体 `verified-partial`。
+
 ### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 - 范围：用户提供 `/Users/yaogj/Downloads/logs 2`，要求定位同一 Agent 会话从模型 A 切换到高级模型后出现 `decode imported replay messages: invalid character ...` 的问题；只修复 replay 导入格式误判，不处理独立 provider 502，不部署、不重启、不 commit/push。
