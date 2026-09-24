@@ -660,3 +660,66 @@ func TestGatewayStartRestartClosesPreviousListener(t *testing.T) {
 		t.Fatalf("old listener %s still accepting after restart to %s", first, second)
 	}
 }
+
+func TestGatewayChatAndResponsesShareDerivedPublicModels(t *testing.T) {
+	adapter := serverconfig.ModelAdapterConfig{
+		DisplayName:    "My Model",
+		Type:           "openai",
+		BaseURL:        "https://api.example.com/v1",
+		APIKey:         "provider-secret",
+		TooltipData:    "My Model",
+		ModelID:        "provider-model",
+		OpenAIEndpoint: "/v1/chat/completions",
+	}
+	adapters, err := serverconfig.NormalizeModelAdapterConfigs([]serverconfig.ModelAdapterConfig{adapter})
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterConfigs() error = %v", err)
+	}
+	cfg := serverconfig.DefaultConfig()
+	cfg.Gateway.Enabled = true
+	cfg.Gateway.Token = "secret-token"
+	cfg.ModelAdapters = adapters
+	cfg, err = serverconfig.NormalizeConfig(cfg)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+
+	fake := &fakeStreamer{}
+	handler := New(fake, staticConfig{cfg: cfg}).Handler()
+	listed := doGatewayRequest(t, handler, http.MethodGet, modelsPath, "secret-token", "")
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"My Model"`) {
+		t.Fatalf("auto-published models = %d %s", listed.Code, listed.Body.String())
+	}
+
+	chat := doGatewayRequest(t, handler, http.MethodPost, chatCompletionsPath, "secret-token", `{"model":"My Model","messages":[{"role":"user","content":"hi"}]}`)
+	if chat.Code != http.StatusOK || fake.lastReq.ModelID != adapters[0].ID {
+		t.Fatalf("chat auto-publish status=%d model=%q body=%s", chat.Code, fake.lastReq.ModelID, chat.Body.String())
+	}
+	responses := doGatewayRequest(t, handler, http.MethodPost, responsesPath, "secret-token", `{"model":"My Model","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	if responses.Code != http.StatusOK || fake.lastReq.ModelID != adapters[0].ID {
+		t.Fatalf("responses auto-publish status=%d model=%q body=%s", responses.Code, fake.lastReq.ModelID, responses.Body.String())
+	}
+
+	unpublished := false
+	cfg.Gateway.PublicModels = []serverconfig.GatewayPublicModel{{
+		TargetAdapterID: adapters[0].ID,
+		Published:       &unpublished,
+	}}
+	cfg, err = serverconfig.NormalizeConfig(cfg)
+	if err != nil {
+		t.Fatalf("unpublished NormalizeConfig() error = %v", err)
+	}
+	handler = New(fake, staticConfig{cfg: cfg}).Handler()
+	hidden := doGatewayRequest(t, handler, http.MethodGet, modelsPath, "secret-token", "")
+	if hidden.Code != http.StatusOK || strings.Contains(hidden.Body.String(), `"My Model"`) {
+		t.Fatalf("unpublished still listed: %s", hidden.Body.String())
+	}
+	chatHidden := doGatewayRequest(t, handler, http.MethodPost, chatCompletionsPath, "secret-token", `{"model":"My Model","messages":[{"role":"user","content":"hi"}]}`)
+	if chatHidden.Code != http.StatusNotFound {
+		t.Fatalf("unpublished chat status = %d %s", chatHidden.Code, chatHidden.Body.String())
+	}
+	responsesHidden := doGatewayRequest(t, handler, http.MethodPost, responsesPath, "secret-token", `{"model":"My Model","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
+	if responsesHidden.Code != http.StatusNotFound {
+		t.Fatalf("unpublished responses status = %d %s", responsesHidden.Code, responsesHidden.Body.String())
+	}
+}

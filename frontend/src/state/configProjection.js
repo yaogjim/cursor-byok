@@ -558,7 +558,7 @@ export function validateUpstreamCapacityAdapters(source, { allAdapters } = {}) {
 }
 
 export const DEFAULT_GATEWAY_LISTEN_ADDR = "127.0.0.1:18091";
-export const MAX_GATEWAY_PUBLIC_MODELS = 32;
+export const MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH = 128;
 
 export const DEFAULT_GATEWAY_CONFIG = Object.freeze({
   enabled: false,
@@ -567,22 +567,148 @@ export const DEFAULT_GATEWAY_CONFIG = Object.freeze({
   publicModels: Object.freeze([]),
 });
 
+export function normalizeModelAdapterEnabled(value) {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  return asBoolean(value);
+}
+
+export function isModelAdapterEnabled(source) {
+  return normalizeModelAdapterEnabled(source?.enabled);
+}
+
+export function isGatewayPublicModelPublished(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return true;
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(source, "published")
+    || source.published === undefined
+    || source.published === null
+    || source.published === ""
+  ) {
+    return true;
+  }
+  return asBoolean(source.published);
+}
+
+export function normalizeGatewayPublicModelID(value) {
+  return asString(value);
+}
+
+export function defaultGatewayPublicModelName(adapter) {
+  return truncatePublicModelID(asString(adapter?.displayName));
+}
+
+export function utf8ByteLength(value) {
+  return new TextEncoder().encode(String(value ?? "")).length;
+}
+
+export function truncatePublicModelID(value, max = MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH) {
+  const text = asString(value);
+  if (max <= 0) {
+    return "";
+  }
+  if (utf8ByteLength(text) <= max) {
+    return text;
+  }
+  let truncated = text;
+  while (truncated && utf8ByteLength(truncated) > max) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated;
+}
+
+export function stableGatewayPublicModelSuffix(adapterID, width = 4) {
+  const id = asString(adapterID);
+  if (!id) {
+    return "id";
+  }
+  const size = Math.max(1, Math.min(width, id.length));
+  return id.slice(0, size);
+}
+
+function joinPublicModelID(base, suffix) {
+  const extra = asString(suffix);
+  if (!extra) {
+    return truncatePublicModelID(base);
+  }
+  const sep = "-";
+  const room = MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH - utf8ByteLength(sep) - utf8ByteLength(extra);
+  if (room < 0) {
+    return truncatePublicModelID(extra);
+  }
+  return `${truncatePublicModelID(base, room)}${sep}${extra}`;
+}
+
+export function uniqueSuffixedPublicModelID(base, adapterID, used) {
+  const id = asString(adapterID);
+  const taken = used instanceof Set ? used : new Set();
+  let start = 4;
+  if (id.length > 0 && id.length < start) {
+    start = id.length;
+  }
+  for (let width = start; width <= id.length; width += 1) {
+    const candidate = joinPublicModelID(base, id.slice(0, width));
+    if (!candidate || taken.has(candidate)) {
+      continue;
+    }
+    taken.add(candidate);
+    return candidate;
+  }
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = joinPublicModelID(base, `${id}-${n}`);
+    if (!candidate || taken.has(candidate)) {
+      continue;
+    }
+    taken.add(candidate);
+    return candidate;
+  }
+  const fallback = joinPublicModelID(base, id);
+  taken.add(fallback);
+  return fallback;
+}
+
+export function normalizeGatewayPublicModel(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const item = {
+    id: normalizeGatewayPublicModelID(raw.id),
+    targetAdapterID: asString(raw.targetAdapterID),
+  };
+  if (!isGatewayPublicModelPublished(raw)) {
+    item.published = false;
+  }
+  return item;
+}
+
 export function normalizeGatewayConfig(source) {
   const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
   const models = Array.isArray(raw.publicModels) ? raw.publicModels : [];
   const publicModels = [];
-  const seen = new Set();
+  const seenIDs = new Set();
+  const seenUnpublishedTargets = new Set();
   for (const item of models) {
-    const id = asString(item?.id);
-    const targetAdapterID = asString(item?.targetAdapterID);
-    if (!id || seen.has(id)) {
+    const normalized = normalizeGatewayPublicModel(item);
+    if (!normalized.targetAdapterID) {
       continue;
     }
-    seen.add(id);
-    publicModels.push({ id, targetAdapterID });
-    if (publicModels.length >= MAX_GATEWAY_PUBLIC_MODELS) {
-      break;
+    if (!isGatewayPublicModelPublished(normalized)) {
+      if (seenUnpublishedTargets.has(normalized.targetAdapterID)) {
+        continue;
+      }
+      seenUnpublishedTargets.add(normalized.targetAdapterID);
+      publicModels.push(normalized);
+      continue;
     }
+    if (!normalized.id || seenIDs.has(normalized.id)) {
+      continue;
+    }
+    seenIDs.add(normalized.id);
+    publicModels.push({
+      id: normalized.id,
+      targetAdapterID: normalized.targetAdapterID,
+    });
   }
   return {
     enabled: asBoolean(raw.enabled),
@@ -592,13 +718,196 @@ export function normalizeGatewayConfig(source) {
   };
 }
 
-export function gatewayPublicModelInvalid(model, adapters) {
-  const target = asString(model?.targetAdapterID);
-  if (!target) {
+export function gatewayPublicModelInvalid(model, _adapters) {
+  const normalized = normalizeGatewayPublicModel(model);
+  if (!normalized.targetAdapterID) {
     return true;
   }
-  const list = Array.isArray(adapters) ? adapters : [];
-  return !list.some((adapter) => asString(adapter?.id) === target);
+  if (utf8ByteLength(normalized.id) > MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH) {
+    return true;
+  }
+  if (isGatewayPublicModelPublished(normalized) && !normalized.id) {
+    return true;
+  }
+  return false;
+}
+
+export function listGatewayPublicModelRows(adapters, publicModels) {
+  const enabled = (Array.isArray(adapters) ? adapters : []).filter((adapter) => (
+    isModelAdapterEnabled(adapter) && asString(adapter?.id)
+  ));
+  const overrides = (Array.isArray(publicModels) ? publicModels : []).map((item) => (
+    normalizeGatewayPublicModel(item)
+  ));
+  const overrideByTarget = new Map();
+  for (const item of overrides) {
+    if (!item.targetAdapterID || overrideByTarget.has(item.targetAdapterID)) {
+      continue;
+    }
+    overrideByTarget.set(item.targetAdapterID, item);
+  }
+
+  const customIDs = new Set();
+  for (const item of overrides) {
+    if (!isGatewayPublicModelPublished(item) || !item.id) {
+      continue;
+    }
+    customIDs.add(item.id);
+  }
+
+  const rows = enabled.map((adapter) => {
+    const adapterID = asString(adapter.id);
+    const override = overrideByTarget.get(adapterID);
+    const unpublished = Boolean(override) && !isGatewayPublicModelPublished(override);
+    const defaultName = defaultGatewayPublicModelName(adapter);
+    const storedID = override ? normalizeGatewayPublicModelID(override.id) : "";
+    return {
+      adapterID,
+      displayName: asString(adapter.displayName),
+      published: !unpublished,
+      publicID: storedID || defaultName,
+      effectiveID: "",
+      hasCustom: Boolean(override) && !unpublished && Boolean(storedID),
+    };
+  });
+
+  const defaultNameCounts = new Map();
+  for (const row of rows) {
+    if (!row.published || row.hasCustom) {
+      continue;
+    }
+    const name = defaultGatewayPublicModelName({ displayName: row.displayName });
+    if (!name) {
+      continue;
+    }
+    defaultNameCounts.set(name, (defaultNameCounts.get(name) || 0) + 1);
+  }
+
+  const used = new Set(customIDs);
+  for (const row of rows) {
+    if (!row.published || row.hasCustom) {
+      continue;
+    }
+    const name = defaultGatewayPublicModelName({ displayName: row.displayName });
+    if (name && defaultNameCounts.get(name) === 1 && !customIDs.has(name)) {
+      used.add(name);
+    }
+  }
+  for (const row of rows) {
+    if (!row.published) {
+      row.effectiveID = "";
+      continue;
+    }
+    if (row.hasCustom) {
+      row.effectiveID = normalizeGatewayPublicModelID(row.publicID);
+      continue;
+    }
+    const defaultName = defaultGatewayPublicModelName({ displayName: row.displayName });
+    const conflictsDefault = (defaultNameCounts.get(defaultName) || 0) > 1;
+    const conflictsCustom = Boolean(defaultName) && customIDs.has(defaultName);
+    if (defaultName && (conflictsDefault || conflictsCustom)) {
+      row.effectiveID = uniqueSuffixedPublicModelID(defaultName, row.adapterID, used);
+      continue;
+    }
+    row.effectiveID = defaultName;
+    if (defaultName) {
+      used.add(defaultName);
+    }
+  }
+
+  return rows;
+}
+
+function overrideFromPublicModelRow(row, existing) {
+  const adapterID = asString(row?.adapterID);
+  if (!adapterID) {
+    return null;
+  }
+  const published = row?.published !== false;
+  const publicID = normalizeGatewayPublicModelID(row?.publicID);
+  const defaultName = defaultGatewayPublicModelName({ displayName: row?.displayName });
+  const existingID = existing ? normalizeGatewayPublicModelID(existing.id) : "";
+  if (!published) {
+    return {
+      id: existing ? existingID : "",
+      targetAdapterID: adapterID,
+      published: false,
+    };
+  }
+  if (publicID && publicID !== defaultName) {
+    return {
+      id: publicID,
+      targetAdapterID: adapterID,
+    };
+  }
+  if (existingID && publicID === existingID) {
+    return {
+      id: existingID,
+      targetAdapterID: adapterID,
+    };
+  }
+  return null;
+}
+
+export function buildGatewayPublicModelOverrides(adapters, publicModels, rows) {
+  const existing = (Array.isArray(publicModels) ? publicModels : [])
+    .map((item) => normalizeGatewayPublicModel(item))
+    .filter((item) => item.targetAdapterID);
+  const rowList = Array.isArray(rows) ? rows : [];
+  const rowByAdapter = new Map(rowList.map((row) => [asString(row.adapterID), row]));
+  const handled = new Set();
+  const output = [];
+
+  for (const item of existing) {
+    const row = rowByAdapter.get(item.targetAdapterID);
+    if (row && !handled.has(item.targetAdapterID)) {
+      handled.add(item.targetAdapterID);
+      const next = overrideFromPublicModelRow(row, item);
+      if (next) {
+        output.push(next);
+      }
+      continue;
+    }
+    if (row && handled.has(item.targetAdapterID)) {
+      if (row.published === false) {
+        output.push({
+          id: normalizeGatewayPublicModelID(item.id),
+          targetAdapterID: item.targetAdapterID,
+          published: false,
+        });
+      } else {
+        output.push(item);
+      }
+      continue;
+    }
+    output.push(item);
+  }
+
+  for (const row of rowList) {
+    const adapterID = asString(row.adapterID);
+    if (!adapterID || handled.has(adapterID)) {
+      continue;
+    }
+    handled.add(adapterID);
+    const next = overrideFromPublicModelRow(row, null);
+    if (next) {
+      output.push(next);
+    }
+  }
+
+  return output;
+}
+
+export function collapseGatewayPublicModelsForPersist(adapters, publicModels) {
+  return buildGatewayPublicModelOverrides(
+    adapters,
+    publicModels,
+    listGatewayPublicModelRows(adapters, publicModels),
+  );
+}
+
+export function countPublishedGatewayModels(adapters, publicModels) {
+  return listGatewayPublicModelRows(adapters, publicModels).filter((row) => row.published).length;
 }
 
 export const DEFAULT_OUTBOUND_PROXY = Object.freeze({

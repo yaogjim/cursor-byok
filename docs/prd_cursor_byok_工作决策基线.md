@@ -476,6 +476,12 @@ Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID�
 - Gateway 与 Cursor 共用同一 config manager 和现有 `DefaultProviderGateway` / Router / fallback / retry / 包级容量 limiter。禁止复制第二套 Router 或 limiter。
 - 公开模型别名只经 `gateway.publicModels[{id,targetAdapterID}]` 显式映射解析，不回落到 Provider `modelID` 或 16 位内部 hash。目标 adapter 变化后显示映射失效并要求重选，不自动迁移。
 
+**模型启停与默认公开（2026-09-24，已确认的产品要求；实施设计待确认）**
+
+- 模型列表中每个已配置模型可启用或停用；旧配置及新建模型默认启用。停用后该模型在 Cursor 等已有调用入口及共享入口均不可使用，不能只在界面隐藏；重新启用后恢复可用。模型启停与共享入口是否公开是两个独立控制。
+- 共享入口的公开模型列表默认包含全部已启用模型；默认公开名称为模型列表的名称。用户可单独修改公开名称或取消公开；仅取消公开不影响模型经其他入口使用。停用模型不得继续公开或被旧公开名称调用。
+- 默认公开名称重复、或与既有自定义公开名称冲突时，仅冲突项自动添加稳定区分后缀；其他模型保持原名。模型名称中的空白、已配置模型数超过当前映射上限时如何保持“全部默认公开”，由实施设计闭合，不以静默漏列代替。
+
 **配置、token 与权限**
 
 - 最小字段：`gateway.enabled`、`gateway.listenAddr`、后端生成的 `gateway.token`、`gateway.publicModels`。不含 ACP 字段和逐协议权限。

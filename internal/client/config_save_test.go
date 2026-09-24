@@ -112,8 +112,15 @@ func TestSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 
 	cleared := saved
 	cleared.ModelAdapters = []serverconfig.ModelAdapterConfig{}
-	if err := service.SaveModelAdapters(cleared); err == nil || !strings.Contains(err.Error(), "公开模型") {
+	if err := service.SaveModelAdapters(cleared); err != nil {
 		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+	loaded, err := service.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.ModelAdapters) != 0 || len(loaded.Gateway.PublicModels) != 0 {
+		t.Fatalf("stale public mapping survived delete: %+v", loaded)
 	}
 }
 

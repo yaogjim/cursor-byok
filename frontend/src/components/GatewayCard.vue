@@ -2,7 +2,6 @@
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
-import Select from "@/components/ui/Select.vue";
 import Switch from "@/components/ui/Switch.vue";
 import { useMessage } from "@/composables/useMessage";
 import { showModal } from "@/composables/useModal";
@@ -19,7 +18,7 @@ import {
   testGateway,
   toUserError,
 } from "@/state/appState";
-import { DEFAULT_GATEWAY_LISTEN_ADDR, gatewayPublicModelInvalid } from "@/state/configProjection";
+import { DEFAULT_GATEWAY_LISTEN_ADDR, countPublishedGatewayModels, listGatewayPublicModelRows, buildGatewayPublicModelOverrides, MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH } from "@/state/configProjection";
 import { Clipboard } from "@wailsio/runtime";
 import { computed, ref } from "vue";
 
@@ -29,21 +28,17 @@ const scopeOpen = ref(false);
 const gatewayTestBusy = ref(false);
 const gatewayTestText = ref("");
 
-const adapterOptions = computed(() =>
-  (appState.modelAdapters || []).map((adapter) => ({
-    label: adapter.displayName || adapter.id,
-    value: adapter.id,
-  })),
-);
-
+const publicModelRows = computed(() => (
+  listGatewayPublicModelRows(appState.modelAdapters, appState.gatewayPublicModels)
+));
 const gatewayDisplayAddr = computed(() =>
   appState.gatewayRuntimeListenAddr || appState.gatewayListenAddr || DEFAULT_GATEWAY_LISTEN_ADDR,
 );
-
 const gatewayBaseURL = computed(() => `http://${gatewayDisplayAddr.value}/v1`);
-const publicModelCount = computed(() =>
-  Array.isArray(appState.gatewayPublicModels) ? appState.gatewayPublicModels.length : 0,
-);
+const publicModelCount = computed(() => (
+  countPublishedGatewayModels(appState.modelAdapters, appState.gatewayPublicModels)
+));
+const enabledModelCount = computed(() => publicModelRows.value.length);
 const gatewayIntentText = computed(() =>
   appState.gatewayEnabled ? "配置意图：已启用" : "配置意图：未启用",
 );
@@ -195,19 +190,32 @@ async function handleGatewayStop() {
   gatewayTestText.value = "";
 }
 
-function addPublicModel() {
-  if ((appState.gatewayPublicModels || []).length >= 32) {
-    message("公开模型最多 32 个");
-    return;
-  }
-  appState.gatewayPublicModels = [
-    ...appState.gatewayPublicModels,
-    { id: "", targetAdapterID: "" },
-  ];
+function writePublicModelRows(rows) {
+  appState.gatewayPublicModels = buildGatewayPublicModelOverrides(
+    appState.modelAdapters,
+    appState.gatewayPublicModels,
+    rows,
+  );
 }
 
-function removePublicModel(index) {
-  appState.gatewayPublicModels = appState.gatewayPublicModels.filter((_, current) => current !== index);
+function updatePublicModelRow(adapterID, patch) {
+  const rows = publicModelRows.value.map((row) => (
+    row.adapterID === adapterID ? { ...row, ...patch } : { ...row }
+  ));
+  writePublicModelRows(rows);
+}
+
+function setPublicModelPublished(adapterID, published) {
+  updatePublicModelRow(adapterID, { published: Boolean(published) });
+}
+
+function setPublicModelID(adapterID, value) {
+  const text = String(value ?? "");
+  updatePublicModelRow(adapterID, {
+    publicID: text.length > MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH
+      ? text.slice(0, MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH)
+      : text,
+  });
 }
 
 async function handleSaveGateway() {
@@ -331,36 +339,49 @@ async function handleReloadGateway() {
 
       <div class="setting-row">
         <div class="setting-l">
-          <div class="setting-t">公开模型别名</div>
+          <div class="setting-t">公开模型</div>
           <div class="setting-s">
-            {{ publicModelCount }} 个映射；只经显式映射解析，不回落到内部 modelID
+            {{ enabledModelCount }} 个已启用，{{ publicModelCount }} 个公开；默认按模型名称公开，可单独改名或取消公开
           </div>
         </div>
-        <Button class="btn-sm" :disabled="appState.configSaving" @click="addPublicModel">
-          <span class="icon-[mdi--plus] text-[14px]" aria-hidden="true" />
-          添加映射
-        </Button>
       </div>
       <div
-        v-for="(item, index) in appState.gatewayPublicModels"
-        :key="index"
+        v-if="publicModelRows.length === 0"
         class="setting-row"
       >
-        <div class="grid w-full min-w-0 grid-cols-[1fr_1fr_auto] gap-2">
-          <Input v-model="item.id" :disabled="appState.configSaving" placeholder="公开别名，如 grok" />
-          <Select
-            v-model="item.targetAdapterID"
-            :options="adapterOptions"
-            placeholder="选择目标适配器"
+        <div class="setting-s">
+          当前没有已启用的模型。在模型页启用并保存后，会按名称默认出现在这里。
+        </div>
+      </div>
+      <div
+        v-for="row in publicModelRows"
+        :key="row.adapterID"
+        class="setting-row"
+      >
+        <div class="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
+          <Switch
+            standalone
+            compact
+            label="公开此模型"
+            :show-state="false"
+            :enabled="row.published"
+            :disabled="appState.configSaving"
+            @change="setPublicModelPublished(row.adapterID, $event)"
           />
-          <Button class="btn-sm" :disabled="appState.configSaving" @click="removePublicModel(index)">
-            删除
-          </Button>
-          <div
-            v-if="gatewayPublicModelInvalid(item, appState.modelAdapters)"
-            class="col-span-3 text-xs text-[var(--color-warning-text)]"
-          >
-            映射已失效，请重新选择目标适配器
+          <div class="min-w-0">
+            <div class="truncate text-sm font-medium">{{ row.displayName || row.adapterID }}</div>
+            <Input
+              :model-value="row.publicID"
+              :disabled="appState.configSaving || !row.published"
+              placeholder="公开名称，默认使用模型名称"
+              @update:model-value="setPublicModelID(row.adapterID, $event)"
+            />
+            <div
+              v-if="row.published && row.effectiveID && row.effectiveID !== row.publicID"
+              class="mt-1 text-xs text-[var(--color-text-muted)]"
+            >
+              对外名称 {{ row.effectiveID }}
+            </div>
           </div>
         </div>
       </div>
@@ -376,7 +397,7 @@ async function handleReloadGateway() {
       </div>
 
       <div class="note plain">
-        <strong>极简使用：</strong>启用并保存 → 启动 Gateway → 将 Base URL 和 Token 填入客户端 → 模型填写上方公开别名。启动后会自动测试入口，也可点击“测试可用性”。
+        <strong>极简使用：</strong>启用并保存 → 启动 Gateway → 将 Base URL 和 Token 填入客户端 → 模型填写上方公开名称。启动后会自动测试入口，也可点击“测试可用性”。
       </div>
 
       <div class="ui-collapse" :class="{ 'is-open': scopeOpen }">
@@ -391,7 +412,7 @@ async function handleReloadGateway() {
         </button>
         <div v-show="scopeOpen" class="ui-collapse-body">
           <div class="note plain">
-            只影响 Gateway 的 HTTP 接口、Token 与公开模型映射；不改变 Cursor 18080/18090 链路。Token 明文不写入页面常驻状态、配置投影或日志。本页保存只包含启用状态、监听地址和公开模型映射。
+            只影响 Gateway 的 HTTP 接口、Token 与公开模型；不改变 Cursor 18080/18090 链路。Token 明文不写入页面常驻状态、配置投影或日志。本页保存只包含启用状态、监听地址和公开覆盖项。
           </div>
         </div>
       </div>

@@ -1173,3 +1173,53 @@ func TestNormalizeConfigRejectsInvalidEnabledOutboundProxy(t *testing.T) {
 		t.Fatalf("model invalid error = %v", err)
 	}
 }
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func TestNormalizeModelAdapterEnabledMissingIsTrueAndFalseDisables(t *testing.T) {
+	missing := testModelAdapter("enabled-default", 1)
+	normalizedMissing, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{missing})
+	if err != nil {
+		t.Fatalf("missing enabled: %v", err)
+	}
+	if !ModelAdapterEnabled(normalizedMissing[0]) || normalizedMissing[0].Enabled != nil {
+		t.Fatalf("missing enabled = %#v, want nil/true", normalizedMissing[0].Enabled)
+	}
+
+	explicitTrue := missing
+	explicitTrue.Enabled = boolPtr(true)
+	normalizedTrue, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{explicitTrue})
+	if err != nil {
+		t.Fatalf("explicit true: %v", err)
+	}
+	if !ModelAdapterEnabled(normalizedTrue[0]) || normalizedTrue[0].Enabled == nil || !*normalizedTrue[0].Enabled {
+		t.Fatalf("explicit true = %#v", normalizedTrue[0].Enabled)
+	}
+
+	explicitFalse := missing
+	explicitFalse.Enabled = boolPtr(false)
+	normalizedFalse, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{explicitFalse})
+	if err != nil {
+		t.Fatalf("explicit false: %v", err)
+	}
+	if ModelAdapterEnabled(normalizedFalse[0]) || normalizedFalse[0].Enabled == nil || *normalizedFalse[0].Enabled {
+		t.Fatalf("explicit false = %#v", normalizedFalse[0].Enabled)
+	}
+	if normalizedFalse[0].ID != normalizedMissing[0].ID || normalizedTrue[0].ID != normalizedMissing[0].ID {
+		t.Fatalf("enabled must not change channel ID: missing=%q true=%q false=%q", normalizedMissing[0].ID, normalizedTrue[0].ID, normalizedFalse[0].ID)
+	}
+
+	var fromYAML Config
+	if err := yaml.Unmarshal([]byte("modelAdapters:\n  - displayName: enabled-default\n    type: openai\n    baseURL: https://api.example.com/v1\n    apiKey: test-key\n    tooltipData: enabled-default\n    modelID: enabled-default\n    reasoningEffort: medium\n    openAIEndpoint: /v1/responses\n"), &fromYAML); err != nil {
+		t.Fatalf("unmarshal missing enabled: %v", err)
+	}
+	loaded, err := NormalizeConfig(fromYAML)
+	if err != nil {
+		t.Fatalf("normalize yaml: %v", err)
+	}
+	if len(loaded.ModelAdapters) != 1 || !ModelAdapterEnabled(loaded.ModelAdapters[0]) {
+		t.Fatalf("old yaml missing enabled must stay enabled: %+v", loaded.ModelAdapters)
+	}
+}

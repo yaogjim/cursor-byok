@@ -41,6 +41,18 @@ import {
   normalizeGatewayConfig,
   DEFAULT_GATEWAY_CONFIG,
   resolveEffectiveTheme,
+  normalizeModelAdapterEnabled,
+  isModelAdapterEnabled,
+  isGatewayPublicModelPublished,
+  normalizeGatewayPublicModel,
+  defaultGatewayPublicModelName,
+  stableGatewayPublicModelSuffix,
+  listGatewayPublicModelRows,
+  buildGatewayPublicModelOverrides,
+  collapseGatewayPublicModelsForPersist,
+  countPublishedGatewayModels,
+  gatewayPublicModelInvalid,
+  MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH,
 } from "../src/state/configProjection.js";
 import {
   applyModelAdapterTypeChange,
@@ -1829,6 +1841,145 @@ assertEqual(
 assert(!Object.prototype.hasOwnProperty.call(gateway, "token"), "normalized gateway must not have token");
 assertEqual(normalizeGatewayConfig(undefined), { ...DEFAULT_GATEWAY_CONFIG, publicModels: [] }, "gateway defaults");
 
+assertEqual(normalizeModelAdapterEnabled(undefined), true, "missing adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(null), true, "null adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(""), true, "empty adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(false), false, "explicit false stays disabled");
+assertEqual(normalizeModelAdapterEnabled(true), true, "explicit true stays enabled");
+assertEqual(isModelAdapterEnabled({}), true, "adapter without enabled is on");
+assertEqual(isModelAdapterEnabled({ enabled: false }), false, "adapter explicit false is off");
+assertEqual(isGatewayPublicModelPublished({ id: "grok", targetAdapterID: "a" }), true, "old custom id defaults published");
+assertEqual(isGatewayPublicModelPublished({ id: "", targetAdapterID: "a", published: false }), false, "published false is unpublished");
+assertEqual(
+  normalizeGatewayPublicModel({ id: "  my grok  ", targetAdapterID: " adapter-a " }),
+  { id: "my grok", targetAdapterID: "adapter-a" },
+  "public name keeps internal spaces and omits published when true",
+);
+assertEqual(
+  normalizeGatewayConfig({
+    publicModels: [
+      { id: "", targetAdapterID: "adapter-a", published: false },
+      { id: "custom", targetAdapterID: "adapter-b" },
+    ],
+  }).publicModels,
+  [
+    { id: "", targetAdapterID: "adapter-a", published: false },
+    { id: "custom", targetAdapterID: "adapter-b" },
+  ],
+  "unpublished empty id is kept and old custom mapping stays published",
+);
+{
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    id: `model-${index}`,
+    targetAdapterID: `adapter-${index}`,
+  }));
+  assertEqual(
+    normalizeGatewayConfig({ publicModels: many }).publicModels.length,
+    40,
+    "publicModels must not silently cap at 32",
+  );
+}
+assertEqual(MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH, 128, "public name max length is 128");
+assert(
+  gatewayPublicModelInvalid({ id: `${"n".repeat(129)}`, targetAdapterID: "a" }),
+  "public name over 128 is invalid",
+);
+assert(
+  !gatewayPublicModelInvalid({ id: "", targetAdapterID: "a", published: false }),
+  "unpublished empty id is valid",
+);
+assert(
+  gatewayPublicModelInvalid({ id: "", targetAdapterID: "a" }),
+  "published empty id is invalid",
+);
+
+{
+  const adapters = [
+    { id: "aaaaaa111111", displayName: "GPT", enabled: true },
+    { id: "bbbbbb222222", displayName: "GPT", enabled: true },
+    { id: "cccccc333333", displayName: "Other", enabled: true },
+    { id: "dddddd444444", displayName: "Off", enabled: false },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, []);
+  assertEqual(rows.map((row) => row.adapterID), ["aaaaaa111111", "bbbbbb222222", "cccccc333333"], "gateway list is enabled models only");
+  assertEqual(rows[2].publicID, "Other", "unconflicted default keeps displayName");
+  assertEqual(rows[2].effectiveID, "Other", "unconflicted default effective id is unchanged");
+  assertEqual(rows[0].effectiveID, "GPT-aaaa", "first conflicting default uses adapter id prefix");
+  assertEqual(rows[1].effectiveID, "GPT-bbbb", "second conflicting default uses its own adapter id prefix");
+  assertEqual(rows[0].publicID, "GPT", "editor still shows default name before suffix");
+  assertEqual(collapseGatewayPublicModelsForPersist(adapters, []), [], "default public names are not persisted as overrides");
+  assertEqual(countPublishedGatewayModels(adapters, []), 3, "published count includes default public models");
+}
+
+{
+  const adapters = [
+    { id: "a1111111", displayName: "GPT", enabled: true },
+    { id: "b2222222", displayName: "GPT", enabled: true },
+    { id: "c3333333", displayName: "GPT-a111", enabled: true },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, []);
+  assertEqual(rows.map((row) => row.effectiveID), ["GPT-a1111", "GPT-b222", "GPT-a111"], "suffix must not steal another model's unconflicted default name");
+}
+
+{
+  const adapters = [
+    { id: "ad-keep", displayName: "Grok", enabled: true },
+    { id: "ad-hidden", displayName: "Hidden", enabled: true },
+    { id: "ad-new", displayName: "New", enabled: true },
+  ];
+  const stored = [
+    { id: "grok", targetAdapterID: "ad-keep" },
+    { id: "", targetAdapterID: "ad-hidden", published: false },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, stored);
+  assertEqual(rows.find((row) => row.adapterID === "ad-keep").publicID, "grok", "existing custom name is shown");
+  assertEqual(rows.find((row) => row.adapterID === "ad-hidden").published, false, "unpublished stays off");
+  assertEqual(rows.find((row) => row.adapterID === "ad-new").publicID, "New", "new enabled model defaults to displayName");
+  assertEqual(
+    collapseGatewayPublicModelsForPersist(adapters, stored),
+    stored,
+    "save keeps custom mapping and unpublished override, and does not add default New",
+  );
+  const republished = rows.map((row) => (
+    row.adapterID === "ad-hidden" ? { ...row, published: true, publicID: "Hidden", hasCustom: false } : { ...row }
+  ));
+  assertEqual(
+    buildGatewayPublicModelOverrides(adapters, stored, republished),
+    [{ id: "grok", targetAdapterID: "ad-keep" }],
+    "republishing default must drop unpublished override and not resurrect a mapping",
+  );
+  const renamed = rows.map((row) => (
+    row.adapterID === "ad-new" ? { ...row, publicID: "my grok" } : { ...row }
+  ));
+  assertEqual(
+    buildGatewayPublicModelOverrides(adapters, stored, renamed),
+    [
+      { id: "grok", targetAdapterID: "ad-keep" },
+      { id: "", targetAdapterID: "ad-hidden", published: false },
+      { id: "my grok", targetAdapterID: "ad-new" },
+    ],
+    "custom public name with internal space is submitted as override",
+  );
+}
+
+{
+  const adapters = [
+    { id: "same-name", displayName: "GPT", enabled: true },
+    { id: "other-gpt", displayName: "GPT", enabled: true },
+  ];
+  const stored = [{ id: "GPT", targetAdapterID: "same-name" }];
+  const rows = listGatewayPublicModelRows(adapters, stored);
+  assertEqual(rows[0].effectiveID, "GPT", "existing custom mapping keeps its id");
+  assert(rows[1].effectiveID !== "GPT", "default that collides with custom id gets a suffix");
+  assertEqual(
+    collapseGatewayPublicModelsForPersist(adapters, stored),
+    stored,
+    "existing same-as-displayName mapping is not deleted",
+  );
+}
+
+assertEqual(defaultGatewayPublicModelName({ displayName: "  foo  bar  " }), "foo  bar", "default public name keeps internal spaces");
+
 assert(!appStateSource.includes("appState.gatewayToken "), "appState must not keep gateway token");
 assert(appStateSource.includes("tokenConfigured"), "appState must project tokenConfigured only");
 assert(!appStateSource.includes("token: normalized.gateway.token"), "serializeConfigPayload must not write gateway token");
@@ -1848,6 +1999,36 @@ assert(
 );
 assert(gatewayCardSource.includes("极简使用"), "GatewayCard must include minimal usage instructions");
 assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must not store token in appState");
+assert(gatewayCardSource.includes("listGatewayPublicModelRows"), "GatewayCard lists enabled models");
+assert(gatewayCardSource.includes("buildGatewayPublicModelOverrides"), "GatewayCard writes override-only publicModels");
+assert(!gatewayCardSource.includes("添加映射"), "GatewayCard no longer adds explicit mappings");
+assert(!gatewayCardSource.includes("公开模型最多 32 个"), "GatewayCard must not keep the 32 mapping cap");
+assert(modelConfigSource.includes("setAdapterEnabled"), "model list has an enable switch");
+assert(editorSource.includes("启用模型"), "model editor has an enable switch");
+assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("enabled: true"),
+  "new adapters default to enabled",
+);
+assert(
+  appStateSource.includes("enabled: normalizeModelAdapterEnabled(raw.enabled)"),
+  "normalizeModelAdapter treats missing enabled as true",
+);
+assert(
+  appStateSource.includes("collapseGatewayPublicModelsForPersist"),
+  "gateway save collapses to overrides",
+);
+assert(
+  !appStateSource.includes("GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR"),
+  "model save must not be blocked by leftover public mappings",
+);
+assert(
+  extractSourceFunction(appStateSource, "snapshotGatewaySection").includes("normalizeGatewayPublicModel"),
+  "gateway dirty snapshot keeps published overrides",
+);
+assert(
+  !projectionSource.includes("MAX_GATEWAY_PUBLIC_MODELS"),
+  "frontend projection must not keep the 32 public model cap",
+);
 assert(isWindowsSource.includes("try {") && isWindowsSource.includes("catch {"), "standalone Vite previews must survive missing Wails platform detection");
 const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
 assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
@@ -1878,7 +2059,7 @@ const routerSource = readFileSync(path.join(frontendSrc, "router/index.js"), "ut
 assert(appStateSource.includes('"/models": "models"'), "models route must map to models section");
 assert(appStateSource.includes("snapshotModelsSection"), "models section must have a dirty snapshot");
 assert(appStateSource.includes("modelsEditorDraftDirty"), "editor draft must participate in models dirty");
-assert(appStateSource.includes("unresolvedGatewayPublicModelsError"), "model save must check gateway public models");
+assert(!appStateSource.includes("unresolvedGatewayPublicModelsError"), "model save must not be blocked by leftover public mappings");
 const includeCacheWriteSaver = extractSourceFunction(appStateSource, "saveIncludeCacheWriteInHitRate");
 assert(includeCacheWriteSaver.includes("saveHomeMetrics"), "cache hit-rate toggle must use section save");
 assert(!includeCacheWriteSaver.includes("persistConfigPayload"), "cache hit-rate toggle must not full-save user config");

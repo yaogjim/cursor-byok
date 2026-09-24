@@ -465,3 +465,72 @@ func TestResolveChannelPlanKeepsOutboundProxyPerCandidate(t *testing.T) {
 		t.Fatalf("candidate used alias/primary proxy: %+v", plan.Channels[1].OutboundProxy)
 	}
 }
+
+func TestResolveSkipsDisabledAdaptersAndAutoSelectsFirstEnabled(t *testing.T) {
+	disabled := testModelAdapter("disabled-first", 1)
+	disabled.Enabled = boolPtr(false)
+	enabled := testModelAdapter("enabled-second", 2)
+	enabled.APIKey = "other-key"
+	normalized, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{disabled, enabled})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	disabledID := normalized[0].ID
+	enabledID := normalized[1].ID
+
+	auto, err := resolveModelAdapterChannel(normalized, "auto")
+	if err != nil {
+		t.Fatalf("auto: %v", err)
+	}
+	if auto.ID != enabledID {
+		t.Fatalf("auto selected %q, want first enabled %q", auto.ID, enabledID)
+	}
+	if _, err := resolveModelAdapterChannel(normalized, disabledID); !errors.Is(err, legacyruntime.ErrChannelNotAvailable) {
+		t.Fatalf("disabled explicit ID error = %v", err)
+	}
+	got, err := resolveModelAdapterChannel(normalized, enabledID)
+	if err != nil || got.ID != enabledID {
+		t.Fatalf("enabled ID = %+v err=%v", got, err)
+	}
+
+	allDisabled, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{disabled})
+	if err != nil {
+		t.Fatalf("normalize all disabled: %v", err)
+	}
+	if _, err := resolveModelAdapterChannel(allDisabled, ""); !errors.Is(err, legacyruntime.ErrChannelNotAvailable) {
+		t.Fatalf("no enabled auto error = %v", err)
+	}
+}
+
+func TestResolveChannelPlanOmitsDisabledPrimaryAndRejectsDisabledAlias(t *testing.T) {
+	adapters, aliasID, primaryID, candidateID := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    primaryID,
+		CandidateChannelIDs: []string{candidateID},
+	}
+	adapters[1].Enabled = boolPtr(false)
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	plan, err := resolveModelAdapterChannelPlan(normalized, aliasID)
+	if err != nil {
+		t.Fatalf("resolve plan: %v", err)
+	}
+	if plan.FallbackEnabled || len(plan.Channels) != 1 || plan.Channels[0].ID != candidateID {
+		t.Fatalf("disabled primary plan = %+v", plan)
+	}
+
+	normalized[0].Enabled = boolPtr(false)
+	if _, err := resolveModelAdapterChannelPlan(normalized, aliasID); !errors.Is(err, legacyruntime.ErrChannelNotAvailable) {
+		t.Fatalf("disabled alias error = %v", err)
+	}
+
+	normalized[0].Enabled = boolPtr(true)
+	normalized[1].Enabled = boolPtr(false)
+	normalized[2].Enabled = boolPtr(false)
+	if _, err := resolveModelAdapterChannelPlan(normalized, aliasID); !errors.Is(err, legacyruntime.ErrChannelNotAvailable) {
+		t.Fatalf("all physical disabled error = %v", err)
+	}
+}

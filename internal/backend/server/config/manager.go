@@ -233,6 +233,7 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 			ID:                           item.ID,
 			Sort:                         item.Sort,
 			DisplayName:                  item.DisplayName,
+			Disabled:                     !ModelAdapterEnabled(item),
 			Type:                         item.Type,
 			BaseURL:                      item.BaseURL,
 			APIKey:                       item.APIKey,

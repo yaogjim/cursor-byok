@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -267,5 +268,64 @@ func TestSelectChannelForModelProjectsOpenAIImageGenerationEnabled(t *testing.T)
 	}
 	if chOff.OpenAIImageGenerationEnabled {
 		t.Fatal("disabled runtime channel projected OpenAIImageGenerationEnabled=true")
+	}
+}
+
+func TestSelectChannelForModelRejectsDisabledAndAutoSelectsEnabled(t *testing.T) {
+	svc := NewConfigurableChannelService(func(context.Context) (RuntimeConfigSnapshot, error) {
+		disabled := testRuntimeModelAdapter("")
+		disabled.DisplayName = "disabled-first"
+		disabled.ModelID = "disabled-first"
+		disabled.TooltipData = "disabled-first"
+		disabled.Disabled = true
+		enabled := testRuntimeModelAdapter("")
+		enabled.DisplayName = "enabled-second"
+		enabled.ModelID = "enabled-second"
+		enabled.TooltipData = "enabled-second"
+		enabled.APIKey = "other-key"
+		return RuntimeConfigSnapshot{ModelAdapters: []ModelAdapterConfig{disabled, enabled}}, nil
+	}, "")
+
+	auto, err := svc.SelectChannelForModel(context.Background(), "auto")
+	if err != nil {
+		t.Fatalf("auto: %v", err)
+	}
+	if auto.Name != "enabled-second" {
+		t.Fatalf("auto selected %q", auto.Name)
+	}
+
+	adapters, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{
+		func() ModelAdapterConfig {
+			adapter := testRuntimeModelAdapter("")
+			adapter.DisplayName = "disabled-first"
+			adapter.ModelID = "disabled-first"
+			adapter.TooltipData = "disabled-first"
+			adapter.Disabled = true
+			return adapter
+		}(),
+		func() ModelAdapterConfig {
+			adapter := testRuntimeModelAdapter("")
+			adapter.DisplayName = "enabled-second"
+			adapter.ModelID = "enabled-second"
+			adapter.TooltipData = "enabled-second"
+			adapter.APIKey = "other-key"
+			return adapter
+		}(),
+	})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if _, err := svc.SelectChannelForModel(context.Background(), adapters[0].ID); !errors.Is(err, ErrChannelNotAvailable) {
+		t.Fatalf("disabled ID error = %v", err)
+	}
+}
+
+func TestNormalizeModelAdapterConfigsPreservesDisabledZeroValue(t *testing.T) {
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{testRuntimeModelAdapter("")})
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	if got[0].Disabled {
+		t.Fatal("old runtime fixture defaulted to Disabled")
 	}
 }

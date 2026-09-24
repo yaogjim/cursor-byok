@@ -121,6 +121,8 @@ type ModelAdapterConfig struct {
 	Sort int `json:"sort"`
 	// DisplayName 表示当前声明中的 DisplayName。
 	DisplayName string `json:"displayName"`
+	// Disabled 表示该模型在运行时不可用；旧 fixture 缺失时视为未禁用。
+	Disabled bool `json:"disabled,omitempty"`
 	// Type 表示当前声明中的 Type。
 	Type string `json:"type"`
 	// BaseURL 表示当前声明中的 BaseURL。
@@ -194,6 +196,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		next := ModelAdapterConfig{
 			Sort:                  item.Sort,
 			DisplayName:           strings.TrimSpace(item.DisplayName),
+			Disabled:              item.Disabled,
 			Type:                  normalizeModelAdapterType(item.Type),
 			BaseURL:               baseURL,
 			APIKey:                strings.TrimSpace(item.APIKey),
@@ -556,15 +559,27 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 		if err != nil {
 			return nil, err
 		}
-		matchIndex, ok := modelchannel.ResolveAdapterIndex(
-			adapters,
-			modelID,
-			func(adapter ModelAdapterConfig) string { return adapter.ID },
-			func(adapter ModelAdapterConfig) string { return adapter.ModelID },
-			func(adapter ModelAdapterConfig) string {
-				return modelchannel.BuildLegacyChannelID(adapter.BaseURL, adapter.ModelID, adapter.APIKey, adapter.DisplayName)
-			},
+		requested := strings.TrimSpace(modelID)
+		var (
+			matchIndex int
+			ok         bool
 		)
+		if requested == "" || modelchannel.IsMetaModelAlias(requested) {
+			matchIndex, ok = firstEnabledRuntimeAdapterIndex(adapters)
+		} else {
+			matchIndex, ok = modelchannel.ResolveAdapterIndex(
+				adapters,
+				modelID,
+				func(adapter ModelAdapterConfig) string { return adapter.ID },
+				func(adapter ModelAdapterConfig) string { return adapter.ModelID },
+				func(adapter ModelAdapterConfig) string {
+					return modelchannel.BuildLegacyChannelID(adapter.BaseURL, adapter.ModelID, adapter.APIKey, adapter.DisplayName)
+				},
+			)
+			if ok && adapters[matchIndex].Disabled {
+				return nil, ErrChannelNotAvailable
+			}
+		}
 		if !ok {
 			return nil, ErrChannelNotAvailable
 		}
@@ -620,6 +635,15 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 	}
 	resolved := s.channel
 	return &resolved, nil
+}
+
+func firstEnabledRuntimeAdapterIndex(adapters []ModelAdapterConfig) (int, bool) {
+	for index, adapter := range adapters {
+		if !adapter.Disabled {
+			return index, true
+		}
+	}
+	return -1, false
 }
 
 // SelectChannelPlanForModel 为指定模型构建渠道计划。

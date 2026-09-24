@@ -20,6 +20,9 @@ import {
   validateProviderFallbackAdapters,
   validateUpstreamCapacityAdapters,
   normalizeGatewayConfig,
+  normalizeGatewayPublicModel,
+  normalizeModelAdapterEnabled,
+  collapseGatewayPublicModelsForPersist,
   gatewayPublicModelInvalid,
   normalizeTheme,
   resolveEffectiveTheme,
@@ -362,6 +365,7 @@ export function createEmptyModelAdapter() {
   return {
     id: "",
     sort: 0,
+    enabled: true,
     displayName: "",
     type: "openai",
     baseURL: "",
@@ -516,6 +520,7 @@ export function normalizeModelAdapter(source) {
   return {
     id: asString(raw.id),
     sort: asPositiveInteger(raw.sort),
+    enabled: normalizeModelAdapterEnabled(raw.enabled),
     displayName: asString(raw.displayName || raw.name),
     type: SUPPORTED_MODEL_ADAPTER_TYPES.has(normalizedType) ? normalizedType : "",
     baseURL: normalizedBaseURL,
@@ -806,15 +811,6 @@ const savedConfigSectionSnapshots = reactive({
   settings: "",
 });
 
-const GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR = "Gateway 公开模型仍指向当前适配器；删除或更改适配器标识前，请先在网关集成页更新映射";
-
-function unresolvedGatewayPublicModelsError(adapters) {
-  if (!asArray(appState.gatewayPublicModels).some((item) => gatewayPublicModelInvalid(item, adapters))) {
-    return "";
-  }
-  return GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR;
-}
-
 function snapshotCursorSection(source = appState) {
   return JSON.stringify({
     routingMode: normalizeRouteMode(source.routingMode),
@@ -825,10 +821,9 @@ function snapshotGatewaySection(source = appState) {
   return JSON.stringify({
     enabled: Boolean(source.gatewayEnabled),
     listenAddr: asString(source.gatewayListenAddr),
-    publicModels: asArray(source.gatewayPublicModels).map((item) => ({
-      id: asString(item?.id),
-      targetAdapterID: asString(item?.targetAdapterID),
-    })),
+    publicModels: asArray(source.gatewayPublicModels).map((item) => (
+      normalizeGatewayPublicModel(item)
+    )),
   });
 }
 
@@ -874,10 +869,9 @@ function applyConfigSectionSnapshot(scope, raw) {
   if (scope === "gateway") {
     appState.gatewayEnabled = Boolean(parsed.enabled);
     appState.gatewayListenAddr = asString(parsed.listenAddr);
-    appState.gatewayPublicModels = asArray(parsed.publicModels).map((item) => ({
-      id: asString(item?.id),
-      targetAdapterID: asString(item?.targetAdapterID),
-    }));
+    appState.gatewayPublicModels = asArray(parsed.publicModels).map((item) => (
+      normalizeGatewayPublicModel(item)
+    ));
     return;
   }
   if (scope === "models") {
@@ -1042,15 +1036,6 @@ async function persistConfigPayload(config, { modelAdaptersOnly = false, savedSc
       error: prepared.error,
     };
   }
-  if (modelAdaptersOnly) {
-    const mappingError = unresolvedGatewayPublicModelsError(prepared.adaptersWithIds);
-    if (mappingError) {
-      return {
-        ok: false,
-        error: mappingError,
-      };
-    }
-  }
   const payload = serializeConfigPayload({
     ...normalized,
     modelAdapters: prepared.payloadAdapters,
@@ -1088,11 +1073,19 @@ async function persistScopedConfig(scope) {
   }
   const payload = buildConfigPayloadFromState();
   if (scope === "gateway") {
-    const invalid = asArray(appState.gatewayPublicModels).some((item) => (
+    const publicModels = collapseGatewayPublicModelsForPersist(
+      appState.modelAdapters,
+      appState.gatewayPublicModels,
+    );
+    payload.gateway = {
+      ...payload.gateway,
+      publicModels,
+    };
+    const invalid = asArray(publicModels).some((item) => (
       gatewayPublicModelInvalid(item, appState.modelAdapters)
     ));
     if (invalid) {
-      return { ok: false, error: "公开模型映射已失效或未选择目标适配器" };
+      return { ok: false, error: "公开名称不能为空，长度最多 128，取消公开时可以不填名称" };
     }
   }
   if (scope === "models") {
@@ -1102,10 +1095,6 @@ async function persistScopedConfig(scope) {
     );
     if (!prepared.ok) {
       return { ok: false, error: prepared.error };
-    }
-    const mappingError = unresolvedGatewayPublicModelsError(prepared.adaptersWithIds);
-    if (mappingError) {
-      return { ok: false, error: mappingError };
     }
     payload.modelAdapters = prepared.payloadAdapters;
   }
@@ -1845,7 +1834,10 @@ export async function persistUserConfig() {
       enabled: appState.gatewayEnabled,
       listenAddr: appState.gatewayListenAddr,
       tokenConfigured: appState.gatewayTokenConfigured,
-      publicModels: appState.gatewayPublicModels,
+      publicModels: collapseGatewayPublicModelsForPersist(
+        appState.modelAdapters,
+        appState.gatewayPublicModels,
+      ),
     },
   });
 }

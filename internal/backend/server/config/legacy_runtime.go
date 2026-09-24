@@ -18,6 +18,7 @@ func (store *Store) LegacyRuntimeSnapshot(ctx context.Context) (legacyruntime.Ru
 			ID:                           item.ID,
 			Sort:                         item.Sort,
 			DisplayName:                  item.DisplayName,
+			Disabled:                     !ModelAdapterEnabled(item),
 			Type:                         item.Type,
 			BaseURL:                      item.BaseURL,
 			APIKey:                       item.APIKey,

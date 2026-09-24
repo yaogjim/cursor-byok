@@ -677,6 +677,7 @@ func buildAvailableModelEntries(adapters []legacyruntime.ModelAdapterConfig) []m
 }
 
 func buildAvailableModelEntriesWithDisplaySuffix(adapters []legacyruntime.ModelAdapterConfig, displaySuffix string) []map[string]any {
+	adapters = catalogModelAdapters(adapters)
 	if len(adapters) == 0 {
 		return []map[string]any{}
 	}
@@ -736,6 +737,7 @@ func buildCLIModelDetails(adapters []legacyruntime.ModelAdapterConfig) []map[str
 }
 
 func buildCLIModelDetailsWithDisplaySuffix(adapters []legacyruntime.ModelAdapterConfig, displaySuffix string) []map[string]any {
+	adapters = catalogModelAdapters(adapters)
 	models := make([]map[string]any, 0, len(adapters))
 	for _, adapter := range adapters {
 		channelID := strings.TrimSpace(adapter.ID)
@@ -893,9 +895,20 @@ func thinkingEffortDisplayName(value string) string {
 	}
 }
 
+func catalogModelAdapters(adapters []legacyruntime.ModelAdapterConfig) []legacyruntime.ModelAdapterConfig {
+	output := make([]legacyruntime.ModelAdapterConfig, 0, len(adapters))
+	for _, adapter := range adapters {
+		if adapter.Disabled {
+			continue
+		}
+		output = append(output, adapter)
+	}
+	return output
+}
+
 func collectModelAdapterRefs(adapters []legacyruntime.ModelAdapterConfig) []string {
 	output := make([]string, 0, len(adapters))
-	for _, adapter := range adapters {
+	for _, adapter := range catalogModelAdapters(adapters) {
 		channelID := strings.TrimSpace(adapter.ID)
 		if channelID == "" {
 			continue

@@ -192,6 +192,28 @@ func TestCatalogCLIAndAvailableModelsShareChannelIDThinkingAndCapability(t *test
 	}
 }
 
+func TestCatalogOmitsDisabledAdaptersFromDefaults(t *testing.T) {
+	adapters := []legacyruntime.ModelAdapterConfig{
+		{ID: "disabled-id", DisplayName: "Disabled", ModelID: "disabled-model", Disabled: true},
+		{ID: "enabled-id", DisplayName: "Enabled", ModelID: "enabled-model"},
+	}
+	cli := buildCLIModelDetails(adapters)
+	available := buildAvailableModelEntries(adapters)
+	if len(cli) != 1 || len(available) != 1 {
+		t.Fatalf("catalog sizes cli=%d available=%d", len(cli), len(available))
+	}
+	if cli[0]["modelId"] != "enabled-id" || available[0]["name"] != "enabled-id" {
+		t.Fatalf("disabled adapter leaked cli=%#v available=%#v", cli[0], available[0])
+	}
+	refs := collectModelAdapterRefs(adapters)
+	if len(refs) != 1 || refs[0] != "enabled-id" {
+		t.Fatalf("default refs = %#v", refs)
+	}
+	if got := firstModelAdapterRef(adapters); got != "enabled-id" {
+		t.Fatalf("first enabled ref = %q", got)
+	}
+}
+
 func TestEncodeCLIModelsUsesAgentModelDetailsWireFormat(t *testing.T) {
 	payload := map[string]any{"models": buildCLIModelDetails([]legacyruntime.ModelAdapterConfig{{ID: "channel-a", DisplayName: "Model A", APIKey: "provider-secret", BaseURL: "https://provider.example/v1"}})}
 	encoded, err := encodeMockProto("aiserver.v1.GetUsableModelsResponse", payload)

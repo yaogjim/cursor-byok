@@ -2,6 +2,7 @@
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import ContentModal from "@/components/ui/ContentModal.vue";
+import Switch from "@/components/ui/Switch.vue";
 import ModelAdapterTestCard from "@/components/ModelAdapterTestCard.vue";
 import ModelEditor from "@/components/ModelEditor.vue";
 import { useMessage } from "@/composables/useMessage";
@@ -302,6 +303,13 @@ async function handleDeleteModelAdapter(index) {
   }
 }
 
+function setAdapterEnabled(adapter, enabled) {
+  if (!adapter || appState.configSaving || batchTesting.value) {
+    return;
+  }
+  adapter.enabled = Boolean(enabled);
+}
+
 function handleDuplicateModelAdapter(index) {
   if (appState.configSaving || batchTesting.value) {
     return;
@@ -577,6 +585,7 @@ onBeforeUnmount(() => {
               v-for="(adapter, index) in filteredAdapters"
               :key="adapter.id || `${adapter.baseURL}-${adapter.modelID}-${index}`"
               class="model-row model-sort-item group"
+              :class="adapter.enabled === false ? 'opacity-55' : ''"
               :data-model-id="adapter.id"
             >
               <div class="flex min-w-0 items-start gap-2">
@@ -590,6 +599,15 @@ onBeforeUnmount(() => {
                 >
                   <span class="icon-[icon-park-outline--drag] text-[18px]" />
                 </button>
+                <Switch
+                  standalone
+                  compact
+                  label="启用模型"
+                  :show-state="false"
+                  :enabled="adapter.enabled !== false"
+                  :disabled="appState.configSaving || batchTesting"
+                  @change="setAdapterEnabled(adapter, $event)"
+                />
                 <div class="min-w-0">
                   <div class="truncate font-semibold">{{ adapter.displayName }}</div>
                   <div class="truncate font-mono text-[11px] text-[var(--color-text-muted)]">{{ adapter.modelID }}</div>
@@ -653,6 +671,7 @@ onBeforeUnmount(() => {
             v-for="(adapter, index) in filteredAdapters"
             :key="adapter.id || `${adapter.baseURL}-${adapter.modelID}-${index}`"
             class="model-sort-item group relative flex flex-col"
+            :class="adapter.enabled === false ? 'opacity-55' : ''"
             :data-model-id="adapter.id"
           >
             <button
@@ -675,13 +694,24 @@ onBeforeUnmount(() => {
                       {{ adapter.openAIEndpoint || "/v1/responses" }}
                     </div>
                   </div>
-                  <span
-                    class="model-provider-chip"
-                    :style="providerStyle(adapter)"
-                  >
-                    <i aria-hidden="true" />
-                    <span>{{ modelProviderMeta(adapter).label }}</span>
-                  </span>
+                  <div class="flex shrink-0 flex-col items-end gap-2">
+                    <Switch
+                      standalone
+                      compact
+                      label="启用模型"
+                      :show-state="false"
+                      :enabled="adapter.enabled !== false"
+                      :disabled="appState.configSaving || batchTesting"
+                      @change="setAdapterEnabled(adapter, $event)"
+                    />
+                    <span
+                      class="model-provider-chip"
+                      :style="providerStyle(adapter)"
+                    >
+                      <i aria-hidden="true" />
+                      <span>{{ modelProviderMeta(adapter).label }}</span>
+                    </span>
+                  </div>
                 </div>
 
                 <ModelAdapterTestCard

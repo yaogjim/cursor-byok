@@ -58,9 +58,9 @@ const (
 	MinMaxConcurrentRequests = 1
 	MaxMaxConcurrentRequests = 16
 
-	DefaultGatewayListenAddr = "127.0.0.1:18091"
-	MaxGatewayPublicModels   = 32
-	GatewayTokenByteLength   = 32
+	DefaultGatewayListenAddr      = "127.0.0.1:18091"
+	MaxGatewayPublicModelIDLength = 128
+	GatewayTokenByteLength        = 32
 	PreGatewayBackupSuffix   = ".bak-pre-gateway"
 	configFilePerm           = 0o600
 
@@ -81,6 +81,7 @@ type ModelAdapterConfig struct {
 	ID                           string `json:"id,omitempty" yaml:"-"`
 	Sort                         int    `json:"sort" yaml:"sort"`
 	DisplayName                  string `json:"displayName" yaml:"displayName"`
+	Enabled                      *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	Type                         string `json:"type" yaml:"type"`
 	BaseURL                      string `json:"baseURL" yaml:"baseURL"`
 	APIKey                       string `json:"apiKey" yaml:"apiKey"`
@@ -377,6 +378,7 @@ func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapter
 			next.AnthropicExtraParamsEnabled = item.AnthropicExtraParamsEnabled
 			next.AnthropicExtraParamsJSON = strings.TrimSpace(item.AnthropicExtraParamsJSON)
 		}
+		next.Enabled = copyOptionalBool(item.Enabled)
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
 		next.OpenAIImageGenerationEnabled = item.OpenAIImageGenerationEnabled
@@ -854,6 +856,22 @@ func validateUpstreamCapacityGroups(normalized []ModelAdapterConfig) error {
 		}
 	}
 	return nil
+}
+
+func copyOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func optionalBoolOrTrue(value *bool) bool {
+	return value == nil || *value
+}
+
+func ModelAdapterEnabled(adapter ModelAdapterConfig) bool {
+	return optionalBoolOrTrue(adapter.Enabled)
 }
 
 func normalizeRoutingMode(value string) string {

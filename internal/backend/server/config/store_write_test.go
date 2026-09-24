@@ -322,10 +322,6 @@ func TestStoreSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 		t.Fatalf("SaveGatewayConfig() error = %v", err)
 	}
 
-	if _, err := store.SaveModelAdapters(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "公开模型") {
-		t.Fatalf("delete mapped adapter error = %v", err)
-	}
-
 	renamed := seed.ModelAdapters[0]
 	renamed.DisplayName = "renamed-physical"
 	renamedSave, err := store.SaveModelAdapters(context.Background(), []ModelAdapterConfig{renamed})
@@ -357,6 +353,55 @@ func TestStoreSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
 	}
 	if len(saved.ModelAdapters) != 2 || saved.Gateway.PublicModels[0].TargetAdapterID != got.ModelAdapters[0].ID {
 		t.Fatalf("valid adapter save = %+v", saved)
+	}
+}
+
+func TestStoreSaveModelAdaptersPrunesDeletedPublicModelTargets(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = []ModelAdapterConfig{testModelAdapter("physical", 1)}
+	})
+	adapterID := seed.ModelAdapters[0].ID
+	gateway := seed.Gateway
+	gateway.PublicModels = []GatewayPublicModel{{ID: "public-a", TargetAdapterID: adapterID}}
+	if _, err := store.SaveGatewayConfig(context.Background(), gateway); err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+
+	saved, err := store.SaveModelAdapters(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("delete mapped adapter error = %v", err)
+	}
+	if len(saved.ModelAdapters) != 0 || len(saved.Gateway.PublicModels) != 0 {
+		t.Fatalf("stale public mapping survived delete: %+v", saved)
+	}
+}
+
+func TestStoreSaveModelAdaptersDoesNotResurrectUnpublished(t *testing.T) {
+	store := newWriteTestStore(t)
+	seed := seedWriteTestConfig(t, store, func(cfg *Config) {
+		cfg.ModelAdapters = []ModelAdapterConfig{testModelAdapter("keep-unpublished", 1), testModelAdapter("other", 2)}
+	})
+	target := seed.ModelAdapters[0].ID
+	gateway := seed.Gateway
+	gateway.PublicModels = []GatewayPublicModel{{TargetAdapterID: target, Published: boolPtr(false)}}
+	if _, err := store.SaveGatewayConfig(context.Background(), gateway); err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+
+	edited := cloneWriteTestAdapters(seed.ModelAdapters)
+	edited[1].DisplayName = "other-renamed"
+	saved, err := store.SaveModelAdapters(context.Background(), edited)
+	if err != nil {
+		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+	if len(saved.Gateway.PublicModels) != 1 || GatewayPublicModelPublished(saved.Gateway.PublicModels[0]) || saved.Gateway.PublicModels[0].TargetAdapterID != saved.ModelAdapters[0].ID {
+		t.Fatalf("unpublished preference lost: %+v", saved.Gateway.PublicModels)
+	}
+	for _, item := range PublicGatewayModels(saved) {
+		if item.TargetAdapterID == saved.ModelAdapters[0].ID {
+			t.Fatalf("unpublished model listed after model-page save: %+v", item)
+		}
 	}
 }
 

@@ -20,7 +20,7 @@ import {
   toUserError,
 } from "@/state/appState";
 import { normalizeHomeMetricsReport } from "@/state/homeMetrics";
-import { DEFAULT_GATEWAY_LISTEN_ADDR } from "@/state/configProjection";
+import { DEFAULT_GATEWAY_LISTEN_ADDR, countPublishedGatewayModels } from "@/state/configProjection";
 import { Events } from "@wailsio/runtime";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -91,9 +91,9 @@ const gatewayListenAddr = computed(() =>
   || asString(appState.gatewayListenAddr)
   || DEFAULT_GATEWAY_LISTEN_ADDR,
 );
-const gatewayPublicModelCount = computed(() =>
-  Array.isArray(appState.gatewayPublicModels) ? appState.gatewayPublicModels.length : 0,
-);
+const gatewayPublicModelCount = computed(() => (
+  countPublishedGatewayModels(appState.modelAdapters, appState.gatewayPublicModels)
+));
 const cursorStartDisabled = computed(() =>
   appState.serviceBusy || (configSectionDirty.cursor && !appState.serviceRunning),
 );

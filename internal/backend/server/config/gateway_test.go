@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -66,6 +67,14 @@ func TestNormalizeGatewayConfigRejectsDuplicatePublicModels(t *testing.T) {
 	}
 	if _, err := NormalizeConfig(cfg); err == nil || !strings.Contains(err.Error(), "重复") {
 		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestNormalizeGatewayConfigRejectsOversizedCustomPublicName(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Gateway.PublicModels = []GatewayPublicModel{{ID: strings.Repeat("a", 129), TargetAdapterID: "adapter-a"}}
+	if _, err := NormalizeConfig(cfg); err == nil || !strings.Contains(err.Error(), "128") {
+		t.Fatalf("oversized explicit name must be rejected, not silently truncated: %v", err)
 	}
 }
 
@@ -253,6 +262,133 @@ func TestResolveGatewayPublicModelRequiresExplicitMapping(t *testing.T) {
 	target, stale, ok = ResolveGatewayPublicModel(cfg, "stale-a")
 	if !ok || !stale || target != "missing-adapter" {
 		t.Fatalf("stale map = %q stale=%t ok=%t", target, stale, ok)
+	}
+}
+
+func TestPublicGatewayModelsAutoPublishCustomPriorityAndConflicts(t *testing.T) {
+	first := testModelAdapter("Shared Name", 1)
+	first.ModelID = "model-a"
+	second := testModelAdapter("Shared Name", 2)
+	second.ModelID = "model-b"
+	second.APIKey = "other-key"
+	custom := testModelAdapter("Custom Name", 3)
+	custom.ModelID = "model-c"
+	custom.APIKey = "third-key"
+	disabled := testModelAdapter("Disabled Name", 4)
+	disabled.ModelID = "model-d"
+	disabled.APIKey = "fourth-key"
+	disabled.Enabled = boolPtr(false)
+	spaced := testModelAdapter("Inner Space", 5)
+	spaced.DisplayName = "My Model"
+	spaced.ModelID = "model-e"
+	spaced.APIKey = "fifth-key"
+	longName := strings.Repeat("n", 140)
+	long := testModelAdapter("Long Name", 6)
+	long.DisplayName = longName
+	long.ModelID = "model-f"
+	long.APIKey = "sixth-key"
+
+	normalized, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{first, second, custom, disabled, spaced, long})
+	if err != nil {
+		t.Fatalf("normalize adapters: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.ModelAdapters = normalized
+	cfg.Gateway.PublicModels = []GatewayPublicModel{
+		{ID: "Shared Name", TargetAdapterID: normalized[2].ID},
+		{TargetAdapterID: normalized[3].ID, Published: boolPtr(false)},
+	}
+	cfg, err = NormalizeConfig(cfg)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+
+	got := PublicGatewayModels(cfg)
+	if len(got) != 5 {
+		t.Fatalf("public count = %d, want 5 (disabled unpublished omitted): %#v", len(got), got)
+	}
+	byTarget := map[string]string{}
+	for _, item := range got {
+		byTarget[item.TargetAdapterID] = item.ID
+		if strings.ContainsAny(item.ID, "\t\r\n") {
+			t.Fatalf("public id has control whitespace: %q", item.ID)
+		}
+		if len(item.ID) > MaxGatewayPublicModelIDLength {
+			t.Fatalf("public id exceeded 128: %d", len(item.ID))
+		}
+	}
+	if byTarget[normalized[2].ID] != "Shared Name" {
+		t.Fatalf("custom id lost: %#v", byTarget)
+	}
+	if byTarget[normalized[0].ID] == "Shared Name" || byTarget[normalized[1].ID] == "Shared Name" {
+		t.Fatalf("conflicting defaults kept custom name: %#v", byTarget)
+	}
+	if !strings.HasPrefix(byTarget[normalized[0].ID], "Shared Name-") || !strings.HasPrefix(byTarget[normalized[1].ID], "Shared Name-") {
+		t.Fatalf("conflicting defaults missing suffix: %#v", byTarget)
+	}
+	if byTarget[normalized[0].ID] == byTarget[normalized[1].ID] {
+		t.Fatal("suffixed public ids must be unique")
+	}
+	if byTarget[normalized[4].ID] != "My Model" {
+		t.Fatalf("internal spaces dropped: %q", byTarget[normalized[4].ID])
+	}
+	if byTarget[normalized[5].ID] != strings.Repeat("n", MaxGatewayPublicModelIDLength) {
+		t.Fatalf("long default was not truncated: %q", byTarget[normalized[5].ID])
+	}
+	if _, exists := byTarget[normalized[3].ID]; exists {
+		t.Fatal("disabled adapter was published")
+	}
+
+	if target, stale, ok := ResolveGatewayPublicModel(cfg, "Shared Name"); !ok || stale || target != normalized[2].ID {
+		t.Fatalf("custom resolve = %q stale=%t ok=%t", target, stale, ok)
+	}
+	if target, stale, ok := ResolveGatewayPublicModel(cfg, byTarget[normalized[0].ID]); !ok || stale || target != normalized[0].ID {
+		t.Fatalf("suffixed default resolve = %q stale=%t ok=%t", target, stale, ok)
+	}
+	if _, _, ok := ResolveGatewayPublicModel(cfg, "Disabled Name"); ok {
+		t.Fatal("disabled displayName must not resolve")
+	}
+	if _, _, ok := ResolveGatewayPublicModel(cfg, normalized[0].ID); ok {
+		t.Fatal("internal hash must not resolve via auto-publish")
+	}
+	if _, _, ok := ResolveGatewayPublicModel(cfg, normalized[0].ModelID); ok {
+		t.Fatal("provider modelID must not resolve via auto-publish")
+	}
+}
+
+func TestPublicGatewayModelsUnpublishedEmptyIDAndNo32Cap(t *testing.T) {
+	adapters := make([]ModelAdapterConfig, 0, 33)
+	for i := 0; i < 33; i++ {
+		adapter := testModelAdapter("model-"+strconv.Itoa(i), i+1)
+		adapter.DisplayName = "Model " + strconv.Itoa(i)
+		adapter.ModelID = "id-" + strconv.Itoa(i)
+		adapter.APIKey = "key-" + strconv.Itoa(i)
+		adapters = append(adapters, adapter)
+	}
+	normalized, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize adapters: %v", err)
+	}
+	unpublished := GatewayPublicModel{TargetAdapterID: normalized[0].ID, Published: boolPtr(false)}
+	cfg := DefaultConfig()
+	cfg.ModelAdapters = normalized
+	cfg.Gateway.PublicModels = []GatewayPublicModel{unpublished}
+	cfg, err = NormalizeConfig(cfg)
+	if err != nil {
+		t.Fatalf("33 models with unpublished row: %v", err)
+	}
+	if cfg.Gateway.PublicModels[0].ID != "" || GatewayPublicModelPublished(cfg.Gateway.PublicModels[0]) {
+		t.Fatalf("unpublished empty id not preserved: %+v", cfg.Gateway.PublicModels[0])
+	}
+	got := PublicGatewayModels(cfg)
+	if len(got) != 32 {
+		t.Fatalf("published count = %d, want 32 after one unpublished", len(got))
+	}
+	if _, _, ok := ResolveGatewayPublicModel(cfg, "Model 0"); ok {
+		t.Fatal("unpublished default must not resolve")
+	}
+	if target, stale, ok := ResolveGatewayPublicModel(cfg, "Model 1"); !ok || stale || target != normalized[1].ID {
+		t.Fatalf("auto-published resolve = %q stale=%t ok=%t", target, stale, ok)
 	}
 }
 

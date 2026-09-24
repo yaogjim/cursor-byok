@@ -1531,6 +1531,17 @@ Gateway 是独立 `http.Server`，默认关闭、loopback-only。阶段 1 随当
 
 最小 YAML：`enabled`、`listenAddr`、`token`、`publicModels`. token 由后端生成。`SaveUserConfig` 在锁内 overlay 磁盘 token，与 hash overlay 并列。默认导出调用 `StripGatewayToken`；再导入时若文档 token 为空则 overlay 现有 token，显式带 token 的 YAML 才替换。JSON/Wails 使用 `json:"-"`，前端投影和 localStorage 只有 `tokenConfigured`。复制/轮换是显式 Wails 方法。配置与临时文件 `0600`；首次写入 `gateway` 键前备份 `.bak-pre-gateway`。旧版本 struct 无该字段，再次保存会丢块。
 
+### 14.11.3a DESIGN-MODEL-AVAILABILITY-20260924：启停与默认公开
+
+- **Design Readiness**：`approved`（用户确认停用全入口、重名稳定后缀及最小实施方案；2026-09-24）。继承 §14.11.1–3 的 Gateway 生命周期、鉴权、token 与分区保存合同；本节只覆盖模型可用性和公开模型派生规则。
+- **现状与原因（已核实）**：`config/types.go` 的模型配置无启用状态；`config/gateway.go` 只解析显式 `publicModels`，公开 ID 禁空白且最多 32 项；`config/resolver.go`、Cursor catalog 与 Gateway 分别消费模型配置。直接在前端隐藏无法阻断旧 ID 调用；直接对缺失映射补行会复活被用户取消公开的模型。真实用户数据分布未读取，不作为实施前提；不改用户现有配置或运行实例。
+- **数据和身份**：`modelAdapters[].enabled` 缺失即 true，显式 false 为停用；不参加渠道 ID/分组哈希。`gateway.publicModels` 保留既有 `id,targetAdapterID` 自定义公开名，增加按 `targetAdapterID` 关联的显式不公开状态；没有自定义项表示“随模型启用自动公开”，不能把缺映射解释为停用公开。目标身份变化沿现有 remap；旧自定义名称保留。独立取消公开不会停用模型；停用模型保留公开偏好，重新启用后按原偏好恢复。删除模型应同时清理该目标的公开偏好，不能留下失效映射阻断模型页保存。
+- **默认名和冲突**：按已保存模型顺序展示所有启用且未取消公开的模型；无自定义公开名时用规范化后的 `displayName`（允许内部空白）；自定义公开名优先保留。与自定义名冲突或两个默认名相同的默认项，使用其模型 ID 的稳定短后缀区分，并保证最终唯一；未冲突项不变。公开名最大长度与现有校验保持一致，超长时仅截断为容纳后缀；取消 32 项硬上限以实现全量默认公开，且不静默截断。不存在的旧目标不自动改绑到其他模型，旧 ID 不能越权回落到 provider `modelID`。
+- **运行边界**：Cursor/CLI 目录、默认选择只展示可用模型；显式旧 ID 命中停用项时拒绝调用而不路由到其他本地或官方模型；自动选择跳到首个可用模型，无可用模型明确失败。fallback alias 停用时失败，primary/candidate 停用时从实际计划移除，全部不可用则失败；不把停用渠道发送到上游。Gateway 的 Chat/Responses 请求与 `/v1/models` 使用同一公开解析，取消公开/停用后旧公开 ID 不可调用；保留 loopback/Bearer/token 安全边界。
+- **保存、交互与恢复**：模型页编辑启停并按模型分区保存，共享入口可逐行调整公开状态/名称并按 Gateway 分区保存；页面草稿与后端生效配置区分。模型保存事务仍在磁盘最新配置上合并，不用陈旧 Gateway 草稿覆盖已保存的公开偏好；失败不改变已保存状态。旧 YAML 缺字段即全模型启用，旧自定义映射继续有效；回退本次源码即可恢复旧行为，但旧版本再次保存可能丢新状态，回退前应备份配置。
+- **验收/回退**：覆盖缺字段/显式 false、启用→停用→恢复、目录/旧 ID/自动选择/fallback、Gateway 列表与 Chat/Responses、重名/含空白/>32、保留旧别名/取消公开不反弹/删除目标、分区保存与失败无副作用；前端配置投影及构建、受影响 Go 包定向测试、必要的隔离 UI 检查。无真实 Cursor/外部客户端验证时只报部分验证；不部署、不改真实配置、不新增依赖或迁移脚本。
+- **Design Gate（2026-09-24）**：正向链路为模型保存→可用性投影→Cursor/Gateway 目录和实际调用，失败链路为旧 ID、冲突公开名与已取消公开的配置保存；配置持久化、对外接口、UI、回退均适用，其余后台任务/权限体系新增为 N/A。独立只读调查已核实 Go 运行入口和前端分区保存，主控完成跨层审视；无承重真实配置前提，阻塞决策由用户确认。实际测试与浏览器验收仍为实施阶段任务，不当作设计完成证据。
+
 - **阶段 1 HTTP 合同**
 
 - 鉴权失败 401；未知公开别名 404；stale mapping 400 `mapping_invalid`；tools/multimodal/reasoning 400。

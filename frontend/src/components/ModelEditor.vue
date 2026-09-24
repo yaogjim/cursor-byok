@@ -4,6 +4,7 @@ import Combobox from "@/components/ui/Combobox.vue";
 import Input from "@/components/ui/Input.vue";
 import ModelAdapterTestCard from "@/components/ModelAdapterTestCard.vue";
 import Select from "@/components/ui/Select.vue";
+import Switch from "@/components/ui/Switch.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
 import { useMessage } from "@/composables/useMessage";
 import {
@@ -180,6 +181,7 @@ function ensureAnthropicExtraParamsJSON() {
 }
 
 const fieldTips = {
+  enabled: "停用后，该模型在 Cursor 等已有入口和共享入口都不可用。更改后需保存才会生效。",
   displayName: "仅用于界面展示，便于你区分不同模型。",
   modelID: "可以直接输入模型标识，或从服务端返回的列表中选择。",
   baseURL: "模型服务的 API 根地址。选择 Codex 或 Grok 订阅后，系统会固定使用对应的官方上游地址。",
@@ -610,6 +612,17 @@ watch(
             <span>{{ tab.label }}</span>
           </button>
         </div>
+
+        <Switch
+          compact
+          label="启用模型"
+          description="停用后所有入口都不可调用；保存后生效"
+          enabled-text="已启用"
+          disabled-text="已停用"
+          :enabled="draft.enabled !== false"
+          :disabled="appState.configSaving"
+          @change="draft.enabled = $event"
+        />
 
         <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
           <label class="flex flex-col gap-1">

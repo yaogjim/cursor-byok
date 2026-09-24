@@ -87,6 +87,14 @@ func TestDecideAgentDestination(t *testing.T) {
 		{name: "auto local identity", modelID: "auto", adapters: adapters, official: false, want: AgentDestinationLocal},
 		{name: "unknown local identity", modelID: "not-a-configured-model", adapters: adapters, official: false, want: AgentDestinationLocal},
 		{name: "ambiguous legacy local identity", modelID: legacyID, adapters: ambiguous, official: false, want: AgentDestinationLocal},
+		{name: "disabled local hash official identity", modelID: agentTestLocalChannel, adapters: []legacyruntime.ModelAdapterConfig{{
+			ID:          agentTestLocalChannel,
+			DisplayName: adapter.DisplayName,
+			ModelID:     adapter.ModelID,
+			APIKey:      adapter.APIKey,
+			BaseURL:     adapter.BaseURL,
+			Disabled:    true,
+		}}, official: true, want: AgentDestinationLocal},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -8,12 +8,19 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
-// GatewayPublicModel 是外部客户端使用的稳定公开别名，只经显式映射解析。
+// GatewayPublicModel 是外部客户端使用的公开别名偏好。
+// 缺映射表示随启用模型自动公开；Published=false 表示显式取消公开。
 type GatewayPublicModel struct {
-	ID              string `json:"id" yaml:"id"`
+	ID              string `json:"id,omitempty" yaml:"id,omitempty"`
 	TargetAdapterID string `json:"targetAdapterID" yaml:"targetAdapterID"`
+	Published       *bool  `json:"published,omitempty" yaml:"published,omitempty"`
+}
+
+func GatewayPublicModelPublished(item GatewayPublicModel) bool {
+	return optionalBoolOrTrue(item.Published)
 }
 
 // GatewayConfig 是独立 Chat Gateway 的最小配置块。
@@ -104,29 +111,28 @@ func normalizeGatewayPublicModels(input []GatewayPublicModel) ([]GatewayPublicMo
 	if len(input) == 0 {
 		return []GatewayPublicModel{}, nil
 	}
-	if len(input) > MaxGatewayPublicModels {
-		return nil, fmt.Errorf("gateway.publicModels 最多 %d 个", MaxGatewayPublicModels)
-	}
 	output := make([]GatewayPublicModel, 0, len(input))
 	seen := make(map[string]struct{}, len(input))
 	for _, item := range input {
 		id := strings.TrimSpace(item.ID)
 		target := strings.TrimSpace(item.TargetAdapterID)
+		published := copyOptionalBool(item.Published)
+		unpublished := !optionalBoolOrTrue(published)
 		switch {
-		case id == "":
-			return nil, errors.New("gateway.publicModels.id 不能为空")
-		case strings.ContainsAny(id, " \t\r\n"):
-			return nil, errors.New("gateway.publicModels.id 不能包含空白")
-		case len(id) > 128:
-			return nil, errors.New("gateway.publicModels.id 不能超过 128 个字符")
 		case target == "":
 			return nil, errors.New("gateway.publicModels.targetAdapterID 不能为空")
+		case len(id) > MaxGatewayPublicModelIDLength:
+			return nil, fmt.Errorf("gateway.publicModels.id 不能超过 %d 字节", MaxGatewayPublicModelIDLength)
+		case id == "" && !unpublished:
+			return nil, errors.New("gateway.publicModels.id 不能为空")
 		}
-		if _, exists := seen[id]; exists {
-			return nil, fmt.Errorf("gateway.publicModels.id %q 重复", id)
+		if id != "" {
+			if _, exists := seen[id]; exists {
+				return nil, fmt.Errorf("gateway.publicModels.id %q 重复", id)
+			}
+			seen[id] = struct{}{}
 		}
-		seen[id] = struct{}{}
-		output = append(output, GatewayPublicModel{ID: id, TargetAdapterID: target})
+		output = append(output, GatewayPublicModel{ID: id, TargetAdapterID: target, Published: published})
 	}
 	return output, nil
 }
@@ -189,14 +195,33 @@ func validateGatewayPublicModelTargets(cfg Config) error {
 	for _, item := range cfg.Gateway.PublicModels {
 		target := strings.TrimSpace(item.TargetAdapterID)
 		id := strings.TrimSpace(item.ID)
+		label := id
+		if label == "" {
+			label = target
+		}
 		if target == "" {
-			return fmt.Errorf("gateway.publicModels %q 未选择目标适配器", id)
+			return fmt.Errorf("gateway.publicModels %q 未选择目标适配器", label)
 		}
 		if _, exists := known[target]; !exists {
-			return fmt.Errorf("gateway.publicModels %q 指向的适配器将失效，请先更新网关公开模型映射", id)
+			return fmt.Errorf("gateway.publicModels %q 指向的适配器将失效，请先更新网关公开模型映射", label)
 		}
 	}
 	return nil
+}
+
+func pruneStaleGatewayPublicModels(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	known := knownAdapterIDs(cfg.ModelAdapters)
+	kept := make([]GatewayPublicModel, 0, len(cfg.Gateway.PublicModels))
+	for _, item := range cfg.Gateway.PublicModels {
+		if _, exists := known[strings.TrimSpace(item.TargetAdapterID)]; !exists {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	cfg.Gateway.PublicModels = kept
 }
 
 func knownAdapterIDs(adapters []ModelAdapterConfig) map[string]struct{} {
@@ -218,10 +243,18 @@ func ResolveGatewayPublicModel(cfg Config, publicID string) (targetAdapterID str
 	if alias == "" {
 		return "", false, false
 	}
+	for _, item := range PublicGatewayModels(cfg) {
+		if item.ID == alias {
+			return item.TargetAdapterID, false, true
+		}
+	}
 	known := knownAdapterIDs(cfg.ModelAdapters)
 	for _, item := range cfg.Gateway.PublicModels {
-		if item.ID != alias {
+		if strings.TrimSpace(item.ID) != alias {
 			continue
+		}
+		if !GatewayPublicModelPublished(item) {
+			return "", false, false
 		}
 		target := strings.TrimSpace(item.TargetAdapterID)
 		if target == "" {
@@ -230,19 +263,175 @@ func ResolveGatewayPublicModel(cfg Config, publicID string) (targetAdapterID str
 		if _, exists := known[target]; !exists {
 			return target, true, true
 		}
-		return target, false, true
+		return "", false, false
 	}
 	return "", false, false
 }
 
+type plannedPublicModel struct {
+	adapter ModelAdapterConfig
+	custom  bool
+	id      string
+}
+
 func PublicGatewayModels(cfg Config) []GatewayPublicModel {
-	known := knownAdapterIDs(cfg.ModelAdapters)
-	output := make([]GatewayPublicModel, 0, len(cfg.Gateway.PublicModels))
+	prefsByTarget := make(map[string][]GatewayPublicModel, len(cfg.Gateway.PublicModels))
 	for _, item := range cfg.Gateway.PublicModels {
-		if _, exists := known[strings.TrimSpace(item.TargetAdapterID)]; !exists {
+		target := strings.TrimSpace(item.TargetAdapterID)
+		if target == "" {
 			continue
 		}
-		output = append(output, item)
+		prefsByTarget[target] = append(prefsByTarget[target], item)
+	}
+
+	planned := make([]plannedPublicModel, 0, len(cfg.ModelAdapters)+len(cfg.Gateway.PublicModels))
+	for _, adapter := range cfg.ModelAdapters {
+		if !ModelAdapterEnabled(adapter) {
+			continue
+		}
+		adapterID := strings.TrimSpace(adapter.ID)
+		if adapterID == "" {
+			continue
+		}
+		prefs := prefsByTarget[adapterID]
+		publishedCustoms := make([]GatewayPublicModel, 0, len(prefs))
+		covered := false
+		for _, pref := range prefs {
+			covered = true
+			if GatewayPublicModelPublished(pref) && strings.TrimSpace(pref.ID) != "" {
+				publishedCustoms = append(publishedCustoms, pref)
+			}
+		}
+		if len(publishedCustoms) > 0 {
+			for _, pref := range publishedCustoms {
+				planned = append(planned, plannedPublicModel{
+					adapter: adapter,
+					custom:  true,
+					id:      strings.TrimSpace(pref.ID),
+				})
+			}
+			continue
+		}
+		if covered {
+			continue
+		}
+		planned = append(planned, plannedPublicModel{
+			adapter: adapter,
+			custom:  false,
+			id:      normalizeDefaultPublicModelID(adapter.DisplayName),
+		})
+	}
+
+	counts := make(map[string]int, len(planned))
+	customNames := make(map[string]struct{}, len(planned))
+	for _, item := range planned {
+		if item.id == "" {
+			continue
+		}
+		counts[item.id]++
+		if item.custom {
+			customNames[item.id] = struct{}{}
+		}
+	}
+
+	needsSuffix := make([]bool, len(planned))
+	used := make(map[string]struct{}, len(planned))
+	for index, item := range planned {
+		if item.id == "" {
+			continue
+		}
+		if !item.custom && (counts[item.id] > 1 || nameInSet(item.id, customNames)) {
+			needsSuffix[index] = true
+			continue
+		}
+		used[item.id] = struct{}{}
+	}
+
+	output := make([]GatewayPublicModel, 0, len(planned))
+	for index, item := range planned {
+		id := item.id
+		if id == "" {
+			id = uniqueSuffixedPublicID(normalizeDefaultPublicModelID(item.adapter.DisplayName), item.adapter.ID, used)
+		} else if needsSuffix[index] {
+			id = uniqueSuffixedPublicID(item.id, item.adapter.ID, used)
+		}
+		if id == "" {
+			continue
+		}
+		output = append(output, GatewayPublicModel{ID: id, TargetAdapterID: strings.TrimSpace(item.adapter.ID)})
 	}
 	return output
+}
+
+func nameInSet(name string, names map[string]struct{}) bool {
+	_, exists := names[name]
+	return exists
+}
+
+func normalizeDefaultPublicModelID(displayName string) string {
+	return truncatePublicModelID(strings.TrimSpace(displayName))
+}
+
+func truncatePublicModelID(value string) string {
+	return truncateUTF8Bytes(value, MaxGatewayPublicModelIDLength)
+}
+
+func truncateUTF8Bytes(value string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if len(value) <= max {
+		return value
+	}
+	truncated := value[:max]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
+}
+
+func joinPublicModelID(base, suffix string) string {
+	suffix = strings.TrimSpace(suffix)
+	if suffix == "" {
+		return truncatePublicModelID(base)
+	}
+	const sep = "-"
+	room := MaxGatewayPublicModelIDLength - len(sep) - len(suffix)
+	if room < 0 {
+		return truncatePublicModelID(suffix)
+	}
+	return truncateUTF8Bytes(base, room) + sep + suffix
+}
+
+func uniqueSuffixedPublicID(base, adapterID string, used map[string]struct{}) string {
+	id := strings.TrimSpace(adapterID)
+	start := 4
+	if len(id) > 0 && len(id) < start {
+		start = len(id)
+	}
+	for width := start; width <= len(id); width++ {
+		candidate := joinPublicModelID(base, id[:width])
+		if candidate == "" {
+			continue
+		}
+		if _, exists := used[candidate]; exists {
+			continue
+		}
+		used[candidate] = struct{}{}
+		return candidate
+	}
+	for n := 2; n < 1000; n++ {
+		candidate := joinPublicModelID(base, fmt.Sprintf("%s-%d", id, n))
+		if candidate == "" {
+			continue
+		}
+		if _, exists := used[candidate]; exists {
+			continue
+		}
+		used[candidate] = struct{}{}
+		return candidate
+	}
+	candidate := joinPublicModelID(base, id)
+	used[candidate] = struct{}{}
+	return candidate
 }

@@ -194,6 +194,7 @@ func (store *Store) SaveModelAdapters(_ context.Context, adapters []ModelAdapter
 	if err != nil {
 		return Config{}, err
 	}
+	pruneStaleGatewayPublicModels(&normalized)
 	if err := validateGatewayPublicModelTargets(normalized); err != nil {
 		return Config{}, err
 	}
