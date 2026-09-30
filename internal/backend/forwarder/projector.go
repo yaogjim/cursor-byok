@@ -1063,11 +1063,15 @@ func coalesceProjectedInterleavedReplayToolBatches(messages []projectedReplayMes
 					toolResultOrder = append(toolResultOrder, toolCallID)
 				}
 				toolResults[toolCallID] = next
-				changed = true
 				nextIndex++
 				continue
 			}
 			if replayAssistantToolGroupID(next.Message) == groupID && canMergeProjectedReplayAssistantToolCalls(batch, next) {
+				// ID 前缀不能证明同一次模型调用；已有结果后，只有实际调用身份
+				// 相同才合并交错片段，保留导入历史中的独立批次和重复实例。
+				if len(toolResults) > 0 && !sameProjectedReplayAggregationKey(batch, next) {
+					break
+				}
 				startIndex := len(batch.ToolCalls)
 				for toolIndex, toolCall := range next.ToolCalls {
 					item := toolCall

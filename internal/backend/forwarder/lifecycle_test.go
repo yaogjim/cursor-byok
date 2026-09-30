@@ -2,14 +2,225 @@ package forwarder
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"cursor/gen/agentv1"
+	execbridge "cursor/internal/backend/agent/bridge/exec"
 	runtimecore "cursor/internal/backend/agent/core"
+
+	"google.golang.org/protobuf/proto"
 )
+
+func TestSubagentModelParametersRemainDistinctAfterInboundDecode(t *testing.T) {
+	service, _, _ := testCheckpointBlobProjection(t)
+	decode := func(value string) InboundIntent {
+		t.Helper()
+		message := &agentv1.AgentClientMessage{
+			Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: &agentv1.AgentRunRequest{
+				ConversationId: stringPtr("parameter-parent"),
+				RequestedModel: &agentv1.RequestedModel{ModelId: "parent-model"},
+				SubagentModelOverrides: []*agentv1.SubagentModelOverride{{
+					SubagentType: "explore",
+					Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
+						ModelId:    "child-model",
+						Parameters: []*agentv1.RequestedModel_ModelParameterValue{{Id: "reasoning", Value: value}},
+					}},
+				}},
+			}},
+		}
+		intent, err := service.decodeInboundIntent("parameter-request", message, "run_request")
+		if err != nil {
+			t.Fatalf("decodeInboundIntent() error = %v", err)
+		}
+		return intent
+	}
+	low, high := decode("low"), decode("high")
+	if low.SubagentModelOverrides["explore"].ModelID != "child-model" || high.SubagentModelOverrides["explore"].ModelID != "child-model" {
+		t.Fatal("子模型 ID 对照未保留")
+	}
+	if reflect.DeepEqual(low.SubagentModelOverrides, high.SubagentModelOverrides) {
+		t.Fatal("子模型 low/high 参数经真实入口解析后成为相同状态，参数键值已丢失")
+	}
+}
+
+func TestSubagentModelParameterSnapshotsAreIndependent(t *testing.T) {
+	first := &agentv1.RequestedModel_ModelParameterValue{Id: "reasoning", Value: " high "}
+	first.ProtoReflect().SetUnknown([]byte{0x22, 0x03, 'x', 'y', 'z'})
+	original := []*agentv1.RequestedModel_ModelParameterValue{
+		first, {Id: "reasoning", Value: "low"}, {Id: "", Value: ""}, nil,
+	}
+	parsed := parseSubagentModelOverrides([]*agentv1.SubagentModelOverride{{
+		SubagentType: "explore",
+		Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
+			ModelId: "child-model", MaxMode: true, BuiltInModel: true, IsVariantStringRepresentation: true,
+			Parameters: original,
+		}},
+	}}).Overrides
+	selection := parsed["explore"]
+	if selection.ParameterCount != len(original) || len(selection.Parameters) != len(original) || !selection.MaxMode || !selection.BuiltInModel || !selection.IsVariantStringRepresentation {
+		t.Fatalf("参数数量或模型标识未保留: %#v", selection)
+	}
+	for index, parameter := range original {
+		if !proto.Equal(selection.Parameters[index], parameter) {
+			t.Fatalf("参数 %d 的顺序、值或未知字段改变", index)
+		}
+		if parameter != nil && selection.Parameters[index] == parameter {
+			t.Fatalf("参数 %d 仍引用客户端原对象", index)
+		}
+	}
+	first.Value = "changed-client"
+	first.ProtoReflect().SetUnknown(nil)
+	original[1] = nil
+	if selection.Parameters[0].GetValue() != " high " || len(selection.Parameters[0].ProtoReflect().GetUnknown()) == 0 || selection.Parameters[1].GetValue() != "low" {
+		t.Fatal("客户端修改污染解析快照")
+	}
+	cloned := cloneSubagentModelOverrides(parsed)
+	cloned["explore"].Parameters[0].Value = "changed-clone"
+	cloned["explore"].Parameters[1] = nil
+	if parsed["explore"].Parameters[0].GetValue() != " high " || parsed["explore"].Parameters[1] == nil {
+		t.Fatal("克隆快照共享参数对象或切片")
+	}
+	lookedUp, matched, ok := runtimecore.LookupSubagentModelOverride(parsed, "generalPurpose")
+	if !ok || matched != "explore" {
+		t.Fatal("既有子类型别名查找退化")
+	}
+	lookedUp.Parameters[0].Value = "changed-lookup"
+	lookedUp.Parameters[1] = nil
+	if parsed["explore"].Parameters[0].GetValue() != " high " || parsed["explore"].Parameters[1] == nil {
+		t.Fatal("查找返回值污染父快照")
+	}
+	for _, parameters := range [][]*agentv1.RequestedModel_ModelParameterValue{nil, {}, {nil}} {
+		copy := (runtimecore.SubagentModelOverrideSelection{Parameters: parameters}).Clone()
+		if !reflect.DeepEqual(parameters, copy.Parameters) {
+			t.Fatal("nil/空参数形状改变")
+		}
+	}
+}
+
+func TestSubagentModelParameterPreservationKeepsSelectionRules(t *testing.T) {
+	model := &agentv1.SubagentModelOverride{
+		SubagentType: "explore",
+		Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
+			ModelId: "child-model", Parameters: []*agentv1.RequestedModel_ModelParameterValue{{Id: "reasoning", Value: "high"}},
+		}},
+	}
+	for _, test := range []struct {
+		name string
+		last *agentv1.SubagentModelOverride
+		want string
+	}{
+		{"inherit", &agentv1.SubagentModelOverride{SubagentType: "explore", Selection: &agentv1.SubagentModelOverride_Inherit{Inherit: true}}, "inherit"},
+		{"disabled", &agentv1.SubagentModelOverride{SubagentType: "explore", Selection: &agentv1.SubagentModelOverride_Disabled{Disabled: true}}, "disabled"},
+		{"empty-model-ignored", &agentv1.SubagentModelOverride{SubagentType: "explore", Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{}}}, "model"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := parseSubagentModelOverrides([]*agentv1.SubagentModelOverride{nil, model, test.last})
+			selection := parsed.Overrides["explore"]
+			if selection.Selection != test.want {
+				t.Fatalf("选择=%s，预期=%s", selection.Selection, test.want)
+			}
+			if test.want != "model" && (len(selection.Parameters) != 0 || selection.ParameterCount != 0 || selection.ModelID != "") {
+				t.Fatal("inherit/disabled 携带了前一个显式模型的参数")
+			}
+		})
+	}
+}
+
+func TestSubagentModelParameterValuesStayOutOfSummaries(t *testing.T) {
+	overrides := parseSubagentModelOverrides([]*agentv1.SubagentModelOverride{{
+		SubagentType: "explore",
+		Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
+			ModelId: "child-model", Parameters: []*agentv1.RequestedModel_ModelParameterValue{{Id: "private-knob", Value: "private-value"}},
+		}},
+	}}).Overrides
+	invocation := runtimecore.ToolInvocation{CallID: "task-1", ToolName: "Task", ArgsJSON: []byte(`{"subagent_type":"explore"}`)}
+	for _, summary := range []any{subagentModelOverrideSummaries(overrides), taskSubagentModelResolutionPayload(invocation, "parent-model", overrides)} {
+		encoded, err := json.Marshal(summary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "private-knob") || strings.Contains(string(encoded), "private-value") || strings.Contains(string(encoded), `"parameters"`) {
+			t.Fatalf("参数值进入日志摘要: %s", encoded)
+		}
+	}
+	if subagentModelOverrideSummaries(overrides)[0]["parameter_count"] != 1 {
+		t.Fatal("既有参数数量摘要退化")
+	}
+}
+
+type subagentParameterSnapshotBridge struct {
+	execbridge.ExecBridge
+	context        execbridge.OpenExecContext
+	modelID        string
+	parameterValue string
+}
+
+func (bridge *subagentParameterSnapshotBridge) OpenExec(openContext execbridge.OpenExecContext, invocation runtimecore.ToolInvocation) (*agentv1.AgentServerMessage, runtimecore.PendingExec, error) {
+	bridge.context = openContext
+	bridge.parameterValue = openContext.SubagentModelOverrides["explore"].Parameters[0].GetValue()
+	message, pending, err := bridge.ExecBridge.OpenExec(openContext, invocation)
+	if err == nil {
+		bridge.modelID = message.GetExecServerMessage().GetSubagentArgs().GetModelId()
+	}
+	// 模拟执行桥修改自己的副本，父 stream 必须保持原选择。
+	openContext.SubagentModelOverrides["explore"].Parameters[0].Value = "changed-bridge"
+	return message, pending, err
+}
+
+func TestSubagentModelParametersReachTaskBridgeAsIsolatedSnapshot(t *testing.T) {
+	service, _, _ := testCheckpointBlobProjection(t)
+	bridge := &subagentParameterSnapshotBridge{ExecBridge: execbridge.NewBridge()}
+	service.execBridge = bridge
+	parameter := &agentv1.RequestedModel_ModelParameterValue{Id: "reasoning", Value: "high"}
+	message := &agentv1.AgentClientMessage{Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: &agentv1.AgentRunRequest{
+		ConversationId: stringPtr("parameter-parent"), RequestedModel: &agentv1.RequestedModel{ModelId: "parent-model"},
+		SubagentModelOverrides: []*agentv1.SubagentModelOverride{{SubagentType: "explore", Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
+			ModelId: "child-model", MaxMode: true, Parameters: []*agentv1.RequestedModel_ModelParameterValue{parameter},
+		}}}},
+	}}}
+	intent, err := service.decodeInboundIntent("parameter-request", message, "run_request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 走相同初始化路径，但不拉起真实 provider。
+	intent.Prewarm = true
+	if err := service.handleRunIntent(intent); err != nil {
+		t.Fatal(err)
+	}
+	stream, ok := service.broker.Get(intent.RequestID)
+	if !ok {
+		t.Fatal("父 stream 未建立")
+	}
+	parameter.Value = "changed-client"
+	intent.SubagentModelOverrides["explore"].Parameters[0].Value = "changed-intent"
+	stream.mu.Lock()
+	selection := stream.SubagentModelOverrides["explore"]
+	stream.CurrentModelCallID = "parameter-call"
+	stream.ProviderActive = true
+	stream.mu.Unlock()
+	if selection.Parameters[0].GetValue() != "high" || !selection.MaxMode {
+		t.Fatal("请求副本污染 stream 或 Max Mode 丢失")
+	}
+	if err := service.handleToolInvocation(stream, runtimecore.ToolInvocation{
+		CallID: "task-parameters", ToolName: "Task", ModelCallID: "parameter-call",
+		ArgsJSON: []byte(`{"subagent_type":"explore","model":"requested-other","prompt":"合成任务"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if bridge.modelID != "child-model" || bridge.parameterValue != "high" || !bridge.context.SubagentModelOverrides["explore"].MaxMode {
+		t.Fatal("Task 桥未收到既有选模优先级或完整选择")
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.SubagentModelOverrides["explore"].Parameters[0].GetValue() != "high" {
+		t.Fatal("执行桥修改污染父 stream 参数")
+	}
+}
 
 func TestBrokerCancelActiveProvidersLeavesIdleStreams(t *testing.T) {
 	broker := NewStreamBroker()

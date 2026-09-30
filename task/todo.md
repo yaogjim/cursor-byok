@@ -4,6 +4,28 @@
 
 ## 当前焦点
 
+### 官方/BYOK 混用兼容（分段设计与实施；整体 delivery_status=planned）
+
+- 授权：执行 `.cursor/plans/官方_byok_混用改进_0ab94bd0.plan.md`；主会话为唯一负责人和文档写入者，委派结果由主会话验收。用户本轮要求在现有事实基础上继续实施，按工作包适用设计门禁：C0-P1 参数保留及 C0-H1 已预取文本历史读取已独立闭合并完成永久回归/最小修复；复杂异步读取、历史同步和新参数承载仍须对应合同闭合，不把未决项伪装为已批准。
+- 已确认需求：官方首次切 BYOK 恢复历史、同会话往返保留新增历史、原生可读检查点、主子模型独立选择及唯一结果回流。冲突采用 preserve-and-stop：保留原记录并停止本次请求；正常历史自动同步，不自动分支或静默删减。
+- 约束：最小直接可回退；不新增依赖/通用抽象/范围外兼容或迁移，不改 Cursor 安装、真实配置、凭据和业务数据，不部署/重启/commit/push；未知业务取舍先确认。旧活动任务保留。
+- `mixed-design-contract`：owner=主会话，P0，todo.status=in_progress，规模=M，只读取证与设计，Design Readiness=not-ready。依赖=已批准路线；需求=PRD §17；设计锚点=系统 Design §19 `DESIGN-MIXED-CHANNEL-COMPAT-001`（阶段0事实基线 v0.1，未批准实施）。功能链状态仍为 planned。
+  - `mixed-codec-probe`：todo.status=done（取证切片，不代表功能完成）。主会话复核 root 原始32字节引用、单条 CoreMessage JSON、summary/archive schema；纠正独立报告对 reasoning 的误判，亲自动态提取 pi/hi 等真实客户端转换并通过合成消息断言。结构化状态全量映射、压缩/回退仍归下项，不以局部通过代替 C0。
+  - `mixed-model-probe`：todo.status=done（取证切片）。原变体字符串承载假设被否证；主会话要求将手写打印探针改为真实方法提取+assert，并复跑11项通过。继续亲自核查 `_runSubagent`：创建阶段与提交阶段不同，提交前 Max Mode 实际取父会话，resume 有条件保留/改模；追加合成断言通过。不能仅凭创建分支推断最终行为。
+  - `mixed-parent-selection-probe`：todo.status=in_progress，owner=主会话，规模=S，只读取证；用户已选择保留完整参数目标，不以拒绝子任务替代修复。候选为现有父请求/工具调用 header 关联；退出标准为 generation/attempt/传输 request_id 对应、BidiAppend/RunSSE 字段传递、四种父子组合、并发与恢复均有源码或合成证据。已否定“内存已完整存参数”“官方不改正文就能补参数”“header直接等于父stream ID”三项推断；尚未授权实现新关联机制或正文改写。
+  - `mixed-history-design`：todo.status=pending，owner=主会话，规模=M，只读设计；复用消息循环、内容存储、检查点确认和会话锁。退出标准为读取预算/完整性/取消、稳定消息映射、末回合/压缩/回退、基线复查、context/state部分提交及回滚合同闭合，并完成独立实现模拟后提交确认。当前已确认存储锁不等于基线复查，两文件写入不等于原子事务。
+  - 续查补充（只读，C0 仍未通过）：父子 header 包括父 generation ID 和 Task tool-call ID，网关路由依赖子 attempt 的消息体 request_id；官方父没有本地派发记录，子出口按子请求身份和模型独立判断。不能将父渠道推断为子渠道；客户端到网关实际头传递/重试关联/纯官方父选择捕获仍待验证。历史方面，内联 turn 无持久前缀引用，两个相同消息可共享哈希，本地重编码又会改变哈希；内容哈希集合和客户端 turn 数均不能单独证明对齐。现有两文件顺序写入和回退覆盖须有恢复/保全合同，不得依现状进入同步实现。
+  - 用户本轮同意把严格校验父子关联后，对官方子请求 `RequestedModel` 参数/Max Mode 的局部改写纳入 C0 候选设计；并非批准代码变更或无限制改写官方请求。尚需模拟协议证据和完整设计再确认；原始参数不可得时不以拒绝全部子任务代替修复，也不静默丢明确参数。官方正文原样透传的局部例外只适用于最终证实安全的子请求，未证实则该工作包继续受阻。
+  - 验收：原生格式、同步规则、参数承载、失败/取消/幂等、回滚边界均可核实；未知项按影响阻塞相关工作包，不宣称可直接实施。验证仅源码核查和必要合成协议探针，不运行真实模型或无关套件。
+  - 阻塞分类：fact/design gap=历史对齐/预算/恢复合同及子模型替代承载；product-decision gap=具体替代承载设计尚未批准（完整参数目标已确认）；test/env gap=真实官方端到端。除 C0-H1 与 §19.3b 的已预取文本/工具读取外，不启用异步历史读取、新检查点写出或子请求参数重写；C0-P1 仅修复内存参数快照，读取切片回退均无需迁移。
+  - 早期取证证据：参数 `SUMMARY pass=11 fail=0`；主会话 `PRIMARY_NATIVE_PARTS_PASS`、`PRIMARY_NATIVE_REFERENCES_PASS`，原始引用恢复2条、旧内联恢复0条，工具关联/推理/图片文件字节通过。仅合成契约探针，不是修复验收；本轮参数永久回归和代码证据见 `docs/process.md` 本专项续办条目。
+- 已完成前置切片 `mixed-parameter-snapshot`：Design Readiness=approved（仅系统 Design §19.4b C0-P1）；真实解析入口 low/high 的永久回归先退出1，再修复转绿。参数序列与 protobuf 未知字段保留，源/克隆/lookup/Task桥隔离、既有选择规则和日志摘要均有测试；相关三包测试/vet、定向 race 验收批次退出0。详细完成记录已转 `docs/process.md`；不代表完整 C1/C4 或客户端最终参数传通。
+- 已完成前置切片 `mixed-native-read-fix`：系统 Design §19.3a C0-H1；已预取原生文本 root 的永久回归 RED→GREEN，HTTP BidiAppend→实际保存/编译/provider gateway→模拟模型输入接线通过。顺序/重复实例、root 优先、32字节内联兼容、部分缺失与解码失败完整会话保全均有回归；forwarder/prompt 两包测试、历史定向 race、vet 验收批次退出0。证据转 `docs/process.md` 最新续办条目，切片 delivery_status=verified-partial；后续文本/工具数组读取已完成，其余内容类型、异步 GetBlob、新检查点及增量同步仍未实现，不能标记完整 C2A 已完成。
+- `mixed-native-codec-read`：owner=主会话，P0，规模=M；文本/工具输入切片已完成源码与隔离入口验收（系统 Design §19.3b，delivery_status=verified-partial），其余内容保持 pending。永久回归证明 text/tool-call/tool-result 进入 BidiAppend→真实编译器→模拟模型请求，大整数参数/结果、乱序结果及重复工具批次保留；不完整或无法表示的内容明确失败，入口不调用模型、不改原会话。独立复审发现并修复分组 ID 导致结果重排和重复批次合并，两项均 RED→GREEN、复审关闭；相关包 test、历史/批次 race、vet 全批退出0（`NATIVE_TOOLS_REVIEWED_VALIDATION_PASS`）。未支持 reasoning/image/file、isError=true、多模态工具结果或调用后的文本；不新增模型 schema、协议或持久化字段。下一实施项为 `mixed-history-hydration`：缺失 Blob 异步恢复到模型输入，取消/超时/失配保全；具体预算/状态合同尚待闭合，不能借本切片宣称已恢复无预取的官方历史。
+- 本轮完成情况复核（2026-09-30，`mixed-completion-review`）：回读参数、原生导入、投影和入口测试，未确认新的业务代码缺陷；本轮仅补强永久测试，不新增业务实现。失败回归明确断言工具关联/未知字段/载荷失配、根引用/哈希/后段 plan/todo 的具体错误阶段；失败请求走真实 Connect HTTP BidiAppend，验证明确错误、不启动模型、原持久会话不变。修改后四个相关包完整 test、历史/投影/参数定向 race、四包 vet、gofmt、差异检查均通过（`MIXED_COMPLETION_FINAL_REVIEW_PASS`）；任务和过程记录最小同步后再做定向收口。已预取文本/工具输入与参数快照仍为已验证切片，整体保持 planned；缺失 Blob 读取、原生写出、增量及完整四组合参数链均未完成，不以本轮复核替代其实现或真实客户端验收。
+- `mixed-red-regressions`：owner=主会话，P0，todo.status=in_progress，规模=M（后续再分 S/M）；参数丢失项已完成，已预取文本读取切片已 RED→GREEN；缺失 Blob 主动读取、增量同步和原生检查点三项完整回归仍待对应合同，不能按四项全部完成验收。
+- 后续依赖：`mixed-red-regressions` 的剩余三项按对应 C0 继续；历史实现仍按 `mixed-history-hydration` → `mixed-checkpoint-codec` → `mixed-history-reconciliation` → `mixed-subagent-contract` 综合验收 → `mixed-integration-delivery` 顺序，尚未开始的实现工作包保持 todo.status=pending，实施前再拆 S/M 切片。用户本轮要求从已确认缺陷实际推进，采用计划“未闭合项只阻塞相关工作包”，不再用整个 C0 阻塞已闭合的 C0-P1/C0-H1；原生文本块与工具读取已按 `mixed-native-codec-read` 完成代码/回归/复审；下一项优先接缺失内容的异步恢复，其余内容块的无损支持独立继续。
+
 ### 模型启停与共享入口默认公开（2026-09-24；verified-partial）
 
 - 已确认：模型停用影响 Cursor 等全部既有调用入口；模型默认启用。所有启用模型在共享入口默认按模型列表名称公开，允许单独改公开名或取消公开；冲突名称仅冲突项自动加稳定后缀。产品条款已同步工作决策基线 §10.10；设计锚点为系统 Design §14.11.3a，用户已确认最小方案。

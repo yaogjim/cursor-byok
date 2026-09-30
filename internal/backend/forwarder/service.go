@@ -74,15 +74,16 @@ func parseSubagentModelOverrides(items []*agentv1.SubagentModelOverride) parsedS
 				parsed.Ignored = append(parsed.Ignored, map[string]any{"index": index, "subagent_type": subagentType, "reason": "empty_model_id"})
 				continue
 			}
-			parsed.Overrides[subagentType] = runtimecore.SubagentModelOverrideSelection{
+			parsed.Overrides[subagentType] = (runtimecore.SubagentModelOverrideSelection{
 				SubagentType:                  subagentType,
 				Selection:                     "model",
 				ModelID:                       modelID,
 				MaxMode:                       model.GetMaxMode(),
 				ParameterCount:                len(model.GetParameters()),
+				Parameters:                    model.GetParameters(),
 				BuiltInModel:                  model.GetBuiltInModel(),
 				IsVariantStringRepresentation: model.GetIsVariantStringRepresentation(),
-			}
+			}).Clone()
 		case *agentv1.SubagentModelOverride_Inherit:
 			parsed.Overrides[subagentType] = runtimecore.SubagentModelOverrideSelection{
 				SubagentType: subagentType,
@@ -207,7 +208,7 @@ func cloneSubagentModelOverrides(overrides map[string]runtimecore.SubagentModelO
 	}
 	cloned := make(map[string]runtimecore.SubagentModelOverrideSelection, len(overrides))
 	for key, value := range overrides {
-		cloned[strings.TrimSpace(key)] = value
+		cloned[strings.TrimSpace(key)] = value.Clone()
 	}
 	return cloned
 }
@@ -1995,7 +1996,9 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 	}
 	var subagentOverrides map[string]runtimecore.SubagentModelOverrideSelection
 	if isExecInvocation {
+		stream.mu.Lock()
 		subagentOverrides = cloneSubagentModelOverrides(stream.SubagentModelOverrides)
+		stream.mu.Unlock()
 		if resolutionPayload := taskSubagentModelResolutionPayload(invocation, stream.ModelID, subagentOverrides); resolutionPayload != nil {
 			service.debug.LogRuntime(context.Background(), stream.RequestID, stream.ConversationID, "subagent_model_override_resolved", resolutionPayload)
 		}

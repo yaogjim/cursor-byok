@@ -14,23 +14,39 @@ import (
 
 // SubagentModelOverrideSelection 表示父 run 对某类 subagent 的模型选择覆盖。
 type SubagentModelOverrideSelection struct {
-	SubagentType                  string `json:"subagent_type"`
-	Selection                     string `json:"selection"`
-	ModelID                       string `json:"model_id,omitempty"`
-	MaxMode                       bool   `json:"max_mode,omitempty"`
-	ParameterCount                int    `json:"parameter_count,omitempty"`
-	BuiltInModel                  bool   `json:"built_in_model,omitempty"`
-	IsVariantStringRepresentation bool   `json:"is_variant_string_representation,omitempty"`
+	SubagentType   string `json:"subagent_type"`
+	Selection      string `json:"selection"`
+	ModelID        string `json:"model_id,omitempty"`
+	MaxMode        bool   `json:"max_mode,omitempty"`
+	ParameterCount int    `json:"parameter_count,omitempty"`
+	// Parameters 保存原始参数序列；不得仅依赖数量推断最终参数。
+	Parameters                    []*agentv1.RequestedModel_ModelParameterValue `json:"parameters,omitempty"`
+	BuiltInModel                  bool                                          `json:"built_in_model,omitempty"`
+	IsVariantStringRepresentation bool                                          `json:"is_variant_string_representation,omitempty"`
 }
 
-// LookupSubagentModelOverride 按 Task subagent_type 查找运行期模型覆盖。
+// Clone 返回参数切片及参数对象均独立的选择快照。
+func (selection SubagentModelOverrideSelection) Clone() SubagentModelOverrideSelection {
+	if selection.Parameters != nil {
+		parameters := make([]*agentv1.RequestedModel_ModelParameterValue, len(selection.Parameters))
+		for index, parameter := range selection.Parameters {
+			if parameter != nil {
+				parameters[index] = proto.Clone(parameter).(*agentv1.RequestedModel_ModelParameterValue)
+			}
+		}
+		selection.Parameters = parameters
+	}
+	return selection
+}
+
+// LookupSubagentModelOverride 按 Task subagent_type 查找运行期模型覆盖，返回独立快照。
 func LookupSubagentModelOverride(overrides map[string]SubagentModelOverrideSelection, subagentType string) (SubagentModelOverrideSelection, string, bool) {
 	if len(overrides) == 0 {
 		return SubagentModelOverrideSelection{}, "", false
 	}
 	for _, key := range subagentModelOverrideLookupKeys(subagentType) {
 		if selection, ok := overrides[key]; ok {
-			return selection, key, true
+			return selection.Clone(), key, true
 		}
 	}
 	return SubagentModelOverrideSelection{}, "", false

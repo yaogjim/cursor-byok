@@ -7,6 +7,71 @@
 
 ## 一、待完成的内容
 
+### 官方/BYOK 混用兼容：分段设计与实施（整体 delivery_status=planned）
+
+#### 完成情况复核（2026-09-30）
+
+- 主会话复核已交付的参数快照、原生文本/工具读取及工具批次规范化，未确认新的业务代码缺陷。本轮改动限于既有 `imported_history_test.go` 和必要任务记录：补强失败原因/阶段断言，将失败保全验证接到真实 Connect HTTP BidiAppend；未新增业务行为、依赖或文件。
+- 永久回归覆盖未知消息/内容字段、错误角色/载荷、工具缺失/失配/重复、根引用部分缺失/混合、SHA-256 校验及后段 plan/todo 解码错误；断言具体错误且完整原会话不变。HTTP 失败路径断言返回内部错误、未调用模拟模型、持久会话不变，防止任意提前错误掩盖待测行为。
+- 测试修改后使用隔离 HOME、固定 Go 缓存、`GOPROXY=off GOSUMDB=off`：`go test ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/agent/prompt ./internal/backend/forwarder -count=1 -timeout=3m`、`go test -race ./internal/backend/forwarder -run '^TestImportedConversationState|^TestImportedTurnIDs|^TestRewindImportedTurnPrefix|^TestNormalizeReplayToolBatches|^TestTrimReplayDangling|^TestSubagentModelParam' -count=1 -timeout=90s`、上述四包 `go vet`、改动 Go 文件 gofmt 检查及 `git diff --check` 全批通过，输出 `MIXED_COMPLETION_FINAL_REVIEW_PASS`；编辑器诊断未报错。文档同步后再运行导入/参数/工具批次定向收口及差异检查，不重复无关全仓或前端套件。
+- 完成边界保持：参数保留仅到服务端快照/执行桥；历史输入仅支持内容已预取齐全的文本和完整工具批次。缺失 Blob 异步读取、原生检查点写出、同会话增量同步、客户端完整参数/独立 Max Mode 与四种父子组合仍未完成；无法表达的内容仍明确失败。整体保持 planned，已实施路径为 verified-partial。纠正任务摘要中“原生数组转换仍未实现”的旧表述，明确文本/工具数组已交付，其余类型待办。未做真实 Cursor/官方验收，未部署、重启、提交或推送；下一项仍是缺失内容恢复，不把设计缺口当作整个已交付切片失败。
+
+#### 最新交付：已预取文本块与完整工具历史读取
+
+- 实现 `imported_blobs.go` 的 text/tool-call/tool-result 转换与工具批次校验；参数/结构结果保留原始 JSON 和大整数，字符串结果保留原文本。未知/不可表达内容明确失败，不裁块继续。永久失败回归先复现工具失配和额外内容被静默接受，再修复转绿。
+- HTTP BidiAppend→导入/保存→真实 PromptCompiler/provider gateway→模拟模型请求验证完整工具历史、结果倒序和参数精度；另验证失败请求不调用模型且原持久会话逐字段不变。测试范围是隔离协议链，不是实际 Cursor/官方或真实 provider。
+- [原生历史独立复审](8da7b35d-42b5-479e-9eeb-06c73942d78c)发现分组 ID 触发结果重排；主会话补永久入口回归 RED，并进一步复现重复工具批次持久化3条而非4条。`projector.go` 改为完整单批次不重排结果、已有结果后仅凭实际非空模型调用身份合并交错片段；两项转绿，复审确认关闭。新增同/不同/缺失调用身份对照，保留同一调用的既有合并行为。
+- 最终隔离 HOME、固定 Go 缓存并禁下载：`go test ./internal/backend/forwarder ./internal/backend/agent/prompt -count=1 -timeout=3m`、`go test -race ./internal/backend/forwarder -run '^TestImportedConversationState|^TestImportedTurnIDs|^TestRewindImportedTurnPrefix|^TestNormalizeReplayToolBatches' -count=1 -timeout=90s`、两包 `go vet`、`git diff --check` 全批退出0，输出 `NATIVE_TOOLS_REVIEWED_VALIDATION_PASS`；独立复审另跑上述新增顺序/重复/调用身份及既有穿插文本回归，含 race，通过。
+- 该输入切片为 `verified-partial`；仍未支持 reasoning/image/file、错误标记、多模态工具结果和调用后的文本。缺失 Blob 异步读取、原生检查点、同会话增量和完整子模型参数链仍待实施；不新增依赖/持久字段，不部署、重启或提交。下一项优先补无预取内容的异步恢复，验收目标为模型输入完整且取消/超时/错误保持旧记录。
+
+#### 前轮交付：原生文本历史读取已完成隔离验收
+
+按系统 Design §19.3a C0-H1 推进阶段2A的输入恢复前置，保留此前参数修复。当前确认并修复：root 内容已经预取齐全时仍被跳过或误当内联 JSON；导入后段失败前就提前改动 token/回合引用/下一回合编号。本轮业务变更为既有 `forwarder/imported_blobs.go`、`token_usage.go`，永久测试在 `imported_history_test.go`；没有新文件、依赖、协议字段或持久化格式。
+
+**修复范围**：解析已校验 SHA-256 的 root 引用，接通原生 user/assistant 字符串消息，保持顺序和重复实例；完整 root 优先于 turns，不再次拼接。旧系统提示不进入本轮模型输入。保留旧内联读取和全部 root 缺失时的既有 turns 回退；部分缺失、混合格式、损坏或尚不支持的数组内容明确失败。全部解码和 entry 编码成功后才更新会话元数据，失败返回 nil entries 并保全调用者会话。本轮不是完整原生 codec，也没有启用 GetBlob。
+
+**RED→GREEN**：`TestImportedConversationStateReadsPrefetchedNativeRootWithoutTurns` 在旧实现退出1（0.662s），失败为已齐全 root 仍被直接 JSON 解码，`invalid character '÷' looking for beginning of value`；修复后同一测试退出0（0.567s）。补齐 root 优先、完整会话失败保全六分支、未知/损坏/数组内容拒绝七分支及恰32字节内联 JSON 的永久测试。调整旧 turns 回退夹具：原夹具错误地把可用 protobuf turn Blob 当作 CoreMessage root Blob，现在改为真正缺失的原生 root 引用；保留原来的回退断言。
+
+**真实入口接线**：`TestImportedConversationStateNativeRootReachesProviderThroughBidiAppend` 通过本机随机端口 Connect HTTP、protobuf/hex 上行、真实 `BidiAppend`/串行处理/导入与文件保存/默认 prompt compiler/provider gateway，到模拟模型适配器捕获 `StreamRequest`。断言三条历史按 user→assistant→user 到达（相同问题出现两次仍保留），当前 user_query 一次、旧系统提示未传入、三条 model_message 已保存；取消并等待模拟 provider 及消息处理器结束。没有访问真实模型、官方服务或用户配置。测试早期曾因33字节夹具、错误动作类型、将 current_user_request 提醒中的相同文字计成重复用户历史而失败，已核实真实 schema/既有提醒规则后只修正测试，不改范围外业务语义。
+
+**验收证据**：临时隔离 HOME，固定 `GOPATH=/Users/yaogj/go`、`GOMODCACHE=/Users/yaogj/go/pkg/mod`、`GOCACHE=/Users/yaogj/Library/Caches/go-build`，`GOPROXY=off GOSUMDB=off`。最终批次执行 `go test ./internal/backend/forwarder ./internal/backend/agent/prompt -count=1 -timeout=3m`、`go test -race ./internal/backend/forwarder -run '^TestImportedConversationState' -count=1 -timeout=90s`、`go vet ./internal/backend/forwarder ./internal/backend/agent/prompt`、`git diff --check`，批次退出0，输出 `NATIVE_ROOT_READ_VALIDATION_PASS`。主会话复审业务 diff 和测试清理逻辑；编辑器诊断无报错。未新增独立评审，不将自审记成外部验收；未跑无关前端或整仓套件。
+
+**状态与下一步**：C0-H1 的源码/模拟入口链为 `verified-partial`；整体混用功能仍为 planned，完整 C2A/C2B/C3/C4 未完成。下一步补齐原生内容数组转换并接缺失 Blob 异步读取，目标为没有 preFetchedBlobs 时也能完整恢复模型输入，且取消/超时/错误不启动模型；随后推进原生检查点写出与增量同步。此步骤只证明已预取文本历史可读，不能宣称真实官方切换或工具/推理/图片/文件已恢复。所有修改保留在工作区，未部署、重启、提交或推送。最后文档落盘后另做定向回归及状态/差异复验。
+
+#### 前轮参数保留：已从设计进入永久回归与修复
+
+用户要求基于当前代码和文档跨过设计门禁、向前推进。本轮落实计划“未闭合项只阻塞相关工作包”：闭合系统 Design §19.4b C0-P1，仅实施已经明确的“参数键值保留及深拷贝”，不擅自通过整个 C0，不启用新的父子关联或官方正文改写。开工工作区已有四份 docs/task 文档修改；本轮业务变更限于 `internal/backend/agent/core/types.go`、`internal/backend/forwarder/service.go`，测试落在既有 `lifecycle_test.go`，没有新文件/依赖，也没有修改真实数据、配置、客户端或运行实例。
+
+**RED→GREEN 证据**：先新增 `TestSubagentModelParametersRemainDistinctAfterInboundDecode`，沿真实 `decodeInboundIntent(run_request)` 比较同模型 low/high 选择；旧源码退出1，失败为“子模型 low/high 参数经真实入口解析后成为相同状态，参数键值已丢失”（0.597s）。保留完整参数序列并深拷贝后，同一命令退出0（0.683s）。补齐5个测试，覆盖参数顺序/重复/空字符串/nil/未知 protobuf 字段，客户端源对象、克隆、lookup 返回值的独立所有权，inherit/disabled/无效覆盖的原有选择规则及日志摘要不泄露参数值。
+
+**接线证据**：`TestSubagentModelParametersReachTaskBridgeAsIsolatedSnapshot` 沿请求解析→`handleRunIntent` 初始化→stream 参数保存→真实 `handleToolInvocation(Task)`→真实执行桥（外包捕获器）核对 high/Max Mode 与子模型 ID，并修改桥接副本证明父 stream 不受污染。启动使用 prewarm 开关抑制 provider；这不是完整 HTTP、真实 Cursor 子请求或官方运行证据。解析、保存、派发和查找都复用同一 `Clone`，派发读取在 stream 锁内完成；`SubagentArgs` 仍只有模型 ID，不能声称客户端最终参数已补齐。
+
+**本轮验收**：隔离临时 HOME、保留本机 Go 缓存、设置 `GOPROXY=off GOSUMDB=off`。`go test ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder -count=1 -timeout=3m`、`go test -race ./internal/backend/forwarder -run '^TestSubagentModelParameter' -count=1 -timeout=90s`、`go vet ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder` 和差异格式检查的整批命令完成、退出0。源码/测试修改后运行过验证。最终收口核验使用 `go test ./internal/backend/forwarder -run '^TestSubagentModelParameter' -count=1 -v -timeout=90s`、`git diff --check` 和 `git status --short`，必须在最后一次文档写入后执行；核验范围仅为参数保留切片及工作区差异，不能证明整个混用功能完成。没有运行无关前端、独立 module 或整仓构建。
+
+**状态与下一步**：参数保留切片的内部合同已验收；阶段1开始，四项回归只完成参数丢失这一项。混用完整功能仍为 planned，父子参数链至多 verified-partial；历史读取、检查点格式、增量对齐和子请求参数承载仍未修复。下一步直接闭合原生根消息编解码的输入/输出、旧格式读取和错误合同，然后落对应永久回归，继而接 GetBlob 异步读取；不继续把它们阻塞于四组合参数调查。新历史写出、对齐/崩溃恢复及官方正文改写仍按对应 C0 审核。未部署、重启、提交或推送。本轮未新增委派评审，复杂历史和承载设计仍保留独立审查要求。
+
+#### 前轮取证记录（历史过程，不是本轮修复验收）
+
+用户授权主会话主持分阶段执行并验收委派结果，保持最小改动与范围约束。开工 `git status --short` 无输出；本次仅更新既有 PRD §17、系统 Design §19、`task/todo.md`、本文及计划，不改功能、schema、依赖、真实配置或 Cursor 安装，不部署/重启/commit/push。`docs/lessons.md` 不存在，未为此新增文档；本专项更正直接记入对应设计和执行记录。
+
+**委派及验收**：并行安排 [原生消息核查](d5dbe311-191c-4905-900b-cd24e23ad9a5) 和 [子模型参数核查](4057c515-d08a-4b9b-a023-5f02eeb16f78)，均限定只读客户端发布代码/指定后端文件、合成临时探针、禁止真实数据和功能修改。主会话逐段核对真实代码，未直接接受其结论：要求参数任务将手工等价实现/打印输出改为动态提取原方法及断言，纠正非 fork Max Mode 的全局配置来源和空参数的偏好优先；另亲自发现 reasoning 经 `unknown` 包装保留，纠正仅因 `hi` 缺少同名 case 就认定其不支持的推断。
+
+**本次实际验证**：主会话运行 `node /tmp/mixed_model_probe/probe_assert.mjs`，输出 `SUMMARY pass=11 fail=0`。探针动态提取当前客户端的模型配置及变体选择方法，合成目录断言 low/high 变体串不还原、普通模型显式参数可区分、空参数先取全局偏好、无偏好才取目录默认；仅替换反应式环境，不运行完整 UI。早期手工探针不作为最终消费链证据。
+
+主会话另执行 `node --input-type=module` 合成探针，按源码锚点提取 exec 包 `class oi` 至 `function fi(e,t)` 之间的内容类型和 `pi/hi`、`LH/OH`，以及工作台 `YMs`：输出 `PRIMARY_NATIVE_PARTS_PASS`、`PRIMARY_NATIVE_REFERENCES_PASS`，整条命令退出 0。断言 reasoning/redacted-reasoning 经内部 unknown 往返、toolCallId/toolName/args/result 保留、image/file 的 Uint8Array 往返；以同两条 CoreMessage 构造 SHA-256 内容仓库，raw32 引用恢复2条，旧内联 JSON 恢复0条。隐私值容器、内容仓库及外围依赖为合成替身，验证消息结构和引用合同，不证明隐私策略、完整客户端或真实官方服务。脚本是临时取证，C1 仍需建立不依赖本机 Cursor 安装的永久回归。
+
+**用户决策与续查**：用户选择保留完整参数目标，继续只读设计和验证替代方案，不以拒绝子任务替代修复；已同步 PRD、Design、任务和计划。续查发现工作台 `ODg` 可输出父请求/工具调用 header，但 `_deriveLineageFromParent` 取 generationUUID，不能直接当作网关传输 request_id。主会话拒收“现有内存已完整保存参数”（解析已丢键值）与“官方不改正文也能补参数”（现有路径只是透明转发）的过宽结论，接管后续关联核查。候选与剩余证据缺口见 Design §19.4a，不授权新增关联或正文改写。
+
+主会话进一步沿实际 `_runSubagent` 读到提交前重建逻辑，纠正“创建阶段等于最终提交”的遗漏：最终 Max Mode 来自已加载父会话，resume 可按条件保留旧子模型或使用新模型。动态提取该原始代码片段及 `_deriveLineageFromParent`，配合前述真实配置方法和合成父/子对象，执行 `node --input-type=module`，输出 `PRIMARY_SUBAGENT_SUBMIT_PASS`、`PRIMARY_LINEAGE_SOURCE_PASS`，退出0。此项补核保持“变体串不会还原参数”的结论，但不将创建阶段局部证据冒充完整提交路径。
+
+**结果与边界**：原生 root 引用和内容块合同已核实；原计划“目录变体字符串即可承载本地子模型参数”的前提被否证，已在计划与 Design 更正。存储复核发现现有锁内保存无读取基线复查，context/state 为顺序单文件替换，不可宣称已有同步原子事务。C0 仍未通过：历史预算/对齐/压缩/回退/恢复和回滚合同待闭合；子模型完整参数目标已确认，具体替代承载仍待设计与证据；真实官方端到端仍属 test/env gap。没有运行 Go/前端/全仓套件，因为没有功能变更，不将历史临时 PASS 当作修复验收。文档检查曾发现两处新增末尾空行，修正后 `git diff --check` 和五份文档状态/范围检查通过。下一步按 Design §19.3/§19.4a 补齐历史合同及可靠父子关联证据，相关设计批准后才进入永久失败回归与功能编码。
+
+**续查结论（仍是阶段 0，未进入编码）**：两项限定只读调查分别回报历史同步与父子参数链，主会话复核 `proto/agent_v1.proto`、`imported_blobs.go`、`token_usage.go`、`projector.go`、`file_store.go`、`rewind.go`、`service.go`、`agent_action.go`、`agent_route.go`、`client.go` 和客户端工作台的原始片段。核实本地导入仍只在 Entries 为空时发生；内联 turn 没有可持久的引用身份；summary 有消息时不单独建 summary entry；回退按 turn 数截断导入 ID 并覆盖 entries；context/state 顺序写入并非跨文件事务。否决调查建议的“用 SHA-256 引用集合直接当跨渠道消息身份”：相同内容消息可重复、本地编码可改变摘要。参数链核实父 generation 与 attempt 的 ID 不必相同，网关只按每个子请求的自身模型和身份选出口，纯官方父无本地 Task run 记录；否决“BYOK 父必使官方子被本地路由”的无条件推断。仍须调查父子头在实际传输中的连通、纯官方父参数快照、官方正文局部重写、跨文件崩溃恢复及稳定对齐。以上仅源码取证和更正文档，没有永久回归或功能修复；C0 的 `Design Readiness=not-ready`，用户目前不能依赖混用修复。下一步先收敛历史合同和子模型承载的最小方案并申请批准，再按 C1–C5 顺序实施。未碰真实数据/配置，不部署、重启、提交或推送。
+
+**用户补充选择**：允许把严格校验父子关联/参数来源后，仅对官方子请求 `RequestedModel` 的参数与 Max Mode 做局部改写纳入 C0 设计讨论，不授权立即编码；其余请求及字段维持原样透传。还需证明纯官方父参数来源、重试/并发/恢复关联、帧压缩与未知字段保留和出错后的安全状态，之后提交完整设计确认。该选择不改变保留完整参数目标。
+
+**收口范围说明**：本轮交付对象仅为阶段 0 的部分取证与文档记录；C0 和后续功能阶段均未完成。文档写入后须另行执行差异格式、修改范围和状态一致性复验，不能以写入前的检查替代。
+
 ### 模型启停与共享入口默认公开（2026-09-24；verified-partial）
 
 用户确认停用影响 Cursor 等全部入口，默认公开原模型名，重名仅冲突项加稳定后缀，已写入工作决策基线 §10.10 和系统 Design §14.11.3a。实现旧模型缺省启用、模型列表/编辑启停、Cursor/CLI 目录与旧 ID 拒用、fallback 跳过停用渠道，以及 Gateway 动态默认公开、保留旧自定义公开名和显式取消公开。仍复用现有配置分区保存与 Gateway token，不新增依赖、迁移脚本，不触碰真实用户配置。

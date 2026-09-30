@@ -1,7 +1,6 @@
 package forwarder
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -54,11 +53,6 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 	if err != nil {
 		return nil, err
 	}
-	item.TokenDetailsUsedTokens = state.GetTokenDetails().GetUsedTokens()
-	item.ImportedTurnIDs = importedIDs
-	if minimumNextTurnSeq := int64(len(item.ImportedTurnIDs)) + 1; item.NextTurnSeq < minimumNextTurnSeq {
-		item.NextTurnSeq = minimumNextTurnSeq
-	}
 	entries := make([]HistoryEntry, 0, 2)
 	if messages, err := importedConversationStateModelMessagesWithBlobs(state, blobs); err != nil {
 		return nil, err
@@ -110,6 +104,12 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 			Payload: payload,
 		})
 	}
+	// 所有输入和 entry 编码成功后才更新调用者元数据，失败不留下半份导入。
+	item.TokenDetailsUsedTokens = state.GetTokenDetails().GetUsedTokens()
+	item.ImportedTurnIDs = importedIDs
+	if minimumNextTurnSeq := int64(len(importedIDs)) + 1; item.NextTurnSeq < minimumNextTurnSeq {
+		item.NextTurnSeq = minimumNextTurnSeq
+	}
 	return entries, nil
 }
 
@@ -121,31 +121,27 @@ func importedConversationStateModelMessagesWithBlobs(state *agentv1.Conversation
 	if state == nil {
 		return nil, nil
 	}
-	rootPromptMessages := state.GetRootPromptMessagesJson()
-	if len(rootPromptMessages) > 0 {
-		allBlobReferences := true
-		hasBlobReference := false
-		for _, raw := range rootPromptMessages {
-			if len(raw) == 0 {
-				continue
-			}
-			if len(raw) != sha256.Size {
-				allBlobReferences = false
-				break
-			}
-			hasBlobReference = true
-		}
-		if allBlobReferences && hasBlobReference && len(state.GetTurns()) > 0 {
-			rootPromptMessages = nil
-		}
+	rootPromptMessages, nativeRoot, err := resolveImportedRootMessages(state.GetRootPromptMessagesJson(), blobs)
+	if err != nil {
+		return nil, err
+	}
+	if nativeRoot && len(rootPromptMessages) == 0 && len(state.GetTurns()) == 0 {
+		return nil, fmt.Errorf("missing prefetched root message blobs")
 	}
 	if len(rootPromptMessages) > 0 {
-		decoded, err := promptengine.DecodeReplayMessages(rootPromptMessages)
+		var decoded []promptengine.Message
+		if nativeRoot {
+			decoded, err = decodeImportedNativeMessages(rootPromptMessages)
+		} else {
+			decoded, err = promptengine.DecodeReplayMessages(rootPromptMessages)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("decode imported replay messages: %w", err)
 		}
-		decoded = restoreImportedReplayUserMessages(decoded, state.GetTurns(), blobs)
-		decoded = filterLegacyPlainWriteReplay(decoded)
+		if !nativeRoot {
+			decoded = restoreImportedReplayUserMessages(decoded, state.GetTurns(), blobs)
+			decoded = filterLegacyPlainWriteReplay(decoded)
+		}
 		decoded = filterInternalPromptContextReplay(decoded)
 		messages := make([]modeladapter.Message, 0, len(decoded))
 		for _, item := range decoded {
