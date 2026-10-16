@@ -2092,7 +2092,7 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 
 ### 19.1 状态、目标与取证边界
 
-**设计版本：阶段 0 取证基线 v0.1；Design Readiness=not-ready。** 对应 PRD §17 `REQ-MIXED-CHANNEL-001`。本节固化已核实合同、候选机制和阻塞项，不是已批准的实施规格；实施路线授权不替代专项设计确认。执行证据与任务状态只记入 `task/todo.md`、`docs/process.md`。
+**设计版本：阶段 0 取证基线 v0.1，附 §19.3c 独立检查点写出合同 C0-W1 v1；整体 Design Readiness=not-ready。** 对应 PRD §17 `REQ-MIXED-CHANNEL-001`。本节固化已核实合同、候选机制和阻塞项；已闭合切片以各自明确的数据域和门禁为准，不是整个专项已批准的实施规格。执行证据与任务状态只记入 `task/todo.md`、`docs/process.md`。
 
 保持 §18 的身份隔离、请求级出口和目录身份规则；本专项不把 request_id 固定路由当作已证实共同根因，不新增跨渠道自动重试，不改客户端安装。冲突遵循已确认的 preserve-and-stop。仅调查当前客户端发布代码与合成数据，未读取真实会话正文、凭据或配置。
 
@@ -2105,19 +2105,19 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 3. plain CoreMessage 使用 `role/content`；工具调用是 assistant 内容块 `{type:"tool-call",toolCallId,toolName,args}`，工具结果是 tool 内容块 `{type:"tool-result",toolCallId,toolName,result,isError?,experimental_content?}`。user 支持 text/image/file；assistant 支持 text/tool-call，并经 `pi`（1446069）把其余内容块包成内部 `unknown`，`hi`（1449148）再还原原对象。reasoning/redacted-reasoning 可以经此通路保留，不能因 `hi` 没有同名 case 就判为不支持。保留数据不等于任意模型服务商都接受另一服务商的推理签名；后者仍遵循既有 provider 合同。
 4. exec 包 `EL.writeToBlobStore` 用 serde 序列化，再以 `jJ` 计算 SHA-256 并写内容。`summary` 引用 `ConversationSummary` protobuf；`summaryArchives[]` 引用 **ConversationSummaryArchive** protobuf，其 `summarized_messages[]` 与 `summary_message` 再引用 CoreMessage JSON，`window_tail` 是内联 uint32，不是 Blob。
 5. 工作台 `DIu` 先展开各 summary archive，再追加 root 中非 system、非 summary 的消息，**不会自动去重**。exec 恢复活动模型消息时使用 root，turns 和 archive 则由各自句柄持有。因此不能把 root、turns、archive 全部拼接为模型输入，也不能假定客户端会修复重复输出。
-6. 仓库 `projector.go:556–626` 当前 root 使用 `prompt.EncodeReplayMessages` 内联本地格式；summary/archive 也未按上述原生引用合同输出。`token_usage.go:124–173` 对引用式 root 且有 turns 时跳过 root，不能将其作为原生 root 已支持的证据。本地 replay 编码与原生 CoreMessage 编码需在检查点边界区分，禁止全局替换所有 provider 的消息格式。
+6. 仓库默认 `projector.go::ProjectCheckpointProjection` 当前 root 使用 `prompt.EncodeReplayMessages` 内联本地格式；默认 summary/archive/plan/todos 也未按上述原生引用合同输出。§19.3c/e 的独立 native 接缝只闭合有限 root/工具与 plan/todos 数据域，未替换默认入口。`token_usage.go::importedConversationStateModelMessagesWithBlobs` 已按 §19.3a/b 支持完整预取的原生文本/工具 root，全部缺失且有 turns 时仍有旧回退；`runtimeStatePayloadFromConversationState(state, blobs)` 与 `imported_blobs.go` 已按 §19.3e 接入 plan/todos 的完整预取双读。这些同步读取不能作为主动 GetBlob、压缩编码或默认新写出已支持的证据。本地 replay 编码与原生 CoreMessage 编码需在检查点边界区分，禁止全局替换所有 provider 的消息格式。
 
 ### 19.3 历史恢复与持久化：已核实落点及待定合同
 
 - 已核实：`actor.go:285–327` 串行接收 run、KV 响应与定时器；KV 目前仅接 `handleCheckpointBlobResult`。`GetBlobArgs` 只带 blob_id；`GetBlobResult` 带可选 blob_data/error，没有回显 Blob ID。必须由流身份和 KV request_id 找到原请求，再校验期望哈希，不能设计不存在的响应 ID 字段。
-- 已核实：`ContentBlobStore.Get/Put` 校验 SHA-256，存储不可变内容；`checkpoint_blobs.go` 只有写确认及 5 秒写超时语义。历史读取不能复用其“已有成功结果可降级”的处理。
+- 已核实：`ContentBlobStore.Get/Put` 校验 SHA-256，存储不可变内容；`checkpoint_blobs.go` 只有写确认及 5 秒写超时语义。历史读取不能复用其“已有成功结果可降级”的处理。读取限制的本轮有限校准确认 `ContentBlobStore.Get` 使用 `os.ReadFile`、`Put` 写入全部 data，已预取仓库也没有数量或总字节预算；这些落点没有可直接继承的 GetBlob 等待期限。原生 root 的 5,000,000 字节显示限制不是通用 Blob 预算，provider 出站限制和其它模块入口限制也不能直接套作此读取合同。读写共用编号空间、等待集合分开已由计划明确，不再次作为未决选项；仍须冻结读取请求总期限、数量/总字节上限及取消/替代/逐层取回的完整状态转换，未确认值不进入实现。
 - 候选最小机制：在当前流内保存待启动请求及缺失引用，发 GetBlob 后立即返回消息循环；只在输入引用完整、解码和对齐成功后构造本轮 entries 并启动模型。读取顺序为已校验预取、本地内容存储、客户端；取消/替代/超时清理待启动请求，迟到或重复响应不启动第二次；读写共用不冲突的 KV 编号空间并按响应类型分派。无需新增调度服务或通用同步框架。
 - 已核实：`runtime_summary.go:51–57` 只在 Entries 为空时导入；`token_usage.go:48–79` 将导入消息记在 TurnSeq=0；`ImportedTurnIDs` 只保留回合引用，尚无逐消息与本地回合的稳定映射。不能直接按消息数、turn 数或文本相似度判断增量。
 - 已核实：`SaveConversationWithEntries` 在锁内重读，但随后 merge 元数据并 append，不复查调用者的读取基线；`writeConversationLocked` 先写 context.json、再写 state.json，是两次文件原子替换而非两文件事务。`ContextVersion` 为最大 entry 序号，单独使用不能识别等长替换。同步必须在既有锁内复查可判别基线，不能宣称当前锁已满足同步原子性。
 - 已核实：`decideRunRewind` 先按本轮 UserMessage.message_id 匹配本地 user_message，再参考客户端 turn 数识别编辑/重跑。同步不得把任何较短历史都当回退，也不得把明确用户编辑一律当冲突。
 - 候选对齐分类：首次、相同、可证明增量、既有规则可识别回退、冲突；只追加已证明缺失的历史内容，保留执行/用量/子任务元数据，本轮系统与工作区提示来自当前请求。重复内容可以属于不同真实消息，不能用内容哈希全局去重。
 
-上述候选机制尚待完成：读取预算与取消状态的精确合同；root/turn 逐消息对应、末回合追加、压缩前后稳定键；同步元数据与 context/state 部分提交后的恢复；旧版本对新记录和新检查点的可读边界。未闭合前不写历史、不启用新检查点。
+上述候选机制尚待完成：读取预算与取消状态的精确合同；root/turn 逐消息对应、末回合追加、压缩前后稳定键；同步元数据与 context/state 部分提交后的恢复。它们分别阻塞异步恢复/增量同步或相关复杂数据域，不能作为 §19.3c W1 独立编码与确认合同的全局前置；新写出只可按已闭合数据域推进，其余域及实际启用仍受对应门禁约束。
 
 阶段 0 续查的反例（仍为 `evidence_status=verified` 的源码事实，不是已选设计）：`imported_blobs.go:45–64,132–150` 只有内容仓库可解的 turn 引用进入 `ImportedTurnIDs`，内联 turn 无此前缀；`projector.go:593,621` 把导入 turn ID 与本地 turn ID 串接，但 root 用内联 replay；`token_usage.go:64–88,120–181` 在有消息时不另建 summary entry；`rewind.go:220–248,283–310` 回退清用量并按客户端回合**数量**截断导入 ID；`file_store.go:471–482` 顺序写两个文件。内容哈希只标识字节，两个相同内容的真实消息可共享哈希，而本地重编码也会改变哈希，故**不能把哈希集合或位置下标直接当跨渠道逐消息身份**。续查者提出的“仅用引用集合比对前缀”和“摘要/用量无损自动成立”均不满足此条件。仍须设计顺序、重复实例、客户端原样引用与本地生成内容之间可验证的映射；无法证明时遵循已确认的保留并停止。既有 `ReplaceEntries` 命中回退即覆盖，不可未经设计直接当作全部同步冲突的安全回退。
 
@@ -2137,6 +2137,155 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 在 §19.3a 的同一导入边界扩展普通 `text`、assistant `tool-call` 和 tool `tool-result`；文本按块顺序拼接，参数/结构化结果使用原始 JSON，不经 float64 或 map 转换；字符串结果解码为原文本。工具 ID/名称精确配对，结果保持出现顺序，完整批次结束后允许相同内容及 ID 再次出现，不按内容哈希去重。规范化只对具有相同非空实际模型调用身份的交错片段合并，ID 前缀不证明调用身份；单一完整批次不重排结果。
 
 未知/角色失配/不完整批次以及当前不能表示的 reasoning/image/file、`isError=true`、非空多模态工具结果、调用后的文本均整体失败，不裁块继续。系统提示继续采用本轮请求。沿用 §19.3a 的失败保全、入口验证及无迁移回退；没有新增字段、依赖、异步状态或写出协议。此 S 级读取修复仅闭合上述可表达内容（Design Readiness=approved），其余内容和缺失 Blob 恢复分别继续；独立代码审查与执行证据留在任务/过程记录。
+
+### 19.3c 检查点写出的独立合同与回滚边界（C0-W1，v1）
+
+本合同承接 `REQ-MIXED-CHECKPOINT-001`、`REQ-MIXED-CONFLICT-001`、`REQ-MIXED-BOUNDARY-001`，对应 `mixed-checkpoint-codec` 的首个 S/M 切片。**Design Readiness=approved 仅限下述 W1 数据域、输出合同及验证编排；delivery_status=contract-ready，不代表新写路径已实现或启用。** 用户本次授权闭合独立检查点设计，沿用已确认的原生可读、保留停止、最小改动与不部署规则；不由本合同批准压缩映射、丢内容、全局切换或任意旧版回滚。整体 §19.1 仍为 not-ready。
+
+#### 问题机制、证据与适用范围
+
+- `evidence_status=verified`：`projector.go::ProjectCheckpointProjection` 把 `EncodeReplayMessages` 返回的本地内联 JSON 直接写入 root；原生 exec 恢复先 `getBlob` 再 `coreMessage.deserialize`，工作台 `YMs` 同样逐引用读取。修复机制必须同时提供原生消息正文、正文的 SHA-256 引用和已确认的正文集合；只给本地 JSON 加哈希会把格式缺陷转移到解码阶段。证伪条件是原生消费者不能逐条恢复预期角色、内容与工具关联，或发布前任一引用不可解析。
+- 客户端基线继承 §19.1 的 Cursor 3.15.19/workbench 摘要；exec 文件为 `extensions/cursor-agent-exec/dist/main.js`，SHA-256 `1f1ced5c4cb82ec36d2f94cf32d46a7f1f3a030eac19e55c02372a723f2d8a75`。该文件的 `class oi` 至 `function fi(e,t)`（字符 1444321–1451746）包含实际 `pi/hi` 消费转换，`qH/LH/OH`（2481935 起）定义 JSON/二进制 serde，`OY`（2490476）定义各 protobuf serde，`fromConversationStateStructure`（2495991）加载 root，构造器以 `EL` 持有 todo/plan/summary/archive 引用。偏移及哈希只描述这一客户端版本。
+- W1 数据域：本地历史或已经完整解码的历史所形成的 user/assistant 文本与完整工具批次；没有 compaction summary/archive、非空 plan/todos、待完成工具或未解析的外部引用；没有 reasoning、image/file、provider 专有元数据或其他尚不能无损转换的内容。空会话可生成无 root/turn 的空状态。root 消息单条 UTF-8 JSON 大小不得超过 5,000,000 字节：工作台 `$Iu=5e6` 在 `YMs` 中对更大正文替换为省略占位，超限不得拆条、截断或宣称无损。总量沿用现有请求/存储约束，不新增任意预算值。
+- 可表达性必须检查投影前的相关历史载荷，不能先调用会丢弃未知字段的过滤器，再据剩下文本断言 W1 合格。已批准的取消/内部上下文/历史工具回放过滤仍使用当前规则，不增添格式修复专用删减。W1 不是缩减完整产品目标，而是独立实施域；其余数据域按下文各自门禁补齐。编码器对域外输入明确返回错误，不退回内联 JSON、不部分发布；沿用调用方的投影错误传播，不新增“编码错误也成功结束”的降级。全局启用不能靠 W1 成功自动获批。
+
+#### 模块职责与数据合同
+
+1. `HistoryProjector` 保持纯投影：输入当前会话快照，输出现有 `CheckpointProjection{State,Blobs}`，失败返回错误且不修改输入。W1 以独立 `projectNativeCheckpointProjection` 接缝承接；`nativeCheckpointMessages` 从有效原始条目取保存正文，不能把 `ProjectPromptReplay` 已裁剪的工具结果当作无损历史。仅复用既有取消政策、工具批次规范化、历史工具过滤和回合 Blob 图；参数/结果不经过面向模型的结果压缩或 float64 重编码。默认 `ProjectCheckpointProjection`、`ProjectPromptReplay`、`prompt.EncodeReplayMessages`、磁盘 `model_message` 格式和 provider 请求编码保持原样；默认入口切换另受下文门禁约束，不建通用 codec 框架。已有 `checkpointBlobGraph.add/list` 负责内容寻址、字节复制和稳定输出顺序。
+2. `State.RootPromptMessagesJson[i]` 是第 i 条原生 CoreMessage 的 raw32 SHA-256；`Blobs` 包含对应 UTF-8 JSON 字节。正文仅有原生 `role/content`，本地 `tool_calls/tool_call_id/name/content_parts` 不得作为同名顶层字段输出。无工具的 user/assistant 文本写字符串 content；有工具的 assistant 内容先写已有非空文本块，再按原 ToolCalls 顺序写 `{type:"tool-call",toolCallId,toolName,args}`。普通文本块使用 `{type:"text",text}`，既有文本顺序不改变。system 提示遵循本轮请求生成与既有过滤，不借历史写出重新注入旧系统提示。
+3. 工具结果写为 tool 角色的内容数组，每条 `{type:"tool-result",toolCallId,toolName,result}` 与对应调用的 ID/名称匹配，顺序采用已批准的完整批次规则。同一 assistant 含多个调用时，结果携带的原始参数只可恢复匹配 ID 的调用，不能覆盖其他调用；非空结果名称与已派发调用名称失配须整体失败，不能用结果重命名调用。参数使用校验后的原始 JSON，不经 `map[string]any`/float64 重编码；结果 Content 是有效 JSON 时嵌入该 JSON 值，否则编码为 JSON 字符串，不擅自增加 `isError`。空结果保留为空字符串。无效参数或不完整/失配批次整体报错，不制造工具结果，不再执行历史工具。
+4. 原生客户端的 JavaScript JSON 消费会舍入超出安全整数的数值，`pi/hi` 还会把结果字符串 `"123"` 转为数值 123；因此原生无损不能仅靠 Go 保存原始 JSON 字节证明。W1 JSON 值域为 string/bool/null、递归数组/对象及绝对值不超过 9,007,199,254,740,991 的整数；分数或更大数值的跨语言精度承诺独立阻塞于 `W-NUMERIC`。结果若是字符串且其字符串正文又是合法 JSON，另归 `W-RESULT-TYPE`，不得声称客户端可保留原类型。旧读取切片对大整数原始字节的保留能力不受此限制改变。域外值不转成字符串规避限制，不据此宣称完整工具写出已支持。
+5. root 是有序消息序列，消息实例位置不是跨渠道身份键；SHA-256 只作内容寻址/字节相等键。相同正文可以只存一个 Blob，但 root 中重复引用必须保留，每个实例都回放。`Turns` 保留现有逻辑回合顺序，使用 `ConversationTurnStructure` protobuf 引用，依次引用 `UserMessage` 和 `ConversationStep` protobuf；resume 活动归入原用户回合，fork 快照不含后来历史。root 是活动模型消息来源，turns 是结构化回合视图，不拼接两份模型历史，不用哈希集合做历史同步。
+6. `Blobs` 必须覆盖本状态所有可达内容引用，包括 turn 的子引用；同 ID 必须同字节且 SHA-256 校验成功。本地生成内容按首次加入顺序列出，消息序列另保留重复实例。已有导入 turn 引用只有在已校验内容仓库能解析全部子图时才可保留并纳入写确认集合；缺内容阻塞对应导入写出切片，不假设“客户端以前有过所以永远可读”。W1 不新增 `ConversationFile`、context/state 字段或磁盘格式版本。
+
+#### 接口、顺序、失败与并发合同
+
+- 真实调用方向仍为 `publishCheckpointWithTerminalAction` → `snapshotCheckpointConversation` → 投影 → 补 PendingToolCalls/显示 token → `queueCheckpointProjectionWithTerminal` → KV SetBlob/SetBlobResult → `buildCheckpointMessage` → 既有终态。W1 先完整编码/检查引用图，再进入队列，不能发送一半内容后才发现编码错误。`SetBlobArgs` 的 blob_id/blob_data 复用既有协议；KV uint32 id 是本流写确认关联号，不是 Blob 身份或历史同步身份。
+- 不修改 `checkpoint_blobs.go` 的流锁、Required/Confirmed/Pending 集合、同流确认复用和 5 秒超时。正文按唯一 ID 发送，全部 Required ACK 后才能发布状态；发布状态成功后才执行既有子任务 MarkAcknowledged，再按原 terminal action 收尾。SetBlob ACK 只证明存储确认，不证明正文符合原生格式，也不证明业务终态成功。确认集合仅在当前流有效，重建服务/新流不能继承“已同步”结论。
+- 持久历史已经存在于本地，检查点是其输出视图；生成/发送本视图不改 `Entries`、ContextVersion、NextTurnSeq、用量、子任务执行记录或 rewind 基线。因而 W1 不依赖 §19.3 尚未闭合的两文件同步事务，不宣称 context/state 已有原子提交。Blob 存储仍使用现有不可变内容合同，无迁移、删除或清理任务。
+- 编码/引用图错误在任何 SetBlob 前停止投影；会话不变，错误采用固定类别，不含正文或 Blob ID 数组。SetBlob 投递失败、拒绝、当前写超时沿用 `finishAfterCheckpointSyncFailure`：丢弃未发布状态，保留旧检查点；已成功回合仍按原 completion 结束，失败回合保留失败终态，不能变成成功。降级不得发布引用不齐的状态，不调用 MarkAcknowledged，不标记本检查点同步成功。
+- 取消/替代请求通过既有 `discardPendingCheckpoint` 清 pending 与 timer；重复/迟到/未知 id/错误响应类型不创建新发布。新投影替代旧 pending 时只发布最新状态，复用同流已确认 Blob，原 terminal action 按既有 merge 规则合并；旧 timer 由单调令牌隔离。停止、超时或进程中断后可能留下无引用的不可变 Blob，允许保留；本切片不做自动重试或持久 ACK 账本。
+- 观测沿用 checkpoint dispatch/result/timeout/canceled/sync-skipped 事件和现有白名单，只报告阶段、计数、耗时与固定错误类别。鉴权/出口继承 §18，本合同不复制官方身份或 BYOK 凭据。UI/配置页及新角色权限为 N/A；异步确认、持久数据保护、接口兼容和回滚不是 N/A。
+
+#### 兼容读取与回滚合同
+
+- 写入与读取分离：保留旧内联 replay 读取，包括恰为32字节的合法 JSON；新输出统一 raw32 引用，不能双写“原生引用+旧内联”到同一 root 数组。源码基线 `07aa83f`（0.0.75.0）的 §19.3a/b 读取可以在所有必需 Blob 预取齐全时还原 W1 文本/完整工具批次；这一能力不等于无预取读取、完整结构化状态或旧于该基线的版本兼容。
+- 最低回滚目标限定为经过 W1 双读回归的 `07aa83f` 源码基线或保留等价读能力的版本。不能仅凭版本号认定某个安装包包含它；部署前须核对实际产物与源码。早于 C0-H1 的读取会跳过引用式 root/依赖 turns，不能保证新格式完整回放，不列为无条件回滚目标。合法 JSON 的 raw32 哈希会与该基线的 JSON 优先检测产生歧义，属于 `W-ID-AMBIGUITY`；W1 验证在编码后检查该歧义，命中则明确失败，不篡改内容或哈希掩盖问题，兼容读修复独立设计。
+- 回滚前先停止产生新检查点（须另行授权运行窗口），等待在途写入收尾或明确取消；保留现有 context/state 和全部内容 Blob，不恢复旧磁盘快照、不 reset 存量会话。随后换回上述可读取基线，使用同一合成新旧检查点和预取集合验证恢复与再投影；输入缺必要内容时保留停止，不靠旧 turns 的偶然回退承诺无损。服务重建必须重新确认本流所需内容。
+- **发布是不可撤回边界**：SetBlob 成功而状态尚未发布时，回滚只留下未引用 Blob；状态发布后客户端持有新引用，撤销服务端代码不会撤回该状态。若目标读能力/必要内容不满足，停止受影响会话的继续运行，保留现有记录和读取能力，补齐内容恢复或兼容读取后再继续；不得删除历史、覆盖为旧检查点或让用户重建聊天来假装回滚成功。发布后的新增回合始终保留，不从部署前备份覆盖回来。
+- 本合同不新增 Feature Flag、双写格式、批量迁移或部署操作。W1 编码/定向接线可独立 TDD，但将其替换为所有请求的默认 writer，必须先通过适用数据域的读取与回滚回归。域外请求继续由对应尚未闭合切片负责，不把其静默删减或错误写出包装为兼容；本设计任务没有授权实际发布。
+
+#### 结构化状态和其余未知的局部阻塞
+
+- `W-STRUCTURED`：plan 引用 `ConversationPlan` protobuf、todos 每项引用 `TodoItem` protobuf；`Plans` map 值仍是内联 `PlanRegistryEntry`，mode/token/pending tool IDs 仍内联。默认 `state_tools.go::encodeConversationPlanBytes/encodeConversationTodoBytes` 仍产内联 protobuf；§19.3e C0-W2 已另闭合独立引用输出、完整预取双读及其回滚合同，真实读侧不再直接把32字节字段当 protobuf 正文。只给字段加哈希不补同对象读取仍不合格；默认 writer 启用继续受完整数据域门槛约束。此域不再因最初只读取证的未决兼容选择阻塞 W2，也不成为无结构化状态的 W1 前置。
+- `W-COMPACTION`：summary 引用 `ConversationSummary`；summary_archive/summary_archives 必须是 `ConversationSummaryArchive`，其 summarized_messages/summary_message 引用 CoreMessage，window_tail 为内联 uint32。当前 `previousCompactionSummaryBytes/compactionSummaryArchives` 误用 summary protobuf，且尚未冻结被压缩消息对应与窗口。禁止把错误 schema 加哈希或填空 archive 假装修复。须核实当前压缩保留内容、窗口及 root/archive 排他规则：root 承载活动摘要与尾部，archive 保留被压缩消息；客户端 DIu 展开 archive 后不自动去重。只阻塞有压缩/archive 的写出及对应同步切片。
+- `W-CONTENT/W-NUMERIC/W-RESULT-TYPE`：推理/签名/provider 元数据、图片/文件、未完成工具、数字精度与 JSON 字符串结果类型分别要求无损映射、消费者/回读证据；二进制若支持须遵循 `{__type:"Uint8Array",hex:…}`，不把 base64 或 URL 当原始字节。不得以客户端支持未知块为依据猜造本地字段映射。分别阻塞含对应载荷的切片，不改变已闭合普通文本与可无损完整工具批次。
+- `W-IMPORTED`：带未解析 turn/子图、file_states(_v2)、subagent_state_refs 等外部状态只在内容完整且持久来源可证明时可写；当前投影不全量保留这些状态，禁止声称已无损恢复任意官方快照。缺失内容的获取归 `mixed-history-hydration`，逐消息增量/两文件恢复归 `mixed-history-reconciliation`，子模型承载归 `mixed-subagent-contract`，均不成为 W1 本地完整视图的全局前置。
+- 各 fact-gap 的 owner 为主会话，退出标准为指定客户端/当前 schema 的只读探针、对应无损正反例和稳定 Design 子锚点；需新增业务取舍则单独确认。真实官方服务内部恢复为 test/env gap，阻塞真实兼容验收而不是源码/合成 W1 修复。整个 C2B 仍须全部适用域及真实验收缺口分别收口，不能从 W1 通过推导整体通过。
+
+#### 验证合同与 Design Gate
+
+- 永久失败回归落在既有 `projector_fork_test.go`：真实投影生成两条文本 root，断言每项 raw32、正文在 Blobs、哈希匹配、原生 CoreMessage 解码成功；旧代码必须在内容查找处 RED。随后覆盖完整工具批次/结果倒序、相同消息重复、Unicode/引号/空结果、确定性且输入不变、fork/resume/取消策略以及所有 W1 域外错误不产生半份投影。数值/结果类型/5,000,000 与 5,000,001 字节边界作为局部能力门禁，不把故意失败记作已修复。
+- 读取兼容落在 `imported_history_test.go`：旧内联与新引用+完整预取恢复相同语义、完整 root 优先且不重复 turns、部分缺失/哈希损坏/32字节歧义明确失败且原记录不变；对最低回滚基线重复相同样本。涉及新 structured 双读时须追加该对象的回归，不能借 root 的 PASS 证明 plan/todo 可读。
+- 发布接线复用 `checkpoint_blobs_test.go` 及真实 HTTP BidiAppend/RunSSE 测试辅助函数：捕获 SetBlob、模拟逐项 ACK、在最后一项 ACK 前无 checkpoint/终态、之后原生消费者按捕获仓库恢复全部预期消息；验证拒绝/超时/取消、重复和迟到 ACK、旧 timer、新 pending 替代、子结果发布后唯一确认。不得只比较数量或用 `DecodeReplayMessages(root)` 自证兼容。
+- 开发验证在隔离 HOME、固定已安装 Go 缓存、`GOENV=off GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off` 下执行 `go test ./internal/backend/forwarder ./internal/backend/agent/prompt -count=1 -timeout=3m`、checkpoint/import 定向 `-race`、两包 `go vet` 与 `git diff --check`。跨语言样本须固定客户端版本与源码摘要；日常永久回归使用最小冻结契约样本，不依赖机器安装 Cursor，不复制整包客户端。命令是后续实现验收合同，本设计任务不宣称已经全部运行。
+- Gate（2026-10-11，主会话自审，**未做独立评审**，遵循项目本次未授权委派的约束）：正向模拟“无压缩文本/可无损完整工具批次→原生正文/raw32→SetBlob→全 ACK→状态→终态”；反向模拟“域外字段/内容超限/引用缺失→发送前错误”“部分 ACK/拒绝/取消/旧 timer→不发布新状态”“发布后回滚→保留新引用/增量、仅回到已验证读取基线”。适用项包含数据/接口、确定性、异步状态与并发、失败、安全观测、兼容回滚和测试追踪；UI/新配置/新磁盘 schema 为 N/A，无新产品或部署决策。
+- 自审被迫补齐的事项已写入本合同：计划/待办实际为引用且旧读仍内联、summary 与 archive 不同 schema、JavaScript 数字和字符串结果的语义限制、raw32 JSON 歧义及已发布状态无法自动撤回。**verdict：W1 合同闭合，可进入相应永久回归和有界最小实现；其他数据域 not-ready 只阻塞各自切片，整个 C0/C2B 未通过。** 此为作者反向审计而非外部复核；未来复杂压缩/导入/同步合同仍需对应审查，不借本 S/M 切片豁免。
+
+### 19.3d 默认写出前的结构化判别与压缩来源校准（只读取证）
+
+本节承接 §19.3c 的 `W-STRUCTURED/W-COMPACTION`，保留 C0-W2 实施前的有限事实与候选边界，**取证当时 Design Readiness=not-ready**；不是新的实施授权，不改变 C0-W1 的已闭合范围。结构化取舍现已由用户确认并由 §19.3e 承接，以下“未批准/旧读直接解码”均描述取证当时，不覆盖 W2 当前读侧；压缩后续反例及待决方向见 §19.3f。需求仍为 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY，不新增持久化字段、格式标记、配置、迁移或兼容框架。任务与运行证据见 `task/todo.md`、`docs/process.md` 的数据域取证条目。
+
+- **已核实结构化路径**：`projectConversationStructuredState` 从 runtime_state/成功结构化工具结果取状态；默认 `ProjectCheckpointProjection` 调 `encodeConversationPlanBytes/encodeConversationTodoBytes` 直接将 protobuf 正文放入 plan/todos，`Plans` map 保持内联。`importConversationState` 先建已校验预取仓库，但 `runtimeStatePayloadFromConversationState` 不接仓库，仍直接 `proto.Unmarshal`。原生 plan/todos 的引用合同继承 §19.3c，不能仅给正文加哈希而不补读侧。
+- **已核实判别反例**：`ConversationPlan{Plan:30字节ASCII文本}` 和 `TodoItem{Id:30字节ASCII文本}` 都是32字节合法旧内联 protobuf。主会话有界合成搜索找到真实 SHA-256（第167号合成 plan 样本）被两种 `proto.Unmarshal` 都接受为已知字段空、未知字段32字节的对象。因而“没有 Blob 时解析成功就是旧正文”会掩盖缺失引用；root 的 `json.Valid` 歧义检查也不能作为 plan/todos 的 protobuf 判据。只含 runtime_state 的历史不形成 root 消息，旧默认 writer 可以产生空 root 与非空 plan/todos；root 字段没有显式生产者/版本标记，不把其格式推断作为结构化字段来源的可靠证明。
+- **候选最小机制，未批准**：复用已校验 Blob 仓库，引用命中则解析正文；没有引用命中时，非32字节沿旧内联 protobuf 读取，恰32字节则明确停止、保全原会话，不猜是正文还是引用。写侧在独立 native 接缝将 plan/todos 正文纳入既有 Blob 图和 ACK；todos 保留顺序及重复实例，`Plans` 仍内联，整个输入成功后才更新会话。该机制不新增 schema，但会使无来源证据的旧32字节内联计划/待办无法继续；这属于兼容取舍，必须由用户确认，不能由路线的“继续”自动批准。另一方向是保持此类旧读取能力、先取得可靠来源依据，在依据闭合前暂停该域写出；不擅自创建新标记。
+- **回滚差异已核实**：`07aa83f` 的 root 双读证据只适用于 C0-W1，不覆盖引用式 plan/todos；该域发送新状态前，最低回滚源码/实际产物必须具备结构化双读并经同对象样本验证。若切片尚未发布，仅撤销独立代码即可；一旦发布，仍遵循 §19.3c 的不可撤回边界并保留全部内容/新增历史。候选尚未批准，当前不改变 W1 的回滚合同。
+- **已核实压缩来源**：`applyCompactionToConversation` 只追加摘要及 runtime_state，原始 Entries 未删除；`compactedPromptProjectionEntries` 使用摘要条目所在索引、CurrentTurnSeq/CurrentRequestID/PreserveCurrentTurnInputs 和 `autoCompactionPreservedEntryIndexes` 构造实际活动视图。因此实际移除集合可由现有数据/算法重建，不能因 payload 未记录显式 Seq 区间就断言必须扩展持久格式。模型候选、预算裁剪后的实际摘要输入与投影移除集合并不等价，不能将任一集合未经合同直接命名为原生 summarized_messages。
+- **客户端有限证据**：继承 §19.1/§19.3c 的两个 bundle SHA-256；exec 字符2848394附近的生产代码以 `messagesForSummarizationCount - messagesActuallySummarizedCount` 的非负值写 windowTail，并逐项保存实际摘要消息的 CoreMessage 引用（排除旧摘要块）。windowTail 单位为消息条数；本次仅核实该生产处和工作台消费者，不将搜索无命中提升为“所有客户端路径都不消费”。工作台 `DIu`（19538609）按归档次序拼接 summarized_messages，再追加 root 中非 system/非摘要的消息，没有去重，也未在该函数读取 windowTail。
+- **仍阻塞压缩实施**：须固定本地活动摘要的原生标记、每次归档与活动尾部的排他映射、取消/fork/连续压缩/回读与回滚；尤其本地被投影移除但未实际参与模型摘要的正文如何保全，不能通过填空 archive 或给错误 schema 加哈希掩盖。优先验证可由现有字段重建的映射，只有证据证明不足且最小设计获准后才考虑新增持久字段。此处为 fact/design gap，不因取证完成将压缩 writer 标 ready。
+
+**本次取证审查结论**：主会话拒收“proto 解析成功可安全兜底”“JSON 歧义门禁可直接复用到 protobuf”和“压缩必需新增持久字段”三项过宽结论；纠偏后限定了可靠事实、兼容决策与后续最小探针。结构化兼容取舍未确认，压缩映射合同未闭合，verdict=not-ready；默认 writer 仍不得切换。
+
+### 19.3e 计划与待办的独立原生写出及双读（C0-W2，v1）
+
+本切片承接 §19.3c 的 W-STRUCTURED 和 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY；用户通过本轮结构化选择明确批准：**没有已校验正文且字段恰32字节时停止并保全；新结构化格式的最低回滚版本必须具备同对象双读。** 这只批准兼容边界及独立代码/测试，不批准默认切换、实际发布或真实会话操作。§19.3d 的反例为事实输入，整体设计仍 not-ready；本切片在下述独立模拟通过后才为 Design Readiness=approved。
+
+- **范围与职责**：沿用 C0-W1 的完整文本/可无损完整工具批次、纯投影/全部 ACK/失败保全合同，额外支持现有结构化状态的 plan/todos。`Plans` map 继续使用原有内联 `PlanRegistryEntry`，不新增字段或重定义其规范化。压缩、推理/图片、未完成工具、未解析导入子图仍域外。复用 `projectConversationStructuredState` 的既有成功工具结果与取消政策，已有 plan/todo 工具历史过滤不改变；编码接缝仍为未导出的 `projectNativeCheckpointProjection`，默认 `ProjectCheckpointProjection` 和 provider replay 不变。
+- **写侧合同**：先检查有效 runtime_state 的原始 JSON，拒绝未知字段/不能保留的结构化载荷，不能先经 clone/过滤再宣称无损。计划采用既有 PlanText 规范化后的 `ConversationPlan` protobuf；todos 采用既有投影结果的每条 `TodoItem` protobuf，完整保留 id/content/status/created_at/updated_at/dependencies、顺序及重复实例，空列表保持空，nil不产生新条目。非nil全零 TodoItem 的 protobuf 正文为空，既有 Blob 图无法登记该实例；明确返回 `native checkpoint: empty todo`，不写空引用或跳过后成功；引用式 todo 正文若为空，或正文虽非空但显式默认字段解码后仍是全零 TodoItem，同样明确失败并保全；判据须在解码及未知字段校验后检查对象语义，旧非32字节内联不新增这一限制。正文进入同一 `checkpointBlobGraph`，State.Plan/每项 State.Todos 写 raw32 引用；同正文去重，实例不去重。protobuf 编码错误返回 nil projection；全部成功才返回 State/Blobs，投影不改输入，不发送半份内容。root 的 JSON 哈希歧义检查只用于 root，不套用于 protobuf 引用。
+- **读侧合同**：`importConversationState` 使用同一个 `newImportedBlobStore` 已校验仓库解析 plan/todos；不新增异步 GetBlob。每个非空字段若长度为32，必须解析其内容引用：已校验仓库存在则解码正文，不存在则固定 `missing prefetched plan blob`/`missing prefetched todo blob` 错误；**即使这32字节可以被 protobuf 解析也不回退**。非32字节仍按旧内联 protobuf 解码，旧空字段保持空。plan/todos 可逐字段包含新引用与旧非32内联，结果与原顺序一致；解析原生引用正文失败固定对应 decode 类别，原生引用正文的未知 protobuf 字段若会被现有 runtime schema 丢弃则明确拒绝，不剥字段后成功；旧非32字节内联仍沿原有解码/克隆规则，不新增未知字段拒绝。所有 root/turn/结构化输入及 entries 编码成功后才更新会话元数据；任一失败仍 nil entries 且会话逐字段不变。
+- **兼容影响与回滚**：未命中内容的旧32字节内联 plan/todo 将明确失败，原记录保持可由旧代码读取，不迁移/删除/自动生成正文；用户已确认此边界。其余旧内联读取不变，W1 root 的兼容判据不改变。写侧仍未默认接线，部署前至少以 W2 双读源码/实际产物验证新旧结构化样本、完整预取和回读再投影；`07aa83f` 不能作为 W2 最低回滚目标。真实产物验证仍独立授权；发布后不可撤回和新增历史保护继承 §19.3c。
+- **实现落点**：`projector.go` 仅扩展独立接缝、结构化域检查和 Blob 编码；`token_usage.go` 给现有 runtime-state 导入传入仓库；`imported_blobs.go` 增加针对 plan/todo 的小范围解析辅助，不建通用 codec 框架。永久测试复用 `projector_fork_test.go`、`imported_history_test.go`；必要的 SetBlob/ACK 覆盖追加到既有 `checkpoint_blobs_test.go`。`state_tools.go`、proto/schema、ContentBlobStore、依赖/配置和默认 service 入口保持不变。
+- **验证合同**：先在现有导入入口使预取 plan/todos 引用不能还原的用例 RED，再实现 GREEN。样本包括 plan、不同 todo 和相同 todo 的重复引用，逐字段比较结构化投影；新引用/旧非32内联/混合格式、缺失（包括可被 protobuf 接受的真实 SHA-256）、损坏正文/哈希、旧32内联拒绝，均断言具体错误及完整输入不变。独立投影输出的所有结构化引用必须 raw32/正文存在/哈希相同/正确 protobuf 解码，PlanRegistryEntry 仍内联；旧默认 writer 输出不变。至少一个真实 BidiAppend 上行的失败/ACK 接线样本验证在结构化内容齐全前不提交/发布。按本切片修改范围运行 forwarder 包测试、结构化/检查点/导入定向 race、forwarder vet、gofmt 和最终 `git diff --check`，隔离 HOME/禁止下载依赖，不重复无关套件。
+- **原生数值事实及实现限制**：主控复核相同 SHA-256 的 exec `wd/vd`（1598931/1599109），createdAt/updatedAt 原样传递，TodoItem 的字段4/5为 int64，protobuf runtime（745100）使用 BigInt，禁用 BigInt 时用十进制字符串而非 Number。因此 W2 的原生 protobuf 时间戳保留完整 int64，不借 root 工具 JSON 的安全整数门禁拒绝合法时间戳。runtime_state 使用标准 `encoding/json` 与现有 snake_case 字段（含 int64数字），严格检查只放在 W2 独立接缝，不改共享 `projectConversationStructuredState`；原生编码直接 `proto.Marshal` 并检查错误，不复用会吞错的旧 encodeConversationPlanBytes/encodeConversationTodoBytes。
+- **Gate（本轮，独立评审后主控闭合）**：[结构化合同独立复审](5aeaada8-8e56-44c1-91e7-b0737b6e2ae7)模拟正向“原始结构化历史→protobuf/raw32→全 ACK→预取读取→相同 runtime state”，反向“缺失/歧义/损坏后段→nil entries/完整会话保全”和“发布后仅回到具备 W2 读取能力的源码/产物”。首次有条件通过，指出未知字段检查作用域和旧编码器吞错；主控据源码/客户端探针明确仅新引用正文拒绝未知字段、旧非32内联不变、严格写校验不进共享路径、直接 protobuf 编码检查错误。用户已确认唯一兼容取舍；数据/接口、失败、重复、内容确认、兼容与回滚适用，新增UI/配置/schema/真实部署为非目标。int64事实已核实，不新增容量阈值或重试。**verdict：C0-W2 Design Readiness=approved，仅限本独立切片；新读兼容需永久 RED→GREEN，独立新写出仍未默认接线，不代表 C2B 完成。**
+
+### 19.3f 压缩活动序列与原生归档顺序（有限取证，v0.1）
+
+承接 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY、§19.3d 的 W-COMPACTION 及 `mixed-checkpoint-compaction-contract`。**Design Readiness=not-ready；本节记录反例与候选设计方向，不授权修改压缩政策、持久化格式或默认写入口。** 原始 Entries 保留与投影移除集合可重建仍成立，但不能据此推导原生归档的顺序合同已经闭合。运行证据和任务状态见 `task/todo.md`、`docs/process.md`。
+
+- **已核实的顺序约束**：固定 §19.1/§19.3c 两份客户端 SHA-256，工作台实际 `async function DIu` 起点为字符19538609（`function DIu` 为19538615）；该函数先按 summaryArchives 顺序展开 summarizedMessages，再追加 root 中非 system、非摘要消息。实际 `IIu` 判定为 `providerOptions?.cursor?.isSummary === true`。exec 的摘要生产使用 user 消息及此标记；不能用未标记的普通 user 文本假装原生摘要。当前 `decodeImportedNativeMessages` 只接受 role/content，带此标记的正文属于尚未闭合的压缩读兼容，不用 W1/W2 的回滚读取能力兜底。
+- **已核实的稀疏保留**：`compactedPromptProjectionEntries` 在最新摘要前保留本轮 user/request context、最后一组完整工具及必要 reasoning carrier，而不是连续尾段；摘要后条目全部追加。假设无取消、无额外元数据，Seq 1/2 为旧轮 user/assistant，3 为当前 user，4/5 与6/7 为两组工具，8为 `preserve_current_turn_inputs=true` 摘要；现有算法的活动 Seq 为 `[8,3,6,7]`。将其余正文作为候选归档 `[1,2,4,5]` 后，实际 DIu 拼接为 `[1,2,4,5,3,6,7]`，而原序为 `[1,2,3,4,5,6,7]`。连续两次压缩也保留该错序，尽管数量、成员与唯一实例均正确。因此“每次新增移除集合归档、稀疏活动消息写 root”的候选被否证；这不是已实现的原生 archive writer，也不证明现场同一根因。
+- **已核实的时间边界问题**：保留 helper 接受完整 Entries 而非摘要截止前缀。上例在摘要后追加同 turn/request 的第三组工具 Seq9/10 后，活动由 `[8,3,6,7]` 变为 `[8,3,9,10]`，旧工具6/7退出活动集合，没有产生新摘要。因此“在摘要索引前截断 helper 输入”只能作为冻结压缩快照的候选新语义；不能把当前算法描述成已有持久快照。重建某次压缩时刻与计算当前最终视图须分别定义。
+- **事实边界**：`checkpointProjectionEntries` 只是取消过滤后的历史视图，不是 ConversationSummaryArchive 的 summarized_messages 集合；既有 summary/archive 输出仍把摘要文本编码成 ConversationSummary，尚无正确原生归档正文映射。模型实际摘要输入还有 turn 片段裁剪与预算丢弃，不能由投影移除集合推定。保留 tool_result 的现有模型视图会裁剪正文，新原生写出必须另从原始 Entries 取完整结果，不能重复 W1 曾被拒收的有损路径。取消/fork/导入子图与预算超限的合同仍待闭合，不因这两项合成反例获证而自动完成。
+- **用户已确认的设计方向（仅方向，不是实施授权）**：用户选择 `continuous_tail_design`，允许按“摘要+连续尾段”完善压缩设计，继续核验预算与失败保全。普通历史应划分为连续前缀归档与连续后缀活动消息，固定压缩时点边界，并继续保留完整原始 Entries；不重复实例，不篡改摘要标记含义。合同样本可恢复原序，但会改变当前稀疏保留政策：同轮更早工具可能进入连续活动尾段，模型输入可能增大。当前 `validateCompactionCandidateBudget`/`compactionBudgetTokens` 已提供按上下文窗口减预留量的预算及超限错误，可作为后续设计现实基线；尚不能据此宣称完整连续尾段必能放入预算。完整工具批次、无损写出、取消/fork、历史压缩快照与读/回滚兼容仍须闭合并独立模拟。此确认不批准新阈值、新持久字段、编码、默认启用、发布或真实会话操作；保持原稀疏规则且暂停压缩写出的方向未采用。
+
+**取证结论**：集合可重建不足以证明原生有序排他映射；已否证直接按移除集合写归档的候选。活动历史政策的方向决策已关闭，后续按连续尾段闭合连续压缩、预算、取消/fork、读兼容和回滚合同；承重事实与具体合同仍未闭合，verdict=not-ready。
+
+### 19.3g 连续尾段的最小实施合同（2026-10-12）
+
+承接用户本轮“保存→缺失读取→增量→子任务→验收”的连续实施授权及 §19.3f 已确认方向，本合同仅闭合活动历史的连续尾段，不批准默认 writer 切换或真实会话操作；原生归档/摘要双读及其他内容域仍分别验收。
+
+- **事实及机制**：现有摘要追加位置可作为固定时点，原始 Entries 不删除；§19.3f 稀疏反例和本轮 `/tmp/mixed-compaction-probe.4tDd9s/probe.log` 已验证连续区间可以保序且不会因摘要后工具追加改变先前边界。候选超预算仍由 `applyCompactionPlan` 编译后、持久化前的 `validateCompactionCandidateBudget` 拒绝；探针不代表实现已完成。
+- **精确规则**：只以 `entries[:summaryIndex]` 计算已有本轮保留集合，取其中最早普通 prompt 条目为连续尾段起点；无保留条目则起点为摘要位置。输出最新摘要→该起点至摘要前的全部普通 prompt 条目→摘要后新增条目；旧摘要不混入尾段。保留摘要前非 prompt 元数据，既有内部上下文过滤、工具规范化不变。结果展示裁剪机制及作用域均保持原样：只改写原保留集合中的条目，新纳入连续尾段的其它结果不额外裁剪，原始历史仍不变。连续区间必须包含原已保留输入和完整工具批次；若最早保留项为 tool_call 或 tool_result 则向前扩展到对应完整批次起点，不能丢同批次兄弟调用或制造悬空结果；采用真实调用顺序/模型调用身份，不凭 ID 前缀猜批次。重复实例保留，不按内容哈希去重。
+- **失败/取消/fork/预算**：复用既有取消过滤和 fork 截断，不改变取消政策；摘要之后新增条目不重新计算旧边界。完整连续尾段不能满足现有上下文预算时原请求明确失败、原历史与旧摘要保留，不再删掉中间消息或提高阈值。原生保存仍须从原始未裁剪正文另行编码，不把模型展示裁剪当无损归档。
+- **落点与回滚**：仅调整 `projector.go::compactedPromptProjectionEntries` 和必要小 helper；预算入口 `compaction.go::applyCompactionPlan` 保持原顺序，无新 schema、阈值、配置、迁移、后台任务或依赖。该纯投影同时供模型输入及下一次压缩候选使用，连续尾段使其看到同一份较完整活动历史，不另建稀疏候选入口；须覆盖下一次压缩候选不重新纳入已归档前缀。代码回退不删除原始历史；尚未发布原生压缩引用，默认发布入口保持不变。新规则会增加部分当前轮模型输入，属已确认连续尾段方向的直接结果，超预算行为沿用既有失败保全。
+- **验证/Gate**：独立复核已确认固定前缀、预算在提交前检查、取消后置、fork先截断、连续压缩及纯代码回滚可沿既有规则实现，无新增用户业务取舍；指出工具调用批次起点、结果裁剪作用域及下一次摘要候选耦合，已按上述规则闭合。正向为最新摘要+完整有序尾段，最高风险失败为尾段超预算不提交，取消/fork及回滚不改原始 Entries。验证复用 `compaction_append_only_test.go`/既有预算入口测试；隔离 HOME、禁止下载依赖，定向 test/race、相关包 test/vet。需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY；工作=`mixed-checkpoint-compaction-contract` 的活动尾段切片。无 UI、外部请求改写或新持久字段；原生归档读写未决只阻塞归档/默认发布，不阻塞本规则。Design Readiness=approved 仅限活动尾段切片；独立复核为本轮只读实现模拟，完成状态仅记 task/process。
+
+### 19.3h 原生消息正文的可选本地保全（2026-10-13）
+
+用户已明确选择允许在现有历史记录增加可选原生消息/归档来源信息，并要求继续实施；本切片先完成已预取 root 正文保全和摘要标记，归档来源、复杂内容和默认 writer 接线随后按同一授权继续，不再次请求已确认的格式方向。
+
+- **事实/范围**：`modelMessageEntryPayload` 当前仅有转换后 Message，原生摘要的 `providerOptions.cursor.isSummary` 被拒绝；一条原生 tool 消息可能解出多个结果。新增 `native_message`（可选单条 CoreMessage JSON）和 `native_message_parts`（该原文对应的连续 model_message 条目数，默认1）。只在映射首条保存原文，后续条目保留各自 Message；新旧载荷共存，无批量迁移/新数据库/配置/依赖。只保存已支持的消息正文，不保存外部请求头/凭据，不输出到 provider/日志；JSON落盘可规范化空白及HTML转义，解码视图先按相同序列化规则规范化参数/非字符串结果，不经浮点数重编码、不改字符串内空白；内容ID按实际保存字节重算，不复用旧哈希。
+- **导入/关联**：在规范化前逐条解码完整原生 root，绑定原文及所有对应 Message，完整序列工具配对校验后才产生 entries；原文顺序和重复实例保留。system 及既有内部上下文过滤仍按当前规则处理；其它不能表示的内容仍明确失败，不因保全字段而放宽模型内容能力。空字符串消息原文也须有对应entry，不通过 `newModelMessageEntry` 的空文本省略丢实例。旧内联/旧turn回退保持不变。1:N 条目必须连续且同 TurnSeq/RequestID，每条 Message 与同一原文解码视图逐项相同，任何失配、截断或嵌套新原文停止，不写半份。
+- **摘要**：仅接受 user字符串以及严格 `providerOptions:{cursor:{isSummary:true}}`；未知顶层/嵌套字段或错误角色/内容仍拒绝。单条解码器直接产生已包装的 Message.Content（已有 `<conversation_summary>` 包装），以 model_message 保存；ProjectPromptReplay 读取此视图不再次包装。保存原文保持原生标记及未包装文本；不是将官方摘要改成本地压缩摘要，不重复拼接 archive 到模型输入。
+- **写侧/所有权**：独立 native 写出按有效条目遍历，普通本地产生条目仍按旧有界转换；原生载荷须用同一解码器复核 parts 数量、内容及完整序列，经过校验后以原文加入完整 Blob 图，一组只输出一次。原生原文不经过重编码或本地工具白名单裁剪；该例外只用于已验证并保存的原文，既有本地生成工具过滤不变。摘要标记不流入 Message schema。字段缺省走旧路径；parts仅缺省/0表示1，负数或parts存在但缺原文须明确失败；存在但不合法则失败，不忽略后降级。原文直接校验JSON数值安全域及结构，配对独立校验；已明确字符串类型的原生结果不再套用本地重编码的类型猜测，仍不允许原文中的域外数值。本地生成消息原数值/结果类型门禁不变。复用5,000,000字节/root哈希歧义门禁、ACK顺序及取消/fork，原始输入不变。
+- **生命周期/兼容/回滚**：原文随 entry 的既有保存、克隆和回退生命周期；必须完成磁盘保存重读及再投影校验。旧代码能忽略JSON可选字段但会丢原生保全能力，因此发布后最低回滚版本必须保留本读取/写出能力，不能宣称任意旧版安全；未发布时撤销本切片代码但保留所有历史。默认 service 入口、本地压缩schema、provider模型schema和真实会话不改。
+- **验证/Gate**：复用 `types.go`、`imported_blobs.go`、`token_usage.go`、`projector.go` 及既有 import/projector 测试；RED→GREEN覆盖普通/摘要、单原文多工具结果、重复/空实例、保存重读后哈希/原文对应、载荷失配/缺项/域外停止、旧内联读取、HTTP→保存/模型输入。需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY，工作=保存阶段原生正文保全。UI/真实发布/新增数据库为N/A，持久兼容及失败保全按上文。独立模拟指出摘要包装位置和单条工具结果校验问题，已明确：单条解析产生包装视图、不做工具序列检查；完整root统一工具校验，保存时逐组比对单条解码视图并再验证完整序列。实现不重新包装，不回写provider规范化结果。Design Readiness=approved 仅本切片；缺项/失配/域外失败保全，发布后按能力回滚；整体混用仍未交付。
+
+### 19.3i 导入回合引用子图的本地保全（2026-10-13）
+
+承接 PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY 和用户连续实施及委派授权，本切片仅补已预取原生回合图的持久保全与独立原生再写出，不切默认writer，不实现异步读取或归档。本地压缩归档仍另行闭合实际摘要输入计数，不能用活动尾段长度代替window_tail。
+
+- **事实与机制**：Service已持有 `ContentBlobStore`，其Put/Get校验SHA-256并保存不可变正文；ImportedTurnIDs只保存回合引用，预取正文导入后未保全，native writer因此拒绝。复用现有 `.blobs` 内容存储保全可达正文，不新增schema、数据库、迁移或任意预取内容镜像。
+- **范围与数据合同**：只对具名字段Turns元素、agent_conversation_turn.user_message和steps元素应用32字节引用规则；每个非空具名字段恰32字节必须命中正文，非32内联保持原字节，不猜测32字节旧内联。Read/Write/MCP/图片的内联bytes即使32字节也不是引用，不按长度扫描任意字段。只处理原生引用回合→ConversationTurnStructure.agent_conversation_turn→UserMessage/ConversationStep；回合顺序和重复实例由ImportedTurnIDs保留，图正文按首次遍历去重。空user/step槽保留在回合原文中，不能丢回合；dynamic_tool_count保持原值，encrypted_model非空及shell turn明确拒绝。原生引用图节点和其嵌套protobuf未知字段明确拒绝；旧非引用内联回合仍沿原读取路径，不批量规范化既有文件。Put和加入Blobs使用已校验原始字节，禁止protobuf重编码改变ID。
+- **额外引用的精确边界**：本切片不跟随UserMessage的conversation_state_blob_id/text_blob_id/rich_text_blob_id；SelectedContext的extra_context_entries.blob_id、invocation_context.data.blob_id、selected_images/documents/videos的blob_id或blob_id_with_data、selected_external_links.blob_id、git_pr_diff_selections.blob_id、selected_pull_requests.blob_id；ToolCall中的ReadToolSuccess.output.data_blob_id/content_blob_id、ReadSuccess.output_blob_id、TruncatedToolCall.original_step_blob_id。上述非空字段明确拒绝，不剥字段或跳步。TaskSuccess.conversation_steps为内联步骤，递归检查同一精确拒绝表；其它内联数据保持原文，不当引用。不存在可达引用时不要求内容存储。
+- **执行顺序**：全部输入解码、消息视图及结构化状态校验成功后，在内存构建并验证整个回合子图；再幂等Put全部可达节点；全部Put成功后才更新ImportedTurnIDs/NextTurnSeq/TokenDetails并返回entries。不存在可达引用时不要求内容存储。缺失、哈希失配、域外、写入错误返回nil entries且调用者会话不变；Put中途已写入但未被会话引用的不可变内容允许保留，不能宣称两文件事务或删除旧内容作为补偿。不保存请求头、外部凭据或未被支持子图引用的预取正文。
+- **写侧与生命周期**：独立native投影显式接受现有内容存储；含ImportedTurnIDs时先Get并重新验证全部可达图，成功才将原回合ID和子图纳入Blobs及既有ACK集合。无来源、缺节点或损坏时停止并返回nil projection，不改会话/原文。root仍由已保存的模型消息视图生成，不从回合图再拼接一次历史。纯root无Turns不受影响；默认ProjectCheckpointProjection与发布入口不改。fork/rewind沿既有ImportedTurnIDs前缀截断，内容不删除；服务重建后同historyRoot可再次完整投影。发布后的回退版本必须能读取并保全本子图，未发布时仅回退本切片代码。
+- **验证与实施落点**：imported_blobs.go负责有限闭包校验，token_usage.go负责提交前保全，projector.go负责独立写出接入；复用imported_history_test.go/projector_fork_test.go和ContentBlobStore，不新增通用框架。先RED覆盖完整图未落盘/未进入Blobs、root齐全但回合子节点缺失及存储失败保全，再GREEN覆盖重启/重复引用/旧内联/混合子节点/原生root不重复/未知与嵌套引用拒绝；HTTP入口至少覆盖缺子节点不启动模型不写会话。隔离HOME、禁下载、相关包test及定向race/vet，不访问真实会话。归档、其它State域、异步GetBlob、增量与默认切换为本切片域外而非已完成。
+- **Gate**：两项独立只读核查已确认回合ID与正文断链、现有ContentBlobStore可复用，主控限定仅回合图，不采用“空user跳过回合”或“dynamic_tool_count一律拒绝”等无依据裁剪。独立实施模拟指出具名引用边界、嵌套ToolCall引用和原字节哈希问题，已按上述精确表闭合；主控补充原生引用图内嵌protobuf未知字段也须拒绝，旧非引用路径不变。正常链为完整预取→全图校验→Put→会话落盘→重建→原ID再写出；最高风险为缺子节点/Put失败/重启后损坏，均保全记录并停止；fork只截断IDs、共享不可变内容。无新UI、协议、schema或迁移，只有旧内容存储中新增已支持原生节点。Design Readiness=approved仅本节，归档未知不阻塞该有限图保全。
+
+### 19.3j 已预取原生摘要与归档来源保全（2026-10-13）
+
+承接用户已批准的现有载荷可选原生来源字段及连续保存授权，仅保全原生root齐全时的外来摘要/归档，不实现本地压缩归档或默认切换。需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY；复用现有runtime_state载荷、ContentBlobStore、原文解码和独立native投影。
+
+- **字段与生效**：runtimeStateEntryPayload增加可选native_summary/native_summary_archive（[]byte raw32）、native_summary_archives（[][]byte raw32）。仅在已解析齐全的原生引用root导入时绑定，旧内联root路径保持不变；任一有效来源即生成runtime_state，即使无plan/todos。该entry只保存来源，不进入模型输入、不产生compacted_summary，也不把archive展开拼入root。root为空仅summary的旧compacted_summary分支仍是独立writer域外，不偷偷启用。
+- **内容合同**：State.Summary及两个Archive字段非空恰32字节必为已校验内容引用；非32字段按正确类型旧内联protobuf校验并以其原字节哈希存入现有内容库。ConversationSummary只允许已知字段，空摘要字符串也保留原节点；ConversationSummaryArchive只允许已知字段，summary/window_tail保留原文不重算。Archive.summarized_messages每个非空元素及summary_message必须raw32引用并命中单条CoreMessage原文，不能把内联JSON当引用或给错误旧schema仅加哈希；空summary_message、空messages列表/槽可保留，整个空State字段视缺省。子CoreMessage逐条按已批准parser校验并沿native JSON安全数值域，不要求其单独工具批次闭合、不与root配对；归档内跨组工具是历史保存数据，不新增模型回放能力。域外/unknown/缺失/失配停止，不跳过数据。
+- **顺序与一致性**：先完成root/结构化/回合图和所有新来源的内存校验、entries编码，再Put所有可达节点，最后才改会话metadata并返回。Put失败不返回半份entries、不改会话；已Put孤儿不可变内容可留。singular与repeated独立保留原顺序及重复实例，不合并/互推；图正文去重，引用原字节不重编码；旧非32父正文只获得内容ID，内部已存在raw32不改。
+- **生命周期与写侧**：来源随runtime_state原entry保存/克隆/截断，禁止改写原Payload；后续本地runtime状态只能追加不含来源字段的新entry。writer在既有取消过滤后取最后一条含任一非空来源字段的runtime_state作为整组来源，后续无来源entry不擦除；若存在但长度非法停止。显式ContentBlobStore重新Get/全图校验成功后，覆盖State.Summary/SummaryArchive/SummaryArchives整组（缺省字段清空），不能留下默认writer错误schema；以addOriginal把完整正文纳入现有ACK图。无来源不要求store，有源无store/缺内容/损坏停止且nil projection，原会话不变。root仍使用已保存消息；本地压缩标记出现时继续域外拒绝，不混写外来archive与本地压缩。fork/重建共享现有historyRoot内容库，无迁移/新DB/凭据保存；发布后回滚须保留新增来源读能力。
+- **独立模拟与Gate**：独立评审发现runtime字段重写、默认Archive污染及32字节Summary内联误判，已按上述整组覆盖、只追加来源和具名引用闭合。主控拒绝将archive中的非32JSON原样再次发布为引用，也不丢空字符串Summary节点；本切片只支持合法raw32子图，旧错误schema明确失败。正常链=原生完整root+来源→Put→落盘/重建→原ID完整图→全ACK发布；失败链=缺归档子节点/Put失败/重建后损坏保全并停止。Design Readiness=approved仅此域；UI/默认启用/本地压缩及后续阶段不在本切片。
+- **验收与落点**：types.go/imported_blobs.go/token_usage.go/projector.go及既有import/projector/checkpoint测试。RED→GREEN覆盖无plan来源entry、32Summary解析、错误Archive schema、singular/repeated/重复/空槽、跨Archive不完整工具片段保全、不泄入模型输入、后追加runtime更新不擦除、缺内容/坏hash/unknown/Put失败保全、磁盘重读。HTTP缺archive子blob须不启动模型不写原会话，实际ACK保留一个归档子节点至末次确认前不得发布。隔离HOME禁下载，相关test/race/vet，真实官方验收另行授权。
+
+### 19.3k 本地压缩原生归档与同源摘要（2026-10-13）
+
+需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY；用户已选择“摘要来源与连续归档前缀一致，预算不足保留历史停止本次压缩”，并再次要求继续。范围仍是保存：只扩展独立native writer已批准的数据域，不切默认入口、不迁移旧会话、不开展缺失读取。以下合同经独立设计模拟后进入实施，Design Readiness=approved仅限本节。
+
+- **事实与本地映射**：官方exec `1f1ced5c…8a75`的handleSummarization（2839736）以qi(f)（1525421）生成A，去system/空assistant/user_info；h来自partition.messagesToSummarize，并非provider文字预算裁剪后的消息列表。window_tail=max(0,A.length−h.length)，归档仅h中非isSummary消息；保留尾段可与h重叠，不能把差值定义成尾段长。本地采用已批准的不重叠连续分区：选定新增归档前缀及旧摘要上下文形成A，完整同一来源形成h；两者按真实CoreMessage实例计数并相减，此规则下可算得0，但缺来源绝不能默认填0。原生一组多entry只计一条CoreMessage，重复实例仍逐条计数；MessagesToCompact旧语义保持。
+- **同源选择与冻结**：在生产build plan时，从canonical Entries按§19.3g同一保留集合/连续批次算法求本次尾段边界，新增归档为前次冻结尾段起点到本次起点的半开连续区间；第一次从0起，旧摘要仅作上下文，不再次归档。取消按既有全局过滤，fork先截断；metadata不入消息集合但不改变canonical区间标识。边界若切原生raw组或完整工具批次，向前扩展尾段以保留完整组；无法闭合则停止本次操作，禁止半组。当前快照与来源深拷贝贯穿newPending/clone/event Plan；摘要请求及提交不重新选择另一前缀。apply前核对冻结来源与当前历史前缀，失配停止，不提交摘要；追加compaction_request/hook等非prompt不改变原区间。
+- **摘要与预算**：继续使用现有compaction prompt及system/user包装，历史部分覆盖冻结前缀所有实例；允许原有逐消息摘要展示方式，但不得为预算丢整条来源/最旧回合，也不能用活动投影裁剪后的工具正文作archive正文。旧摘要同时计入A/h但排除归档；provider请求不携带native保全字段。完整同源请求含输出预留超compactionBudgetTokens即明确错误，不转fallback绕过；输入预算通过后的provider overflow/空摘要仍允许原有同源fallback，不添加重试/阈值。编译候选后validateCompactionCandidateBudget仍在持久化前。生产新plan都使用新政策；直接构造无来源Pending的旧单测/旧记录保持本地兼容，native写侧不能据此推算来源。reasoning/image等当前native域外消息仍参与同源摘要，不为该writer切片强退已有用户压缩能力；native写出继续明确失败。
+- **可选载荷与一致性**：compactionSummaryEntryPayload增指针型可选native_archive_source对象，内部prefix_start/prefix_end/candidate_count/actual_count/window_tail五字段全部必须存在，读取逐项检查存在性，写入不得omitempty；记录canonical半开区间及显式计数；0值必须有存在性，不得与缺字段混同。存量缺对象走旧本地读规则，native拒绝；对象存在但区间、计数、类型或来源失配也拒绝，不忽略降级。可从既有Entries重建原生成员，不新增必填membership/数据库；仅在源集合可以无损原生编码且计数完成时写出原生来源，否则省略native_archive_source（旧无来源），本地压缩仍落盘，native writer停止；不新增incomplete标记。原生raw组遵守§19.3h落盘可改变JSON空白/转义的事实，不承诺旧hash不变；不得用未经稳定化的raw字节hash让合法磁盘重读失配。新摘要CoreMessage按确定编码重建，未包装文本和严格user/isSummary标记，不额外存raw摘要副本。
+- **独立原生输出**：遍历本地摘要标记按来源区间重建每次新增归档，普通实例顺序保持，旧摘要排除。Archive使用正确ConversationSummaryArchive：summarized_messages与summary_message均raw32且所有正文入图，summary为本次摘要，window_tail由存在的冻结计数校验。root只含最新本地isSummary消息及未裁剪连续活动尾，不重复归档实例；State.Summary为最新ConversationSummary raw32，SummaryArchives按压缩次序，纯本地SummaryArchive为空，不承接默认错误schema。现有默认投影、模型replay与ACK/5秒写降级机制不改；独立投影遇旧无来源摘要或坏来源返回nil且不改输入。
+- **导入来源共存**：§19.3j导入图原ID/原bytes不动；singular独立保留，repeated原序作为前缀再追加本地Archive，State.Summary换最新本地summary，root不展开外来archive。旧官方isSummary root只作上下文不入本地archive。来源整组覆盖只用于读取导入来源，不得覆盖掉新本地Archive；若历史出现缺来源本地压缩，整个native投影停止，不用后次来源掩盖缺失。独立复核若证明混合子域未闭合，明确仅该子域停止，纯本地及纯导入切片不回退，不猜测singular展开语义。
+- **Gate与验证**：独立只读精查官方A/h赋值纠正“实际provider裁剪集合”的旧推断；另一独立设计模拟核对plan clone/event、区间冻结、预算fallback及默认错误schema隔离。主控限定混合来源组合和域外压缩兼容，正常链=生产plan→完整同源摘要→预算校验→载荷落盘重读→正确原生图→全ACK才发布；最高风险=源失配/预算不足/工具半组/缺来源，均保全停止。永久RED→GREEN覆盖单次/两次、重复/raw多结果、候选与实摘计数、旧格式/坏来源、取消/fork、unsupported用户压缩兼容、真实HTTP末次archive子节点ACK门禁。落点types.go/compaction.go/projector.go及既有compaction/projector/import/checkpoint测试；隔离HOME禁下载、两包test/定向race/vet/gofmt/diff检查。UI/真实发布/迁移为域外；可回退代码但保留新增可选字段的读取能力与全部历史/内容，不能宣称任意旧版回滚安全。本节只批准该切片，不等于保存阶段完成。
 
 ### 19.4 子模型参数：原拟议承载方案被否证
 
@@ -2175,11 +2324,11 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 
 ### 19.5 追踪、后续取证与设计审查结论
 
-| 链路 | 需求 | 计划切片 | 设计仍需闭合的内容 |
-| --- | --- | --- | --- |
-| 官方历史首次进入 BYOK | HISTORY/CONFLICT | mixed-history-hydration | 异步预算、完整输入判定、取消与启动提交边界 |
-| BYOK 状态被原生读取 | CHECKPOINT | mixed-checkpoint-codec | 完整结构引用、旧格式歧义、summary/window 与回滚；原生 root/内容块已核实 |
-| 同会话往返 | HISTORY/CONFLICT | mixed-history-reconciliation | 稳定映射、压缩/末回合/回退、幂等持久化与部分提交恢复 |
-| 混合父子任务 | SUBAGENT | mixed-subagent-contract | 替代承载或范围决策；不能继续原变体假设 |
+- 官方历史首次进入 BYOK：需求 HISTORY/CONFLICT → `mixed-history-hydration` → §19.3/§19.3a/b；已预取文本/工具可读，异步预算、完整输入判定、取消与启动提交边界仍需闭合。
+- BYOK 状态被原生读取：需求 CHECKPOINT → `mixed-checkpoint-codec` → §19.3c C0-W1/§19.3e C0-W2；文本/可无损完整工具批次的 raw32/正文图、确认与回滚合同独立闭合，plan/todos 的引用输出与完整预取双读另按 W2 同对象回归验收。执行证据见任务/过程记录，默认入口仍未切换。compaction/archive、其他内容/精度/导入子图和歧义兼容分别只阻塞自己的切片，不将完整 C2B 标为已通过。
+- 同会话往返：需求 HISTORY/CONFLICT → `mixed-history-reconciliation` → §19.3；稳定映射、压缩/末回合/回退、幂等持久化与部分提交恢复尚未闭合。
+- 混合父子任务：需求 SUBAGENT → `mixed-subagent-contract` → §19.4/§19.4a/b；快照切片已闭合，完整替代承载仍需证据与确认，不能继续原变体假设。
 
-阶段 0 早期审查记录：主会话复核两个独立取证交付，拒收“变体透传即参数生效”“空参数恒默认”“创建配置即最终提交行为”和“reasoning 因缺 case 不支持”等过宽结论；Max Mode 与 resume 的最终语义以 §19.4 的 `_runSubagent` 复核为准。完整历史/承载设计尚未完成独立实现模拟。最高风险为历史基线错配/两文件部分提交，以及子模型静默改用偏好参数；未启用异步历史读取、历史新写出/增量同步或官方正文改写，不将此风险转为默认降级；C0-H1 仅接通已预取文本读取。无 UI/部署/迁移操作，其余异步、接口、持久化、幂等与回滚条款不能标记 N/A。**当前结论：C0-P1（§19.4b）和 C0-H1（§19.3a）已独立闭合，可进入各自永久回归与最小修复；整个 C0 和 C1/C2A/C2B/C4 完整验收尚未通过。未闭合项只阻塞相关工作包，不再要求所有取证完成后才修复已确认且合同清晰的缺陷。**
+阶段 0 早期审查记录：主会话复核两个独立取证交付，拒收“变体透传即参数生效”“空参数恒默认”“创建配置即最终提交行为”和“reasoning 因缺 case 不支持”等过宽结论；Max Mode 与 resume 的最终语义以 §19.4 的 `_runSubagent` 复核为准。复杂历史/承载设计尚未完成独立实现模拟，最高风险仍为历史基线错配/两文件部分提交及子模型静默改用偏好参数。C0-W1 的本次作者反向审计与局部限制见 §19.3c；不将其表述为独立评审或真实官方验收。
+
+**当前门禁：C0-P1（§19.4b）、C0-H1（§19.3a/b）、C0-W1（§19.3c 的有限数据域）及 C0-W2（§19.3e 的 plan/todos 域）分别闭合；整个 C0 和 C1/C2A/C2B/C4 完整验收仍未通过。** 未启用异步恢复、默认原生检查点写出/增量同步或官方正文改写。未知项只阻塞对应工作包或数据域；不再要求全部取证结束后才修复已确认且合同清晰的缺陷。

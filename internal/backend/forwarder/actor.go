@@ -255,9 +255,18 @@ func (service *Service) postStreamCommandWait(stream *ActiveStream, command stre
 		return errProviderLoopInterrupted
 	case mailbox <- envelope:
 	}
+	return waitPostedStreamCommand(done, result)
+}
+
+func waitPostedStreamCommand(done <-chan struct{}, result <-chan error) error {
 	select {
 	case <-done:
-		return errProviderLoopInterrupted
+		select {
+		case err := <-result:
+			return err
+		default:
+			return errProviderLoopInterrupted
+		}
 	case err := <-result:
 		return err
 	}

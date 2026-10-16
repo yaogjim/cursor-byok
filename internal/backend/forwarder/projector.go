@@ -2,9 +2,12 @@
 package forwarder
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -50,6 +53,20 @@ func (graph *checkpointBlobGraph) add(data []byte) []byte {
 		graph.order = append(graph.order, id)
 	}
 	return append([]byte(nil), id[:]...)
+}
+
+func (graph *checkpointBlobGraph) addOriginal(id []byte, data []byte) error {
+	if graph == nil {
+		return errNativeCheckpointNilGraph
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("native checkpoint: empty imported blob")
+	}
+	added := graph.add(data)
+	if !bytes.Equal(added, id) {
+		return fmt.Errorf("native checkpoint: imported blob id mismatch")
+	}
+	return nil
 }
 
 func (graph *checkpointBlobGraph) list() []CheckpointBlob {
@@ -317,6 +334,14 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 }
 
 func compactedPromptProjectionEntries(entries []HistoryEntry) []HistoryEntry {
+	return projectCompactedPromptEntries(entries, true)
+}
+
+func compactedNativeCheckpointEntries(entries []HistoryEntry) []HistoryEntry {
+	return projectCompactedPromptEntries(entries, false)
+}
+
+func projectCompactedPromptEntries(entries []HistoryEntry, rewritePreservedToolResults bool) []HistoryEntry {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -332,30 +357,229 @@ func compactedPromptProjectionEntries(entries []HistoryEntry) []HistoryEntry {
 	}
 	var compactionPayload compactionSummaryEntryPayload
 	_ = json.Unmarshal(entries[compactionIndex].Payload, &compactionPayload)
+	// §19.3g：保留集合只由摘要前缀（entries[:summaryIndex]）决定；摘要之后新增的条目
+	// 不重新计算旧边界，压缩时点因而是冻结的。
 	preservedIndexes := map[int]struct{}{}
 	if compactionPayload.PreserveCurrentTurnInputs {
-		latestToolCallID := latestCompletedToolCallIDForTurn(entries, compactionPayload.CurrentTurnSeq, compactionPayload.CurrentRequestID)
-		preservedIndexes = autoCompactionPreservedEntryIndexes(entries, compactionPayload.CurrentTurnSeq, compactionPayload.CurrentRequestID, latestToolCallID)
+		prefix := entries[:compactionIndex]
+		latestToolCallID := latestCompletedToolCallIDForTurn(prefix, compactionPayload.CurrentTurnSeq, compactionPayload.CurrentRequestID)
+		preservedIndexes = autoCompactionPreservedEntryIndexes(prefix, compactionPayload.CurrentTurnSeq, compactionPayload.CurrentRequestID, latestToolCallID)
 	}
-	filtered := make([]HistoryEntry, 0, len(entries)-compactionIndex+len(preservedIndexes))
+	tailStart := continuousTailStartIndex(entries, compactionIndex, preservedIndexes)
+	filtered := make([]HistoryEntry, 0, len(entries))
 	for index := 0; index < compactionIndex; index++ {
 		if !isPromptReplayEntryKind(entries[index].Kind) {
 			filtered = append(filtered, entries[index])
 		}
 	}
 	filtered = append(filtered, entries[compactionIndex])
-	for index := 0; index < compactionIndex; index++ {
-		if _, ok := preservedIndexes[index]; !ok || isCompactionSummaryKind(entries[index].Kind) {
+	for index := tailStart; index < compactionIndex; index++ {
+		if !isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
 			continue
 		}
 		entry := entries[index]
-		if rewritten, ok := compactedProjectionPreservedEntry(entry); ok {
-			entry = rewritten
+		// 结果展示裁剪只作用于模型视图的原保留集合；独立 native ROOT 使用未改写原文。
+		if rewritePreservedToolResults {
+			if _, ok := preservedIndexes[index]; ok {
+				if rewritten, ok := compactedProjectionPreservedEntry(entry); ok {
+					entry = rewritten
+				}
+			}
 		}
 		filtered = append(filtered, entry)
 	}
 	filtered = append(filtered, entries[compactionIndex+1:]...)
 	return filtered
+}
+
+// isOrdinaryPromptReplayEntryKind 判定模型可见的普通 prompt 条目（排除旧摘要标记）。
+func isOrdinaryPromptReplayEntryKind(kind string) bool {
+	if isCompactionSummaryKind(kind) {
+		return false
+	}
+	return isPromptReplayEntryKind(kind)
+}
+
+// continuousTailStartIndex 取保留集合中最早的普通 prompt 条目为连续尾段起点；无保留条目
+// 时起点为摘要位置；起点落在工具批次中时向前扩展到完整批次首项，避免丢兄弟调用或悬空结果。
+func continuousTailStartIndex(entries []HistoryEntry, compactionIndex int, preservedIndexes map[int]struct{}) int {
+	start := compactionIndex
+	for index := 0; index < compactionIndex; index++ {
+		if _, ok := preservedIndexes[index]; !ok {
+			continue
+		}
+		if !isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
+			continue
+		}
+		start = index
+		break
+	}
+	return extendContinuousTailToNativeGroupStart(entries, extendContinuousTailToToolBatchStart(entries, start))
+}
+
+func extendContinuousTailToToolBatchStart(entries []HistoryEntry, start int) int {
+	aligned, err := compactionToolBoundaryStart(entries, start)
+	if err != nil {
+		return start
+	}
+	return aligned
+}
+
+func compactionToolBoundaryStart(entries []HistoryEntry, start int) (int, error) {
+	if start <= 0 || start >= len(entries) {
+		return start, nil
+	}
+	if !isContinuousTailToolEntryKind(entries[start].Kind) {
+		return start, nil
+	}
+	targetTurn := entries[start].TurnSeq
+	targetRequestID := strings.TrimSpace(entries[start].RequestID)
+	targetModelCallID := strings.TrimSpace(entries[start].ModelCallID)
+	sameBatch := func(entry HistoryEntry) bool {
+		if !isContinuousTailToolEntryKind(entry.Kind) {
+			return false
+		}
+		if entry.TurnSeq != targetTurn || strings.TrimSpace(entry.RequestID) != targetRequestID {
+			return false
+		}
+		return strings.TrimSpace(entry.ModelCallID) == targetModelCallID
+	}
+	callIndex := map[string]int{}
+	for index := start - 1; index >= 0; index-- {
+		entry := entries[index]
+		if !isPromptReplayEntryKind(entry.Kind) {
+			continue
+		}
+		if !sameBatch(entry) {
+			break
+		}
+		if strings.TrimSpace(entry.Kind) != "tool_call" {
+			continue
+		}
+		id := historyEntryToolCallID(entry)
+		if id == "" {
+			return start, fmt.Errorf("compaction prefix splits a complete group")
+		}
+		callIndex[id] = index
+	}
+	resultAfter := map[string]struct{}{}
+	for index := start; index < len(entries); index++ {
+		entry := entries[index]
+		if !isPromptReplayEntryKind(entry.Kind) {
+			continue
+		}
+		if !sameBatch(entry) {
+			break
+		}
+		if strings.TrimSpace(entry.Kind) != "tool_result" {
+			continue
+		}
+		id := historyEntryToolCallID(entry)
+		if id == "" {
+			return start, fmt.Errorf("compaction prefix splits a complete group")
+		}
+		resultAfter[id] = struct{}{}
+	}
+	earliest := start
+	for id := range resultAfter {
+		if idx, ok := callIndex[id]; ok {
+			if idx < earliest {
+				earliest = idx
+			}
+			continue
+		}
+		foundCall := false
+		for index := start; index < len(entries); index++ {
+			entry := entries[index]
+			if !isPromptReplayEntryKind(entry.Kind) {
+				continue
+			}
+			if !sameBatch(entry) {
+				break
+			}
+			if strings.TrimSpace(entry.Kind) == "tool_call" && historyEntryToolCallID(entry) == id {
+				foundCall = true
+				break
+			}
+		}
+		if !foundCall {
+			return start, fmt.Errorf("compaction prefix splits a complete group")
+		}
+	}
+	for id, idx := range callIndex {
+		if _, ok := resultAfter[id]; ok {
+			if idx < earliest {
+				earliest = idx
+			}
+			continue
+		}
+		hasResultBefore := false
+		for index := idx + 1; index < start; index++ {
+			entry := entries[index]
+			if !isPromptReplayEntryKind(entry.Kind) {
+				continue
+			}
+			if !sameBatch(entry) {
+				break
+			}
+			if strings.TrimSpace(entry.Kind) == "tool_result" && historyEntryToolCallID(entry) == id {
+				hasResultBefore = true
+				break
+			}
+		}
+		if !hasResultBefore {
+			if idx < earliest {
+				earliest = idx
+			}
+		}
+	}
+	return earliest, nil
+}
+
+func extendContinuousTailToNativeGroupStart(entries []HistoryEntry, start int) int {
+	if start <= 0 || start >= len(entries) {
+		return start
+	}
+	if strings.TrimSpace(entries[start].Kind) != "model_message" {
+		return start
+	}
+	var payload modelMessageEntryPayload
+	if json.Unmarshal(entries[start].Payload, &payload) != nil {
+		return start
+	}
+	if len(payload.NativeMessage) > 0 {
+		return start
+	}
+	for index := start - 1; index >= 0; index-- {
+		if strings.TrimSpace(entries[index].Kind) != "model_message" {
+			break
+		}
+		var member modelMessageEntryPayload
+		if json.Unmarshal(entries[index].Payload, &member) != nil {
+			break
+		}
+		if len(member.NativeMessage) == 0 {
+			continue
+		}
+		parts := member.NativeMessageParts
+		if parts == 0 {
+			parts = 1
+		}
+		if index+parts > start {
+			return index
+		}
+		break
+	}
+	return start
+}
+
+func isContinuousTailToolEntryKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case "tool_call", "tool_result":
+		return true
+	default:
+		return false
+	}
 }
 
 func replayablePromptProjectionEntries(entries []HistoryEntry) []HistoryEntry {
@@ -377,36 +601,54 @@ func sanitizeCanceledReplayEntries(entries []HistoryEntry) []HistoryEntry {
 	if len(entries) == 0 {
 		return nil
 	}
-	canceledTurns := canceledReplayPolicies(entries)
-	if len(canceledTurns) == 0 {
+	dropped := canceledReplayDroppedIndexes(entries)
+	if len(dropped) == 0 {
 		return entries
 	}
-	activeCanceledTurns := canceledReplayActivityTurns(entries)
 	filtered := make([]HistoryEntry, 0, len(entries))
-	for _, entry := range entries {
-		if entry.TurnSeq > 0 {
-			if policy, canceled := canceledTurns[entry.TurnSeq]; canceled {
-				if policy == cancelReplayPolicyKeepInterrupted {
-					filtered = append(filtered, entry)
-					continue
-				}
-				if policy != cancelReplayPolicyDropTurn {
-					if _, active := activeCanceledTurns[entry.TurnSeq]; active {
-						filtered = append(filtered, entry)
-						continue
-					}
-				}
-				if policy == cancelReplayPolicyDropUnstarted {
-					policy = cancelReplayPolicyDropTurn
-				}
-				if policy == cancelReplayPolicyDropTurn || !isStableCanceledTurnInputEntry(entry) {
-					continue
-				}
-			}
+	for index, entry := range entries {
+		if _, skip := dropped[index]; skip {
+			continue
 		}
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+func canceledReplayDroppedIndexes(entries []HistoryEntry) map[int]struct{} {
+	dropped := make(map[int]struct{})
+	if len(entries) == 0 {
+		return dropped
+	}
+	canceledTurns := canceledReplayPolicies(entries)
+	if len(canceledTurns) == 0 {
+		return dropped
+	}
+	activeCanceledTurns := canceledReplayActivityTurns(entries)
+	for index, entry := range entries {
+		if entry.TurnSeq <= 0 {
+			continue
+		}
+		policy, canceled := canceledTurns[entry.TurnSeq]
+		if !canceled {
+			continue
+		}
+		if policy == cancelReplayPolicyKeepInterrupted {
+			continue
+		}
+		if policy != cancelReplayPolicyDropTurn {
+			if _, active := activeCanceledTurns[entry.TurnSeq]; active {
+				continue
+			}
+		}
+		if policy == cancelReplayPolicyDropUnstarted {
+			policy = cancelReplayPolicyDropTurn
+		}
+		if policy == cancelReplayPolicyDropTurn || !isStableCanceledTurnInputEntry(entry) {
+			dropped[index] = struct{}{}
+		}
+	}
+	return dropped
 }
 
 func canceledReplayPolicies(entries []HistoryEntry) map[int64]string {
@@ -620,6 +862,360 @@ func (projector *HistoryProjector) ProjectCheckpointProjection(conversation *Con
 	}
 	state.RootPromptMessagesJson = rootPromptMessages
 	return &CheckpointProjection{State: state, Blobs: blobs.list()}, nil
+}
+
+// projectNativeCheckpointProjection 实现 C0-W1/W2 的独立写出接缝。
+// 默认发布入口仍使用 ProjectCheckpointProjection；未闭合数据域不得据此全局启用。
+func (projector *HistoryProjector) projectNativeCheckpointProjection(conversation *ConversationFile, contentBlobs ...*ContentBlobStore) (*CheckpointProjection, error) {
+	var store *ContentBlobStore
+	if len(contentBlobs) > 0 {
+		store = contentBlobs[0]
+	}
+	source, hasSource, err := lastNativeSummarySource(conversation)
+	if err != nil {
+		return nil, err
+	}
+	var summaryNodes []importedContentNode
+	if hasSource {
+		nodes, err := loadImportedSummaryGraph(source, store)
+		if err != nil {
+			return nil, err
+		}
+		summaryNodes = nodes
+	}
+	var importedNodes []importedContentNode
+	if conversation != nil && len(conversation.ImportedTurnIDs) > 0 {
+		nodes, err := loadImportedTurnGraph(conversation.ImportedTurnIDs, store)
+		if err != nil {
+			return nil, err
+		}
+		importedNodes = nodes
+	}
+	// 先在既有取消政策下做原生域校验，保持旧接缝的错误优先级：
+	// 域外输入与未闭合工具批次必须先于共享投影失败，且过滤不得掩盖未完成调用。
+	if _, err := nativeCheckpointMessages(conversation); err != nil {
+		return nil, err
+	}
+	projection, err := projector.ProjectCheckpointProjection(conversation)
+	if err != nil || projection == nil {
+		return nil, err
+	}
+	// 仅复用回合结构和既有历史工具过滤，不使用面向模型的裁剪结果作保存正文。
+	graph := newCheckpointBlobGraph()
+	for _, blob := range projection.Blobs {
+		graph.add(blob.Data)
+	}
+	root, err := encodeNativeCheckpointRootItems(conversation, graph)
+	if err != nil {
+		return nil, err
+	}
+	structured, err := projectConversationStructuredState(conversation)
+	if err != nil {
+		return nil, fmt.Errorf("native checkpoint: invalid structured state")
+	}
+	if structured.HasPlan && structured.PlanText != "" {
+		data, err := proto.Marshal(&agentv1.ConversationPlan{Plan: structured.PlanText})
+		if err != nil {
+			return nil, fmt.Errorf("native checkpoint: encode plan")
+		}
+		projection.State.Plan = graph.add(data)
+	}
+	projection.State.Todos = nil
+	for _, item := range structured.Todos {
+		data, err := proto.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("native checkpoint: encode todo")
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("native checkpoint: empty todo")
+		}
+		projection.State.Todos = append(projection.State.Todos, graph.add(data))
+	}
+	projection.State.RootPromptMessagesJson = root
+	for _, node := range importedNodes {
+		if err := graph.addOriginal(node.ID, node.Data); err != nil {
+			return nil, err
+		}
+	}
+	if hasSource {
+		projection.State.Summary = append([]byte(nil), source.NativeSummary...)
+		if len(projection.State.Summary) == 0 {
+			projection.State.Summary = nil
+		}
+		projection.State.SummaryArchive = append([]byte(nil), source.NativeSummaryArchive...)
+		if len(projection.State.SummaryArchive) == 0 {
+			projection.State.SummaryArchive = nil
+		}
+		projection.State.SummaryArchives = cloneByteSlices(source.NativeSummaryArchives)
+		for _, node := range summaryNodes {
+			if err := graph.addOriginal(node.ID, node.Data); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		projection.State.Summary = nil
+		projection.State.SummaryArchive = nil
+		projection.State.SummaryArchives = nil
+	}
+	if err := attachLocalCompactionNativeGraph(conversation, projection, graph); err != nil {
+		return nil, err
+	}
+	projection.Blobs = graph.list()
+	return projection, nil
+}
+
+func lastNativeSummarySource(conversation *ConversationFile) (runtimeStateEntryPayload, bool, error) {
+	if conversation == nil {
+		return runtimeStateEntryPayload{}, false, nil
+	}
+	var found runtimeStateEntryPayload
+	ok := false
+	for _, entry := range checkpointProjectionEntries(conversation.Entries) {
+		if strings.TrimSpace(entry.Kind) != "runtime_state" {
+			continue
+		}
+		var payload runtimeStateEntryPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			return runtimeStateEntryPayload{}, false, fmt.Errorf("native checkpoint: invalid structured state")
+		}
+		if !hasNativeSummarySource(payload) {
+			continue
+		}
+		if err := validateNativeSummarySourceIDs(payload); err != nil {
+			return runtimeStateEntryPayload{}, false, err
+		}
+		found = payload
+		ok = true
+	}
+	return found, ok, nil
+}
+
+// nativeCheckpointMessages 在既有取消政策后从有效原始历史取保存正文。
+// 域校验先于规范化/过滤；工具结果不经过 limitProjectedToolResultReplay 的裁剪和浮点重编码。
+func nativeCheckpointMessages(conversation *ConversationFile) ([]modeladapter.Message, error) {
+	if conversation == nil {
+		return nil, nil
+	}
+	if conversationHasLocalCompaction(conversation) {
+		if err := validateAllLocalCompactionSources(conversation); err != nil {
+			return nil, err
+		}
+		return nativeCheckpointSegmentMessages(sanitizeCanceledReplayEntries(compactedNativeCheckpointEntries(conversation.Entries)), true, true)
+	}
+	return nativeCheckpointSegmentMessages(checkpointProjectionEntries(conversation.Entries), true, false)
+}
+
+// nativeCheckpointSegmentMessages 在既有取消政策后从一段有效原始历史取保存正文。
+// requireComplete 为 true 时要求工具批次在段内闭合；分段写出时由整段配对校验兜底。
+func nativeCheckpointSegmentMessages(entries []HistoryEntry, requireComplete bool, skipSummaries bool) ([]modeladapter.Message, error) {
+	// 原生组先复核原文及全部视图；原文已明确 JSON 类型，不能再把视图中的
+	// 字符串工具结果猜成 JSON 值。数值门禁直接校验原文，仍不放宽安全数值域。
+	nativeMembers := make(map[int]struct{})
+	for index := 0; index < len(entries); index++ {
+		raw, parts, native := nativeCheckpointGroupStart(entries[index])
+		if !native {
+			continue
+		}
+		_, next, err := parseNativeCheckpointGroup(entries, index, raw, parts)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateNativeCheckpointJSON(raw, false); err != nil {
+			return nil, err
+		}
+		for member := index; member < next; member++ {
+			nativeMembers[member] = struct{}{}
+		}
+		index = next - 1
+	}
+	messages := make([]projectedReplayMessage, 0, len(entries))
+	pending := make(map[string]int)
+	completed := make(map[string]struct{})
+	for entryIndex, entry := range entries {
+		var message modeladapter.Message
+		switch strings.TrimSpace(entry.Kind) {
+		case "runtime_state":
+			// 保存侧必须检查原始载荷，避免共享投影的克隆过程剥掉未知字段后成功。
+			var payload runtimeStateEntryPayload
+			decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
+			decoder.DisallowUnknownFields()
+			if !json.Valid(entry.Payload) || decoder.Decode(&payload) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid structured state")
+			}
+			continue
+		case "compaction_summary", "compacted_summary":
+			if skipSummaries {
+				continue
+			}
+			return nil, fmt.Errorf("native checkpoint: compaction not supported")
+		case "model_message":
+			var payload modelMessageEntryPayload
+			decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
+			decoder.DisallowUnknownFields()
+			if !json.Valid(entry.Payload) || decoder.Decode(&payload) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid model message payload")
+			}
+			if len(payload.NativeMessage) == 0 && payload.NativeMessageParts != 0 {
+				return nil, errNativeCheckpointNativeGroup
+			}
+			message = payload.Message
+		case "user_message":
+			user := &agentv1.UserMessage{}
+			if protojson.Unmarshal(entry.Payload, user) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid user message payload")
+			}
+			replay, ok := promptengine.BuildUserMessageReplayMessage(user)
+			if !ok {
+				continue
+			}
+			message = toModelMessage(replay)
+		case "request_context":
+			context := &agentv1.RequestContext{}
+			if protojson.Unmarshal(entry.Payload, context) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid request context")
+			}
+			for _, replay := range promptengine.BuildRequestContextReplayMessages(context) {
+				message := toModelMessage(replay)
+				if err := validateNativeCheckpointMessage(message); err != nil {
+					return nil, err
+				}
+				messages = append(messages, newProjectedReplayMessage(message, entry))
+			}
+			continue
+		case "prompt_context":
+			var payload promptContextEntryPayload
+			if json.Unmarshal(entry.Payload, &payload) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid prompt context")
+			}
+			context := normalizePromptContextMessage(PromptContextMessage{Source: payload.Source, ContentHash: payload.ContentHash,
+				Message: modeladapter.Message{Role: firstNonEmpty(payload.Role, "user"), Content: payload.Content}, Persist: true})
+			if !isReplayablePromptContext(context) {
+				continue
+			}
+			message = context.Message
+		case "assistant_text":
+			var payload assistantTextPayload
+			decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
+			decoder.DisallowUnknownFields()
+			if !json.Valid(entry.Payload) || decoder.Decode(&payload) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid assistant payload")
+			}
+			message = modeladapter.Message{Role: "assistant", Content: strings.TrimSpace(payload.Text),
+				ReasoningContent: payload.ReasoningContent, ReasoningSignature: payload.ReasoningSignature,
+				ReasoningSignatureSource: payload.ReasoningSignatureSource, OpenAIResponsesReasoningID: payload.ReasoningItemID,
+				OpenAIResponsesReasoningStatus: payload.ReasoningStatus, OpenAIResponsesReasoningSummary: payload.ReasoningSummary,
+				ReasoningOrigin: payload.ReasoningOrigin}
+		case "tool_call", "tool_result":
+			// 两种历史载荷的共有字段一致；先检查只用于界面的工具，不能过滤后才判定域。
+			var payload toolResultEntryPayload
+			decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
+			decoder.DisallowUnknownFields()
+			if !json.Valid(entry.Payload) || decoder.Decode(&payload) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid tool payload")
+			}
+			metadata := modeladapter.Message{ReasoningContent: payload.ReasoningContent, ReasoningSignature: payload.ReasoningSignature,
+				ReasoningSignatureSource: payload.ReasoningSignatureSource, OpenAIResponsesReasoningID: payload.ReasoningItemID,
+				OpenAIResponsesReasoningStatus: payload.ReasoningStatus, OpenAIResponsesReasoningSummary: payload.ReasoningSummary,
+				ReasoningOrigin: payload.ReasoningOrigin}
+			if hasNativeCheckpointReasoningMetadata(metadata) || payload.ProviderItemID != "" || payload.ProviderCallID != "" || payload.ProviderStatus != "" {
+				return nil, errNativeCheckpointReasoningMetadata
+			}
+			tool := &agentv1.ToolCall{}
+			if len(payload.ToolCall) > 0 && protojson.Unmarshal(payload.ToolCall, tool) != nil {
+				return nil, fmt.Errorf("native checkpoint: invalid tool call payload")
+			}
+			if entry.Kind == "tool_call" {
+				replay, ok := promptengine.BuildAssistantToolCallReplayMessage(payload.ToolCallID, tool)
+				if !ok {
+					return nil, fmt.Errorf("native checkpoint: unsupported tool call payload")
+				}
+				message = toModelMessage(replay)
+				// 原始派发条目决定调用名称；结果不能事后重命名已派发的调用。
+				overrideModelToolReplayFromEntry(&message, payload.ToolName, "")
+			} else {
+				if index, exists := pending[payload.ToolCallID]; exists {
+					for callIndex, call := range messages[index].Message.ToolCalls {
+						if call.ID != payload.ToolCallID {
+							continue
+						}
+						if payload.ToolName != "" && payload.ToolName != call.Function.Name {
+							return nil, errNativeCheckpointToolNameMismatch
+						}
+						// pending 按调用 ID 关联，但同一 assistant 可以包含多个调用。
+						// 仅对匹配项恢复参数，不把某个结果的名称/参数覆盖整个批次。
+						matched := modeladapter.Message{Role: "assistant", ToolCalls: []modeladapter.ToolCallDescriptor{call}}
+						overrideModelToolReplayFromEntry(&matched, payload.ToolName, payload.Arguments)
+						if err := validateNativeCheckpointMessage(matched); err != nil {
+							return nil, err
+						}
+						messages[index].Message.ToolCalls[callIndex] = matched.ToolCalls[0]
+						break
+					}
+				} else {
+					if _, exists := completed[payload.ToolCallID]; exists {
+						return nil, errNativeCheckpointDuplicateToolResult
+					}
+					replay, ok := promptengine.BuildAssistantToolCallReplayMessage(payload.ToolCallID, tool)
+					if !ok {
+						return nil, errNativeCheckpointOrphanToolResult
+					}
+					call := toModelMessage(replay)
+					overrideModelToolReplayFromEntry(&call, payload.ToolName, payload.Arguments)
+					if err := validateNativeCheckpointMessage(call); err != nil {
+						return nil, err
+					}
+					pending[payload.ToolCallID] = len(messages)
+					messages = append(messages, newProjectedReplayMessage(call, entry))
+				}
+				replay, ok := promptengine.BuildToolResultReplayMessage(payload.ToolCallID, tool)
+				if ok {
+					message = toModelMessage(replay)
+					message.Name = firstNonEmpty(payload.ToolName, message.Name)
+				} else {
+					message = modeladapter.Message{Role: "tool", ToolCallID: payload.ToolCallID, Name: payload.ToolName, Content: payload.ResultText}
+				}
+			}
+		default:
+			continue
+		}
+		if _, native := nativeMembers[entryIndex]; !native {
+			if err := validateNativeCheckpointMessage(message); err != nil {
+				return nil, err
+			}
+		}
+		if len(pending) > 0 && message.Role != "tool" && len(message.ToolCalls) == 0 {
+			return nil, errNativeCheckpointPendingToolResults
+		}
+		for _, call := range message.ToolCalls {
+			if _, exists := pending[call.ID]; exists {
+				return nil, errNativeCheckpointDuplicateToolCall
+			}
+			pending[call.ID] = len(messages)
+			delete(completed, call.ID)
+		}
+		if message.Role == "tool" {
+			index, exists := pending[message.ToolCallID]
+			if !exists {
+				return nil, errNativeCheckpointOrphanToolResult
+			}
+			matched := false
+			for _, call := range messages[index].Message.ToolCalls {
+				if call.ID == message.ToolCallID && call.Function.Name == message.Name {
+					matched = true
+				}
+			}
+			if !matched {
+				return nil, errNativeCheckpointToolNameMismatch
+			}
+			delete(pending, message.ToolCallID)
+			completed[message.ToolCallID] = struct{}{}
+		}
+		messages = append(messages, newProjectedReplayMessage(message, entry))
+	}
+	if requireComplete && len(pending) > 0 {
+		return nil, errNativeCheckpointMissingToolResult
+	}
+	return projectedReplayMessagesToModel(normalizeProjectedReplayMessages(messages)), nil
 }
 
 func projectCheckpointTurnBlobs(conversation *ConversationFile, blobs *checkpointBlobGraph) ([][]byte, error) {
@@ -2128,4 +2724,847 @@ func toPromptToolCalls(items []modeladapter.ToolCallDescriptor) []promptengine.T
 		})
 	}
 	return output
+}
+
+// native checkpoint 写出（C0-W1）：把本地模型消息编码为原生 {role,content} root。
+//
+// 只覆盖 W1 可表达域：user/assistant 文本、assistant 完整工具调用与 tool 结果。
+// 域外输入（system、reasoning/provider 元数据、ContentParts、未知角色、不完整批次、
+// 安全域外数字、结果类型歧义、超限正文、raw32 与内联 JSON 歧义）一律返回固定类别错误，
+// 不退回内联 JSON、不裁块、不产生半图。函数不修改入参 messages。
+
+const (
+	// nativeCheckpointBlockTypeText 是原生文本块类型。
+	nativeCheckpointBlockTypeText = "text"
+	// nativeCheckpointBlockTypeToolCall 是原生工具调用块类型。
+	nativeCheckpointBlockTypeToolCall = "tool-call"
+	// nativeCheckpointBlockTypeToolResult 是原生工具结果块类型。
+	nativeCheckpointBlockTypeToolResult = "tool-result"
+	// nativeCheckpointMaxMessageBytes 是客户端已核实的单条 root UTF-8 JSON 上限，不自造预算。
+	nativeCheckpointMaxMessageBytes = 5_000_000
+)
+
+// nativeCheckpointMaxSafeInteger 是 2^53-1；原生 JS 消费者超过该值会舍入。
+var nativeCheckpointMaxSafeInteger = big.NewInt(9007199254740991)
+
+var (
+	errNativeCheckpointNilGraph            = errors.New("native checkpoint: nil blob graph")
+	errNativeCheckpointUnknownRole         = errors.New("native checkpoint: unknown message role")
+	errNativeCheckpointSystemRole          = errors.New("native checkpoint: system role not supported")
+	errNativeCheckpointReasoningMetadata   = errors.New("native checkpoint: reasoning metadata not supported")
+	errNativeCheckpointContentParts        = errors.New("native checkpoint: content parts not supported")
+	errNativeCheckpointProviderMetadata    = errors.New("native checkpoint: provider item metadata not supported")
+	errNativeCheckpointToolCallIdentity    = errors.New("native checkpoint: tool call missing id or name")
+	errNativeCheckpointToolCallType        = errors.New("native checkpoint: unsupported tool call type")
+	errNativeCheckpointToolResultIdentity  = errors.New("native checkpoint: tool result missing id or name")
+	errNativeCheckpointUnexpectedToolCalls = errors.New("native checkpoint: unexpected tool calls for role")
+	errNativeCheckpointJSONInvalid         = errors.New("native checkpoint: invalid JSON value")
+	errNativeCheckpointNumber              = errors.New("native checkpoint: number outside safe integer domain")
+	errNativeCheckpointResultType          = errors.New("native checkpoint: tool result string is itself valid JSON (W-RESULT-TYPE)")
+	errNativeCheckpointOrphanToolResult    = errors.New("native checkpoint: orphan tool result")
+	errNativeCheckpointDuplicateToolResult = errors.New("native checkpoint: duplicate tool result")
+	errNativeCheckpointMissingToolResult   = errors.New("native checkpoint: missing tool result")
+	errNativeCheckpointDuplicateToolCall   = errors.New("native checkpoint: duplicate tool call id in batch")
+	errNativeCheckpointToolNameMismatch    = errors.New("native checkpoint: tool result name mismatch")
+	errNativeCheckpointPendingToolResults  = errors.New("native checkpoint: message inserted before tool results completed")
+	errNativeCheckpointMessageTooLarge     = errors.New("native checkpoint: message exceeds client JSON size limit")
+	errNativeCheckpointIDAmbiguity         = errors.New("native checkpoint: content id collides with inline JSON (W-ID-AMBIGUITY)")
+	errNativeCheckpointNativePayload       = errors.New("native checkpoint: invalid native message payload")
+	errNativeCheckpointNativeGroup         = errors.New("native checkpoint: invalid native message group")
+	errNativeCheckpointNativeParts         = errors.New("native checkpoint: native message parts truncated or mismatched")
+	errNativeCheckpointNativeViewMismatch  = errors.New("native checkpoint: native message view mismatch")
+)
+
+// nativeCheckpointRootMessage 是原生 CoreMessage 的最小顶层结构，仅含 role/content。
+type nativeCheckpointRootMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// nativeCheckpointTextBlock 是原生文本块。
+type nativeCheckpointTextBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// nativeCheckpointToolCallBlock 是原生工具调用块，args 为原始 JSON。
+type nativeCheckpointToolCallBlock struct {
+	Type       string          `json:"type"`
+	ToolCallID string          `json:"toolCallId"`
+	ToolName   string          `json:"toolName"`
+	Args       json.RawMessage `json:"args"`
+}
+
+// nativeCheckpointToolResultBlock 是原生工具结果块，result 为原始 JSON。
+type nativeCheckpointToolResultBlock struct {
+	Type       string          `json:"type"`
+	ToolCallID string          `json:"toolCallId"`
+	ToolName   string          `json:"toolName"`
+	Result     json.RawMessage `json:"result"`
+}
+
+// encodeNativeCheckpointRoot 把消息序列编码为原生 root 引用序列。
+// 返回值是每条消息正文的 raw32 SHA-256，顺序与入参一致；相同正文共享一个 Blob，
+// 但重复实例保留在返回序列中。只有整条序列全部校验/序列化成功后才写入 graph。
+func encodeNativeCheckpointRoot(messages []modeladapter.Message, graph *checkpointBlobGraph) ([][]byte, error) {
+	if graph == nil {
+		return nil, errNativeCheckpointNilGraph
+	}
+	tracker := newNativeCheckpointPairingTracker()
+	encoded := make([][]byte, 0, len(messages))
+	for _, message := range messages {
+		if err := tracker.observe(message); err != nil {
+			return nil, err
+		}
+		data, err := encodeNativeCheckpointGeneratedMessage(message)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) > nativeCheckpointMaxMessageBytes {
+			return nil, errNativeCheckpointMessageTooLarge
+		}
+		digest := sha256.Sum256(data)
+		if json.Valid(digest[:]) {
+			return nil, errNativeCheckpointIDAmbiguity
+		}
+		encoded = append(encoded, data)
+	}
+	if err := tracker.finish(); err != nil {
+		return nil, err
+	}
+	ids := make([][]byte, 0, len(encoded))
+	for _, data := range encoded {
+		ids = append(ids, graph.add(data))
+	}
+	return ids, nil
+}
+
+// nativeCheckpointPairingTracker 复用既有工具配对语义，供整段校验与编码共享。
+type nativeCheckpointPairingTracker struct {
+	pending   map[string]string
+	completed map[string]struct{}
+}
+
+func newNativeCheckpointPairingTracker() *nativeCheckpointPairingTracker {
+	return &nativeCheckpointPairingTracker{pending: make(map[string]string), completed: make(map[string]struct{})}
+}
+
+// observe 校验单条消息并推进配对状态；错误类别与旧编码顺序保持一致。
+func (tracker *nativeCheckpointPairingTracker) observe(message modeladapter.Message) error {
+	if err := validateNativeCheckpointMessage(message); err != nil {
+		return err
+	}
+	return tracker.observePairing(message)
+}
+
+// observePairing 只推进配对状态；原生原文已由解析器和原文数值门禁校验，
+// 不经过仅针对本地重编码的工具结果类型猜测。
+func (tracker *nativeCheckpointPairingTracker) observePairing(message modeladapter.Message) error {
+	switch strings.TrimSpace(message.Role) {
+	case "user":
+		if len(tracker.pending) > 0 {
+			return errNativeCheckpointPendingToolResults
+		}
+		tracker.completed = make(map[string]struct{})
+	case "assistant":
+		if len(tracker.pending) > 0 {
+			return errNativeCheckpointPendingToolResults
+		}
+		if len(message.ToolCalls) == 0 {
+			tracker.completed = make(map[string]struct{})
+			return nil
+		}
+		tracker.pending = make(map[string]string)
+		tracker.completed = make(map[string]struct{})
+		for _, toolCall := range message.ToolCalls {
+			toolCallID := toolCall.ID
+			if _, exists := tracker.pending[toolCallID]; exists {
+				return errNativeCheckpointDuplicateToolCall
+			}
+			tracker.pending[toolCallID] = toolCall.Function.Name
+		}
+	case "tool":
+		toolCallID := message.ToolCallID
+		toolName, exists := tracker.pending[toolCallID]
+		if !exists {
+			if _, done := tracker.completed[toolCallID]; done {
+				return errNativeCheckpointDuplicateToolResult
+			}
+			return errNativeCheckpointOrphanToolResult
+		}
+		if toolName != message.Name {
+			return errNativeCheckpointToolNameMismatch
+		}
+		delete(tracker.pending, toolCallID)
+		tracker.completed[toolCallID] = struct{}{}
+	}
+	return nil
+}
+
+func (tracker *nativeCheckpointPairingTracker) finish() error {
+	if len(tracker.pending) > 0 {
+		return errNativeCheckpointMissingToolResult
+	}
+	return nil
+}
+
+// encodeNativeCheckpointGeneratedMessage 编码单条生成本地消息，不修改入参、不做整段配对。
+func encodeNativeCheckpointGeneratedMessage(message modeladapter.Message) ([]byte, error) {
+	switch strings.TrimSpace(message.Role) {
+	case "user":
+		return nativeCheckpointPlainMessageJSON("user", message.Content)
+	case "assistant":
+		if len(message.ToolCalls) == 0 {
+			return nativeCheckpointPlainMessageJSON("assistant", message.Content)
+		}
+		return nativeCheckpointAssistantToolCallMessageJSON(message)
+	case "tool":
+		return nativeCheckpointToolMessageJSON(message)
+	default:
+		return nil, errNativeCheckpointUnknownRole
+	}
+}
+
+// nativeCheckpointRootItem 是原生 root 的一个输出项：原生原文直接输出，否则编码生成消息。
+type nativeCheckpointRootItem struct {
+	native  []byte
+	message modeladapter.Message
+}
+
+// encodeNativeCheckpointRootItems 按 entry 顺序切段构造原生 root。
+// 原生组按原文输出一次（按实际字节哈希、保留重复实例），generated 段复用本地过滤/编码，
+// 整段再用同一配对语义校验，确保跨段不产生孤立工具结果。
+func encodeNativeCheckpointRootItems(conversation *ConversationFile, graph *checkpointBlobGraph) ([][]byte, error) {
+	if graph == nil {
+		return nil, errNativeCheckpointNilGraph
+	}
+	if conversation == nil {
+		return nil, nil
+	}
+	localCompaction := conversationHasLocalCompaction(conversation)
+	var effective []HistoryEntry
+	if localCompaction {
+		if err := validateAllLocalCompactionSources(conversation); err != nil {
+			return nil, err
+		}
+		effective = sanitizeCanceledReplayEntries(compactedNativeCheckpointEntries(conversation.Entries))
+	} else {
+		effective = checkpointProjectionEntries(conversation.Entries)
+	}
+	return encodeNativeCheckpointEntryRoot(effective, graph, localCompaction)
+}
+
+func encodeNativeCheckpointEntryRoot(effective []HistoryEntry, graph *checkpointBlobGraph, unclipped bool) ([][]byte, error) {
+	if graph == nil {
+		return nil, errNativeCheckpointNilGraph
+	}
+	items := make([]nativeCheckpointRootItem, 0, len(effective))
+	tracker := newNativeCheckpointPairingTracker()
+	for index := 0; index < len(effective); {
+		if unclipped && isCompactionSummaryKind(effective[index].Kind) {
+			text, ok := decodeCompactionSummaryEntry(effective[index])
+			if !ok {
+				return nil, fmt.Errorf("native checkpoint: compaction not supported")
+			}
+			raw, err := encodeNativeIsSummaryMessage(text)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateNativeCheckpointJSON(raw, false); err != nil {
+				return nil, err
+			}
+			parsed, err := parseImportedNativeMessage(raw)
+			if err != nil {
+				return nil, err
+			}
+			for _, view := range parsed {
+				if err := tracker.observePairing(toModelMessage(view)); err != nil {
+					return nil, err
+				}
+			}
+			items = append(items, nativeCheckpointRootItem{native: raw})
+			index++
+			continue
+		}
+		raw, parts, isNative := nativeCheckpointGroupStart(effective[index])
+		if isNative {
+			views, next, err := parseNativeCheckpointGroup(effective, index, raw, parts)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateNativeCheckpointJSON(raw, false); err != nil {
+				return nil, err
+			}
+			for _, view := range views {
+				if err := tracker.observePairing(view); err != nil {
+					return nil, err
+				}
+			}
+			items = append(items, nativeCheckpointRootItem{native: raw})
+			index = next
+			continue
+		}
+		end := index + 1
+		for end < len(effective) {
+			if unclipped && isCompactionSummaryKind(effective[end].Kind) {
+				break
+			}
+			if _, _, next := nativeCheckpointGroupStart(effective[end]); next {
+				break
+			}
+			end++
+		}
+		segMessages, err := nativeCheckpointSegmentMessages(effective[index:end], false, unclipped)
+		if err != nil {
+			return nil, err
+		}
+		encodedMessages := segMessages
+		if !unclipped {
+			encodedMessages = checkpointFilteredModelMessages(segMessages)
+		}
+		for _, message := range encodedMessages {
+			if err := tracker.observe(message); err != nil {
+				return nil, err
+			}
+			items = append(items, nativeCheckpointRootItem{message: message})
+		}
+		index = end
+	}
+	if err := tracker.finish(); err != nil {
+		return nil, err
+	}
+	ids := make([][]byte, 0, len(items))
+	for _, item := range items {
+		data := item.native
+		if len(data) == 0 {
+			encoded, err := encodeNativeCheckpointGeneratedMessage(item.message)
+			if err != nil {
+				return nil, err
+			}
+			data = encoded
+		}
+		if len(data) > nativeCheckpointMaxMessageBytes {
+			return nil, errNativeCheckpointMessageTooLarge
+		}
+		digest := sha256.Sum256(data)
+		if json.Valid(digest[:]) {
+			return nil, errNativeCheckpointIDAmbiguity
+		}
+		ids = append(ids, graph.add(data))
+	}
+	return ids, nil
+}
+
+// checkpointFilteredModelMessages 复用经典 checkpoint 的工具过滤与消息转换。
+func checkpointFilteredModelMessages(messages []modeladapter.Message) []modeladapter.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	replay := make([]promptengine.Message, 0, len(messages))
+	for _, message := range messages {
+		replay = append(replay, promptengine.Message{Role: message.Role, Content: message.Content,
+			ToolCalls: toPromptToolCalls(message.ToolCalls), ToolCallID: message.ToolCallID, Name: message.Name})
+	}
+	replay = filterCheckpointPersistentToolReplay(replay)
+	output := make([]modeladapter.Message, 0, len(replay))
+	for _, message := range replay {
+		output = append(output, toModelMessage(message))
+	}
+	return output
+}
+
+// nativeCheckpointGroupStart 判断 entry 是否开启一个原生原文组，返回原文与 parts。
+func nativeCheckpointGroupStart(entry HistoryEntry) ([]byte, int, bool) {
+	if strings.TrimSpace(entry.Kind) != "model_message" {
+		return nil, 0, false
+	}
+	var payload modelMessageEntryPayload
+	decoder := json.NewDecoder(bytes.NewReader(entry.Payload))
+	decoder.DisallowUnknownFields()
+	if !json.Valid(entry.Payload) || decoder.Decode(&payload) != nil || len(payload.NativeMessage) == 0 {
+		return nil, 0, false
+	}
+	parts := payload.NativeMessageParts
+	if parts == 0 {
+		parts = 1
+	}
+	return payload.NativeMessage, parts, true
+}
+
+// parseNativeCheckpointGroup 逐条解析原文并与成员条目保存的 Message 视图比对；
+// parts 截断/非 model/Turn 或 Request 失配/成员带 raw 或 parts/内容不同/非法 raw 固定失败。
+func parseNativeCheckpointGroup(entries []HistoryEntry, start int, raw []byte, parts int) ([]modeladapter.Message, int, error) {
+	if parts == 0 {
+		parts = 1
+	}
+	if parts < 1 || parts > len(entries)-start {
+		return nil, 0, errNativeCheckpointNativeParts
+	}
+	first := entries[start]
+	var firstPayload modelMessageEntryPayload
+	if !decodeStrictModelMessagePayload(first.Payload, &firstPayload) || !bytes.Equal(firstPayload.NativeMessage, raw) {
+		return nil, 0, errNativeCheckpointNativePayload
+	}
+	parsed, err := parseImportedNativeMessage(raw)
+	if err != nil {
+		return nil, 0, errNativeCheckpointNativePayload
+	}
+	filtered := filterInternalPromptContextReplay(parsed)
+	views := make([]modeladapter.Message, 0, len(filtered))
+	for _, message := range filtered {
+		views = append(views, toModelMessage(message))
+	}
+	if len(views) != parts {
+		return nil, 0, errNativeCheckpointNativeParts
+	}
+	for offset := 0; offset < parts; offset++ {
+		entry := entries[start+offset]
+		if strings.TrimSpace(entry.Kind) != "model_message" || entry.TurnSeq != first.TurnSeq ||
+			strings.TrimSpace(entry.RequestID) != strings.TrimSpace(first.RequestID) {
+			return nil, 0, errNativeCheckpointNativeGroup
+		}
+		var member modelMessageEntryPayload
+		if !decodeStrictModelMessagePayload(entry.Payload, &member) {
+			return nil, 0, errNativeCheckpointNativeGroup
+		}
+		if offset > 0 && (len(member.NativeMessage) > 0 || member.NativeMessageParts != 0) {
+			return nil, 0, errNativeCheckpointNativeGroup
+		}
+		if offset == 0 && !bytes.Equal(member.NativeMessage, raw) {
+			return nil, 0, errNativeCheckpointNativeGroup
+		}
+		if !modelMessageViewsEqual(member.Message, views[offset]) {
+			return nil, 0, errNativeCheckpointNativeViewMismatch
+		}
+	}
+	return views, start + parts, nil
+}
+
+// decodeStrictModelMessagePayload 只接受恰好已知字段的 model_message 载荷。
+func decodeStrictModelMessagePayload(payload json.RawMessage, target *modelMessageEntryPayload) bool {
+	if !json.Valid(payload) {
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target) == nil
+}
+
+// modelMessageViewsEqual 以确定性 JSON 比较两条消息视图，避免两阶段规范化静默丢字段后继续。
+func modelMessageViewsEqual(left modeladapter.Message, right modeladapter.Message) bool {
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(leftJSON, rightJSON)
+}
+
+// validateNativeCheckpointMessage 校验单条消息的全部字段，不做批次配对检查。
+// 供原始载荷门禁与 encodeNativeCheckpointRoot 共同调用。
+func validateNativeCheckpointMessage(message modeladapter.Message) error {
+	role := message.Role
+	switch role {
+	case "user", "assistant", "tool":
+	case "system":
+		return errNativeCheckpointSystemRole
+	default:
+		return errNativeCheckpointUnknownRole
+	}
+	if hasNativeCheckpointReasoningMetadata(message) {
+		return errNativeCheckpointReasoningMetadata
+	}
+	if len(message.ContentParts) > 0 {
+		return errNativeCheckpointContentParts
+	}
+	if (role != "tool" && (message.Name != "" || message.ToolCallID != "")) || (role != "assistant" && len(message.ToolCalls) > 0) {
+		return errNativeCheckpointUnexpectedToolCalls
+	}
+	switch role {
+	case "assistant":
+		return validateNativeCheckpointAssistantMessage(message)
+	case "tool":
+		return validateNativeCheckpointToolMessage(message)
+	default:
+		return nil
+	}
+}
+
+// validateNativeCheckpointAssistantMessage 校验 assistant 的工具调用身份、类型、provider 元数据与 args。
+func validateNativeCheckpointAssistantMessage(message modeladapter.Message) error {
+	for _, toolCall := range message.ToolCalls {
+		if strings.TrimSpace(toolCall.ID) == "" || strings.TrimSpace(toolCall.Function.Name) == "" {
+			return errNativeCheckpointToolCallIdentity
+		}
+		switch strings.TrimSpace(toolCall.Type) {
+		case "", "function":
+		default:
+			return errNativeCheckpointToolCallType
+		}
+		if toolCall.OpenAIResponsesID != "" || toolCall.OpenAIResponsesCallID != "" || toolCall.OpenAIResponsesStatus != "" {
+			return errNativeCheckpointProviderMetadata
+		}
+		if err := validateNativeCheckpointJSON([]byte(toolCall.Function.Arguments), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateNativeCheckpointToolMessage 校验 tool 结果身份与结果正文（含 W-RESULT-TYPE）。
+func validateNativeCheckpointToolMessage(message modeladapter.Message) error {
+	if strings.TrimSpace(message.ToolCallID) == "" || strings.TrimSpace(message.Name) == "" {
+		return errNativeCheckpointToolResultIdentity
+	}
+	_, err := nativeCheckpointToolResultJSON(message.Content)
+	return err
+}
+
+// hasNativeCheckpointReasoningMetadata 报告消息是否携带任何 reasoning/provider 推理元数据。
+func hasNativeCheckpointReasoningMetadata(message modeladapter.Message) bool {
+	return message.ReasoningContent != "" ||
+		message.ReasoningSignature != "" ||
+		message.ReasoningSignatureSource != "" ||
+		message.OpenAIResponsesReasoningID != "" ||
+		message.OpenAIResponsesReasoningStatus != "" ||
+		len(message.OpenAIResponsesReasoningSummary) > 0 ||
+		message.ReasoningOrigin != (modeladapter.ReasoningOrigin{})
+}
+
+// nativeCheckpointPlainMessageJSON 编码无工具的消息，content 为 JSON 字符串。
+func nativeCheckpointPlainMessageJSON(role string, content string) ([]byte, error) {
+	encodedContent, err := json.Marshal(content)
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	encoded, err := json.Marshal(nativeCheckpointRootMessage{Role: role, Content: encodedContent})
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	return encoded, nil
+}
+
+// nativeCheckpointAssistantToolCallMessageJSON 编码带工具调用的 assistant，content 为块数组。
+func nativeCheckpointAssistantToolCallMessageJSON(message modeladapter.Message) ([]byte, error) {
+	blocks := make([]any, 0, len(message.ToolCalls)+1)
+	if message.Content != "" {
+		blocks = append(blocks, nativeCheckpointTextBlock{Type: nativeCheckpointBlockTypeText, Text: message.Content})
+	}
+	for _, toolCall := range message.ToolCalls {
+		blocks = append(blocks, nativeCheckpointToolCallBlock{
+			Type:       nativeCheckpointBlockTypeToolCall,
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Function.Name,
+			Args:       json.RawMessage(toolCall.Function.Arguments),
+		})
+	}
+	encodedContent, err := json.Marshal(blocks)
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	encoded, err := json.Marshal(nativeCheckpointRootMessage{Role: "assistant", Content: encodedContent})
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	return encoded, nil
+}
+
+// nativeCheckpointToolMessageJSON 编码 tool 消息，content 为单条 tool-result 块数组。
+func nativeCheckpointToolMessageJSON(message modeladapter.Message) ([]byte, error) {
+	result, err := nativeCheckpointToolResultJSON(message.Content)
+	if err != nil {
+		return nil, err
+	}
+	blocks := []any{nativeCheckpointToolResultBlock{
+		Type:       nativeCheckpointBlockTypeToolResult,
+		ToolCallID: message.ToolCallID,
+		ToolName:   message.Name,
+		Result:     result,
+	}}
+	encodedContent, err := json.Marshal(blocks)
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	encoded, err := json.Marshal(nativeCheckpointRootMessage{Role: "tool", Content: encodedContent})
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	return encoded, nil
+}
+
+// nativeCheckpointToolResultJSON 编码工具结果正文：有效 JSON 直接嵌入原始值，
+// 否则编码为 JSON 字符串；空正文保留为空字符串。字符串结果本身又是合法 JSON 时报 W-RESULT-TYPE。
+func nativeCheckpointToolResultJSON(content string) (json.RawMessage, error) {
+	if content == "" {
+		return json.RawMessage(`""`), nil
+	}
+	raw := []byte(content)
+	if json.Valid(raw) {
+		if err := validateNativeCheckpointJSON(raw, true); err != nil {
+			return nil, err
+		}
+		return json.RawMessage(raw), nil
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	return json.RawMessage(encoded), nil
+}
+
+// validateNativeCheckpointJSON 校验一段 JSON 是否合法、恰好一个值，且数字落在安全整数域。
+// result 为 true 时额外校验结果类型歧义（W-RESULT-TYPE）。
+func validateNativeCheckpointJSON(raw []byte, result bool) error {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return errNativeCheckpointJSONInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return errNativeCheckpointJSONInvalid
+	}
+	if result {
+		if text, ok := value.(string); ok && json.Valid([]byte(text)) {
+			return errNativeCheckpointResultType
+		}
+	}
+	return validateNativeCheckpointJSONValue(value)
+}
+
+// validateNativeCheckpointJSONValue 递归校验解码后的 JSON 值，数字必须是安全域内数学整数。
+func validateNativeCheckpointJSONValue(value any) error {
+	switch typed := value.(type) {
+	case nil, bool, string:
+		return nil
+	case json.Number:
+		return validateNativeCheckpointNumber(typed)
+	case []any:
+		for _, item := range typed {
+			if err := validateNativeCheckpointJSONValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	case map[string]any:
+		for _, item := range typed {
+			if err := validateNativeCheckpointJSONValue(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return errNativeCheckpointJSONInvalid
+	}
+}
+
+// validateNativeCheckpointNumber 用 math/big.Rat 精确判定数学整数与安全上界，
+// 不经过 float64，因此 1.000000000000000001 之类不会被舍入接受。
+func validateNativeCheckpointNumber(number json.Number) error {
+	rational, ok := new(big.Rat).SetString(number.String())
+	if !ok || !rational.IsInt() {
+		return errNativeCheckpointNumber
+	}
+	if new(big.Int).Abs(rational.Num()).Cmp(nativeCheckpointMaxSafeInteger) > 0 {
+		return errNativeCheckpointNumber
+	}
+	return nil
+}
+
+func conversationHasLocalCompaction(conversation *ConversationFile) bool {
+	if conversation == nil {
+		return false
+	}
+	for _, entry := range conversation.Entries {
+		if isCompactionSummaryKind(entry.Kind) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAllLocalCompactionSources(conversation *ConversationFile) error {
+	if conversation == nil {
+		return nil
+	}
+	found := false
+	for _, entry := range conversation.Entries {
+		if !isCompactionSummaryKind(entry.Kind) {
+			continue
+		}
+		found = true
+		if _, _, _, err := localCompactionArchiveFromEntry(conversation.Entries, entry); err != nil {
+			return err
+		}
+	}
+	if !found {
+		return fmt.Errorf("native checkpoint: compaction not supported")
+	}
+	return nil
+}
+
+func nativeCoreMessagesFromCanonicalPrefix(entries []HistoryEntry, start, end int) ([][]byte, error) {
+	if start < 0 || end > len(entries) || start > end {
+		return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	dropped := canceledReplayDroppedIndexes(entries)
+	selected := make([]HistoryEntry, 0, end-start)
+	for index := start; index < end; index++ {
+		if _, skip := dropped[index]; skip {
+			continue
+		}
+		if !isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
+			continue
+		}
+		selected = append(selected, entries[index])
+	}
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	graph := newCheckpointBlobGraph()
+	ids, err := encodeNativeCheckpointEntryRoot(selected, graph, true)
+	if err != nil {
+		return nil, err
+	}
+	repo := make(map[string][]byte, len(graph.blobs))
+	for _, blob := range graph.list() {
+		repo[string(blob.ID)] = blob.Data
+	}
+	messages := make([][]byte, 0, len(ids))
+	for _, id := range ids {
+		data, ok := repo[string(id)]
+		if !ok {
+			return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+		}
+		messages = append(messages, append([]byte(nil), data...))
+	}
+	return messages, nil
+}
+
+func encodeNativeIsSummaryMessage(text string) ([]byte, error) {
+	content, err := json.Marshal(text)
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	encoded, err := json.Marshal(struct {
+		Role            string          `json:"role"`
+		Content         json.RawMessage `json:"content"`
+		ProviderOptions json.RawMessage `json:"providerOptions"`
+	}{
+		Role:            "user",
+		Content:         content,
+		ProviderOptions: json.RawMessage(`{"cursor":{"isSummary":true}}`),
+	})
+	if err != nil {
+		return nil, errNativeCheckpointJSONInvalid
+	}
+	return encoded, nil
+}
+
+func attachLocalCompactionNativeGraph(conversation *ConversationFile, projection *CheckpointProjection, graph *checkpointBlobGraph) error {
+	if conversation == nil || projection == nil || projection.State == nil || graph == nil {
+		return nil
+	}
+	if !conversationHasLocalCompaction(conversation) {
+		return nil
+	}
+	archives := make([][]byte, 0)
+	var latestSummary []byte
+	hadPrevious := false
+	for _, entry := range conversation.Entries {
+		if !isCompactionSummaryKind(entry.Kind) {
+			continue
+		}
+		archiveID, summaryID, err := addLocalCompactionArchive(conversation.Entries, entry, graph, hadPrevious)
+		if err != nil {
+			return err
+		}
+		archives = append(archives, archiveID)
+		latestSummary = summaryID
+		hadPrevious = true
+	}
+	if len(archives) == 0 || len(latestSummary) == 0 {
+		return fmt.Errorf("native checkpoint: compaction not supported")
+	}
+	projection.State.Summary = latestSummary
+	projection.State.SummaryArchives = append(cloneByteSlices(projection.State.GetSummaryArchives()), archives...)
+	return nil
+}
+
+func addLocalCompactionArchive(entries []HistoryEntry, entry HistoryEntry, graph *checkpointBlobGraph, hadPrevious bool) ([]byte, []byte, error) {
+	payload, source, summarized, err := localCompactionArchiveFromEntry(entries, entry)
+	if err != nil {
+		return nil, nil, err
+	}
+	oldSummaryCount := uint32(0)
+	if hadPrevious {
+		oldSummaryCount = 1
+	}
+	if source.CandidateCount != source.ActualCount || source.WindowTail != 0 ||
+		source.ActualCount != oldSummaryCount+uint32(len(summarized)) {
+		return nil, nil, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	summaryText := strings.TrimSpace(payload.Summary)
+	summaryMessage, err := encodeNativeIsSummaryMessage(summaryText)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateNativeCheckpointJSON(summaryMessage, false); err != nil {
+		return nil, nil, err
+	}
+	messageIDs := make([][]byte, 0, len(summarized))
+	for _, raw := range summarized {
+		if len(raw) == 0 {
+			messageIDs = append(messageIDs, nil)
+			continue
+		}
+		if len(raw) > nativeCheckpointMaxMessageBytes {
+			return nil, nil, errNativeCheckpointMessageTooLarge
+		}
+		digest := sha256.Sum256(raw)
+		if json.Valid(digest[:]) {
+			return nil, nil, errNativeCheckpointIDAmbiguity
+		}
+		messageIDs = append(messageIDs, graph.add(raw))
+	}
+	summaryMessageID := graph.add(summaryMessage)
+	archiveBody, err := proto.Marshal(&agentv1.ConversationSummaryArchive{
+		SummarizedMessages: messageIDs,
+		Summary:            summaryText,
+		WindowTail:         source.WindowTail,
+		SummaryMessage:     summaryMessageID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("native checkpoint: encode summary archive")
+	}
+	summaryBody, err := proto.Marshal(&agentv1.ConversationSummary{Summary: summaryText})
+	if err != nil {
+		return nil, nil, fmt.Errorf("native checkpoint: encode summary")
+	}
+	return graph.add(archiveBody), graph.add(summaryBody), nil
+}
+
+func localCompactionArchiveFromEntry(entries []HistoryEntry, entry HistoryEntry) (compactionSummaryEntryPayload, *compactionNativeArchiveSource, [][]byte, error) {
+	payload, err := decodeCompactionSummaryPayload(entry.Payload)
+	if err != nil {
+		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: compaction not supported")
+	}
+	source, err := parseNativeArchiveSource(payload.NativeArchiveSource)
+	if err != nil {
+		return compactionSummaryEntryPayload{}, nil, nil, err
+	}
+	if source == nil {
+		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: compaction not supported")
+	}
+	if source.PrefixStart < 0 || source.PrefixEnd > len(entries) || source.PrefixStart > source.PrefixEnd {
+		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	summarized, err := nativeCoreMessagesFromCanonicalPrefix(entries, source.PrefixStart, source.PrefixEnd)
+	if err != nil {
+		return compactionSummaryEntryPayload{}, nil, nil, err
+	}
+	return payload, source, summarized, nil
 }

@@ -323,6 +323,15 @@ type PendingCompaction struct {
 	HookMessage               string
 	SummaryModelCallID        string
 	StartedAt                 time.Time
+	// HomologousPrefixFrozen 标记生产 plan 已按连续归档前缀冻结；旧单测直接构造的 Pending 保持零值。
+	HomologousPrefixFrozen bool
+	// FrozenPrefixStart/End/Entries 是 plan 时深拷贝的同源前缀身份、内容和半开区间，
+	// 无论 native 能否编码都必须保留，apply 按稳定 JSON 核对。
+	FrozenPrefixStart   int
+	FrozenPrefixEnd     int
+	FrozenPrefixEntries []HistoryEntry
+	// NativeArchiveSource 仅在前缀可无损原生编码时设置，经 clone/event 传递到 apply。
+	NativeArchiveSource *compactionNativeArchiveSource
 }
 
 type ProviderStreamStats struct {
@@ -520,12 +529,22 @@ type promptContextEntryPayload struct {
 
 type modelMessageEntryPayload struct {
 	Message modeladapter.Message `json:"message"`
+	// NativeMessage 保存已支持原生 CoreMessage 的正文，仅在映射首条设置；
+	// 随外层 JSON 序列化可规范化空白及 HTML 转义，不保证原始内容哈希不变。
+	NativeMessage json.RawMessage `json:"native_message,omitempty"`
+	// NativeMessageParts 是该原文对应的连续 model_message 条目数，默认1。
+	NativeMessageParts int `json:"native_message_parts,omitempty"`
 }
 
 type runtimeStateEntryPayload struct {
 	PlanText string                                `json:"plan_text,omitempty"`
 	Plans    map[string]*agentv1.PlanRegistryEntry `json:"plans,omitempty"`
 	Todos    []*agentv1.TodoItem                   `json:"todos,omitempty"`
+	// NativeSummary/NativeSummaryArchive/NativeSummaryArchives 仅记录已保全的
+	// 外来摘要/归档父图 raw32 ID；旧内联 root 路径不得绑定这些字段。
+	NativeSummary         []byte   `json:"native_summary,omitempty"`
+	NativeSummaryArchive  []byte   `json:"native_summary_archive,omitempty"`
+	NativeSummaryArchives [][]byte `json:"native_summary_archives,omitempty"`
 }
 
 type compactionSummaryEntryPayload struct {
@@ -536,6 +555,18 @@ type compactionSummaryEntryPayload struct {
 	CompactTurnCount          int32  `json:"compact_turn_count,omitempty"`
 	MessagesToCompact         int32  `json:"messages_to_compact,omitempty"`
 	PreserveCurrentTurnInputs bool   `json:"preserve_current_turn_inputs,omitempty"`
+	// NativeArchiveSource 为可选 JSON 对象；缺省走旧本地读，native writer 拒绝。
+	NativeArchiveSource json.RawMessage `json:"native_archive_source,omitempty"`
+}
+
+// compactionNativeArchiveSource 是 §19.3k 冻结的同源归档来源。五字段写入不得 omitempty，
+// 读取必须逐项检查存在性；0 与缺字段不是同一状态。
+type compactionNativeArchiveSource struct {
+	PrefixStart    int    `json:"prefix_start"`
+	PrefixEnd      int    `json:"prefix_end"`
+	CandidateCount uint32 `json:"candidate_count"`
+	ActualCount    uint32 `json:"actual_count"`
+	WindowTail     uint32 `json:"window_tail"`
 }
 
 type ModeSource string
