@@ -278,7 +278,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 			"model":      modelID,
 			"messages":   messages,
 			"stream":     true,
-			"max_tokens": maxAnthropicTokens(req),
+			"max_tokens": effectiveAnthropicOutputTokens(req),
 		}
 		if len(tools) > 0 {
 			body["tools"] = tools
@@ -299,6 +299,10 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
+	}
+	if req.EnforceOutputLimit && req.MaxTokens > 0 {
+		// extra params 不得覆盖摘要的显式输出预算。
+		body["max_tokens"] = effectiveAnthropicOutputTokens(req)
 	}
 	recordLLMRequestArtifact(req, "anthropic", modelID, "POST", requestURL, body)
 
@@ -1522,6 +1526,16 @@ func completedAnthropicToolArgsJSON(accumulator *anthropicToolAccumulator) ([]by
 		return nil, fmt.Errorf("anthropic returned non-object tool input for %s", toolName)
 	}
 	return []byte(trimmed), nil
+}
+
+// effectiveAnthropicOutputTokens 计算 Anthropic max_tokens 的有效值。
+// 摘要等显式强制预算的调用必须使用调用方给出的 MaxTokens，不能被渠道配置的
+// AnthropicMaxTokens 夹回较小值；普通调用仍沿用既有优先级。
+func effectiveAnthropicOutputTokens(req StreamRequest) int {
+	if req.EnforceOutputLimit && req.MaxTokens > 0 {
+		return req.MaxTokens
+	}
+	return maxAnthropicTokens(req)
 }
 
 func buildAnthropicThinkingConfig(req StreamRequest) map[string]any {

@@ -142,3 +142,32 @@ func TestDefaultProviderGatewayReleasesArtifactSessionOnEveryExit(t *testing.T) 
 		})
 	}
 }
+
+func TestDefaultProviderGatewayForwardsEnforceOutputLimit(t *testing.T) {
+	for _, enforce := range []bool{false, true} {
+		var got modeladapter.StreamRequest
+		gateway := &DefaultProviderGateway{router: providerGatewayTestRouter{
+			stream: func(_ context.Context, req modeladapter.StreamRequest, _ func(modeladapter.ModelEvent) error) error {
+				got = req
+				return nil
+			},
+		}}
+		err := gateway.StartStream(context.Background(), ProviderRequest{
+			RequestID:          "request-1",
+			RunID:              "run-1",
+			ModelCallID:        "model-call-1",
+			ModelID:            "gpt-test",
+			MaxTokens:          8192,
+			EnforceOutputLimit: enforce,
+		}, func(modeladapter.ModelEvent) error { return nil })
+		if err != nil {
+			t.Fatalf("StartStream() error = %v", err)
+		}
+		if got.EnforceOutputLimit != enforce {
+			t.Fatalf("StreamRequest.EnforceOutputLimit = %v, want %v", got.EnforceOutputLimit, enforce)
+		}
+		if got.MaxTokens != 8192 {
+			t.Fatalf("StreamRequest.MaxTokens = %d, want 8192", got.MaxTokens)
+		}
+	}
+}

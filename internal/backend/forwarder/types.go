@@ -404,6 +404,7 @@ type ProviderRequest struct {
 	StableMessageCount  int
 	Tools               []json.RawMessage
 	MaxTokens           int
+	EnforceOutputLimit  bool // 仅摘要等内部调用启用：强制把 MaxTokens 作为输出预算发送。
 	RequestKnobs        map[string]any
 	CompileSummary      string
 	Observer            modeladapter.LLMArtifactObserver

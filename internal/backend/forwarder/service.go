@@ -1073,13 +1073,33 @@ func cancelMetadataIdempotencyKey(turnSeq int64, requestID string) string {
 func (service *Service) handleExecResult(intent InboundIntent) error {
 	stream, ok := service.broker.Get(intent.RequestID)
 	if !ok || stream == nil {
+		if handled, err := service.recoverLateSubagentResult(intent); handled || err != nil {
+			return err
+		}
 		return fmt.Errorf("request is not active: %s", intent.RequestID)
+	}
+	if isSubagentExecClientMessage(intent.ExecClientMessage) && isTerminalIntentStream(stream) {
+		if handled, err := service.recoverLateSubagentResult(intent); handled || err != nil {
+			return err
+		}
+		return nil
 	}
 	if intent.ExecClientMessage == nil {
 		return fmt.Errorf("exec client message is required")
 	}
 	pending, found := selectPendingExec(intent.ExecClientMessage.GetExecId(), intent.ExecClientMessage.GetId(), stream)
+	if found && isSubagentExecClientMessage(intent.ExecClientMessage) {
+		// 消息编号跨请求可能复用；有 exec ID 的子任务结果不得退化为按编号匹配。
+		if execID := strings.TrimSpace(intent.ExecClientMessage.GetExecId()); execID != "" && pending.ExecID != execID {
+			found = false
+		} else if pending.ExecKind != "subagent" || (intent.ExecClientMessage.GetId() != 0 && pending.MessageID != intent.ExecClientMessage.GetId()) {
+			return fmt.Errorf("subagent result exec identity mismatch")
+		}
+	}
 	if !found {
+		if handled, err := service.recoverLateSubagentResult(intent); handled || err != nil {
+			return err
+		}
 		if service.observeMissingBackgroundShellExecClientMessage(stream, intent.ExecClientMessage) {
 			return nil
 		}
@@ -2089,7 +2109,7 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 				SubagentType:         parseArgsJSONSubagentType(pendingExec.ArgsJSON),
 				ModelID:              strings.TrimSpace(stream.ModelID),
 			}
-			if _, createErr := service.subagentRuns.CreateRun(identity); createErr != nil {
+			if _, createErr := service.subagentRuns.CreateRun(identity, SubagentDispatch{ExecID: pendingExec.ExecID, MessageID: pendingExec.MessageID, ArgsJSON: append(json.RawMessage(nil), pendingExec.ArgsJSON...)}); createErr != nil {
 				return service.completePreDispatchToolError(stream, invocation, startedToolCall, startedToolCall != nil, startedEmitted, fmt.Errorf("subagent persist failed before dispatch: %w", createErr))
 			}
 			// attempts.json remains an unconnected foundation until a stable Cursor

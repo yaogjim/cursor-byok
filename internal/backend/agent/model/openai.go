@@ -479,6 +479,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	enforceOpenAIOutputLimit(bodyMap, req, modelID, "chat")
 	enforceOpenAIChatCompletionsImageGenerationToolPolicy(bodyMap)
 	body = bodyMap
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
@@ -1019,6 +1020,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	enforceOpenAIOutputLimit(bodyMap, req, modelID, "responses")
 	enforceOpenAIResponsesImageGenerationToolPolicy(bodyMap, req)
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
 	filterCodexResponsesBody(bodyMap, req, requestURL)
@@ -2039,6 +2041,33 @@ func normalizeOpenAIProviderMessages(messages []Message, thinkingEnabled bool) (
 
 func shouldSendOpenAIMaxOutputTokens(modelID string) bool {
 	return !strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "gpt")
+}
+
+// shouldSendOpenAIMaxCompletionTokens 判断 OpenAI chat 是否应使用 max_completion_tokens。
+// 只有显式强制输出预算的摘要调用会走到这里；普通调用保持既有省略行为。
+func shouldSendOpenAIMaxCompletionTokens(modelID string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "gpt")
+}
+
+// enforceOpenAIOutputLimit 在摘要等显式强制预算的调用中，把 MaxTokens 写回请求体，
+// 并清除互斥的额度字段，避免自定义 extra params 覆盖摘要预算。
+// endpoint 取 chat 或 responses；Chat 的 GPT 模型使用 max_completion_tokens，其余使用 max_tokens。
+func enforceOpenAIOutputLimit(body map[string]any, req StreamRequest, modelID string, endpoint string) {
+	if body == nil || !req.EnforceOutputLimit || req.MaxTokens <= 0 {
+		return
+	}
+	delete(body, "max_tokens")
+	delete(body, "max_completion_tokens")
+	delete(body, "max_output_tokens")
+	if endpoint == "responses" {
+		body["max_output_tokens"] = req.MaxTokens
+		return
+	}
+	if shouldSendOpenAIMaxCompletionTokens(modelID) {
+		body["max_completion_tokens"] = req.MaxTokens
+		return
+	}
+	body["max_tokens"] = req.MaxTokens
 }
 
 func shouldIncludeOpenAIReasoningContent(message Message, thinkingEnabled bool) bool {

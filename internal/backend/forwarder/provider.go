@@ -64,6 +64,7 @@ func (gateway *DefaultProviderGateway) StartStream(ctx context.Context, req Prov
 		StableMessageCount:  req.StableMessageCount,
 		Tools:               append([]json.RawMessage(nil), req.Tools...),
 		MaxTokens:           req.MaxTokens,
+		EnforceOutputLimit:  req.EnforceOutputLimit,
 		Stream:              true,
 		RequestKnobs:        requestKnobs,
 		CompileSummary:      req.CompileSummary,

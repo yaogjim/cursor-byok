@@ -326,7 +326,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 			delete(resolved.RequestKnobs, "reasoning_effort")
 			resolved.RequestKnobs["custom_headers_enabled"] = resolved.CustomHeadersEnabled
 			resolved.RequestKnobs["anthropic_extra_params_enabled"] = resolved.AnthropicExtraParamsEnabled
-			anthropicMaxTokens := maxAnthropicTokens(resolved)
+			anthropicMaxTokens := effectiveAnthropicOutputTokens(resolved)
 			resolved.RequestKnobs["max_tokens"] = anthropicMaxTokens
 			resolved.RequestKnobs["anthropic_max_tokens"] = anthropicMaxTokens
 			if strings.TrimSpace(resolved.AnthropicThinkingEffort) != "" {

@@ -29,6 +29,7 @@ const (
 	compactionReserveFloorTokens     = 8192
 	compactionSummaryMaxChars        = 12000
 	compactionSummaryOutputMaxTokens = 4096
+	compactionSummaryRetryMaxTokens  = 8192
 	compactionTurnSnippetMaxChars    = 900
 
 	autoCompactionPreservedToolResultLimitBytes = 16 * 1024
@@ -1971,9 +1972,20 @@ func (err compactionTerminalError) TerminalCode() string {
 	return strings.TrimSpace(err.code)
 }
 
+func isCompactionSummaryOutputLimit(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errProviderLoopInterrupted) {
+		return false
+	}
+	var terminal *modeladapter.ProviderTerminalStatusError
+	return errors.As(err, &terminal) && terminal != nil &&
+		strings.EqualFold(strings.TrimSpace(terminal.Status), "incomplete") &&
+		(strings.EqualFold(strings.TrimSpace(terminal.Message), "max_output_tokens") ||
+			strings.EqualFold(strings.TrimSpace(terminal.Code), "max_output_tokens"))
+}
+
 func resolveCompactionSummaryResult(plan *PendingCompaction, summaryText string, err error) (string, error) {
 	if err != nil {
-		if modeladapter.IsContextOverflowError(err) {
+		if modeladapter.IsContextOverflowError(err) || isCompactionSummaryOutputLimit(err) {
 			return buildFallbackCompactionSummary(plan), nil
 		}
 		return "", err
@@ -2089,36 +2101,82 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 	if useFallback || len(messages) == 0 {
 		return buildFallbackCompactionSummary(plan), nil
 	}
+	if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
+		return "", err
+	}
+	text, err := service.generateCompactionSummaryAttempt(ctx, stream, plan, modelCallID, messages, compactionSummaryOutputMaxTokens)
+	if interrupted := providerLoopInterruptErr(ctx, stream, modelCallID); interrupted != nil {
+		return "", interrupted
+	}
+	if !isCompactionSummaryOutputLimit(err) {
+		return text, err
+	}
+
+	// 仅重试无工具副作用的摘要请求；不放宽普通 Agent 的 output_observed 保护。
+	// 重试保留同一冻结前缀，且输入与输出总量不得超过原压缩预算。
+	retryMaxTokens := int64(compactionSummaryRetryMaxTokens)
+	if available := compactionBudgetTokens(plan.ContextWindowSize) - estimateModelMessagesTokens(messages); available < retryMaxTokens {
+		retryMaxTokens = available
+	}
+	if retryMaxTokens <= compactionSummaryOutputMaxTokens {
+		log.Printf("forwarder compaction summary fallback request_id=%s model_call_id=%s reason=output_limit_budget", stream.RequestID, modelCallID)
+		return "", err
+	}
+	retryCallID := uuid.NewString()
+	stream.mu.Lock()
+	// 在切换调用标识前再次检查取消与替换，避免恢复已终止的会话。
+	if isTerminalStreamStatus(stream.Status) || stream.CurrentModelCallID != modelCallID || (ctx != nil && ctx.Err() != nil) {
+		stream.mu.Unlock()
+		return "", errProviderLoopInterrupted
+	}
+	stream.CurrentModelCallID = retryCallID
+	if stream.PendingCompaction != nil {
+		stream.PendingCompaction.SummaryModelCallID = retryCallID
+	}
+	stream.mu.Unlock()
+	plan.SummaryModelCallID = retryCallID
+	log.Printf("forwarder compaction summary retry request_id=%s model_call_id=%s max_tokens=%d reason=output_limit", stream.RequestID, retryCallID, retryMaxTokens)
+	text, err = service.generateCompactionSummaryAttempt(ctx, stream, plan, retryCallID, messages, int(retryMaxTokens))
+	if interrupted := providerLoopInterruptErr(ctx, stream, retryCallID); interrupted != nil {
+		return "", interrupted
+	}
+	if isCompactionSummaryOutputLimit(err) {
+		log.Printf("forwarder compaction summary fallback request_id=%s model_call_id=%s reason=output_limit_exhausted", stream.RequestID, retryCallID)
+	}
+	return text, err
+}
+
+func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, stream *ActiveStream, plan *PendingCompaction, modelCallID string, messages []modeladapter.Message, maxTokens int) (string, error) {
 	accumulated := ""
 	usage := turnUsageSnapshot{}
-	err = service.provider.StartStream(ctx, ProviderRequest{
+	var outputLimitErr error
+	err := service.provider.StartStream(ctx, ProviderRequest{
 		RequestID:      stream.RequestID,
 		ConversationID: stream.ConversationID,
 		RunID:          stream.RequestID,
 		ModelCallID:    modelCallID,
 		ModelID:        stream.ModelID,
+		ThinkingEffort: "disabled",
 		Mode:           agentv1.AgentMode_AGENT_MODE_AGENT,
 		Messages:       messages,
-		MaxTokens:      compactionSummaryOutputMaxTokens,
-		CompileSummary: fmt.Sprintf("compaction trigger=%s source=%s turns=%d messages=%d", plan.Trigger, plan.RequestSource, plan.CompactTurnCount, plan.MessagesToCompact),
-		Observer:       service.recorder,
-		ArtifactPaths:  &modeladapter.LLMArtifactPaths{},
+		MaxTokens:      maxTokens,
+		// 摘要必须让 provider 真正收到 4096/8192 的输出预算，不能被渠道额度省略或夹回。
+		EnforceOutputLimit: true,
+		CompileSummary:     fmt.Sprintf("compaction trigger=%s source=%s turns=%d messages=%d", plan.Trigger, plan.RequestSource, plan.CompactTurnCount, plan.MessagesToCompact),
+		Observer:           service.recorder,
+		ArtifactPaths:      &modeladapter.LLMArtifactPaths{},
 	}, func(event modeladapter.ModelEvent) error {
 		if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
 			return err
 		}
 		switch event.Kind {
 		case modeladapter.ModelEventKindTextDelta:
+			// 未完成的摘要不得发布为有效内容；成功后由 handleCompactionEvent 统一发布。
 			accumulated += event.Text
-			if strings.TrimSpace(accumulated) == "" {
-				return nil
-			}
-			return service.broker.Publish(stream.RequestID, StreamEvent{
-				Message: buildSummaryMessage(accumulated),
-			})
+			return nil
 		case modeladapter.ModelEventKindThinkingDelta, modeladapter.ModelEventKindThinkingCompleted:
 			return nil
-		case modeladapter.ModelEventKindToolLikeCompleted:
+		case modeladapter.ModelEventKindPartialToolCall, modeladapter.ModelEventKindToolCallDelta, modeladapter.ModelEventKindToolLikeCompleted:
 			return fmt.Errorf("compaction summary generation must not invoke tools")
 		case modeladapter.ModelEventKindTurnFinished:
 			usage = turnUsageSnapshot{
@@ -2132,6 +2190,10 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 				CacheReadPresent:  event.CacheReadPresent,
 				CacheWritePresent: event.CacheWritePresent,
 			}
+			switch strings.ToLower(strings.TrimSpace(event.FinishReason)) {
+			case "length", "max_tokens", "max_output_tokens":
+				outputLimitErr = &modeladapter.ProviderTerminalStatusError{Status: "incomplete", Code: "max_output_tokens"}
+			}
 			return nil
 		case modeladapter.ModelEventKindProviderError:
 			if event.Err != nil {
@@ -2142,6 +2204,9 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 			return nil
 		}
 	})
+	if err == nil {
+		err = outputLimitErr
+	}
 	if err != nil {
 		if !errors.Is(err, errProviderLoopInterrupted) {
 			stream.mu.Lock()

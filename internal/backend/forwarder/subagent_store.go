@@ -27,6 +27,8 @@ import (
 // cryptoRandRead is a package-level var so tests can replace it.
 var cryptoRandRead = cryptorand.Read
 
+var errSubagentPrepareVersionConflict = errors.New("subagent prepare version conflict")
+
 // fallbackRunIDCounter is used when crypto/rand is unavailable.
 var fallbackRunIDCounter atomic.Uint64
 
@@ -120,7 +122,7 @@ func (s *SubagentRunStore) acquireRunLock(runID string) func() {
 // CreateRun 原子创建初始 run record。
 // 若已存在且身份匹配则幂等返回（支持崩溃重试）。
 // 若 Task 尚未派发且持久化失败，必须明确失败。
-func (s *SubagentRunStore) CreateRun(identity SubagentIdentity) (*SubagentRunRecord, error) {
+func (s *SubagentRunStore) CreateRun(identity SubagentIdentity, dispatches ...SubagentDispatch) (*SubagentRunRecord, error) {
 	if s == nil {
 		return nil, fmt.Errorf("subagent store is nil")
 	}
@@ -132,6 +134,22 @@ func (s *SubagentRunStore) CreateRun(identity SubagentIdentity) (*SubagentRunRec
 	}
 	if err := validateSubagentRunID(runID); err != nil {
 		return nil, err
+	}
+	var dispatch *SubagentDispatch
+	if len(dispatches) > 1 {
+		return nil, fmt.Errorf("only one subagent dispatch is allowed")
+	}
+	if len(dispatches) == 1 {
+		value := dispatches[0]
+		value.ExecID = strings.TrimSpace(value.ExecID)
+		if value.ExecID == "" || identity.ParentRequestID == "" || identity.ParentConversationID == "" || identity.ParentToolCallID == "" {
+			return nil, fmt.Errorf("subagent dispatch requires exec and parent identity")
+		}
+		if len(value.ArgsJSON) > subagentResultToolCallLimit || (len(value.ArgsJSON) > 0 && !json.Valid(value.ArgsJSON)) {
+			return nil, fmt.Errorf("invalid or oversized subagent dispatch arguments")
+		}
+		value.ArgsJSON = append(json.RawMessage(nil), value.ArgsJSON...)
+		dispatch = &value
 	}
 	if err := os.MkdirAll(s.runDir(runID), 0o700); err != nil {
 		return nil, fmt.Errorf("create run directory: %w", err)
@@ -145,6 +163,13 @@ func (s *SubagentRunStore) CreateRun(identity SubagentIdentity) (*SubagentRunRec
 		if normalizeSubagentIdentity(existing.Identity) != identity {
 			return nil, fmt.Errorf("subagent run identity conflict for %s", runID)
 		}
+		if dispatch != nil {
+			stored, _ := json.Marshal(existing.Dispatch)
+			requested, _ := json.Marshal(dispatch)
+			if string(stored) != string(requested) {
+				return nil, fmt.Errorf("subagent dispatch conflict for %s", runID)
+			}
+		}
 		return existing, nil
 	}
 	if err != nil {
@@ -154,6 +179,7 @@ func (s *SubagentRunStore) CreateRun(identity SubagentIdentity) (*SubagentRunRec
 	record := &SubagentRunRecord{
 		SchemaVersion: subagentContractSchemaVersion,
 		Identity:      identity,
+		Dispatch:      dispatch,
 		Status:        SubagentRunDispatched,
 		Version:       1,
 		CreatedAt:     now,
@@ -300,7 +326,7 @@ func (s *SubagentRunStore) PrepareTerminal(runID string, prevVersion int64, enve
 	}
 	// 版本冲突检查（崩溃重试时允许 terminal_prepared 重入）
 	if record.Version != prevVersion && record.Status != SubagentRunTerminalPrepared {
-		return nil, fmt.Errorf("version conflict during prepare: expected %d got %d for run %s", prevVersion, record.Version, runID)
+		return nil, fmt.Errorf("%w: expected %d got %d for run %s", errSubagentPrepareVersionConflict, prevVersion, record.Version, runID)
 	}
 	// 截断超限字段
 	envelope = truncateResultEnvelope(envelope)
@@ -402,6 +428,61 @@ func (s *SubagentRunStore) LoadRun(runID string) (*SubagentRunRecord, error) {
 	release := s.acquireRunLock(runID)
 	defer release()
 	return s.loadRunLocked(runID)
+}
+
+// FindDispatch 只按稳定 exec ID 与父请求/会话关联查询；消息编号只能校验，不能单独认领任务。
+// 旧记录没有 Dispatch 时保持不可恢复，不按时间或相似参数猜测身份。
+func (s *SubagentRunStore) FindDispatch(execID string, messageID uint32, requestID, conversationID string) (*SubagentRunRecord, error) {
+	execID = strings.TrimSpace(execID)
+	requestID = strings.TrimSpace(requestID)
+	conversationID = strings.TrimSpace(conversationID)
+	if s == nil || execID == "" || (requestID == "" && conversationID == "") {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("scan subagent dispatches: %w", err)
+	}
+	var found *SubagentRunRecord
+	var scanErr error
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
+		record, err := s.LoadRun(entry.Name())
+		if err != nil {
+			// 单条不可验证记录不能阻塞其他已精确匹配的结果；没有可信匹配时仍明确报错。
+			// 日志只记录目录标识，不输出可能含敏感内容的解码错误。
+			log.Printf("subagent_store dispatch_record_unavailable run_id=%s", entry.Name())
+			scanErr = errors.Join(scanErr, fmt.Errorf("load subagent dispatch: %w", err))
+			continue
+		}
+		if record == nil || record.Dispatch == nil || record.Dispatch.ExecID != execID {
+			continue
+		}
+		if messageID != 0 && record.Dispatch.MessageID != messageID {
+			continue
+		}
+		identity := record.Identity
+		if conversationID != "" {
+			if identity.ParentConversationID != conversationID {
+				continue
+			}
+		} else if identity.ParentRequestID != requestID {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("ambiguous subagent dispatch identity")
+		}
+		found = record
+	}
+	if found == nil {
+		return nil, scanErr
+	}
+	return found, nil
 }
 
 // LoadResult 加载 result envelope（未找到或尚未 prepare 返回 nil）。

@@ -7,6 +7,7 @@
 package forwarder
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -194,12 +195,21 @@ type SubagentIdentity struct {
 // 持久化记录
 // ──────────────────────────────────────────────────────────────────────────────
 
+// SubagentDispatch 保存派发前落盘的执行桥关联信息，仅用于接收迟到结果，不用于自动重派。
+// 参数与会话历史采用相同的本地存储保护，不写入观测日志。
+type SubagentDispatch struct {
+	ExecID    string          `json:"exec_id"`
+	MessageID uint32          `json:"message_id"`
+	ArgsJSON  json.RawMessage `json:"args_json,omitempty"`
+}
+
 // SubagentRunRecord 是持久化在 SubagentRunStore 的运行身份 + 生命周期记录。
-// 写入路径：historyRoot/_subagents/<run_id>/run.json
+// 写入路径：historyRoot/_subagents/<run_id>/run.json。
 // 文件权限：0600；原子替换（temp + rename）；带 checksum 校验。
 type SubagentRunRecord struct {
 	SchemaVersion int               `json:"schema_version"`
 	Identity      SubagentIdentity  `json:"identity"`
+	Dispatch      *SubagentDispatch `json:"dispatch,omitempty"`
 	Status        SubagentRunStatus `json:"status"`
 	// Version 是单调递增的乐观并发版本，用于 CAS 更新。
 	Version int64 `json:"version"`

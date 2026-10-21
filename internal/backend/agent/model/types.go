@@ -186,6 +186,10 @@ type StreamRequest struct {
 	Tools []json.RawMessage
 	// MaxTokens 表示本轮最大输出 token 数。
 	MaxTokens int
+	// EnforceOutputLimit 表示必须把 MaxTokens 作为 provider 输出预算显式发送，
+	// 且不被渠道额度或 extra params 覆盖。仅 compaction 摘要等内部调用启用；
+	// 普通 Agent 调用保持既有省略/裁剪行为。
+	EnforceOutputLimit bool
 	// Stream 表示当前请求必须使用流式。
 	Stream bool
 	// RequestKnobs 保存本轮请求的附加参数摘要。

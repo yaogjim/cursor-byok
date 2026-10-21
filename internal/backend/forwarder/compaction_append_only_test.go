@@ -5,14 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
 	modeladapter "cursor/internal/backend/agent/model"
+	legacyruntime "cursor/internal/runtime"
 )
 
 func TestCompactionFailureDoesNotPersistProviderResponseBody(t *testing.T) {
@@ -228,6 +233,211 @@ func TestCompactionSummaryFallsBackWhenFixedInputDoesNotFit(t *testing.T) {
 	}
 	if !reflect.DeepEqual(plan.CompactedTurns, originalTurns) {
 		t.Fatal("fallback mutated PendingCompaction turns")
+	}
+}
+
+func TestCompactionSummaryOutputLimitRecoversWithoutFailingTurn(t *testing.T) {
+	for _, exhausted := range []bool{false, true} {
+		name := "retry_success"
+		if exhausted {
+			name = "retry_exhausted_local_fallback"
+		}
+		t.Run(name, func(t *testing.T) {
+			service, stream := testOverflowRecoveryStream(t)
+			plan := &PendingCompaction{
+				Trigger: "auto", ContextWindowSize: 130_000,
+				ExistingSummary: "必须保留的约束",
+				CompactedTurns:  []compactedTurnSummary{{UserText: "继续原子任务"}},
+			}
+			stream.PendingCompaction = clonePendingCompaction(plan)
+			provider := &overflowRecoveryTestProvider{}
+			attempt := 0
+			provider.handler = func(_ context.Context, req ProviderRequest, sink func(modeladapter.ModelEvent) error) error {
+				attempt++
+				if attempt == 1 || exhausted {
+					if err := sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "不完整的摘要"}); err != nil {
+						return err
+					}
+					return providerTerminalError{cause: &modeladapter.ProviderTerminalStatusError{
+						Provider: "openai responses", Status: "incomplete", Message: "max_output_tokens",
+					}}
+				}
+				return sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "完整的摘要"})
+			}
+			service.provider = provider
+			got, err := service.generateCompactionSummary(context.Background(), stream, plan, stream.CurrentModelCallID)
+			got, err = resolveCompactionSummaryResult(plan, got, err)
+			if err != nil {
+				t.Fatalf("摘要输出不足不应结束子会话: %v", err)
+			}
+			if provider.requestCount() != 2 {
+				t.Fatalf("摘要调用次数=%d，期望有界的两次调用", provider.requestCount())
+			}
+			requests := provider.requests
+			if requests[1].MaxTokens <= requests[0].MaxTokens {
+				t.Fatalf("重试未提高输出预算: %d -> %d", requests[0].MaxTokens, requests[1].MaxTokens)
+			}
+			if requests[0].ModelCallID == requests[1].ModelCallID {
+				t.Fatal("摘要重试必须使用独立的模型调用标识")
+			}
+			for _, req := range requests {
+				if req.ThinkingEffort != "disabled" || len(req.Tools) != 0 {
+					t.Fatal("摘要应关闭思考且不派发工具")
+				}
+				if !req.EnforceOutputLimit {
+					t.Fatal("摘要请求必须强制发送输出预算")
+				}
+				if estimateModelMessagesTokens(req.Messages)+int64(req.MaxTokens) > compactionBudgetTokens(plan.ContextWindowSize) {
+					t.Fatal("摘要重试超出上下文预算")
+				}
+			}
+			if !exhausted && got != "完整的摘要" {
+				t.Fatalf("成功重试应仅使用完整摘要: %q", got)
+			}
+			if stream.CurrentModelCallID != requests[1].ModelCallID || stream.PendingCompaction.SummaryModelCallID != requests[1].ModelCallID {
+				t.Fatal("摘要重试调用标识未同步")
+			}
+			for _, event := range readCheckpointTestEvents(t, service, stream) {
+				if event.Message.GetInteractionUpdate().GetSummary() != nil {
+					t.Fatal("生成阶段不得发布未经确认的摘要")
+				}
+			}
+			if exhausted && (!strings.Contains(got, "必须保留的约束") || strings.Contains(got, "不完整的摘要")) {
+				t.Fatalf("备用摘要丢失约束或包含被截断的内容: %q", got)
+			}
+		})
+	}
+}
+
+func TestCompactionSummaryOutputLimitResumesOriginalTurn(t *testing.T) {
+	service, stream := testOverflowRecoveryStream(t)
+	appendCompletedToolHistory(t, service, stream)
+	provider := &overflowRecoveryTestProvider{}
+	attempts := 0
+	provider.handler = func(_ context.Context, req ProviderRequest, sink func(modeladapter.ModelEvent) error) error {
+		if strings.Contains(req.CompileSummary, "compaction") {
+			attempts++
+			if attempts == 1 {
+				return &modeladapter.ProviderTerminalStatusError{Status: "incomplete", Message: "max_output_tokens"}
+			}
+			return sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "已保留任务进展"})
+		}
+		return sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTurnFinished, FinishReason: "stop"})
+	}
+	service.provider = provider
+	failedCall := stream.CurrentModelCallID
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: stream.CurrentProviderToken, Done: true, Err: testContextOverflowErr()}); err != nil {
+		t.Fatal(err)
+	}
+	completeOverflowPreCompactHook(t, service, stream)
+	waitForOverflowRecoveryResume(t, service, stream, failedCall, provider)
+	summaryCount := 0
+	for _, event := range readCheckpointTestEvents(t, service, stream) {
+		if summary := event.Message.GetInteractionUpdate().GetSummary(); summary != nil {
+			summaryCount++
+			if summary.GetSummary() != "已保留任务进展" {
+				t.Fatalf("发布了错误的摘要: %q", summary.GetSummary())
+			}
+		}
+	}
+	if summaryCount != 1 {
+		t.Fatalf("完整摘要应恰好发布一次: %d", summaryCount)
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.Status != StreamStatusCompleted {
+		t.Fatalf("压缩恢复后原回合状态=%s", stream.Status)
+	}
+	if countHistoryKind(stream.CheckpointConversation.Entries, "tool_call") != 1 || countHistoryKind(stream.CheckpointConversation.Entries, "tool_result") != 1 {
+		t.Fatal("摘要恢复重复执行或丢失了已完成工具")
+	}
+}
+
+func TestCompactionSummaryOutputLimitRespectsRetryBudget(t *testing.T) {
+	for _, available := range []int64{compactionSummaryOutputMaxTokens, 6000} {
+		t.Run(map[int64]string{compactionSummaryOutputMaxTokens: "no_retry_budget", 6000: "clipped_retry_budget"}[available], func(t *testing.T) {
+			service, stream := testOverflowRecoveryStream(t)
+			plan := &PendingCompaction{ContextWindowSize: 130_000, ExistingSummary: "保留约束"}
+			messages, fallback, err := service.prepareCompactionSummaryMessages(plan)
+			if err != nil || fallback {
+				t.Fatalf("准备摘要输入失败: fallback=%v err=%v", fallback, err)
+			}
+			plan.ContextWindowSize = compactionAutoReserveTokens + estimateModelMessagesTokens(messages) + available
+			provider := &overflowRecoveryTestProvider{}
+			provider.handler = func(_ context.Context, _ ProviderRequest, _ func(modeladapter.ModelEvent) error) error {
+				return &modeladapter.ProviderTerminalStatusError{Status: "incomplete", Code: "max_output_tokens"}
+			}
+			service.provider = provider
+			got, err := service.generateCompactionSummary(context.Background(), stream, plan, stream.CurrentModelCallID)
+			got, err = resolveCompactionSummaryResult(plan, got, err)
+			wantCount := 2
+			if available == compactionSummaryOutputMaxTokens {
+				wantCount = 1
+			}
+			if err != nil || provider.requestCount() != wantCount || !strings.Contains(got, "保留约束") {
+				t.Fatalf("预算受限的恢复不正确: got=%q err=%v calls=%d", got, err, provider.requestCount())
+			}
+			if wantCount == 2 && int64(provider.requests[1].MaxTokens) != available {
+				t.Fatalf("重试预算应裁剪为%d: %d", available, provider.requests[1].MaxTokens)
+			}
+		})
+	}
+}
+
+func TestCompactionSummaryOutputLimitFinishReasons(t *testing.T) {
+	for _, reason := range []string{"length", "max_tokens", "max_output_tokens"} {
+		t.Run(reason, func(t *testing.T) {
+			service, stream := testOverflowRecoveryStream(t)
+			plan := &PendingCompaction{ContextWindowSize: 130_000, ExistingSummary: "保留约束"}
+			provider := &overflowRecoveryTestProvider{}
+			provider.handler = func(_ context.Context, _ ProviderRequest, sink func(modeladapter.ModelEvent) error) error {
+				if err := sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "截断内容"}); err != nil {
+					return err
+				}
+				return sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTurnFinished, FinishReason: reason})
+			}
+			service.provider = provider
+			got, err := service.generateCompactionSummary(context.Background(), stream, plan, stream.CurrentModelCallID)
+			got, err = resolveCompactionSummaryResult(plan, got, err)
+			if err != nil || provider.requestCount() != 2 || !strings.Contains(got, "保留约束") || strings.Contains(got, "截断内容") {
+				t.Fatalf("截断恢复结果=%q err=%v 调用次数=%d", got, err, provider.requestCount())
+			}
+		})
+	}
+}
+
+func TestCompactionSummaryOutputLimitHonorsInterruption(t *testing.T) {
+	for _, mode := range []string{"cancel_context", "cancel_stream", "replace_call", "provider_error"} {
+		t.Run(mode, func(t *testing.T) {
+			service, stream := testOverflowRecoveryStream(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			plan := &PendingCompaction{ContextWindowSize: 130_000}
+			provider := &overflowRecoveryTestProvider{}
+			provider.handler = func(_ context.Context, _ ProviderRequest, _ func(modeladapter.ModelEvent) error) error {
+				switch mode {
+				case "cancel_context":
+					cancel()
+				case "cancel_stream":
+					stream.mu.Lock()
+					stream.Status = StreamStatusCanceled
+					stream.mu.Unlock()
+				case "replace_call":
+					stream.mu.Lock()
+					stream.CurrentModelCallID = "replacement"
+					stream.mu.Unlock()
+				case "provider_error":
+					return errors.New("unrelated provider failure")
+				}
+				return &modeladapter.ProviderTerminalStatusError{Status: "incomplete", Code: "max_output_tokens"}
+			}
+			service.provider = provider
+			got, err := service.generateCompactionSummary(ctx, stream, plan, stream.CurrentModelCallID)
+			_, err = resolveCompactionSummaryResult(plan, got, err)
+			if err == nil || provider.requestCount() != 1 {
+				t.Fatalf("取消、替换和无关错误必须保留: err=%v 调用次数=%d", err, provider.requestCount())
+			}
+		})
 	}
 }
 
@@ -1219,5 +1429,78 @@ func TestApplyFrozenPrefixAllowsEscapedPayloadAndRequestHookMetadata(t *testing.
 	})
 	if err := applyCompactionToConversation(reloaded, pending, "escaped summary"); err != nil {
 		t.Fatalf("落盘转义或追加 request/hook 元数据不应导致冻结失配: %v", err)
+	}
+}
+
+type compactionHTTPChannelResolver struct {
+	channel *legacyruntime.ResolvedChannel
+}
+
+func (resolver compactionHTTPChannelResolver) SelectChannelForModel(context.Context, string) (*legacyruntime.ResolvedChannel, error) {
+	return resolver.channel, nil
+}
+
+// TestCompactionSummaryRealAdapterSendsBoundedOutputBudgets 通过真实 OpenAI 适配器
+// 校验摘要两次 HTTP 请求确实携带 4096/8192 的 max_completion_tokens。
+func TestCompactionSummaryRealAdapterSendsBoundedOutputBudgets(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		bodies []map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, body)
+		attempt := len(bodies)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			_, _ = fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\n")
+		} else {
+			_, _ = fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+		}
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	service, stream := testOverflowRecoveryStream(t)
+	service.provider = NewProviderGateway(compactionHTTPChannelResolver{channel: &legacyruntime.ResolvedChannel{
+		ID:        "http-openai",
+		Provider:  "openai",
+		Model:     "gpt-test",
+		BaseURL:   server.URL,
+		APIKey:    "test-key",
+		MaxTokens: 65_536,
+	}})
+	plan := &PendingCompaction{Trigger: "auto", ContextWindowSize: 130_000, ExistingSummary: "保留约束"}
+	got, err := service.generateCompactionSummary(context.Background(), stream, plan, stream.CurrentModelCallID)
+	if err != nil {
+		t.Fatalf("generateCompactionSummary() error = %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("summary = %q, want done", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("HTTP 请求次数=%d，期望有界两次", len(bodies))
+	}
+	for index, want := range []int{compactionSummaryOutputMaxTokens, compactionSummaryRetryMaxTokens} {
+		value, ok := bodies[index]["max_completion_tokens"]
+		if !ok {
+			t.Fatalf("第%d次请求缺少 max_completion_tokens: %#v", index+1, bodies[index])
+		}
+		if gotValue, ok := value.(float64); !ok || int(gotValue) != want {
+			t.Fatalf("第%d次请求 max_completion_tokens = %#v, want %d", index+1, value, want)
+		}
+		if _, exists := bodies[index]["max_tokens"]; exists {
+			t.Fatalf("第%d次请求不得同时发送 max_tokens: %#v", index+1, bodies[index])
+		}
 	}
 }

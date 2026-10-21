@@ -135,6 +135,11 @@ func (service *Service) dispatchInboundIntent(intent InboundIntent) error {
 		return fmt.Errorf("forwarder service is nil")
 	}
 	stream, err := service.streamForIntent(intent)
+	if (err != nil || stream == nil) && strings.TrimSpace(intent.Kind) == "exec_result" {
+		if handled, recoveryErr := service.recoverLateSubagentResult(intent); handled || recoveryErr != nil {
+			return recoveryErr
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -145,10 +150,16 @@ func (service *Service) dispatchInboundIntent(intent InboundIntent) error {
 	if err != nil {
 		return err
 	}
-	return service.postStreamCommandWait(stream, streamCommand{
+	err = service.postStreamCommandWait(stream, streamCommand{
 		Kind:   commandKind,
 		Intent: intent,
 	})
+	if errors.Is(err, errProviderLoopInterrupted) && commandKind == streamCommandExecResult {
+		if handled, recoveryErr := service.recoverLateSubagentResult(intent); handled || recoveryErr != nil {
+			return recoveryErr
+		}
+	}
+	return err
 }
 
 func (service *Service) streamForIntent(intent InboundIntent) (*ActiveStream, error) {

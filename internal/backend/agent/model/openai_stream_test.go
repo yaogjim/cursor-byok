@@ -1148,3 +1148,124 @@ func TestOpenAIStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAIEnforcedOutputLimitSendsExplicitBudget(t *testing.T) {
+	outputLimitFields := []string{"max_tokens", "max_completion_tokens", "max_output_tokens"}
+	tests := []struct {
+		name       string
+		modelID    string
+		endpoint   string
+		maxTokens  int
+		enforce    bool
+		extraParam string
+		// wantField 为空表示请求体不得出现任何输出额度字段。
+		wantField string
+	}{
+		{
+			name: "enforced_gpt_chat_4096", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_completion_tokens",
+		},
+		{
+			name: "enforced_gpt_chat_retry_8192", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 8192, enforce: true, wantField: "max_completion_tokens",
+		},
+		{
+			name: "enforced_non_gpt_chat", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_tokens",
+		},
+		{
+			name: "enforced_gpt_responses", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 4096, enforce: true, wantField: "max_output_tokens",
+		},
+		{
+			name: "enforced_gpt_chat_extra_params_cannot_override", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 8192, enforce: true, wantField: "max_completion_tokens",
+			extraParam: `{"max_tokens":99999,"max_completion_tokens":99999,"max_output_tokens":99999}`,
+		},
+		{
+			name: "enforced_non_gpt_chat_extra_params_cannot_override", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_tokens",
+			extraParam: `{"max_tokens":99999,"max_completion_tokens":99999}`,
+		},
+		{
+			name: "enforced_responses_extra_params_cannot_override", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 4096, enforce: true, wantField: "max_output_tokens",
+			extraParam: `{"max_output_tokens":99999,"max_tokens":99999}`,
+		},
+		{
+			name: "normal_gpt_chat_keeps_omission", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 128,
+		},
+		{
+			name: "normal_non_gpt_chat_keeps_max_tokens", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 128, wantField: "max_tokens",
+		},
+		{
+			name: "normal_gpt_responses_keeps_omission", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 128,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writer.Header().Set("Content-Type", "text/event-stream")
+				if test.endpoint == "/v1/responses" {
+					_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+				} else {
+					_, _ = fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+				}
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			err := adapter.Stream(context.Background(), StreamRequest{
+				RequestID:                "request-1",
+				RunID:                    "run-1",
+				ModelCallID:              "model-call-1",
+				BaseURL:                  server.URL,
+				APIKey:                   "test-key",
+				ProviderModelID:          test.modelID,
+				OpenAIEndpoint:           test.endpoint,
+				OpenAIExtraParamsEnabled: test.extraParam != "",
+				OpenAIExtraParamsJSON:    test.extraParam,
+				Messages:                 []Message{{Role: "user", Content: "hello"}},
+				MaxTokens:                test.maxTokens,
+				EnforceOutputLimit:       test.enforce,
+			}, func(ModelEvent) error { return nil })
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+
+			if test.wantField == "" {
+				for _, field := range outputLimitFields {
+					if value, ok := requestBody[field]; ok {
+						t.Fatalf("%s must stay omitted for normal call, got %#v", field, value)
+					}
+				}
+				return
+			}
+			value, ok := requestBody[test.wantField]
+			if !ok {
+				t.Fatalf("missing %s in request body: %#v", test.wantField, requestBody)
+			}
+			if got, ok := value.(float64); !ok || int(got) != test.maxTokens {
+				t.Fatalf("%s = %#v, want %d", test.wantField, value, test.maxTokens)
+			}
+			for _, field := range outputLimitFields {
+				if field == test.wantField {
+					continue
+				}
+				if value, ok := requestBody[field]; ok {
+					t.Fatalf("%s must not be sent alongside %s: %#v", field, test.wantField, value)
+				}
+			}
+		})
+	}
+}

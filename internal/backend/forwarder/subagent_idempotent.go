@@ -289,6 +289,10 @@ func computeSubagentParentCommitKey(runID, toolCallID, resultDigest string) stri
 	return hex.EncodeToString(sum[:16])
 }
 
+func isSubagentExecClientMessage(msg *agentv1.ExecClientMessage) bool {
+	return msg != nil && (msg.GetSubagentResult() != nil || msg.GetSubagentAwaitResult() != nil || msg.GetForceBackgroundSubagentResult() != nil)
+}
+
 // categorizeSubagentResultMsg 根据 ExecClientMessage 中的 SubagentResult 一键字段
 // 返回对应的 SubagentTerminalCategory。
 // nil 消息或缺失 SubagentResult 均映射为 SubagentTerminalProtocolError。

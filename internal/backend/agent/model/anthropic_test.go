@@ -282,3 +282,72 @@ func TestAnthropicStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
 		t.Fatal("MarkRequestBuildFailed was not called")
 	}
 }
+
+func TestAnthropicEnforcedOutputLimitUsesExplicitBudget(t *testing.T) {
+	tests := []struct {
+		name               string
+		enforce            bool
+		maxTokens          int
+		anthropicMaxTokens int
+		extraParams        string
+		wantMaxTokens      int
+	}{
+		{
+			name: "summary_overrides_channel_cap", enforce: true,
+			maxTokens: 8192, anthropicMaxTokens: 4096, wantMaxTokens: 8192,
+		},
+		{
+			name: "summary_extra_params_cannot_override", enforce: true,
+			maxTokens: 8192, anthropicMaxTokens: 4096,
+			extraParams: `{"max_tokens":1024}`, wantMaxTokens: 8192,
+		},
+		{
+			name:      "normal_call_keeps_existing_clamp",
+			maxTokens: 8192, anthropicMaxTokens: 4096, wantMaxTokens: 4096,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(writer, "event: content_block_delta\n")
+				_, _ = fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+				_, _ = fmt.Fprint(writer, "event: message_stop\n")
+				_, _ = fmt.Fprint(writer, "data: {\"type\":\"message_stop\"}\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &AnthropicAdapter{client: server.Client()}
+			err := adapter.Stream(context.Background(), StreamRequest{
+				RequestID:                   "request-1",
+				RunID:                       "run-1",
+				ModelCallID:                 "model-call-1",
+				BaseURL:                     server.URL,
+				APIKey:                      "test-key",
+				ProviderModelID:             "claude-test",
+				Messages:                    []Message{{Role: "user", Content: "hello"}},
+				MaxTokens:                   test.maxTokens,
+				AnthropicMaxTokens:          test.anthropicMaxTokens,
+				AnthropicExtraParamsEnabled: test.extraParams != "",
+				AnthropicExtraParamsJSON:    test.extraParams,
+				EnforceOutputLimit:          test.enforce,
+			}, func(ModelEvent) error { return nil })
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			value, ok := requestBody["max_tokens"]
+			if !ok {
+				t.Fatalf("missing max_tokens in request body: %#v", requestBody)
+			}
+			if got, ok := value.(float64); !ok || int(got) != test.wantMaxTokens {
+				t.Fatalf("max_tokens = %#v, want %d", value, test.wantMaxTokens)
+			}
+		})
+	}
+}
