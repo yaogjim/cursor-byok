@@ -746,6 +746,9 @@ func eventFromRecord(record workspace.EventRecord) contract.Event {
 		HTTPRequestID:       record.HTTPRequestID,
 		CursorRequestID:     record.CursorRequestID,
 		ConversationID:      record.ConversationID,
+		SubagentRunID:       record.SubagentRunID,
+		SubagentAttemptID:   record.SubagentAttemptID,
+		SubagentAttemptNo:   record.SubagentAttemptNo,
 		TurnID:              record.TurnID,
 		TurnSequence:        record.TurnSequence,
 		ModelCallID:         record.ModelCallID,
@@ -761,6 +764,7 @@ func eventFromRecord(record workspace.EventRecord) contract.Event {
 		Status:              record.Status,
 		SemanticOutcome:     record.SemanticOutcome,
 		ImplementationState: record.ImplementationState,
+		Severity:            record.Severity,
 		ErrorCategory:       record.ErrorCategory,
 		DurationMS:          record.DurationMS,
 		RequestBytes:        record.RequestBytes,
@@ -787,6 +791,8 @@ func sanitizeEvent(event contract.Event) (contract.Event, error) {
 	event.HTTPRequestID = pseudonym(event.HTTPRequestID)
 	event.CursorRequestID = pseudonym(event.CursorRequestID)
 	event.ConversationID = pseudonym(event.ConversationID)
+	event.SubagentRunID = pseudonym(event.SubagentRunID)
+	event.SubagentAttemptID = pseudonym(event.SubagentAttemptID)
 	event.TurnID = pseudonym(event.TurnID)
 	event.ModelCallID = pseudonym(event.ModelCallID)
 	event.ToolCallID = pseudonym(event.ToolCallID)

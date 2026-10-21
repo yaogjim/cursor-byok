@@ -36,11 +36,13 @@ import (
 
 const (
 	// appName 表示当前模块中的 appName 状态值。
-	appName = "Cursor助手"
+	appName = "Gateway-byok"
 	// adRefreshInterval 表示后台广告拉取间隔。
 	adRefreshInterval = 3 * time.Minute
 	// disableWebViewSandboxEnv allows affected VDI users to opt out of the WebView2 sandbox.
 	disableWebViewSandboxEnv = "CURSOR_BYOK_DISABLE_WEBVIEW_SANDBOX"
+	proxyStartRequestedEvent = "proxy:start-requested"
+	mainWindowName           = "main"
 )
 
 // EmbeddedResources 定义了当前模块中的 EmbeddedResources 类型。
@@ -58,6 +60,7 @@ func init() {
 	application.RegisterEvent[bridge.ProxyState]("proxy:state")
 	application.RegisterEvent[bridge.UserConfig]("user-config:changed")
 	application.RegisterEvent[bridge.ModelAdapterTestResultsPayload]("model-adapter-test:updated")
+	application.RegisterEvent[application.Void](proxyStartRequestedEvent)
 	application.RegisterEvent[bridge.AdRuntime](ads.EventUpdated)
 	application.RegisterEvent[updater.StatePayload](updater.EventState)
 	application.RegisterEvent[updater.ProgressPayload](updater.EventProgress)
@@ -154,7 +157,7 @@ func Run(resources EmbeddedResources) error {
 			if updateManager != nil {
 				updateManager.Shutdown()
 			}
-			proxyService.ShutdownForQuit()
+			runOnShutdown(proxyService)
 		},
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "com.cursor-assistant.single-instance",
@@ -217,11 +220,12 @@ func Run(resources EmbeddedResources) error {
 	windowService.SetUpdater(updateManager)
 
 	mainWindow = app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name:                mainWindowName,
 		Title:               appName,
-		Width:               700,
-		Height:              530,
-		MinWidth:            700,
-		MinHeight:           530,
+		Width:               1100,
+		Height:              720,
+		MinWidth:            980,
+		MinHeight:           640,
 		DisableResize:       false,
 		Frameless:           goruntime.GOOS == "windows",
 		URL:                 "/",
@@ -230,7 +234,7 @@ func Run(resources EmbeddedResources) error {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    appWindowBackgroundColour(startupConfig.Appearance.Theme),
+		BackgroundColour:    bridge.WindowBackgroundColour(startupConfig.Appearance.Theme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -292,8 +296,7 @@ func Run(resources EmbeddedResources) error {
 	})
 	menu.AddSeparator()
 	quitItem := menu.Add("退出").OnClick(func(ctx *application.Context) {
-		proxyService.ShutdownForQuit()
-		app.Quit()
+		runTrayQuit(proxyService, app.Quit)
 	})
 
 	var currentLocale = "zh-CN"
@@ -393,25 +396,25 @@ func Run(resources EmbeddedResources) error {
 		startAdRefreshLoop(adRefreshCtx)
 		go func() {
 			logger.Infof("application started, begin auto start service in background")
-			if _, err := proxyService.StartProxy(); err != nil {
-				logger.Errorf("自动启动服务失败: %v", err)
-			} else {
-				state := proxyService.GetState()
-				if refreshAdAssetBaseURL() {
-					refreshAdRuntime()
-				}
-				logger.Infof("代理已自动启动: %s", state.ProxyListenAddr)
+			err := runAutoStartProxy(func() error {
+				_, startErr := proxyService.StartProxy()
+				return startErr
+			})
+			if err != nil {
+				return
 			}
+			state := proxyService.GetState()
+			if refreshAdAssetBaseURL() {
+				refreshAdRuntime()
+			}
+			logger.Infof("代理已自动启动: %s", state.ProxyListenAddr)
 		}()
 	})
 
 	startItem.OnClick(func(ctx *application.Context) {
-		if _, err := proxyService.StartProxy(); err != nil {
-			logger.Errorf("启动服务失败: %v", err)
-		} else if refreshAdAssetBaseURL() {
-			refreshAdRuntime()
-		}
-		refreshTray()
+		requestInteractiveProxyStart(showMainWindow, func(name string) {
+			window.EmitEvent(name)
+		})
 	})
 	stopItem.OnClick(func(ctx *application.Context) {
 		if _, err := proxyService.StopProxy(); err != nil {
@@ -437,11 +440,43 @@ func Run(resources EmbeddedResources) error {
 	return app.Run()
 }
 
-func appWindowBackgroundColour(theme string) application.RGBA {
-	if theme == "dark" {
-		return application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255}
+type quitShutdown interface {
+	ShutdownForQuitFrom(initiator string)
+}
+
+func requestInteractiveProxyStart(showAndFocus func(), emitToMain func(eventName string)) {
+	if showAndFocus != nil {
+		showAndFocus()
 	}
-	return application.RGBA{Red: 246, Green: 248, Blue: 251, Alpha: 255}
+	if emitToMain != nil {
+		emitToMain(proxyStartRequestedEvent)
+	}
+}
+
+func runAutoStartProxy(start func() error) error {
+	if start == nil {
+		return nil
+	}
+	err := start()
+	if err != nil {
+		logger.Errorf("自动启动服务失败: %v", err)
+	}
+	return err
+}
+
+func runTrayQuit(proxy quitShutdown, quit func()) {
+	if proxy != nil {
+		proxy.ShutdownForQuitFrom("tray")
+	}
+	if quit != nil {
+		quit()
+	}
+}
+
+func runOnShutdown(proxy quitShutdown) {
+	if proxy != nil {
+		proxy.ShutdownForQuitFrom("on_shutdown")
+	}
 }
 
 func windowsAdditionalBrowserArgs() []string {

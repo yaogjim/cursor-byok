@@ -19,6 +19,74 @@ import (
 // CreateRun
 // ─────────────────────────────────────────────
 
+func TestSubagentRunStore_DispatchSurvivesRestartAndIsImmutable(t *testing.T) {
+	root := t.TempDir()
+	store := NewSubagentRunStore(root)
+	identity := SubagentIdentity{SubagentRunID: "run-dispatch", ParentRequestID: "req-dispatch", ParentConversationID: "conv-dispatch", ParentToolCallID: "tc-dispatch"}
+	dispatch := SubagentDispatch{ExecID: "exec-dispatch", MessageID: 23, ArgsJSON: json.RawMessage(`{"description":"恢复参数"}`)}
+	if _, err := store.CreateRun(identity, dispatch); err != nil {
+		t.Fatal(err)
+	}
+	store = NewSubagentRunStore(root)
+	if _, err := store.CreateRun(identity, dispatch); err != nil {
+		t.Fatalf("落盘后重复创建应幂等: %v", err)
+	}
+	for _, mutate := range []func(*SubagentDispatch){
+		func(d *SubagentDispatch) { d.ExecID = "other-exec" },
+		func(d *SubagentDispatch) { d.MessageID++ },
+		func(d *SubagentDispatch) { d.ArgsJSON = json.RawMessage(`{"description":"不同参数"}`) },
+	} {
+		changed := dispatch
+		mutate(&changed)
+		if _, err := store.CreateRun(identity, changed); err == nil {
+			t.Fatal("持久化派发关联应不可变")
+		}
+	}
+	record, err := store.FindDispatch(dispatch.ExecID, dispatch.MessageID, "new-request", identity.ParentConversationID)
+	if err != nil || record == nil || record.Dispatch == nil || record.Dispatch.MessageID != dispatch.MessageID || !strings.Contains(string(record.Dispatch.ArgsJSON), "恢复参数") {
+		t.Fatalf("重启后派发关联应可读取: %+v err=%v", record, err)
+	}
+	data, err := os.ReadFile(store.runPath(identity.SubagentRunID))
+	if err != nil || !strings.Contains(string(data), `"dispatch"`) {
+		t.Fatalf("派发信息未持久化: %v", err)
+	}
+}
+
+func TestSubagentRunStore_DispatchRejectsInvalidArguments(t *testing.T) {
+	for _, args := range []json.RawMessage{json.RawMessage(`{broken`), json.RawMessage(`"` + strings.Repeat("x", subagentResultToolCallLimit) + `"`)} {
+		store := NewSubagentRunStore(t.TempDir())
+		identity := SubagentIdentity{SubagentRunID: "run-invalid", ParentRequestID: "req", ParentConversationID: "conv", ParentToolCallID: "tc"}
+		if _, err := store.CreateRun(identity, SubagentDispatch{ExecID: "exec", ArgsJSON: args}); err == nil {
+			t.Fatal("无效参数必须在派发前明确失败")
+		}
+		record, err := store.LoadRun(identity.SubagentRunID)
+		if err != nil || record != nil {
+			t.Fatalf("失败不得留下可派发记录: %+v %v", record, err)
+		}
+	}
+}
+
+func TestSubagentRunStore_DispatchSkipsUnverifiableRecords(t *testing.T) {
+	store := NewSubagentRunStore(t.TempDir())
+	identity := SubagentIdentity{SubagentRunID: "run-valid", ParentRequestID: "req", ParentConversationID: "conv", ParentToolCallID: "tc"}
+	if _, err := store.CreateRun(identity, SubagentDispatch{ExecID: "exec", MessageID: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.runDir("a-corrupt"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.runPath("a-corrupt"), []byte(`{"broken":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.FindDispatch("exec", 7, "req", "conv")
+	if err != nil || record == nil || record.Identity.SubagentRunID != identity.SubagentRunID {
+		t.Fatalf("无关损坏记录不得阻塞可信匹配: record=%+v err=%v", record, err)
+	}
+	if record, err := store.FindDispatch("unknown", 7, "req", "conv"); err == nil || record != nil {
+		t.Fatalf("没有可信匹配时必须保留损坏错误: record=%+v err=%v", record, err)
+	}
+}
+
 func TestSubagentRunStore_CreateRun_Basic(t *testing.T) {
 	store := NewSubagentRunStore(t.TempDir())
 	id := SubagentIdentity{

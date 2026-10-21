@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/internal/audit"
 	"cursor/internal/observability"
 )
 
@@ -149,6 +150,86 @@ func TestProviderObservabilityOmitsSecretsAndDoesNotForgeIDs(t *testing.T) {
 		if event.CursorRequestID != "request-id" || event.ModelCallID != "model-call-id" {
 			t.Fatalf("param correlation missing: %+v", event)
 		}
+	}
+}
+
+func TestRecoveryObservabilityFieldsOmitSecrets(t *testing.T) {
+	raw := `Post "https://api.example.test/v1/messages?api_key=sk-secret": Authorization: Bearer header-secret account_id=acct-123 body={"prompt":"do-not-record"}`
+	fields := map[string]any{"error_message": observabilityErrorMessage(raw)}
+	appendFailureObservabilityFields(fields, audit.Event{
+		ErrorCategory: ProviderErrorTransport,
+		ErrorMessage:  raw,
+		RetryDecision: retryDecisionRetry,
+	})
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, secret := range []string{"sk-secret", "header-secret", "acct-123", "api_key=sk-secret", "https://", "/v1/messages"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("recovery fields leaked %q: %s", secret, text)
+		}
+	}
+	if fields["failure_category"] != ProviderErrorTransport {
+		t.Fatalf("failure_category = %v", fields["failure_category"])
+	}
+	if fields["recovery_action"] != RecoveryActionRetrySame {
+		t.Fatalf("recovery_action = %v", fields["recovery_action"])
+	}
+}
+
+func TestProviderObservabilityRetryingAttemptIsWarningButExhaustedIsError(t *testing.T) {
+	controller, eventsPath := newObservabilityController(t)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Body:       io.NopCloser(strings.NewReader("server-error")),
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	})}
+	response, err := doProviderRequest(
+		context.Background(),
+		client,
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodPost, "https://example.test/v1/chat/completions", bytes.NewReader([]byte(`{}`)))
+		},
+		nil,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	events := readObservabilityEvents(t, eventsPath)
+	responses := filterObservabilityEvents(events, "provider_response")
+	if len(responses) != 2 {
+		t.Fatalf("provider_response count = %d, want 2 in %v", len(responses), eventNames(events))
+	}
+	if observabilityFieldString(responses[0], "retry_decision") != retryDecisionRetry {
+		t.Fatalf("first retry_decision = %q", observabilityFieldString(responses[0], "retry_decision"))
+	}
+	if responses[0].Severity != observability.SeverityWarning || responses[0].Status != "retrying" {
+		t.Fatalf("retrying attempt severity/status = %q/%q, want warning/retrying", responses[0].Severity, responses[0].Status)
+	}
+	if responses[0].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("retrying error_category = %q, want %q", responses[0].ErrorCategory, ProviderErrorServer5xx)
+	}
+	if observabilityFieldString(responses[1], "retry_decision") != retryDecisionExhausted {
+		t.Fatalf("final retry_decision = %q", observabilityFieldString(responses[1], "retry_decision"))
+	}
+	if responses[1].Severity != observability.SeverityError || responses[1].Status != "error" {
+		t.Fatalf("exhausted severity/status = %q/%q, want error/error", responses[1].Severity, responses[1].Status)
+	}
+	if responses[1].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("exhausted error_category = %q, want %q", responses[1].ErrorCategory, ProviderErrorServer5xx)
 	}
 }
 

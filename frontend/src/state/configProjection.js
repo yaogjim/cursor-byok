@@ -1,4 +1,4 @@
-const SUPPORTED_THEMES = new Set(["light", "dark"]);
+const SUPPORTED_THEMES = new Set(["light", "dark", "system"]);
 const SUPPORTED_OBSERVABILITY_MODES = new Set(["off", "basic", "full"]);
 
 export const DEFAULT_OBSERVABILITY_CONFIG = Object.freeze({
@@ -18,12 +18,35 @@ export const DEFAULT_CLIENT_PREFERENCES = Object.freeze({
   updates: { checkOnStartup: false },
 });
 
+export const DEFAULT_SUBAGENT_RESCHEDULE = Object.freeze({
+  enabled: false,
+});
+
+export function normalizeSubagentRescheduleConfig(_source) {
+  // Runtime relaunch 尚无稳定 typed failure 关联。前端投影固定关闭，
+  // 避免加载或保存未来兼容字段时误启用当前未接线能力。
+  return {
+    enabled: DEFAULT_SUBAGENT_RESCHEDULE.enabled,
+  };
+}
+
+export function buildSubagentRescheduleConfigFromState(_source = {}) {
+  return {
+    enabled: DEFAULT_SUBAGENT_RESCHEDULE.enabled,
+  };
+}
+
 export const DEFAULT_PROVIDER_FALLBACK = Object.freeze({
   enabled: false,
   primaryChannelID: "",
   candidateChannelIDs: Object.freeze([]),
   maxHttpAttempts: 5,
   maxWaitSeconds: 8,
+  maxAttemptsPerChannel: 2,
+  connectTimeoutSeconds: 30,
+  firstEventTimeoutSeconds: 600,
+  streamIdleTimeoutSeconds: 240,
+  callTimeoutSeconds: 7200,
 });
 
 export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
@@ -31,7 +54,36 @@ export const MAX_PROVIDER_FALLBACK_CANDIDATES = 4;
 export const PROVIDER_FALLBACK_LIMITS = Object.freeze({
   maxHttpAttempts: Object.freeze({ min: 2, max: 9 }),
   maxWaitSeconds: Object.freeze({ min: 1, max: 30 }),
+  maxAttemptsPerChannel: Object.freeze({ min: 1, max: 3 }),
+  connectTimeoutSeconds: Object.freeze({ min: 5, max: 120 }),
+  firstEventTimeoutSeconds: Object.freeze({ min: 60, max: 1800 }),
+  streamIdleTimeoutSeconds: Object.freeze({ min: 30, max: 900 }),
+  callTimeoutSeconds: Object.freeze({ min: 900, max: 21600 }),
 });
+
+const PROVIDER_FALLBACK_BUDGET_FIELDS = Object.freeze([
+  Object.freeze(["maxHttpAttempts", "max_http_attempts"]),
+  Object.freeze(["maxWaitSeconds", "max_wait_seconds"]),
+  Object.freeze(["maxAttemptsPerChannel", "max_attempts_per_channel"]),
+  Object.freeze(["connectTimeoutSeconds", "connect_timeout_seconds"]),
+  Object.freeze(["firstEventTimeoutSeconds", "first_event_timeout_seconds"]),
+  Object.freeze(["streamIdleTimeoutSeconds", "stream_idle_timeout_seconds"]),
+  Object.freeze(["callTimeoutSeconds", "call_timeout_seconds"]),
+]);
+
+const PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS = Object.freeze({
+  maxHttpAttempts: "全链最大 HTTP 尝试次数必须为 2–9 的整数",
+  maxWaitSeconds: "全链最大退避等待秒数必须为 1–30 的整数",
+  maxAttemptsPerChannel: "单渠道最大尝试次数必须为 1–3 的整数",
+  connectTimeoutSeconds: "建连超时秒数必须为 5–120 的整数",
+  firstEventTimeoutSeconds: "首事件超时秒数必须为 60–1800 的整数",
+  streamIdleTimeoutSeconds: "流空闲超时秒数必须为 30–900 的整数",
+  callTimeoutSeconds: "整次调用超时秒数必须为 900–21600 的整数",
+});
+
+const OPENAI_ENDPOINT_RESPONSES = "/v1/responses";
+const OPENAI_ENDPOINT_CHAT_COMPLETIONS = "/v1/chat/completions";
+const OPENAI_ENDPOINT_CUSTOM = "/custom";
 
 export const DEFAULT_MAX_CONCURRENT_REQUESTS = 0;
 
@@ -62,9 +114,20 @@ function asBoolean(value) {
   return ["true", "1", "yes"].includes(asString(value).toLowerCase());
 }
 
-function normalizeTheme(value) {
+export function normalizeTheme(value) {
   const theme = asString(value).toLowerCase();
   return SUPPORTED_THEMES.has(theme) ? theme : DEFAULT_CLIENT_PREFERENCES.appearance.theme;
+}
+
+export function resolveEffectiveTheme(value, prefersDark = false) {
+  const theme = normalizeTheme(value);
+  if (theme === "dark") {
+    return "dark";
+  }
+  if (theme === "system") {
+    return prefersDark ? "dark" : "light";
+  }
+  return "light";
 }
 
 function boundedInteger(value, fallback, { min, max }) {
@@ -92,6 +155,56 @@ function parseBudgetNumber(value) {
 
 function defaultBudget(value, fallback) {
   return value === 0 ? fallback : value;
+}
+
+function openAIEndpointShape(endpoint) {
+  const lower = asString(endpoint).toLowerCase();
+  if (lower.endsWith("/responses")) {
+    return "responses";
+  }
+  return "chat/completions";
+}
+
+function resolveOpenAIEndpoint(baseURL, endpoint) {
+  const base = asString(baseURL).toLowerCase().replace(/\/+$/, "");
+  if (base.endsWith("/responses")) {
+    return OPENAI_ENDPOINT_RESPONSES;
+  }
+  if (base.endsWith("/chat/completions")) {
+    return OPENAI_ENDPOINT_CHAT_COMPLETIONS;
+  }
+  const normalized = asString(endpoint).toLowerCase();
+  if (!normalized) {
+    return OPENAI_ENDPOINT_CHAT_COMPLETIONS;
+  }
+  if (
+    normalized === OPENAI_ENDPOINT_RESPONSES
+    || normalized === OPENAI_ENDPOINT_CHAT_COMPLETIONS
+    || normalized === OPENAI_ENDPOINT_CUSTOM
+  ) {
+    return normalized;
+  }
+  return "";
+}
+
+// channelEndpointFamily 与后端 fallback 兼容性判定对齐：Anthropic 固定 messages，
+// OpenAI 按 /responses 与 chat/completions 分成两个协议家族。
+export function channelEndpointFamily(adapter) {
+  const type = asString(adapter?.type).toLowerCase();
+  if (type === "anthropic") {
+    return "anthropic:messages";
+  }
+  const shape = openAIEndpointShape(resolveOpenAIEndpoint(adapter?.baseURL, adapter?.openAIEndpoint));
+  return `openai:${shape || "chat/completions"}`;
+}
+
+export function isFallbackChannelCompatible(from, to) {
+  const fromType = asString(from?.type).toLowerCase();
+  const toType = asString(to?.type).toLowerCase();
+  if (!fromType || !toType || fromType !== toType) {
+    return false;
+  }
+  return channelEndpointFamily(from) === channelEndpointFamily(to);
 }
 
 export function normalizeObservabilityConfig(source, legacyLog = false) {
@@ -155,45 +268,41 @@ export function buildClientPreferencesFromState(source = {}) {
 }
 
 // normalizeProviderFallback 归一化单条 providerFallback 配置（纯函数，无副作用）。
-// 缺失/0 预算归一化为 5/8；非零越界原样保留供校验报错，禁止静默 clamp。
+// 缺失/0 预算归一化为默认值；非零越界原样保留供校验报错，禁止静默 clamp。
 // 禁用时保留引用和预算字段，但不参与运行。
 export function normalizeProviderFallback(source) {
   const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
   const candidateSource = Array.isArray(raw.candidateChannelIDs)
     ? raw.candidateChannelIDs
     : (Array.isArray(raw.candidate_channel_ids) ? raw.candidate_channel_ids : []);
-  return {
+  const normalized = {
     enabled: asBoolean(raw.enabled),
     primaryChannelID: asString(raw.primaryChannelID ?? raw.primary_channel_id ?? ""),
     candidateChannelIDs: candidateSource.map((id) => asString(id)).filter(Boolean),
-    maxHttpAttempts: defaultBudget(
-      parseBudgetNumber(raw.maxHttpAttempts ?? raw.max_http_attempts),
-      DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts,
-    ),
-    maxWaitSeconds: defaultBudget(
-      parseBudgetNumber(raw.maxWaitSeconds ?? raw.max_wait_seconds),
-      DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds,
-    ),
   };
+  for (const [camel, snake] of PROVIDER_FALLBACK_BUDGET_FIELDS) {
+    normalized[camel] = defaultBudget(
+      parseBudgetNumber(raw[camel] ?? raw[snake]),
+      DEFAULT_PROVIDER_FALLBACK[camel],
+    );
+  }
+  return normalized;
+}
+
+function providerFallbackBudgetOutOfRange(field, value) {
+  const limits = PROVIDER_FALLBACK_LIMITS[field];
+  if (!limits) {
+    return false;
+  }
+  return !Number.isInteger(value) || value < limits.min || value > limits.max;
 }
 
 export function validateProviderFallbackBudget(source, prefix = "模型") {
   const fb = source && typeof source === "object" ? source : {};
-  const attempts = fb.maxHttpAttempts;
-  const wait = fb.maxWaitSeconds;
-  if (
-    !Number.isInteger(attempts)
-    || attempts < PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.min
-    || attempts > PROVIDER_FALLBACK_LIMITS.maxHttpAttempts.max
-  ) {
-    return `${prefix} 的全链最大 HTTP 尝试次数必须为 2–9 的整数`;
-  }
-  if (
-    !Number.isInteger(wait)
-    || wait < PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.min
-    || wait > PROVIDER_FALLBACK_LIMITS.maxWaitSeconds.max
-  ) {
-    return `${prefix} 的全链最大等待秒数必须为 1–30 的整数`;
+  for (const [field] of PROVIDER_FALLBACK_BUDGET_FIELDS) {
+    if (providerFallbackBudgetOutOfRange(field, fb[field])) {
+      return `${prefix} 的${PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS[field]}`;
+    }
   }
   return "";
 }
@@ -228,6 +337,9 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
     if (isLogicalRoutingAdapter(adapterByID.get(fb.primaryChannelID))) {
       return `${prefix} 的 Fallback 主渠道必须是未启用 Fallback 的物理渠道`;
     }
+    if (!isFallbackChannelCompatible(adapter, adapterByID.get(fb.primaryChannelID))) {
+      return `${prefix} 的 Fallback 主渠道必须与当前模型使用相同的适配器类型和协议端点`;
+    }
     if (!fb.candidateChannelIDs.length || fb.candidateChannelIDs.length > MAX_PROVIDER_FALLBACK_CANDIDATES) {
       return `${prefix} 的 Fallback 候选渠道数量必须为 1–${MAX_PROVIDER_FALLBACK_CANDIDATES} 个`;
     }
@@ -245,17 +357,13 @@ export function validateProviderFallbackAdapters(source, { allAdapters } = {}) {
       if (isLogicalRoutingAdapter(adapterByID.get(cid))) {
         return `${prefix} 的 Fallback 候选渠道必须是未启用 Fallback 的物理渠道`;
       }
+      if (!isFallbackChannelCompatible(adapter, adapterByID.get(cid))) {
+        return `${prefix} 的 Fallback 候选渠道必须与当前模型使用相同的适配器类型和协议端点`;
+      }
       seenInChain.add(cid);
     }
   }
   return "";
-}
-
-export function stripDerivedModelAdapterIDs(source) {
-  return (Array.isArray(source) ? source : []).map((adapter) => {
-    const { id: _id, ...rest } = adapter && typeof adapter === "object" ? adapter : {};
-    return rest;
-  });
 }
 
 export function prepareModelAdaptersForPersist(source, validate = validateProviderFallbackAdapters) {
@@ -275,7 +383,9 @@ export function prepareModelAdaptersForPersist(source, validate = validateProvid
     ok: true,
     error: "",
     adaptersWithIds,
-    payloadAdapters: stripDerivedModelAdapterIDs(adaptersWithIds),
+    // The backend uses the last persisted id as an identity hint while
+    // recomputing derived channel IDs. New adapters keep an empty id.
+    payloadAdapters: adaptersWithIds,
   };
 }
 
@@ -328,17 +438,11 @@ export function providerFallbackBudgetFieldError(field, value) {
     return "";
   }
   const parsed = parseBudgetNumber(value);
-  if (field === "maxHttpAttempts") {
-    if (!Number.isInteger(parsed) || parsed < 2 || parsed > 9) {
-      return "全链最大 HTTP 尝试次数必须为 2–9 的整数";
-    }
+  if (!PROVIDER_FALLBACK_LIMITS[field]) {
     return "";
   }
-  if (field === "maxWaitSeconds") {
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 30) {
-      return "全链最大等待秒数必须为 1–30 的整数";
-    }
-    return "";
+  if (providerFallbackBudgetOutOfRange(field, parsed)) {
+    return PROVIDER_FALLBACK_BUDGET_FIELD_ERRORS[field];
   }
   return "";
 }
@@ -451,4 +555,595 @@ export function validateUpstreamCapacityAdapters(source, { allAdapters } = {}) {
     }
   }
   return "";
+}
+
+export const DEFAULT_GATEWAY_LISTEN_ADDR = "127.0.0.1:18091";
+export const MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH = 128;
+
+export const DEFAULT_GATEWAY_CONFIG = Object.freeze({
+  enabled: false,
+  listenAddr: DEFAULT_GATEWAY_LISTEN_ADDR,
+  tokenConfigured: false,
+  publicModels: Object.freeze([]),
+});
+
+export function normalizeModelAdapterEnabled(value) {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  return asBoolean(value);
+}
+
+export function isModelAdapterEnabled(source) {
+  return normalizeModelAdapterEnabled(source?.enabled);
+}
+
+export function isGatewayPublicModelPublished(source) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return true;
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(source, "published")
+    || source.published === undefined
+    || source.published === null
+    || source.published === ""
+  ) {
+    return true;
+  }
+  return asBoolean(source.published);
+}
+
+export function normalizeGatewayPublicModelID(value) {
+  return asString(value);
+}
+
+export function defaultGatewayPublicModelName(adapter) {
+  return truncatePublicModelID(asString(adapter?.displayName));
+}
+
+export function utf8ByteLength(value) {
+  return new TextEncoder().encode(String(value ?? "")).length;
+}
+
+export function truncatePublicModelID(value, max = MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH) {
+  const text = asString(value);
+  if (max <= 0) {
+    return "";
+  }
+  if (utf8ByteLength(text) <= max) {
+    return text;
+  }
+  let truncated = text;
+  while (truncated && utf8ByteLength(truncated) > max) {
+    truncated = truncated.slice(0, -1);
+  }
+  return truncated;
+}
+
+export function stableGatewayPublicModelSuffix(adapterID, width = 4) {
+  const id = asString(adapterID);
+  if (!id) {
+    return "id";
+  }
+  const size = Math.max(1, Math.min(width, id.length));
+  return id.slice(0, size);
+}
+
+function joinPublicModelID(base, suffix) {
+  const extra = asString(suffix);
+  if (!extra) {
+    return truncatePublicModelID(base);
+  }
+  const sep = "-";
+  const room = MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH - utf8ByteLength(sep) - utf8ByteLength(extra);
+  if (room < 0) {
+    return truncatePublicModelID(extra);
+  }
+  return `${truncatePublicModelID(base, room)}${sep}${extra}`;
+}
+
+export function uniqueSuffixedPublicModelID(base, adapterID, used) {
+  const id = asString(adapterID);
+  const taken = used instanceof Set ? used : new Set();
+  let start = 4;
+  if (id.length > 0 && id.length < start) {
+    start = id.length;
+  }
+  for (let width = start; width <= id.length; width += 1) {
+    const candidate = joinPublicModelID(base, id.slice(0, width));
+    if (!candidate || taken.has(candidate)) {
+      continue;
+    }
+    taken.add(candidate);
+    return candidate;
+  }
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = joinPublicModelID(base, `${id}-${n}`);
+    if (!candidate || taken.has(candidate)) {
+      continue;
+    }
+    taken.add(candidate);
+    return candidate;
+  }
+  const fallback = joinPublicModelID(base, id);
+  taken.add(fallback);
+  return fallback;
+}
+
+export function normalizeGatewayPublicModel(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const item = {
+    id: normalizeGatewayPublicModelID(raw.id),
+    targetAdapterID: asString(raw.targetAdapterID),
+  };
+  if (!isGatewayPublicModelPublished(raw)) {
+    item.published = false;
+  }
+  return item;
+}
+
+export function normalizeGatewayConfig(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const models = Array.isArray(raw.publicModels) ? raw.publicModels : [];
+  const publicModels = [];
+  const seenIDs = new Set();
+  const seenUnpublishedTargets = new Set();
+  for (const item of models) {
+    const normalized = normalizeGatewayPublicModel(item);
+    if (!normalized.targetAdapterID) {
+      continue;
+    }
+    if (!isGatewayPublicModelPublished(normalized)) {
+      if (seenUnpublishedTargets.has(normalized.targetAdapterID)) {
+        continue;
+      }
+      seenUnpublishedTargets.add(normalized.targetAdapterID);
+      publicModels.push(normalized);
+      continue;
+    }
+    if (!normalized.id || seenIDs.has(normalized.id)) {
+      continue;
+    }
+    seenIDs.add(normalized.id);
+    publicModels.push({
+      id: normalized.id,
+      targetAdapterID: normalized.targetAdapterID,
+    });
+  }
+  return {
+    enabled: asBoolean(raw.enabled),
+    listenAddr: asString(raw.listenAddr) || DEFAULT_GATEWAY_LISTEN_ADDR,
+    tokenConfigured: asBoolean(raw.tokenConfigured),
+    publicModels,
+  };
+}
+
+export function gatewayPublicModelInvalid(model, _adapters) {
+  const normalized = normalizeGatewayPublicModel(model);
+  if (!normalized.targetAdapterID) {
+    return true;
+  }
+  if (utf8ByteLength(normalized.id) > MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH) {
+    return true;
+  }
+  if (isGatewayPublicModelPublished(normalized) && !normalized.id) {
+    return true;
+  }
+  return false;
+}
+
+export function listGatewayPublicModelRows(adapters, publicModels) {
+  const enabled = (Array.isArray(adapters) ? adapters : []).filter((adapter) => (
+    isModelAdapterEnabled(adapter) && asString(adapter?.id)
+  ));
+  const overrides = (Array.isArray(publicModels) ? publicModels : []).map((item) => (
+    normalizeGatewayPublicModel(item)
+  ));
+  const overrideByTarget = new Map();
+  for (const item of overrides) {
+    if (!item.targetAdapterID || overrideByTarget.has(item.targetAdapterID)) {
+      continue;
+    }
+    overrideByTarget.set(item.targetAdapterID, item);
+  }
+
+  const customIDs = new Set();
+  for (const item of overrides) {
+    if (!isGatewayPublicModelPublished(item) || !item.id) {
+      continue;
+    }
+    customIDs.add(item.id);
+  }
+
+  const rows = enabled.map((adapter) => {
+    const adapterID = asString(adapter.id);
+    const override = overrideByTarget.get(adapterID);
+    const unpublished = Boolean(override) && !isGatewayPublicModelPublished(override);
+    const defaultName = defaultGatewayPublicModelName(adapter);
+    const storedID = override ? normalizeGatewayPublicModelID(override.id) : "";
+    return {
+      adapterID,
+      displayName: asString(adapter.displayName),
+      published: !unpublished,
+      publicID: storedID || defaultName,
+      effectiveID: "",
+      hasCustom: Boolean(override) && !unpublished && Boolean(storedID),
+    };
+  });
+
+  const defaultNameCounts = new Map();
+  for (const row of rows) {
+    if (!row.published || row.hasCustom) {
+      continue;
+    }
+    const name = defaultGatewayPublicModelName({ displayName: row.displayName });
+    if (!name) {
+      continue;
+    }
+    defaultNameCounts.set(name, (defaultNameCounts.get(name) || 0) + 1);
+  }
+
+  const used = new Set(customIDs);
+  for (const row of rows) {
+    if (!row.published || row.hasCustom) {
+      continue;
+    }
+    const name = defaultGatewayPublicModelName({ displayName: row.displayName });
+    if (name && defaultNameCounts.get(name) === 1 && !customIDs.has(name)) {
+      used.add(name);
+    }
+  }
+  for (const row of rows) {
+    if (!row.published) {
+      row.effectiveID = "";
+      continue;
+    }
+    if (row.hasCustom) {
+      row.effectiveID = normalizeGatewayPublicModelID(row.publicID);
+      continue;
+    }
+    const defaultName = defaultGatewayPublicModelName({ displayName: row.displayName });
+    const conflictsDefault = (defaultNameCounts.get(defaultName) || 0) > 1;
+    const conflictsCustom = Boolean(defaultName) && customIDs.has(defaultName);
+    if (defaultName && (conflictsDefault || conflictsCustom)) {
+      row.effectiveID = uniqueSuffixedPublicModelID(defaultName, row.adapterID, used);
+      continue;
+    }
+    row.effectiveID = defaultName;
+    if (defaultName) {
+      used.add(defaultName);
+    }
+  }
+
+  return rows;
+}
+
+function overrideFromPublicModelRow(row, existing) {
+  const adapterID = asString(row?.adapterID);
+  if (!adapterID) {
+    return null;
+  }
+  const published = row?.published !== false;
+  const publicID = normalizeGatewayPublicModelID(row?.publicID);
+  const defaultName = defaultGatewayPublicModelName({ displayName: row?.displayName });
+  const existingID = existing ? normalizeGatewayPublicModelID(existing.id) : "";
+  if (!published) {
+    return {
+      id: existing ? existingID : "",
+      targetAdapterID: adapterID,
+      published: false,
+    };
+  }
+  if (publicID && publicID !== defaultName) {
+    return {
+      id: publicID,
+      targetAdapterID: adapterID,
+    };
+  }
+  if (existingID && publicID === existingID) {
+    return {
+      id: existingID,
+      targetAdapterID: adapterID,
+    };
+  }
+  return null;
+}
+
+export function buildGatewayPublicModelOverrides(adapters, publicModels, rows) {
+  const existing = (Array.isArray(publicModels) ? publicModels : [])
+    .map((item) => normalizeGatewayPublicModel(item))
+    .filter((item) => item.targetAdapterID);
+  const rowList = Array.isArray(rows) ? rows : [];
+  const rowByAdapter = new Map(rowList.map((row) => [asString(row.adapterID), row]));
+  const handled = new Set();
+  const output = [];
+
+  for (const item of existing) {
+    const row = rowByAdapter.get(item.targetAdapterID);
+    if (row && !handled.has(item.targetAdapterID)) {
+      handled.add(item.targetAdapterID);
+      const next = overrideFromPublicModelRow(row, item);
+      if (next) {
+        output.push(next);
+      }
+      continue;
+    }
+    if (row && handled.has(item.targetAdapterID)) {
+      if (row.published === false) {
+        output.push({
+          id: normalizeGatewayPublicModelID(item.id),
+          targetAdapterID: item.targetAdapterID,
+          published: false,
+        });
+      } else {
+        output.push(item);
+      }
+      continue;
+    }
+    output.push(item);
+  }
+
+  for (const row of rowList) {
+    const adapterID = asString(row.adapterID);
+    if (!adapterID || handled.has(adapterID)) {
+      continue;
+    }
+    handled.add(adapterID);
+    const next = overrideFromPublicModelRow(row, null);
+    if (next) {
+      output.push(next);
+    }
+  }
+
+  return output;
+}
+
+export function collapseGatewayPublicModelsForPersist(adapters, publicModels) {
+  return buildGatewayPublicModelOverrides(
+    adapters,
+    publicModels,
+    listGatewayPublicModelRows(adapters, publicModels),
+  );
+}
+
+export function countPublishedGatewayModels(adapters, publicModels) {
+  return listGatewayPublicModelRows(adapters, publicModels).filter((row) => row.published).length;
+}
+
+export const DEFAULT_OUTBOUND_PROXY = Object.freeze({
+  enabled: false,
+  url: "",
+});
+
+export function normalizeOutboundProxy(source) {
+  const raw = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  return {
+    enabled: asBoolean(raw.enabled),
+    url: asString(raw.url),
+  };
+}
+
+export function validateOutboundProxy(source, prefix = "自定义代理") {
+  const proxy = normalizeOutboundProxy(source);
+  if (!proxy.enabled) {
+    return "";
+  }
+  if (!proxy.url) {
+    return `${prefix} URL 不能为空`;
+  }
+  let parsed;
+  try {
+    parsed = new URL(proxy.url);
+  } catch (_error) {
+    return `${prefix} URL 无效`;
+  }
+  const protocol = asString(parsed.protocol).toLowerCase();
+  if (protocol !== "http:" && protocol !== "https:" && protocol !== "socks5:") {
+    return `${prefix} URL 仅支持 http、https 或 socks5`;
+  }
+  if (!parsed.host) {
+    return `${prefix} URL 无效`;
+  }
+  return "";
+}
+
+export function resolveEffectiveOutboundProxy(modelProxy, savedGlobalProxy) {
+  const model = normalizeOutboundProxy(modelProxy);
+  if (model.enabled) {
+    return {
+      enabled: true,
+      url: model.url,
+    };
+  }
+  const savedGlobal = normalizeOutboundProxy(savedGlobalProxy);
+  if (savedGlobal.enabled) {
+    return {
+      enabled: true,
+      url: savedGlobal.url,
+    };
+  }
+  return {
+    enabled: false,
+    url: "",
+  };
+}
+
+export function outboundProxyHashFields(modelProxy, savedGlobalProxy) {
+  const effective = resolveEffectiveOutboundProxy(modelProxy, savedGlobalProxy);
+  return [
+    effective.enabled ? "true" : "false",
+    effective.enabled ? effective.url : "",
+  ];
+}
+
+export function describeOutboundProxyInheritance(modelProxy, savedGlobalProxy) {
+  const model = normalizeOutboundProxy(modelProxy);
+  if (model.enabled) {
+    return "当前使用模型自定义代理";
+  }
+  if (normalizeOutboundProxy(savedGlobalProxy).enabled) {
+    return "当前继承已保存的全局自定义代理";
+  }
+  return "当前继承环境变量/系统代理或直连";
+}
+
+function rewriteImportedChannelID(id, idMap) {
+  const key = asString(id);
+  if (!key) {
+    return asString(id);
+  }
+  return idMap.has(key) ? idMap.get(key) : key;
+}
+
+function rememberImportedChannelID(incomingID, assignedID, idMap) {
+  const from = asString(incomingID);
+  const to = asString(assignedID);
+  if (!from || !to) {
+    return;
+  }
+  idMap.set(from, to);
+}
+
+function remapImportedProviderFallback(source, idMap) {
+  const fb = normalizeProviderFallback(source);
+  return {
+    ...fb,
+    primaryChannelID: rewriteImportedChannelID(fb.primaryChannelID, idMap),
+    candidateChannelIDs: fb.candidateChannelIDs.map((id) => rewriteImportedChannelID(id, idMap)),
+  };
+}
+
+function assignImportedAdapter(currentAdapter, incoming, idMap) {
+  const assignedID = asString(currentAdapter.id);
+  rememberImportedChannelID(incoming.id, assignedID, idMap);
+  return {
+    ...incoming,
+    id: assignedID,
+    sort: currentAdapter.sort,
+  };
+}
+
+export function mergeImportedModelAdapters(currentAdapters, importedAdapters, { identityKey } = {}) {
+  if (typeof identityKey !== "function") {
+    return {
+      ok: false,
+      error: "导入失败：缺少渠道身份计算",
+      adapters: [],
+      added: 0,
+      updated: 0,
+    };
+  }
+
+  const current = (Array.isArray(currentAdapters) ? currentAdapters : []).map((item) => (
+    item && typeof item === "object" ? { ...item } : {}
+  ));
+  const imported = Array.isArray(importedAdapters) ? importedAdapters : [];
+  const identityToIndexes = new Map();
+  const nameToIndexes = new Map();
+
+  current.forEach((adapter, index) => {
+    const key = identityKey(adapter);
+    identityToIndexes.set(key, [...(identityToIndexes.get(key) || []), index]);
+    const name = asString(adapter?.displayName);
+    if (!name) {
+      return;
+    }
+    nameToIndexes.set(name, [...(nameToIndexes.get(name) || []), index]);
+  });
+
+  const used = new Set();
+  const idMap = new Map();
+  let updated = 0;
+  const appended = [];
+
+  for (const raw of imported) {
+    const incoming = raw && typeof raw === "object" ? { ...raw } : {};
+    const identityHits = identityToIndexes.get(identityKey(incoming)) || [];
+    if (identityHits.length > 1) {
+      return {
+        ok: false,
+        error: "导入失败：当前草稿存在重复渠道身份，无法唯一匹配",
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (identityHits.length === 1) {
+      const index = identityHits[0];
+      if (used.has(index)) {
+        return {
+          ok: false,
+          error: "导入失败：多个导入项匹配到同一模型，已取消合并",
+          adapters: [],
+          added: 0,
+          updated: 0,
+        };
+      }
+      current[index] = assignImportedAdapter(current[index], incoming, idMap);
+      used.add(index);
+      updated += 1;
+      continue;
+    }
+
+    const name = asString(incoming.displayName);
+    const nameHits = name ? (nameToIndexes.get(name) || []) : [];
+    const availableHits = nameHits.filter((index) => !used.has(index));
+    if (name && nameHits.length === 1 && used.has(nameHits[0])) {
+      return {
+        ok: false,
+        error: `导入失败：显示名称「${name}」匹配到多个导入项，已取消合并`,
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (name && (availableHits.length > 1 || (nameHits.length > 1 && availableHits.length !== 1))) {
+      return {
+        ok: false,
+        error: `导入失败：显示名称「${name}」无法唯一匹配，已取消合并`,
+        adapters: [],
+        added: 0,
+        updated: 0,
+      };
+    }
+    if (availableHits.length === 1) {
+      const index = availableHits[0];
+      current[index] = assignImportedAdapter(current[index], incoming, idMap);
+      used.add(index);
+      updated += 1;
+      continue;
+    }
+
+    const assignedID = asString(incoming.id);
+    rememberImportedChannelID(incoming.id, assignedID, idMap);
+    appended.push({
+      ...incoming,
+      id: assignedID,
+      sort: 0,
+    });
+  }
+
+  const adapters = current.concat(appended);
+  const remapped = idMap.size
+    ? adapters.map((adapter, index) => {
+      if (!used.has(index) && index < current.length) {
+        return adapter;
+      }
+      if (!adapter?.providerFallback) {
+        return adapter;
+      }
+      return {
+        ...adapter,
+        providerFallback: remapImportedProviderFallback(adapter.providerFallback, idMap),
+      };
+    })
+    : adapters;
+
+  return {
+    ok: true,
+    error: "",
+    adapters: remapped,
+    added: appended.length,
+    updated,
+  };
 }

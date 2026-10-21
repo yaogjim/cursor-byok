@@ -3,11 +3,17 @@ package execbridge
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
 	runtimecore "cursor/internal/backend/agent/core"
@@ -110,6 +116,83 @@ func TestConvertReadResultKeepsTextAndLimitsUnsupportedBinary(t *testing.T) {
 	}
 	if !strings.Contains(binarySuccess.GetContent(), "Read binary data") {
 		t.Fatalf("large binary fallback = %q", binarySuccess.GetContent())
+	}
+}
+
+func TestTruncateReplayTextStaysWithinByteLimitAndValidUTF8(t *testing.T) {
+	content := strings.Repeat("😀x", 100)
+	for limit := 1; limit <= 250; limit++ {
+		got := truncateReplayText("MCP text", content, limit)
+		if len(got) > limit {
+			t.Fatalf("limit %d produced %d bytes", limit, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Fatalf("limit %d produced invalid UTF-8: %q", limit, got)
+		}
+	}
+}
+
+func TestTruncateMcpImageReplayPreservesMimeAndValidBase64Projection(t *testing.T) {
+	originalData := bytes.Repeat([]byte{0xff, 0x00, 0x7f}, mcpReplayBinaryLimit/3+10)
+	result := &agentv1.McpToolResult{
+		Result: &agentv1.McpToolResult_Success{
+			Success: &agentv1.McpSuccess{Content: []*agentv1.McpToolResultContentItem{{
+				Content: &agentv1.McpToolResultContentItem_Image{Image: &agentv1.McpImageContent{
+					Data:     append([]byte(nil), originalData...),
+					MimeType: "image/png",
+				}},
+			}}},
+		},
+	}
+
+	got := truncateMcpToolResultForReplay(result)
+	image := got.GetSuccess().GetContent()[0].GetImage()
+	if image == nil || image.GetMimeType() != "image/png" {
+		t.Fatalf("truncated image lost MIME type: %#v", image)
+	}
+	if len(image.GetData()) != mcpReplayBinaryLimit {
+		t.Fatalf("truncated image bytes = %d, want %d", len(image.GetData()), mcpReplayBinaryLimit)
+	}
+	if len(result.GetSuccess().GetContent()[0].GetImage().GetData()) != len(originalData) {
+		t.Fatal("truncation mutated the original MCP result")
+	}
+
+	encoded, err := protojson.Marshal(got)
+	if err != nil || !json.Valid(encoded) {
+		t.Fatalf("projected MCP result is not valid JSON: %s err=%v", encoded, err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode projected MCP result: %v", err)
+	}
+	success := payload["success"].(map[string]any)
+	content := success["content"].([]any)
+	imagePayload := content[0].(map[string]any)["image"].(map[string]any)
+	if _, err := base64.StdEncoding.DecodeString(imagePayload["data"].(string)); err != nil {
+		t.Fatalf("projected MCP image data is not valid base64: %v", err)
+	}
+}
+
+func TestListMcpResourcesReplayNoticeUsesResourceCount(t *testing.T) {
+	resources := make([]*agentv1.ListMcpResourcesExecResult_McpResource, 0, mcpResourcesReplayCount+50)
+	for index := 0; index < mcpResourcesReplayCount+50; index++ {
+		resources = append(resources, &agentv1.ListMcpResourcesExecResult_McpResource{Uri: fmt.Sprintf("mcp://resource/%d", index)})
+	}
+	result := &agentv1.ListMcpResourcesExecResult{
+		Result: &agentv1.ListMcpResourcesExecResult_Success{
+			Success: &agentv1.ListMcpResourcesSuccess{Resources: resources},
+		},
+	}
+
+	got := truncateListMcpResourcesResultForReplay(result)
+	items := got.GetSuccess().GetResources()
+	if len(items) != mcpResourcesReplayCount+1 {
+		t.Fatalf("resource count = %d, want %d plus notice", len(items), mcpResourcesReplayCount)
+	}
+	notice := items[len(items)-1]
+	want := "[truncated: ListMcpResources result exceeded 200 resources; showing 200 of 250 resources]"
+	if notice.GetUri() != "truncated:list-mcp-resources" || notice.GetDescription() != want {
+		t.Fatalf("resource truncation notice = uri:%q description:%q, want %q", notice.GetUri(), notice.GetDescription(), want)
 	}
 }
 

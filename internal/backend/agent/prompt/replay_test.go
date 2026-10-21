@@ -3,6 +3,8 @@ package promptengine
 import (
 	"reflect"
 	"testing"
+
+	modeladapter "cursor/internal/backend/agent/model"
 )
 
 func TestBuildReplayMessagesFromPendingAssistantOutputsKeepsTextAndToolCallInOneAssistantTurn(t *testing.T) {
@@ -82,5 +84,54 @@ func TestBuildReplayMessagesFromPendingAssistantOutputsKeepsMultipleToolResultsO
 	}
 	if messages[1].ToolCallID != "call_1" || messages[1].Content != "first" || messages[2].ToolCallID != "call_2" || messages[2].Content != "second" {
 		t.Fatalf("tool result order = %#v", messages[1:])
+	}
+}
+
+func TestEncodeReplayMessagesPreservesReasoningOrigin(t *testing.T) {
+	origin := modeladapter.ReasoningOrigin{
+		Provider:         "openai",
+		Endpoint:         "openai_responses:api.openai.com",
+		CredentialSource: "codex",
+		AccountID:        "acct-1",
+		ModelID:          "gpt-5",
+	}
+	encoded, err := EncodeReplayMessages([]Message{{
+		Role:                            "assistant",
+		Content:                         "hello",
+		ReasoningContent:                "think",
+		ReasoningSignature:              "encrypted-reasoning",
+		ReasoningSignatureSource:        modeladapter.ReasoningSignatureSourceOpenAIResponses,
+		OpenAIResponsesReasoningID:      "reasoning_1",
+		OpenAIResponsesReasoningStatus:  "completed",
+		OpenAIResponsesReasoningSummary: []byte(`[{"type":"summary_text","text":"summary"}]`),
+		ReasoningOrigin:                 origin,
+		ToolCalls: []ToolCallDescriptor{{
+			ID:                    "call_1",
+			Type:                  "function",
+			OpenAIResponsesID:     "item_1",
+			OpenAIResponsesCallID: "provider_call_1",
+			OpenAIResponsesStatus: "completed",
+			Function:              ToolCallFunctionShape{Name: "Read", Arguments: `{"path":"first.go"}`},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("EncodeReplayMessages: %v", err)
+	}
+	decoded, err := DecodeReplayMessages(encoded)
+	if err != nil {
+		t.Fatalf("DecodeReplayMessages: %v", err)
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("decoded count = %d, want 1: %#v", len(decoded), decoded)
+	}
+	got := decoded[0]
+	if !got.ReasoningOrigin.Equal(origin) {
+		t.Fatalf("decoded origin = %#v, want %#v", got.ReasoningOrigin, origin)
+	}
+	if got.ReasoningSignature != "encrypted-reasoning" || got.OpenAIResponsesReasoningID != "reasoning_1" {
+		t.Fatalf("decoded opaque reasoning = %#v", got)
+	}
+	if len(got.ToolCalls) != 1 || got.ToolCalls[0].OpenAIResponsesID != "item_1" {
+		t.Fatalf("decoded tool opaque ids = %#v", got.ToolCalls)
 	}
 }

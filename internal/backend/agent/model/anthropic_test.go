@@ -96,6 +96,86 @@ func TestAnthropicNormalCompletionStillSucceeds(t *testing.T) {
 	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 1)
 }
 
+func TestAnthropicCRLFMultilineAndTerminalAtEOF(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: message_stop\r\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\r\n")
+		_, _ = fmt.Fprint(writer, "data: \"message_stop\"}")
+	}))
+	defer server.Close()
+
+	diagnostics := &StreamDiagnostics{}
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	events := make([]ModelEvent, 0, 1)
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID: "request-1", RunID: "run-1", ModelCallID: "model-call-1", BaseURL: server.URL,
+		APIKey: "test-key", ProviderModelID: "claude-test", Messages: []Message{{Role: "user", Content: "hello"}},
+		MaxTokens: 128, StreamDiagnostics: diagnostics,
+	}, func(event ModelEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("CRLF multiline terminal-at-EOF failed: %v", err)
+	}
+	assertAnthropicEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+	snapshot := diagnostics.Snapshot()
+	if snapshot.LastSSEEventType != "message_stop" || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("terminal diagnostics = %#v", snapshot)
+	}
+}
+
+func TestAnthropicExplicitErrorIsProviderTerminalAndDoesNotRetry(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: error\ndata: {\"type\":\"error\",\"request_id\":\"req-secret\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n")
+	}))
+	defer server.Close()
+
+	diagnostics := &StreamDiagnostics{}
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	req := anthropicTestRequest(server.URL)
+	req.StreamDiagnostics = diagnostics
+	err := adapter.Stream(context.Background(), req, func(ModelEvent) error { return nil })
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Status != "failed" || hits != 1 {
+		t.Fatalf("err=%v terminal=%#v hits=%d", err, terminal, hits)
+	}
+	snapshot := diagnostics.Snapshot()
+	if ClassifyProviderError(err) != ProviderErrorTerminal || snapshot.CloseCause != StreamCloseCauseProviderTerminal || snapshot.LastResponseStatus != "failed" {
+		t.Fatalf("classification=%q diagnostics=%#v", ClassifyProviderError(err), snapshot)
+	}
+	if snapshot.LastSSEEventIDHash == "" || strings.Contains(snapshot.LastSSEEventIDHash, "req-secret") {
+		t.Fatalf("request ID was not safely hashed: %#v", snapshot)
+	}
+}
+
+func TestAnthropicHTTP200OverflowCodeIsContextOverflow(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"code\":\"context_length_exceeded\",\"message\":\"prompt is too long\"}}\n\n")
+	}))
+	defer server.Close()
+	adapter := &AnthropicAdapter{client: server.Client(), retry: instantRetry()}
+	req := anthropicTestRequest(server.URL)
+	err := adapter.Stream(context.Background(), req, func(ModelEvent) error { return nil })
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "context_length_exceeded" || hits != 1 {
+		t.Fatalf("err=%v terminal=%#v hits=%d", err, terminal, hits)
+	}
+	if !IsContextOverflowError(err) {
+		t.Fatal("anthropic overflow code was not classified as context overflow")
+	}
+	if ClassifyProviderError(err) != ProviderErrorTerminal || isFallbackEligibleError(err) {
+		t.Fatal("anthropic overflow must stay provider_terminal and not become fallback eligible")
+	}
+}
+
 func collectAnthropicStreamEvents(t *testing.T, server *httptest.Server) ([]ModelEvent, error) {
 	t.Helper()
 	adapter := &AnthropicAdapter{client: server.Client()}
@@ -176,4 +256,98 @@ func TestAnthropicPreEventContextCanceledDoesNotRetry(t *testing.T) {
 
 func anthropicTestRequest(baseURL string) StreamRequest {
 	return StreamRequest{RequestID: "request-1", RunID: "run-1", ModelCallID: "model-call-1", BaseURL: baseURL, APIKey: "test-key", ProviderModelID: "claude-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128}
+}
+
+func TestAnthropicStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
+	hits := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		hits++
+		return nil, errors.New("http must not be attempted")
+	})}
+	adapter := &AnthropicAdapter{client: client, retry: instantRetry()}
+	safety := &FallbackSafetyInfo{}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:           "request-1",
+		RunID:               "run-1",
+		ModelCallID:         "model-call-1",
+		BaseURL:             "https://example.test",
+		APIKey:              "test-key",
+		ProviderModelID:     "claude-test",
+		RequestBodyOverride: map[string]any{"pad": strings.Repeat("x", maxEncodedRequestBodyBytes)},
+		MaxTokens:           128,
+		FallbackSafety:      safety,
+	}, func(ModelEvent) error { return nil })
+	assertRequestBuildLimitError(t, err, hits)
+	if !safety.Snapshot().RequestBuildFailed {
+		t.Fatal("MarkRequestBuildFailed was not called")
+	}
+}
+
+func TestAnthropicEnforcedOutputLimitUsesExplicitBudget(t *testing.T) {
+	tests := []struct {
+		name               string
+		enforce            bool
+		maxTokens          int
+		anthropicMaxTokens int
+		extraParams        string
+		wantMaxTokens      int
+	}{
+		{
+			name: "summary_overrides_channel_cap", enforce: true,
+			maxTokens: 8192, anthropicMaxTokens: 4096, wantMaxTokens: 8192,
+		},
+		{
+			name: "summary_extra_params_cannot_override", enforce: true,
+			maxTokens: 8192, anthropicMaxTokens: 4096,
+			extraParams: `{"max_tokens":1024}`, wantMaxTokens: 8192,
+		},
+		{
+			name:      "normal_call_keeps_existing_clamp",
+			maxTokens: 8192, anthropicMaxTokens: 4096, wantMaxTokens: 4096,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writer.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(writer, "event: content_block_delta\n")
+				_, _ = fmt.Fprint(writer, "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+				_, _ = fmt.Fprint(writer, "event: message_stop\n")
+				_, _ = fmt.Fprint(writer, "data: {\"type\":\"message_stop\"}\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &AnthropicAdapter{client: server.Client()}
+			err := adapter.Stream(context.Background(), StreamRequest{
+				RequestID:                   "request-1",
+				RunID:                       "run-1",
+				ModelCallID:                 "model-call-1",
+				BaseURL:                     server.URL,
+				APIKey:                      "test-key",
+				ProviderModelID:             "claude-test",
+				Messages:                    []Message{{Role: "user", Content: "hello"}},
+				MaxTokens:                   test.maxTokens,
+				AnthropicMaxTokens:          test.anthropicMaxTokens,
+				AnthropicExtraParamsEnabled: test.extraParams != "",
+				AnthropicExtraParamsJSON:    test.extraParams,
+				EnforceOutputLimit:          test.enforce,
+			}, func(ModelEvent) error { return nil })
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			value, ok := requestBody["max_tokens"]
+			if !ok {
+				t.Fatalf("missing max_tokens in request body: %#v", requestBody)
+			}
+			if got, ok := value.(float64); !ok || int(got) != test.wantMaxTokens {
+				t.Fatalf("max_tokens = %#v, want %d", value, test.wantMaxTokens)
+			}
+		})
+	}
 }

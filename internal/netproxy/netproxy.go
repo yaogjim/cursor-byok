@@ -1,6 +1,7 @@
 package netproxy
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,6 +20,13 @@ import (
 const (
 	proxyCacheTTL     = time.Second
 	alwaysNoProxyList = "localhost,127.0.0.1,::1"
+
+	ProviderTransportProfileEnv             = "CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE"
+	ProviderTransportProfileAuto            = "auto"
+	ProviderTransportProfileHTTP1           = "http1"
+	ProviderTransportProfileNoCompression   = "no_compression"
+	ProviderTransportProfileFreshConnection = "fresh_connection"
+	ProviderTransportProfileDirect          = "direct"
 )
 
 var (
@@ -46,6 +54,68 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+// NewProviderHTTPClient creates a Provider-only client with one optional,
+// default-off transport experiment selected by CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE.
+// The profile is read when the client is built, so changing it requires rebuilding
+// the adapter/client (normally an application restart).
+func NewProviderHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: NewProviderTransport(nil, os.Getenv(ProviderTransportProfileEnv)),
+		Timeout:   timeout,
+	}
+}
+
+// NormalizeProviderTransportProfile returns a stable allowlisted profile.
+// Unknown values fail closed to auto instead of silently combining experiments.
+func NormalizeProviderTransportProfile(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ProviderTransportProfileHTTP1:
+		return ProviderTransportProfileHTTP1
+	case ProviderTransportProfileNoCompression:
+		return ProviderTransportProfileNoCompression
+	case ProviderTransportProfileFreshConnection:
+		return ProviderTransportProfileFreshConnection
+	case ProviderTransportProfileDirect:
+		return ProviderTransportProfileDirect
+	default:
+		return ProviderTransportProfileAuto
+	}
+}
+
+// NewProviderTransport applies exactly one Provider transport experiment.
+// direct 只绕过 env/OS 自动代理；启用的模型/全局自定义代理仍生效。OS TUN 仍可能拦截最终连接。
+func NewProviderTransport(base *http.Transport, profile string) *http.Transport {
+	transport := NewTransport(base)
+	switch NormalizeProviderTransportProfile(profile) {
+	case ProviderTransportProfileHTTP1:
+		protocols := new(http.Protocols)
+		protocols.SetHTTP1(true)
+		transport.Protocols = protocols
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSNextProto = make(map[string]func(string, *tls.Conn) http.RoundTripper)
+		tlsConfig := &tls.Config{}
+		if transport.TLSClientConfig != nil {
+			tlsConfig = transport.TLSClientConfig.Clone()
+		}
+		nextProtos := make([]string, 0, len(tlsConfig.NextProtos))
+		for _, protocol := range tlsConfig.NextProtos {
+			if protocol != "h2" {
+				nextProtos = append(nextProtos, protocol)
+			}
+		}
+		tlsConfig.NextProtos = nextProtos
+		transport.TLSClientConfig = tlsConfig
+	case ProviderTransportProfileNoCompression:
+		transport.DisableCompression = true
+	case ProviderTransportProfileFreshConnection:
+		transport.DisableKeepAlives = true
+	case ProviderTransportProfileDirect:
+		// direct 只绕过 env/OS 自动代理；启用的模型/全局自定义代理仍生效。
+		transport.Proxy = ProxyForRequestCustomOnly
+	}
+	return transport
+}
+
 // NewTransport clones the given transport and installs proxy resolution on it.
 // When base is nil, it clones Go's original default transport.
 func NewTransport(base *http.Transport) *http.Transport {
@@ -59,11 +129,44 @@ func NewTransport(base *http.Transport) *http.Transport {
 }
 
 // ProxyForRequest resolves the proxy URL for a single request.
+// 顺序：请求级自定义 > 全局自定义 > env/OS > 直连。显式自定义失败不回退。
 func ProxyForRequest(req *http.Request) (*url.URL, error) {
 	if req == nil || req.URL == nil {
 		return nil, nil
 	}
+	if cfg, ok := RequestConfigFromContext(req.Context()); ok && cfg.Enabled {
+		return proxyURLForCustom(req.URL, cfg)
+	}
 	return defaultResolver.proxyForURL(req.URL)
+}
+
+// ProxyForRequestCustomOnly 只应用请求级或全局自定义代理，忽略 env/OS 自动代理。
+func ProxyForRequestCustomOnly(req *http.Request) (*url.URL, error) {
+	if req == nil || req.URL == nil {
+		return nil, nil
+	}
+	if cfg, ok := RequestConfigFromContext(req.Context()); ok && cfg.Enabled {
+		return proxyURLForCustom(req.URL, cfg)
+	}
+	if global := GlobalConfig(); global.Enabled {
+		return proxyURLForCustom(req.URL, global)
+	}
+	return nil, nil
+}
+
+// SetGlobal 用已保存的全局自定义代理更新解析器。非法启用配置不生效。
+// 成功更新后关闭空闲连接，不中断在途请求。
+func SetGlobal(cfg Config) {
+	normalized, err := Normalize(cfg)
+	if err != nil {
+		return
+	}
+	defaultResolver.setGlobal(normalized)
+}
+
+// GlobalConfig 返回当前已应用的全局自定义代理（含关闭时保留的 URL）。
+func GlobalConfig() Config {
+	return defaultResolver.globalConfigCopy()
 }
 
 // CurrentStatus returns the latest proxy resolver snapshot without exposing
@@ -73,8 +176,9 @@ func CurrentStatus() Status {
 }
 
 type proxyResolver struct {
-	mu       sync.Mutex
-	snapshot proxySnapshot
+	mu           sync.Mutex
+	snapshot     proxySnapshot
+	globalConfig Config
 }
 
 type proxySnapshot struct {
@@ -98,6 +202,7 @@ type Status struct {
 	Active           bool   `json:"active"`
 	UsingSystemProxy bool   `json:"usingSystemProxy"`
 	UsingEnvProxy    bool   `json:"usingEnvProxy"`
+	UsingCustomProxy bool   `json:"usingCustomProxy"`
 	HTTPProxy        string `json:"httpProxy"`
 	HTTPSProxy       string `json:"httpsProxy"`
 	Description      string `json:"description"`
@@ -122,7 +227,7 @@ func (resolver *proxyResolver) proxyForURL(reqURL *url.URL) (*url.URL, error) {
 	if snapshot.proxyFunc == nil {
 		return nil, nil
 	}
-	if shouldBypassSystemProxy(reqURL, snapshot.systemBypass, snapshot.excludeSimple) {
+	if snapshot.source != "custom" && shouldBypassSystemProxy(reqURL, snapshot.systemBypass, snapshot.excludeSimple) {
 		return nil, nil
 	}
 	return snapshot.proxyFunc(reqURL)
@@ -133,10 +238,10 @@ func (resolver *proxyResolver) currentSnapshot() proxySnapshot {
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
 
-	if !resolver.snapshot.expiresAt.IsZero() && now.Before(resolver.snapshot.expiresAt) {
+	if resolver.snapshotValidLocked(now) {
 		return resolver.snapshot
 	}
-	next := buildProxySnapshot(now)
+	next := resolver.buildSnapshotLocked(now)
 	if next.key != resolver.snapshot.key {
 		logProxySnapshot(next)
 		closeIdleProxyConnections()
@@ -145,9 +250,45 @@ func (resolver *proxyResolver) currentSnapshot() proxySnapshot {
 	return next
 }
 
+func (resolver *proxyResolver) snapshotValidLocked(now time.Time) bool {
+	if resolver.snapshot.expiresAt.IsZero() || !now.Before(resolver.snapshot.expiresAt) {
+		return false
+	}
+	if resolver.globalConfig.Enabled {
+		return resolver.snapshot.source == "custom"
+	}
+	return resolver.snapshot.source != "custom"
+}
+
+func (resolver *proxyResolver) buildSnapshotLocked(now time.Time) proxySnapshot {
+	if resolver.globalConfig.Enabled {
+		return snapshotFromCustom(now, resolver.globalConfig)
+	}
+	return buildProxySnapshot(now)
+}
+
+func (resolver *proxyResolver) setGlobal(cfg Config) {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	prevKey := resolver.snapshot.key
+	resolver.globalConfig = cfg
+	next := resolver.buildSnapshotLocked(time.Now())
+	if next.key != prevKey {
+		logProxySnapshot(next)
+		closeIdleProxyConnections()
+	}
+	resolver.snapshot = next
+}
+
+func (resolver *proxyResolver) globalConfigCopy() Config {
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	return resolver.globalConfig
+}
+
 func (resolver *proxyResolver) logCurrentSnapshot(prefix string) {
 	resolver.mu.Lock()
-	next := buildProxySnapshot(time.Now())
+	next := resolver.buildSnapshotLocked(time.Now())
 	if prefix != "" {
 		next.description = strings.TrimSpace(prefix + "; " + next.description)
 	}
@@ -155,6 +296,30 @@ func (resolver *proxyResolver) logCurrentSnapshot(prefix string) {
 	resolver.snapshot = next
 	closeIdleProxyConnections()
 	resolver.mu.Unlock()
+}
+
+func snapshotFromCustom(now time.Time, cfg Config) proxySnapshot {
+	parsed, parseErr := ParseURL(cfg.URL)
+	httpDesc := sanitizeProxyValue(cfg.URL)
+	proxyFunc := func(reqURL *url.URL) (*url.URL, error) {
+		if isAlwaysDirectURL(reqURL) {
+			return nil, nil
+		}
+		if parseErr != nil || parsed == nil {
+			return nil, ErrInvalidURL
+		}
+		return parsed, nil
+	}
+	return proxySnapshot{
+		expiresAt:   now.Add(24 * time.Hour),
+		source:      "custom",
+		active:      true,
+		description: fmt.Sprintf("source=custom http=%s https=%s", displayProxyDesc(httpDesc), displayProxyDesc(httpDesc)),
+		key:         strings.Join([]string{"custom", httpDesc}, "|"),
+		httpProxy:   httpDesc,
+		httpsProxy:  httpDesc,
+		proxyFunc:   proxyFunc,
+	}
 }
 
 func buildProxySnapshot(now time.Time) proxySnapshot {
@@ -300,6 +465,7 @@ func statusFromSnapshot(snapshot proxySnapshot) Status {
 		Active:           snapshot.active,
 		UsingSystemProxy: snapshot.active && snapshot.source == "system",
 		UsingEnvProxy:    snapshot.active && snapshot.source == "env",
+		UsingCustomProxy: snapshot.active && snapshot.source == "custom",
 		HTTPProxy:        snapshot.httpProxy,
 		HTTPSProxy:       snapshot.httpsProxy,
 		Description:      snapshot.description,

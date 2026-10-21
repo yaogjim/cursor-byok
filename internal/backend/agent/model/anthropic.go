@@ -146,7 +146,7 @@ func (parser *anthropicThinkTagParser) Flush() []anthropicContentPart {
 // NewAnthropicAdapter 创建一个 Anthropic 兼容适配器。
 func NewAnthropicAdapter() *AnthropicAdapter {
 	return &AnthropicAdapter{
-		client: netproxy.NewHTTPClient(0),
+		client: netproxy.NewProviderHTTPClient(0),
 	}
 }
 
@@ -207,6 +207,14 @@ func anthropicProviderSystemBlocks(systemParts []string) []map[string]any {
 
 // Stream 发送 Messages 流式请求，并解析统一模型事件。
 func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	if req.StreamDiagnostics == nil {
+		req.StreamDiagnostics = &StreamDiagnostics{}
+	}
+	return runStreamWithZeroEventRecovery(ctx, req, sink, adapter.streamOnce)
+}
+
+func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("anthropic base url is empty")
@@ -270,7 +278,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			"model":      modelID,
 			"messages":   messages,
 			"stream":     true,
-			"max_tokens": maxAnthropicTokens(req),
+			"max_tokens": effectiveAnthropicOutputTokens(req),
 		}
 		if len(tools) > 0 {
 			body["tools"] = tools
@@ -292,6 +300,10 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	if req.EnforceOutputLimit && req.MaxTokens > 0 {
+		// extra params 不得覆盖摘要的显式输出预算。
+		body["max_tokens"] = effectiveAnthropicOutputTokens(req)
+	}
 	recordLLMRequestArtifact(req, "anthropic", modelID, "POST", requestURL, body)
 
 	payload, err := json.Marshal(body)
@@ -300,11 +312,19 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
+	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, requestURL, bytes.NewReader(payload))
@@ -320,7 +340,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			// 自定义 header 构建失败是本地逻辑错误，禁止 fallback。
 			return nil, &RequestBuildError{Err: err}
 		}
-		return httpReq, nil
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false
@@ -414,6 +434,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
@@ -439,6 +460,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			ThinkingDurationMS:      duration,
 			ThinkingSignature:       thinkingSignature,
 			ThinkingSignatureSource: thinkingSignatureSource,
+			ReasoningOrigin:         reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -523,8 +545,14 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 	}
 	errorFromEvent := func(event anthropicEvent) error {
 		finishReason = "error"
+		parts := make([]string, 0, 4)
+		message := "anthropic provider error"
+		code := ""
 		if event.Error != nil {
-			parts := make([]string, 0, 4)
+			code = strings.TrimSpace(event.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(event.Error.Type) {
+				code = strings.TrimSpace(event.Error.Type)
+			}
 			if value := strings.TrimSpace(event.Error.Type); value != "" {
 				parts = append(parts, "type="+value)
 			}
@@ -534,17 +562,14 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 			if value := strings.TrimSpace(event.RequestID); value != "" {
 				parts = append(parts, "request_id="+value)
 			}
-			if message := strings.TrimSpace(event.Error.Message); message != "" {
-				if len(parts) > 0 {
-					return fmt.Errorf("anthropic provider error %s: %s", strings.Join(parts, " "), message)
-				}
-				return fmt.Errorf("anthropic provider error: %s", message)
-			}
 			if len(parts) > 0 {
-				return fmt.Errorf("anthropic provider error %s", strings.Join(parts, " "))
+				message += " " + strings.Join(parts, " ")
+			}
+			if detail := strings.TrimSpace(event.Error.Message); detail != "" {
+				message += ": " + detail
 			}
 		}
-		return fmt.Errorf("anthropic provider error")
+		return &ProviderTerminalStatusError{Provider: "anthropic", Status: "failed", Code: code, Message: message}
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -558,6 +583,7 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		payloadLine := strings.Join(dataLines, "\n")
 		dataLines = dataLines[:0]
 		if strings.TrimSpace(payloadLine) == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			return nil
 		}
@@ -566,6 +592,14 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 		if err := json.Unmarshal([]byte(payloadLine), &event); err != nil {
 			return err
 		}
+		eventType := firstNonEmptyString(event.Type, currentEvent)
+		responseStatus := ""
+		if currentEvent == "message_stop" || eventType == "message_stop" {
+			responseStatus = "completed"
+		} else if currentEvent == "error" || eventType == "error" {
+			responseStatus = "failed"
+		}
+		req.StreamDiagnostics.RecordSSEEvent(eventType, event.RequestID, int64(event.Index), responseStatus)
 		if currentEvent == "error" || strings.TrimSpace(event.Type) == "error" {
 			return errorFromEvent(event)
 		}
@@ -636,10 +670,11 @@ func (adapter *AnthropicAdapter) Stream(ctx context.Context, req StreamRequest, 
 				}
 				streamIdle.MarkEffectiveContent()
 				if err := sink(ModelEvent{
-					Kind:       ModelEventKindToolLikeCompleted,
-					OccurredAt: time.Now().UTC(),
-					Provider:   "anthropic",
-					Model:      currentModel,
+					Kind:            ModelEventKindToolLikeCompleted,
+					OccurredAt:      time.Now().UTC(),
+					Provider:        "anthropic",
+					Model:           currentModel,
+					ReasoningOrigin: reasoningOriginFromRequest(req),
 					ToolInvocation: &runtimecore.ToolInvocation{
 						CallID:   accumulator.CallID,
 						ToolName: accumulator.Name,
@@ -1491,6 +1526,16 @@ func completedAnthropicToolArgsJSON(accumulator *anthropicToolAccumulator) ([]by
 		return nil, fmt.Errorf("anthropic returned non-object tool input for %s", toolName)
 	}
 	return []byte(trimmed), nil
+}
+
+// effectiveAnthropicOutputTokens 计算 Anthropic max_tokens 的有效值。
+// 摘要等显式强制预算的调用必须使用调用方给出的 MaxTokens，不能被渠道配置的
+// AnthropicMaxTokens 夹回较小值；普通调用仍沿用既有优先级。
+func effectiveAnthropicOutputTokens(req StreamRequest) int {
+	if req.EnforceOutputLimit && req.MaxTokens > 0 {
+		return req.MaxTokens
+	}
+	return maxAnthropicTokens(req)
 }
 
 func buildAnthropicThinkingConfig(req StreamRequest) map[string]any {

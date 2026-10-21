@@ -2,7 +2,6 @@
 package modeladapter
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,10 @@ const (
 	// maxErrorBodyBytes 表示错误响应体最多读取的字节数。
 	maxErrorBodyBytes = 8192
 
+	// maxEncodedRequestBodyBytes 是最终 JSON 编码后、创建 HTTP 请求前的实际请求体字节上限。
+	// 配置层没有对应项；取与现有 canary 检查同量级的保守包级上限，避免无界编码体进入发送路径。
+	maxEncodedRequestBodyBytes = 32 << 20
+
 	ProviderErrorStatus4xx         = "status_4xx"
 	ProviderErrorRateLimited       = "rate_limited"
 	ProviderErrorServer5xx         = "server_5xx"
@@ -24,6 +27,7 @@ const (
 	ProviderErrorContextCanceled   = "context_canceled"
 	ProviderErrorStreamDecode      = "stream_decode"
 	ProviderErrorStreamIdleTimeout = "stream_idle_timeout"
+	ProviderErrorTerminal          = "provider_terminal"
 	// ProviderErrorRequestBuild 表示请求序列化/构建阶段失败，此类错误禁止跨渠道 fallback。
 	ProviderErrorRequestBuild = "request_build"
 	// ProviderErrorCapacityUnavailable 表示物理上游组在固定短超时内没有空闲槽。
@@ -43,6 +47,7 @@ type HTTPStatusError struct {
 	StatusCode        int
 	Attempt           int
 	MaxAttempts       int
+	Code              string
 	Body              string
 	BodyReadError     error
 	BodySummaryType   string
@@ -102,6 +107,31 @@ type StreamTruncatedError struct {
 	RawBytesObserved bool
 }
 
+// ProviderTerminalStatusError 表示上游通过协议事件明确报告 failed/cancelled/incomplete。
+// 它不是 HTTP transport 错误，也不得触发 EOF 恢复。
+type ProviderTerminalStatusError struct {
+	Provider string
+	Status   string
+	Code     string
+	Message  string
+}
+
+func (err *ProviderTerminalStatusError) Error() string {
+	if err == nil {
+		return "provider terminal status"
+	}
+	provider := firstNonEmptyString(strings.TrimSpace(err.Provider), "provider")
+	status := firstNonEmptyString(strings.TrimSpace(err.Status), "failed")
+	if message := strings.TrimSpace(err.Message); message != "" {
+		return fmt.Sprintf("%s terminal status=%s: %s", provider, status, limitSanitizedErrorText(message))
+	}
+	return fmt.Sprintf("%s terminal status=%s", provider, status)
+}
+
+func (err *ProviderTerminalStatusError) Category() string {
+	return ProviderErrorTerminal
+}
+
 // CapacityUnavailableError 表示在固定 2 秒等待内无法获得上游组并发槽。
 // 错误文本不得包含 API key、组哈希或 URL。
 type CapacityUnavailableError struct{}
@@ -120,10 +150,12 @@ func isCapacityUnavailable(err error) bool {
 }
 
 // RequestBuildError 表示在发送 HTTP 请求之前的序列化/构建阶段出错。
-// 包括 JSON marshal、extra params 解析、自定义 header 构建失败等。
+// 包括 JSON marshal、编码体超限、extra params 解析、自定义 header 构建失败等。
 // 此类错误来自本地逻辑，不可能通过切换 provider 渠道解决，因此禁止 fallback。
 type RequestBuildError struct {
-	Err error
+	Err    error
+	Actual int
+	Limit  int
 }
 
 // FallbackSafetyError 把一次渠道尝试的 typed 安全快照与原始错误绑定。
@@ -158,6 +190,17 @@ func WrapFallbackSafetyError(err error, safety *FallbackSafetyInfo) error {
 	return &FallbackSafetyError{Err: err, Safety: safety.Snapshot()}
 }
 
+// wrapRequestBuildFailure 标记发送前的本地构建失败，避免 fallback 诊断把零 HTTP 误报成 no_http_attempt。
+func wrapRequestBuildFailure(req StreamRequest, err error) error {
+	if err == nil {
+		return nil
+	}
+	if req.FallbackSafety != nil {
+		req.FallbackSafety.MarkRequestBuildFailed()
+	}
+	return WrapFallbackSafetyError(err, req.FallbackSafety)
+}
+
 func fallbackSafetyFromError(err error) (FallbackSafetySnapshot, bool) {
 	var safetyErr *FallbackSafetyError
 	if errors.As(err, &safetyErr) && safetyErr != nil {
@@ -170,10 +213,24 @@ func (e *RequestBuildError) Error() string {
 	if e == nil {
 		return "request build error"
 	}
+	if e.Limit > 0 {
+		return fmt.Sprintf("request build error: encoded body bytes=%d limit=%d", e.Actual, e.Limit)
+	}
 	if e.Err == nil {
 		return "request build error"
 	}
 	return "request build error: " + e.Err.Error()
+}
+
+func checkEncodedRequestBodyLimit(payload []byte) error {
+	return checkEncodedRequestBodyBytes(len(payload), maxEncodedRequestBodyBytes)
+}
+
+func checkEncodedRequestBodyBytes(actual, limit int) error {
+	if actual <= limit {
+		return nil
+	}
+	return &RequestBuildError{Actual: actual, Limit: limit}
 }
 
 func (e *RequestBuildError) Unwrap() error {
@@ -235,7 +292,11 @@ func ClassifyProviderError(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil {
+		return live.Category()
+	}
+	if isParentContextError(err) {
 		return ProviderErrorContextCanceled
 	}
 	if isCapacityUnavailable(err) {
@@ -243,6 +304,10 @@ func ClassifyProviderError(err error) string {
 	}
 	if isProviderStreamIdleTimeout(err) {
 		return ProviderErrorStreamIdleTimeout
+	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) && terminal != nil {
+		return ProviderErrorTerminal
 	}
 	var truncated *StreamTruncatedError
 	if errors.As(err, &truncated) && truncated != nil {
@@ -258,6 +323,14 @@ func ClassifyProviderError(err error) string {
 }
 
 func isProviderStreamIdleTimeout(err error) bool {
+	var idle *StreamIdleTimeoutError
+	if errors.As(err, &idle) {
+		return true
+	}
+	var live *LivenessTimeoutError
+	if errors.As(err, &live) && live != nil && live.Phase == LivenessPhaseIdle {
+		return true
+	}
 	if err == nil {
 		return false
 	}
@@ -293,8 +366,65 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 		statusError.BodySummaryType = bodySummaryBodyReadError
 		return statusError
 	}
-	statusError.Body, statusError.BodySummaryType = summarizeProviderErrorBody(string(limitedBody))
+	rawBody := string(limitedBody)
+	statusError.Code = extractJSONErrorCode(rawBody)
+	statusError.Body, statusError.BodySummaryType = summarizeProviderErrorBody(rawBody)
 	return statusError
+}
+
+const (
+	overflowErrorCodeContextLengthExceeded = "context_length_exceeded"
+	overflowErrorCodeModelContextWindow    = "model_context_window_exceeded"
+)
+
+// IsContextOverflowError 判断可信 provider 溢出错误。
+// HTTP 400/413 需要溢出 code 或已知溢出 message；HTTP 200 协议失败只认明确溢出 code。
+// 401/403/429/5xx、取消和网络错误即使正文像溢出也不算。该判定不改变 retry/fallback 分类。
+func IsContextOverflowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isParentContextError(err) {
+		return false
+	}
+	var httpErr *HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil {
+		if httpErr.StatusCode != http.StatusBadRequest && httpErr.StatusCode != http.StatusRequestEntityTooLarge {
+			return false
+		}
+		if isContextOverflowCode(httpErr.Code) {
+			return true
+		}
+		return isContextOverflowMessage(httpErr.Body)
+	}
+	var terminal *ProviderTerminalStatusError
+	if errors.As(err, &terminal) && terminal != nil {
+		return isContextOverflowCode(terminal.Code)
+	}
+	return false
+}
+
+func isContextOverflowCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case overflowErrorCodeContextLengthExceeded, overflowErrorCodeModelContextWindow:
+		return true
+	default:
+		return false
+	}
+}
+
+func isContextOverflowMessage(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "prompt is too long") {
+		return true
+	}
+	if strings.Contains(normalized, "context window exceeded") {
+		return true
+	}
+	return strings.Contains(normalized, "maximum context length") && strings.Contains(normalized, "token")
 }
 
 func summarizeProviderErrorBody(raw string) (string, string) {
@@ -314,6 +444,39 @@ func extractJSONErrorMessage(raw string) string {
 		return ""
 	}
 	return extractJSONErrorMessageValue(payload, 0)
+}
+
+func extractJSONErrorCode(raw string) string {
+	var payload any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	return extractJSONErrorCodeValue(payload, 0)
+}
+
+func extractJSONErrorCodeValue(value any, depth int) string {
+	if depth > 8 || value == nil {
+		return ""
+	}
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if nested := extractJSONErrorCodeValue(typed["error"], depth+1); nested != "" {
+		return nested
+	}
+	for _, key := range []string{"code", "type"} {
+		code, _ := typed[key].(string)
+		trimmed := strings.TrimSpace(code)
+		if trimmed == "" {
+			continue
+		}
+		if key == "type" && !isContextOverflowCode(trimmed) {
+			continue
+		}
+		return trimmed
+	}
+	return ""
 }
 
 func extractJSONErrorMessageValue(value any, depth int) string {

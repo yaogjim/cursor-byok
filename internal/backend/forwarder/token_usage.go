@@ -41,10 +41,6 @@ func (snapshot turnUsageSnapshot) promptTokensTotal() int64 {
 		nonNegativeInt64(snapshot.CacheWriteTokens)
 }
 
-func (snapshot turnUsageSnapshot) requestTokensTotal() int64 {
-	return snapshot.promptTokensTotal() + nonNegativeInt64(snapshot.OutputTokens)
-}
-
 func (service *Service) importConversationState(item *ConversationFile, state *agentv1.ConversationStateStructure, prefetchedBlobs []*agentv1.PreFetchedBlob) ([]HistoryEntry, error) {
 	if item == nil || state == nil {
 		return nil, nil
@@ -53,30 +49,18 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 	if err != nil {
 		return nil, err
 	}
-	importedIDs, err := importedTurnIDs(state.GetTurns(), blobs)
+	rootMessages, nativeRoot, err := resolveImportedRootMessages(state.GetRootPromptMessagesJson(), blobs)
 	if err != nil {
 		return nil, err
 	}
-	item.TokenDetailsUsedTokens = state.GetTokenDetails().GetUsedTokens()
-	item.ImportedTurnIDs = importedIDs
-	if minimumNextTurnSeq := int64(len(item.ImportedTurnIDs)) + 1; item.NextTurnSeq < minimumNextTurnSeq {
-		item.NextTurnSeq = minimumNextTurnSeq
-	}
+	nativeComplete := nativeRoot && len(rootMessages) > 0
 	entries := make([]HistoryEntry, 0, 2)
-	if messages, err := importedConversationStateModelMessagesWithBlobs(state, blobs); err != nil {
+	modelEntries, err := importedConversationStateModelEntries(state, blobs)
+	if err != nil {
 		return nil, err
-	} else {
-		for _, message := range messages {
-			entry, ok, err := newModelMessageEntry(0, "", message)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				entries = append(entries, entry)
-			}
-		}
 	}
-	if len(entries) == 0 {
+	entries = append(entries, modelEntries...)
+	if len(entries) == 0 && !nativeComplete {
 		summary, ok, err := importedConversationStateSummary(state)
 		if err != nil {
 			return nil, err
@@ -97,9 +81,23 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 			})
 		}
 	}
-	runtimeState, ok, err := runtimeStatePayloadFromConversationState(state)
+	var summarySource runtimeStateEntryPayload
+	var summaryNodes []importedContentNode
+	if nativeComplete {
+		summarySource, summaryNodes, err = collectImportedSummaryGraph(state, blobs)
+		if err != nil {
+			return nil, err
+		}
+	}
+	runtimeState, ok, err := runtimeStatePayloadFromConversationState(state, blobs)
 	if err != nil {
 		return nil, err
+	}
+	if hasNativeSummarySource(summarySource) {
+		runtimeState.NativeSummary = summarySource.NativeSummary
+		runtimeState.NativeSummaryArchive = summarySource.NativeSummaryArchive
+		runtimeState.NativeSummaryArchives = summarySource.NativeSummaryArchives
+		ok = true
 	}
 	if ok {
 		payload, err := json.Marshal(runtimeState)
@@ -113,6 +111,103 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 			Payload: payload,
 		})
 	}
+	importedIDs, nodes, err := collectImportedTurnGraph(state.GetTurns(), blobs)
+	if err != nil {
+		return nil, err
+	}
+	nodes = append(nodes, summaryNodes...)
+	var store *ContentBlobStore
+	if service != nil {
+		store = service.contentBlobs
+	}
+	if err := persistImportedTurnGraph(store, nodes); err != nil {
+		return nil, err
+	}
+	// 所有输入和 entry 编码成功后才更新调用者元数据，失败不留下半份导入。
+	item.TokenDetailsUsedTokens = state.GetTokenDetails().GetUsedTokens()
+	item.ImportedTurnIDs = importedIDs
+	if minimumNextTurnSeq := int64(len(importedIDs)) + 1; item.NextTurnSeq < minimumNextTurnSeq {
+		item.NextTurnSeq = minimumNextTurnSeq
+	}
+	return entries, nil
+}
+
+// importedConversationStateModelEntries 在规范化前逐条绑定原生 root 原文；
+// 其余情况沿用既有整段解码与 newModelMessageEntry 过滤。
+func importedConversationStateModelEntries(state *agentv1.ConversationStateStructure, blobs importedBlobStore) ([]HistoryEntry, error) {
+	if state == nil {
+		return nil, nil
+	}
+	rootMessages, nativeRoot, err := resolveImportedRootMessages(state.GetRootPromptMessagesJson(), blobs)
+	if err != nil {
+		return nil, err
+	}
+	if nativeRoot && len(rootMessages) > 0 {
+		entries, err := importedNativeRootEntries(rootMessages)
+		if err != nil {
+			return nil, fmt.Errorf("decode imported replay messages: %w", err)
+		}
+		return entries, nil
+	}
+	messages, err := importedConversationStateModelMessagesWithBlobs(state, blobs)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]HistoryEntry, 0, len(messages))
+	for _, message := range messages {
+		entry, ok, err := newModelMessageEntry(0, "", message)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+
+// importedNativeRootEntries 在完整序列工具配对校验通过后，为每条原文绑定其解码视图。
+// 首条保存未包装原文与 parts，其余连续条目只保留各自 Message；空原文视图不省略。
+func importedNativeRootEntries(rawItems [][]byte) ([]HistoryEntry, error) {
+	decodedPerRaw := make([][]promptengine.Message, len(rawItems))
+	combined := make([]promptengine.Message, 0, len(rawItems))
+	for index, raw := range rawItems {
+		decoded, err := parseImportedNativeMessage(raw)
+		if err != nil {
+			return nil, err
+		}
+		decodedPerRaw[index] = decoded
+		combined = append(combined, decoded...)
+	}
+	if err := validateImportedNativeToolSequence(combined); err != nil {
+		return nil, err
+	}
+	entries := make([]HistoryEntry, 0, len(combined))
+	for index, raw := range rawItems {
+		filtered := filterInternalPromptContextReplay(decodedPerRaw[index])
+		if len(filtered) == 0 {
+			continue
+		}
+		parts := len(filtered)
+		for messageIndex, message := range filtered {
+			modelMessage := toModelMessage(message)
+			payload := modelMessageEntryPayload{Message: modelMessage}
+			if messageIndex == 0 {
+				payload.NativeMessage = append(json.RawMessage(nil), raw...)
+				payload.NativeMessageParts = parts
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				return nil, fmt.Errorf("encode imported model message context: %w", err)
+			}
+			entries = append(entries, HistoryEntry{
+				TurnSeq: 0,
+				Role:    modelMessage.Role,
+				Kind:    "model_message",
+				Payload: encoded,
+			})
+		}
+	}
 	return entries, nil
 }
 
@@ -124,13 +219,27 @@ func importedConversationStateModelMessagesWithBlobs(state *agentv1.Conversation
 	if state == nil {
 		return nil, nil
 	}
-	if len(state.GetRootPromptMessagesJson()) > 0 {
-		decoded, err := promptengine.DecodeReplayMessages(state.GetRootPromptMessagesJson())
+	rootPromptMessages, nativeRoot, err := resolveImportedRootMessages(state.GetRootPromptMessagesJson(), blobs)
+	if err != nil {
+		return nil, err
+	}
+	if nativeRoot && len(rootPromptMessages) == 0 && len(state.GetTurns()) == 0 {
+		return nil, fmt.Errorf("missing prefetched root message blobs")
+	}
+	if len(rootPromptMessages) > 0 {
+		var decoded []promptengine.Message
+		if nativeRoot {
+			decoded, err = decodeImportedNativeMessages(rootPromptMessages)
+		} else {
+			decoded, err = promptengine.DecodeReplayMessages(rootPromptMessages)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("decode imported replay messages: %w", err)
 		}
-		decoded = restoreImportedReplayUserMessages(decoded, state.GetTurns(), blobs)
-		decoded = filterLegacyPlainWriteReplay(decoded)
+		if !nativeRoot {
+			decoded = restoreImportedReplayUserMessages(decoded, state.GetTurns(), blobs)
+			decoded = filterLegacyPlainWriteReplay(decoded)
+		}
 		decoded = filterInternalPromptContextReplay(decoded)
 		messages := make([]modeladapter.Message, 0, len(decoded))
 		for _, item := range decoded {
@@ -203,7 +312,7 @@ func newModelMessageEntry(turnSeq int64, requestID string, message modeladapter.
 	}, true, nil
 }
 
-func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateStructure) (runtimeStateEntryPayload, bool, error) {
+func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateStructure, blobs importedBlobStore) (runtimeStateEntryPayload, bool, error) {
 	if state == nil {
 		return runtimeStateEntryPayload{}, false, nil
 	}
@@ -211,9 +320,9 @@ func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateSt
 		Plans: clonePlanRegistryEntries(state.GetPlans()),
 	}
 	if len(state.GetPlan()) > 0 {
-		plan := &agentv1.ConversationPlan{}
-		if err := proto.Unmarshal(state.GetPlan(), plan); err != nil {
-			return runtimeStateEntryPayload{}, false, fmt.Errorf("decode imported plan: %w", err)
+		plan, err := decodeImportedPlan(state.GetPlan(), blobs)
+		if err != nil {
+			return runtimeStateEntryPayload{}, false, err
 		}
 		payload.PlanText = strings.TrimSpace(plan.GetPlan())
 	}
@@ -223,9 +332,9 @@ func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateSt
 			if len(raw) == 0 {
 				continue
 			}
-			item := &agentv1.TodoItem{}
-			if err := proto.Unmarshal(raw, item); err != nil {
-				return runtimeStateEntryPayload{}, false, fmt.Errorf("decode imported todo: %w", err)
+			item, err := decodeImportedTodo(raw, blobs)
+			if err != nil {
+				return runtimeStateEntryPayload{}, false, err
 			}
 			todos = append(todos, cloneTodoItem(item))
 		}
@@ -240,13 +349,6 @@ func (service *Service) updateConversationTokenState(stream *ActiveStream, conve
 		return nil
 	}
 	now := time.Now().UTC()
-	autoCompactionReserveTokens := int64(compactionAutoReserveTokens)
-	if finalizeAutoCompaction {
-		autoCompactionReserveTokens = service.resolveCompactionReserveTokens(activeStreamModelID(stream))
-		if autoCompactionReserveTokens <= 0 {
-			autoCompactionReserveTokens = compactionAutoReserveTokens
-		}
-	}
 	_, err := service.updateConversationMetaAndCheckpoint(stream, conversationID, func(item *ConversationFile) error {
 		if item == nil {
 			return nil
@@ -259,7 +361,7 @@ func (service *Service) updateConversationTokenState(stream *ActiveStream, conve
 			item.TokenDetailsMaxTokens = projectedConversationMaxTokens
 		}
 		if finalizeAutoCompaction {
-			updateConversationAutoCompactionState(item, usage.requestTokensTotal(), autoCompactionReserveTokens, modelCallID, now)
+			updateConversationAutoCompactionState(item, promptTokensTotal, compactionReserveTokens(int64(item.TokenDetailsMaxTokens)), modelCallID, now)
 		}
 		return nil
 	})

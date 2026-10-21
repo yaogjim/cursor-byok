@@ -1,0 +1,155 @@
+{
+  "codex_device_code": {
+    "status": 200,
+    "body": {
+      "user_code": "ABCD-1234",
+      "device_auth_id": "dev-codex-1",
+      "expires_in": 900,
+      "interval": 5
+    }
+  },
+  "codex_device_pending_403": {
+    "status": 403,
+    "body": {
+      "error": {
+        "message": "Device authorization is pending. Please try again."
+      }
+    }
+  },
+  "codex_device_pending_404": {
+    "status": 404,
+    "body": {}
+  },
+  "codex_device_pending_400": {
+    "status": 400,
+    "body": {
+      "error": "authorization_pending",
+      "error_description": "Device authorization is pending. Please try again."
+    }
+  },
+  "codex_device_authorization_code": {
+    "status": 200,
+    "body": {
+      "authorization_code": "auth-code",
+      "code_verifier": "pkce-verifier",
+      "code_challenge": "pkce-challenge"
+    }
+  },
+  "codex_device_token_success": {
+    "status": 200,
+    "body": {
+      "access_token": "tok",
+      "refresh_token": "ref",
+      "token_type": "Bearer",
+      "expires_in": 3600
+    }
+  },
+  "codex_oauth_token_success": {
+    "status": 200,
+    "body": {
+      "access_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjQ0NDgwMH0.sig",
+      "refresh_token": "test-refresh-codex",
+      "id_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjQ0NDgwMH0.sig",
+      "token_type": "Bearer",
+      "expires_in": 3600
+    }
+  },
+  "codex_refresh_success": {
+    "status": 200,
+    "body": {
+      "access_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjUzMTIwMH0.sig",
+      "refresh_token": "rotated-refresh",
+      "id_token": "eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1maXh0dXJlIn0sImV4cCI6NDEwMjUzMTIwMH0.sig",
+      "token_type": "Bearer",
+      "expires_in": 3600
+    }
+  },
+  "codex_refresh_invalid_grant": {
+    "status": 401,
+    "body": {
+      "error": "invalid_grant",
+      "error_description": "revoked"
+    }
+  },
+  "codex_refresh_empty_token": {
+    "status": 200,
+    "body": {
+      "access_token": "",
+      "refresh_token": ""
+    }
+  },
+  "grok_device_code": {
+    "status": 200,
+    "body": {
+      "device_code": "dev-1",
+      "user_code": "ABCD-1234",
+      "verification_uri": "https://auth.x.ai/device",
+      "verification_uri_complete": "https://auth.x.ai/device?user_code=ABCD-1234",
+      "expires_in": 900,
+      "interval": 5
+    }
+  },
+  "grok_token_pending": {
+    "status": 400,
+    "body": {
+      "error": "authorization_pending"
+    }
+  },
+  "grok_token_slow_down": {
+    "status": 400,
+    "body": {
+      "error": "slow_down"
+    }
+  },
+  "grok_token_expired": {
+    "status": 400,
+    "body": {
+      "error": "expired_token",
+      "error_description": "Device authorization code expired"
+    }
+  },
+  "grok_token_denied": {
+    "status": 400,
+    "body": {
+      "error": "access_denied",
+      "error_description": "User denied authorization"
+    }
+  },
+  "grok_token_success": {
+    "status": 200,
+    "body": {
+      "access_token": "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ1c2VyLTEiLCJlbWFpbCI6ImFAeC5haSJ9.sig",
+      "refresh_token": "test-refresh-grok",
+      "token_type": "Bearer"
+    }
+  },
+  "grok_usage": {
+    "status": 200,
+    "body": {
+      "config": {
+        "creditUsagePercent": 34.0,
+        "subscriptionTierDisplay": "SuperGrok",
+        "currentPeriod": {
+          "end": "2026-06-08T00:00:00Z"
+        }
+      }
+    }
+  },
+  "codex_usage": {
+    "status": 200,
+    "body": {
+      "plan_type": "plus",
+      "rate_limit": {
+        "limit_reached": false,
+        "primary_window": {
+          "used_percent": 80.0,
+          "reset_at": 1780000000
+        },
+        "secondary_window": {
+          "used_percent": 25.0,
+          "reset_at": 1780500000
+        }
+      }
+    }
+  }
+}

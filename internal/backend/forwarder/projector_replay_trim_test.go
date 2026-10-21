@@ -87,3 +87,38 @@ func TestTrimReplayDanglingAssistantToolCallsKeepsReasoningOnlyShell(t *testing.
 		t.Fatalf("expected tool calls to be trimmed, got %+v", trimmed[1].ToolCalls)
 	}
 }
+
+func TestNormalizeReplayToolBatchesRequiresActualModelCallIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		secondID   string
+		withIDs    bool
+		wantMerged bool
+	}{
+		{"same-model-call", "model-call-1", true, true},
+		{"different-model-call", "model-call-2", true, false},
+		{"no-model-call-identity", "", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			firstEntry, secondEntry := HistoryEntry{}, HistoryEntry{}
+			if test.withIDs {
+				firstEntry = HistoryEntry{TurnSeq: 1, RequestID: "request-1", ModelCallID: "model-call-1"}
+				secondEntry = HistoryEntry{TurnSeq: 1, RequestID: "request-1", ModelCallID: test.secondID}
+			}
+			messages := []projectedReplayMessage{
+				newProjectedReplayMessage(modeladapter.Message{Role: "assistant", ToolCalls: []modeladapter.ToolCallDescriptor{replayToolCall("tc_batch_1", "Read")}}, firstEntry),
+				newProjectedReplayMessage(modeladapter.Message{Role: "tool", ToolCallID: "tc_batch_1", Name: "Read", Content: "first"}, firstEntry),
+				newProjectedReplayMessage(modeladapter.Message{Role: "assistant", ToolCalls: []modeladapter.ToolCallDescriptor{replayToolCall("tc_batch_2", "Read")}}, secondEntry),
+				newProjectedReplayMessage(modeladapter.Message{Role: "tool", ToolCallID: "tc_batch_2", Name: "Read", Content: "second"}, secondEntry),
+			}
+			normalized := normalizeProjectedReplayMessages(messages)
+			if test.wantMerged {
+				if len(normalized) != 3 || len(normalized[0].ToolCalls) != 2 || normalized[1].ToolCallID != "tc_batch_1" || normalized[2].ToolCallID != "tc_batch_2" {
+					t.Fatal("同一实际模型调用的交错片段未按既有规则合并")
+				}
+			} else if len(normalized) != 4 || len(normalized[0].ToolCalls) != 1 || len(normalized[2].ToolCalls) != 1 {
+				t.Fatal("不同或无法证明相同的模型调用被仅凭 ID 前缀合并")
+			}
+		})
+	}
+}

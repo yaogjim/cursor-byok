@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -12,11 +13,14 @@ import (
 	backend "cursor/internal/backend"
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/certs"
+	"cursor/internal/cursor"
 	"cursor/internal/cursoraccount"
+	"cursor/internal/gateway"
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
 	"cursor/internal/observability"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
@@ -45,13 +49,19 @@ type ProxyService struct {
 	mu sync.RWMutex
 	// lastError 表示当前声明中的 lastError。
 	lastError string
-	// cursorSettingsApplied 表示当前是否已完成宿主代理设置注入。
+	// cursorSettingsApplied 表示当前实例是否已完成宿主代理设置注入。
 	cursorSettingsApplied bool
+	// cursorSettingsStore 隔离 Cursor settings.json 路径并校验跨进程清理所有权。
+	cursorSettingsStore *cursor.UserProxySettingsStore
+	// cursorSettingsOwnerID 标识当前 ProxyService 实例持有的设置所有权。
+	cursorSettingsOwnerID string
 
 	// configMu 表示当前声明中的 configMu。
 	configMu sync.Mutex
 	// lifecycleMu 串行化服务启停与完整配置导入，避免过渡状态下切换配置。
 	lifecycleMu sync.Mutex
+	// shutdownOnce 保证托盘退出与 OnShutdown 只执行一次进程退出清理。
+	shutdownOnce sync.Once
 	// configPath 表示当前声明中的 configPath。
 	configPath string
 	// store 表示统一的配置存储。
@@ -72,17 +82,46 @@ type ProxyService struct {
 	modelTestMu sync.RWMutex
 	// modelTestResults 保存当前进程内的模型测速结果。
 	modelTestResults map[string]ModelAdapterTestResult
+
+	subscriptionAuth *subscriptionauth.Service
+
+	// cursorAppController 可注入 Cursor 应用生命周期，测试使用假应用。
+	cursorAppController cursor.AppController
+	// cursorQuitTimeout 覆盖正常退出等待上限，测试可缩短。
+	cursorQuitTimeout time.Duration
+	// applyCursorSettingsFn 可注入设置写入，测试跳过真实 CA/钥匙串。
+	applyCursorSettingsFn func() error
+	// emitProxyStateFn 可注入状态事件接收端，隔离测试不启动 Wails 应用。
+	emitProxyStateFn func(ProxyState)
+	// injectCursorUserInfoFn 可注入账号同步，测试不得写入真实 state.vscdb。
+	injectCursorUserInfoFn func(email, token string) error
+	// clearSystemNodeExtraCACertsFn 可注入 Darwin CA 环境清理，测试不得改真实 launchctl。
+	clearSystemNodeExtraCACertsFn func() error
+
+	gatewayMu                sync.Mutex
+	gateway                  *gateway.Server
+	gatewayLastError         string
+	gatewayConfigUnsubscribe func()
 }
 
 type LogCaptureStatus struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"`
-	SessionID       string `json:"sessionId,omitempty"`
-	SessionPath     string `json:"sessionPath,omitempty"`
-	LogsRoot        string `json:"logsRoot"`
-	PayloadDegraded bool   `json:"payloadDegraded"`
-	DroppedEvents   uint64 `json:"droppedEvents"`
-	LastError       string `json:"lastError,omitempty"`
+	Enabled             bool   `json:"enabled"`
+	Mode                string `json:"mode"`
+	SessionID           string `json:"sessionId,omitempty"`
+	SessionPath         string `json:"sessionPath,omitempty"`
+	LogsRoot            string `json:"logsRoot"`
+	PayloadDegraded     bool   `json:"payloadDegraded"`
+	DroppedEvents       uint64 `json:"droppedEvents"`
+	LastError           string `json:"lastError,omitempty"`
+	QuotaBlocked        bool   `json:"quotaBlocked"`
+	DiagnosticEnabled   bool   `json:"diagnosticEnabled"`
+	DiagnosticDegraded  bool   `json:"diagnosticDegraded"`
+	DiagnosticDropped   uint64 `json:"diagnosticDropped"`
+	DiagnosticLastError string `json:"diagnosticLastError,omitempty"`
+	AppLogEnabled       bool   `json:"appLogEnabled"`
+	AppLogDegraded      bool   `json:"appLogDegraded"`
+	AppLogDropped       uint64 `json:"appLogDropped"`
+	AppLogLastError     string `json:"appLogLastError,omitempty"`
 }
 
 type LogCleanupResult struct {
@@ -99,20 +138,31 @@ func NewProxyService(proxy *mitm.ProxyServer, certManager *certs.Manager, caCert
 	copy(copiedCert, caCertPEM)
 
 	service := &ProxyService{
-		proxy:            proxy,
-		certManager:      certManager,
-		configPath:       resolveUserConfigPath(),
-		logsRoot:         resolveLogsRootPath(),
-		caCertPEM:        copiedCert,
-		publicClient:     netproxy.NewHTTPClient(publicAPITimeout),
-		modelTestResults: make(map[string]ModelAdapterTestResult),
+		proxy:                 proxy,
+		certManager:           certManager,
+		configPath:            resolveUserConfigPath(),
+		logsRoot:              resolveLogsRootPath(),
+		caCertPEM:             copiedCert,
+		publicClient:          netproxy.NewHTTPClient(publicAPITimeout),
+		modelTestResults:      make(map[string]ModelAdapterTestResult),
+		cursorSettingsOwnerID: fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano()),
+	}
+	settingsStore, err := cursor.DefaultUserProxySettingsStore()
+	if err != nil {
+		logger.Errorf("init Cursor settings store failed: %v", err)
+	} else {
+		service.cursorSettingsStore = settingsStore
 	}
 	service.cursorAccount = cursoraccount.NewManager(
 		filepath.Join(appdata.DataRootPath(), "cursor-account.json"),
 		netproxy.NewHTTPClient(publicAPITimeout),
 	)
+	service.subscriptionAuth = subscriptionauth.NewService(
+		appdata.SubscriptionAuthRootPath(),
+		netproxy.NewHTTPClient(publicAPITimeout),
+	)
 	service.store = serverconfig.NewStore(service.configPath, service.logsRoot)
-	host, err := backend.NewHost(service.store, service.cursorAccount)
+	host, err := backend.NewHost(service.store, service.cursorAccount, service.subscriptionAuth)
 	if err != nil {
 		logger.Errorf("init backend host failed: %v", err)
 	} else {
@@ -128,11 +178,23 @@ func (s *ProxyService) ensureBackendHost() error {
 	if s.backendHost != nil {
 		return nil
 	}
-	host, err := backend.NewHost(s.store, s.cursorAccount)
+	host, err := backend.NewHost(s.store, s.cursorAccount, s.subscriptionAuth)
 	if err != nil {
 		return err
 	}
 	s.backendHost = host
+	if manager := host.ConfigManager(); manager != nil && s.gatewayConfigUnsubscribe == nil {
+		s.gatewayConfigUnsubscribe = manager.Subscribe(func(next serverconfig.Config) {
+			s.gatewayMu.Lock()
+			instance := s.gateway
+			running := instance != nil && instance.Running()
+			s.gatewayMu.Unlock()
+			if running || !next.Gateway.Enabled {
+				s.reconcileGateway(next)
+				s.emitState()
+			}
+		})
+	}
 	return nil
 }
 
@@ -181,14 +243,23 @@ func (s *ProxyService) GetLogCaptureStatus() LogCaptureStatus {
 		logsRoot = s.logsRoot
 	}
 	return LogCaptureStatus{
-		Enabled:         status.Enabled,
-		Mode:            status.Mode,
-		SessionID:       status.SessionID,
-		SessionPath:     status.SessionPath,
-		LogsRoot:        logsRoot,
-		PayloadDegraded: status.PayloadDegraded,
-		DroppedEvents:   status.DroppedEvents,
-		LastError:       status.LastError,
+		Enabled:             status.Enabled,
+		Mode:                status.Mode,
+		SessionID:           status.SessionID,
+		SessionPath:         status.SessionPath,
+		LogsRoot:            logsRoot,
+		PayloadDegraded:     status.PayloadDegraded,
+		DroppedEvents:       status.DroppedEvents,
+		LastError:           status.LastError,
+		QuotaBlocked:        status.QuotaBlocked,
+		DiagnosticEnabled:   status.DiagnosticEnabled,
+		DiagnosticDegraded:  status.DiagnosticDegraded,
+		DiagnosticDropped:   status.DiagnosticDropped,
+		DiagnosticLastError: status.DiagnosticLastError,
+		AppLogEnabled:       status.AppLogEnabled,
+		AppLogDegraded:      status.AppLogDegraded,
+		AppLogDropped:       status.AppLogDropped,
+		AppLogLastError:     status.AppLogLastError,
 	}
 }
 

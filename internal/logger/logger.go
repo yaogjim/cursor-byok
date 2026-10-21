@@ -21,43 +21,62 @@ import (
 	"github.com/mattn/go-isatty"
 )
 
-const (
-	appLogSegmentMaxBytes = 10 << 20
-	appLogMaxFiles        = 10
-	appLogMaxTotalBytes   = 100 << 20
-	appLogMaxAge          = 14 * 24 * time.Hour
+var (
+	initOnce sync.Once
+	appLogMu sync.RWMutex
+	// appLogWriter is set once the observability controller has read the real
+	// config. Until then application file writes are held back and stdout is the
+	// only sink.
+	appLogWriter AppLogWriter
 )
 
-var (
-	initOnce    sync.Once
-	logFilePath string
-)
+// AppLogWriter is the narrow seam the observability controller satisfies so
+// application log file writes share the trace/payload budget.
+type AppLogWriter interface {
+	WriteAppLog(payload []byte) (int, error)
+}
+
+// ConfigureAppLogWriter enables application log file output. logger.Init runs
+// before the config is loaded, so file output stays deferred until the host has
+// built a controller that knows the real observability budget.
+func ConfigureAppLogWriter(writer AppLogWriter) {
+	appLogMu.Lock()
+	previous := appLogWriter
+	appLogWriter = writer
+	appLogMu.Unlock()
+	if writer != nil && previous == nil {
+		slog.Log(context.Background(), slog.LevelInfo, "应用日志文件输出已启用", "pid", os.Getpid())
+	}
+}
+
+type appLogGateWriter struct{}
+
+func (appLogGateWriter) Write(payload []byte) (int, error) {
+	appLogMu.RLock()
+	writer := appLogWriter
+	appLogMu.RUnlock()
+	if writer == nil {
+		return len(payload), nil
+	}
+	return writer.WriteAppLog(payload)
+}
 
 // Init 配置默认 slog logger，并把标准库 log 接到同一输出。
 func Init() {
 	initOnce.Do(func() {
-		handlers := []slog.Handler{tint.NewHandler(colorable.NewColorableStdout(), &tint.Options{
+		stdoutHandler := tint.NewHandler(colorable.NewColorableStdout(), &tint.Options{
 			Level:      slog.LevelInfo,
 			TimeFormat: "15:04:05.000",
 			NoColor:    disableColor(),
-		})}
-		fileHandler, path, fileErr := buildFileHandler()
-		if fileErr != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "[logger] 初始化日志文件失败: %v\n", fileErr)
-		} else if fileHandler != nil {
-			handlers = append(handlers, fileHandler)
-			logFilePath = path
-		}
-		handler := handlers[0]
-		if len(handlers) > 1 {
-			handler = &multiHandler{handlers: handlers}
-		}
-		slog.SetDefault(slog.New(handler))
+		})
+		fileHandler := tint.NewHandler(appLogGateWriter{}, &tint.Options{
+			Level:      slog.LevelInfo,
+			TimeFormat: time.RFC3339,
+			NoColor:    true,
+		})
+		slog.SetDefault(slog.New(&multiHandler{handlers: []slog.Handler{stdoutHandler, fileHandler}}))
 		stdlog.SetFlags(0)
 		stdlog.SetOutput(standardLogWriter{})
-		if logFilePath != "" {
-			slog.Info("应用日志已写入分片目录", "path", logFilePath, "pid", os.Getpid())
-		}
 		go cleanupLegacyPayloadDirectory()
 	})
 }
@@ -126,29 +145,6 @@ func cleanupLegacyPayloadDirectory() {
 	if stats.Removed > 0 {
 		slog.Info("旧版 payload 日志清理完成", "path", path, "removed", stats.Removed)
 	}
-}
-
-func buildFileHandler() (slog.Handler, string, error) {
-	if err := appdata.EnsureAssistantHome(); err != nil {
-		return nil, "", err
-	}
-	dir := filepath.Join(appdata.LogsRootPath(), "app")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, "", fmt.Errorf("创建应用日志目录失败: %w", err)
-	}
-	writer := logsink.NewRotatingFile(dir, logsink.RotationConfig{
-		Prefix:        "app",
-		Extension:     ".log",
-		MaxBytes:      appLogSegmentMaxBytes,
-		MaxFiles:      appLogMaxFiles,
-		MaxTotalBytes: appLogMaxTotalBytes,
-		MaxAge:        appLogMaxAge,
-	})
-	return tint.NewHandler(writer, &tint.Options{
-		Level:      slog.LevelInfo,
-		TimeFormat: time.RFC3339,
-		NoColor:    true,
-	}), dir, nil
 }
 
 type standardLogWriter struct{}

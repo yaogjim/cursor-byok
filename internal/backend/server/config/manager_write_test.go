@@ -238,6 +238,33 @@ func TestManagerConcurrentUserAndHashWritesPreserveBoth(t *testing.T) {
 	}
 }
 
+func TestLegacyRuntimeSnapshotProjectsDisabledFromEnabledPointer(t *testing.T) {
+	manager := newWriteTestManager(t)
+	seedWriteTestManagerConfig(t, manager, func(cfg *Config) {
+		enabled := testModelAdapter("enabled-model", 1)
+		disabled := testModelAdapter("disabled-model", 2)
+		disabled.APIKey = "other-key"
+		disabled.Enabled = boolPtr(false)
+		cfg.ModelAdapters = []ModelAdapterConfig{enabled, disabled}
+	})
+	snapshot, err := manager.LegacyRuntimeSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("LegacyRuntimeSnapshot() error = %v", err)
+	}
+	if len(snapshot.ModelAdapters) != 2 {
+		t.Fatalf("snapshot adapters = %d", len(snapshot.ModelAdapters))
+	}
+	if snapshot.ModelAdapters[0].Disabled {
+		t.Fatal("missing enabled projected as Disabled")
+	}
+	if !snapshot.ModelAdapters[1].Disabled {
+		t.Fatal("explicit false did not project Disabled")
+	}
+	if snapshot.ModelAdapters[0].ID == snapshot.ModelAdapters[1].ID {
+		t.Fatal("disabled flag must not collapse channel IDs")
+	}
+}
+
 func newWriteTestManager(t *testing.T) *Manager {
 	t.Helper()
 	root := t.TempDir()

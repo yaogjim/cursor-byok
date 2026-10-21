@@ -64,6 +64,9 @@ type EventRecord struct {
 	HTTPRequestID       string
 	CursorRequestID     string
 	ConversationID      string
+	SubagentRunID       string
+	SubagentAttemptID   string
+	SubagentAttemptNo   int
 	TurnID              string
 	TurnSequence        uint64
 	ModelCallID         string
@@ -737,7 +740,7 @@ func (workspace *Workspace) SearchEvents(ctx context.Context, request EventSearc
 	selectSQL := `
 		SELECT e.source_file_id, e.line_number, e.timestamp_seconds, e.timestamp_nanoseconds, e.timestamp_text,
 			e.sequence_key, e.ingest_order, e.trace_key, e.schema_version, e.app_session_id, e.project_id, e.trace_id, e.span_id,
-			e.parent_span_id, e.http_request_id, e.cursor_request_id, e.conversation_id, e.turn_id, e.turn_sequence_key, e.model_call_id, e.tool_call_id,
+			e.parent_span_id, e.http_request_id, e.cursor_request_id, e.conversation_id, e.subagent_run_id, e.subagent_attempt_id, e.subagent_attempt_no, e.turn_id, e.turn_sequence_key, e.model_call_id, e.tool_call_id,
 			e.layer, e.event, e.capability, e.operation, e.direction, e.route, e.execution_target, e.protocol, e.status, e.semantic_outcome, e.implementation_state, e.severity, e.error_category, e.duration_ms,
 			e.request_bytes, e.response_bytes, e.decode_error, e.dropped_events_key, e.safe_fields_json, e.payload_ref
 		FROM events AS e
@@ -795,7 +798,7 @@ func (workspace *Workspace) ListTraceEvents(ctx context.Context, datasetID int64
 	query := `
 		SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 			sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
-			parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+			parent_span_id, http_request_id, cursor_request_id, conversation_id, subagent_run_id, subagent_attempt_id, subagent_attempt_no, turn_id, turn_sequence_key, model_call_id, tool_call_id,
 			layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
 			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 		FROM events
@@ -808,7 +811,7 @@ func (workspace *Workspace) ListTraceEvents(ctx context.Context, datasetID int64
 		query = `
 			SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 				sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
-				parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+				parent_span_id, http_request_id, cursor_request_id, conversation_id, subagent_run_id, subagent_attempt_id, subagent_attempt_no, turn_id, turn_sequence_key, model_call_id, tool_call_id,
 				layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
 				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 			FROM events
@@ -842,7 +845,7 @@ func (workspace *Workspace) ListGlobalEvents(ctx context.Context, datasetID int6
 	query := `
 		SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 			sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
-			parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+			parent_span_id, http_request_id, cursor_request_id, conversation_id, subagent_run_id, subagent_attempt_id, subagent_attempt_no, turn_id, turn_sequence_key, model_call_id, tool_call_id,
 			layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
 			request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 		FROM events
@@ -855,7 +858,7 @@ func (workspace *Workspace) ListGlobalEvents(ctx context.Context, datasetID int6
 		query = `
 			SELECT source_file_id, line_number, timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 				sequence_key, ingest_order, trace_key, schema_version, app_session_id, project_id, trace_id, span_id,
-				parent_span_id, http_request_id, cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+				parent_span_id, http_request_id, cursor_request_id, conversation_id, subagent_run_id, subagent_attempt_id, subagent_attempt_no, turn_id, turn_sequence_key, model_call_id, tool_call_id,
 				layer, event, capability, operation, direction, route, execution_target, protocol, status, semantic_outcome, implementation_state, severity, error_category, duration_ms,
 				request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
 			FROM events
@@ -1360,7 +1363,7 @@ func (workspace *Workspace) listEvents(ctx context.Context, query string, args .
 		if err := rows.Scan(
 			&sourceFileID, &row.LineNumber, &row.Cursor.TimestampSeconds, &row.Cursor.TimestampNanoseconds, &timestampText,
 			&sequenceKey, &row.IngestOrder, &row.TraceKey, &row.SchemaVersion, &row.AppSessionID, &row.ProjectID, &row.TraceID, &row.SpanID,
-			&row.ParentSpanID, &row.HTTPRequestID, &row.CursorRequestID, &row.ConversationID, &row.TurnID, &turnSequenceKey, &row.ModelCallID, &row.ToolCallID,
+			&row.ParentSpanID, &row.HTTPRequestID, &row.CursorRequestID, &row.ConversationID, &row.SubagentRunID, &row.SubagentAttemptID, &row.SubagentAttemptNo, &row.TurnID, &turnSequenceKey, &row.ModelCallID, &row.ToolCallID,
 			&row.Layer, &row.Event, &row.Capability, &row.Operation, &row.Direction, &row.Route, &row.ExecutionTarget, &row.Protocol, &row.Status,
 			&row.SemanticOutcome, &row.ImplementationState, &row.Severity, &row.ErrorCategory, &row.DurationMS,
 			&row.RequestBytes, &row.ResponseBytes, &decodeError, &droppedEventsKey, &safeFields, &row.PayloadRef,
@@ -1594,7 +1597,7 @@ func eventValues(record EventRecord) []any {
 		utc.Unix(), utc.Nanosecond(), utc.Format(time.RFC3339Nano),
 		SequenceKey(record.Sequence), record.IngestOrder, strings.TrimSpace(record.TraceKey), record.SchemaVersion,
 		record.AppSessionID, record.ProjectID, record.TraceID, record.SpanID, record.ParentSpanID, record.HTTPRequestID,
-		record.CursorRequestID, record.ConversationID, record.TurnID, SequenceKey(record.TurnSequence), record.ModelCallID, record.ToolCallID,
+		record.CursorRequestID, record.ConversationID, record.SubagentRunID, record.SubagentAttemptID, record.SubagentAttemptNo, record.TurnID, SequenceKey(record.TurnSequence), record.ModelCallID, record.ToolCallID,
 		record.Layer, record.Event, record.Capability, record.Operation, record.Direction, record.Route, record.ExecutionTarget, record.Protocol,
 		record.Status, record.SemanticOutcome, record.ImplementationState, record.Severity, record.ErrorCategory,
 		record.DurationMS, record.RequestBytes, record.ResponseBytes, boolInt(record.DecodeError), SequenceKey(record.DroppedEvents), nullEmpty(record.SafeFieldsJSON), record.PayloadRef,
@@ -1607,11 +1610,11 @@ INSERT INTO events(
 	timestamp_seconds, timestamp_nanoseconds, timestamp_text,
 	sequence_key, ingest_order, trace_key, schema_version,
 	app_session_id, project_id, trace_id, span_id, parent_span_id, http_request_id,
-	cursor_request_id, conversation_id, turn_id, turn_sequence_key, model_call_id, tool_call_id,
+	cursor_request_id, conversation_id, subagent_run_id, subagent_attempt_id, subagent_attempt_no, turn_id, turn_sequence_key, model_call_id, tool_call_id,
 	layer, event, capability, operation, direction, route, execution_target, protocol,
 	status, semantic_outcome, implementation_state, severity, error_category,
 	duration_ms, request_bytes, response_bytes, decode_error, dropped_events_key, safe_fields_json, payload_ref
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 const schemaSQL = `
@@ -1712,6 +1715,9 @@ CREATE TABLE IF NOT EXISTS events (
     http_request_id TEXT,
     cursor_request_id TEXT,
     conversation_id TEXT,
+    subagent_run_id TEXT,
+    subagent_attempt_id TEXT,
+    subagent_attempt_no INTEGER NOT NULL DEFAULT 0,
     turn_id TEXT,
     turn_sequence_key TEXT NOT NULL DEFAULT '00000000000000000000' CHECK(length(turn_sequence_key) = 20),
     model_call_id TEXT,

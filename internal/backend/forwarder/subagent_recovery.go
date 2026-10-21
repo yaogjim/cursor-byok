@@ -18,6 +18,10 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	runtimecore "cursor/internal/backend/agent/core"
 )
 
 // startSubagentRecovery 在 Service 启动时异步运行 subagent run 恢复扫描。
@@ -180,6 +184,138 @@ func (service *Service) recoverSubagentTerminalPrepared(record *SubagentRunRecor
 		log.Printf("subagent_recovery committed run_id=%s parent_conv=%s", runID, parentConvID)
 	}
 	return nil
+}
+
+// recoverLateSubagentResult 仅保存已派发子任务的迟到终态，不启动模型、不重派工具、
+// 不改变父请求的取消状态。只有稳定执行桥身份匹配时才接管结果。
+func (service *Service) recoverLateSubagentResult(intent InboundIntent) (bool, error) {
+	msg := intent.ExecClientMessage
+	if service.subagentRuns == nil || service.store == nil || msg == nil || (msg.GetSubagentResult() == nil && msg.GetForceBackgroundSubagentResult() == nil) {
+		return false, nil
+	}
+	conversationID := strings.TrimSpace(intent.ConversationID)
+	stream, _ := service.broker.Get(intent.RequestID)
+	if stream != nil {
+		if conversationID != "" && conversationID != stream.ConversationID {
+			return false, fmt.Errorf("subagent result conversation mismatch")
+		}
+		conversationID = stream.ConversationID
+	}
+	record, err := service.subagentRuns.FindDispatch(msg.GetExecId(), msg.GetId(), intent.RequestID, conversationID)
+	if err != nil || record == nil {
+		return false, err
+	}
+	runID := record.Identity.SubagentRunID
+	if !isTerminalRunStatus(record.Status) && record.Status != SubagentRunTerminalPrepared && record.Status != SubagentRunAwaitingParentResume {
+		if service.execBridge == nil {
+			return true, fmt.Errorf("subagent recovery exec bridge is not initialized")
+		}
+		record, err = service.subagentRuns.BindChildIdentity(runID, "", extractSubagentAgentID(msg))
+		if err != nil {
+			return true, fmt.Errorf("subagent recovery bind identity: %w", err)
+		}
+		if record == nil || record.Dispatch == nil {
+			return true, fmt.Errorf("subagent recovery dispatch disappeared")
+		}
+		pending := runtimecore.PendingExec{
+			ExecID: record.Dispatch.ExecID, MessageID: record.Dispatch.MessageID,
+			ExecKind: "subagent", SubagentRunID: runID,
+			ToolCallID: record.Identity.ParentToolCallID, ModelCallID: record.Identity.ParentModelCallID,
+			ArgsJSON: append([]byte(nil), record.Dispatch.ArgsJSON...),
+		}
+		result, applyErr := service.execBridge.ApplyExecClientMessage(msg, pending)
+		if applyErr != nil {
+			return true, applyErr
+		}
+		if !result.IsTerminal {
+			return false, nil
+		}
+		if msg.GetForceBackgroundSubagentResult() != nil {
+			result.ToolResultPayload = "[canceled] Subagent moved to background"
+			result.ToolCall = nil
+		}
+		var encoded []byte
+		if result.ToolCall != nil {
+			encoded, err = protojson.Marshal(result.ToolCall)
+			if err != nil {
+				return true, err
+			}
+		}
+		digest := computeSubagentStringDigest(result.ToolResultPayload)
+		envelope := &SubagentResultEnvelope{
+			SchemaVersion: subagentContractSchemaVersion, SubagentRunID: runID,
+			TerminalCategory: categorizeSubagentResultMsg(msg), TerminalAt: time.Now().UTC(),
+			ResultDigest: digest, ResultSummary: extractSubagentErrorSummary(msg),
+			ToolName: deriveToolNameFromPendingExec(pending), ArgsJSON: pending.ArgsJSON,
+			ToolResultPayload: result.ToolResultPayload, ToolCallEncoded: encoded,
+			ParentCommitKey: computeSubagentParentCommitKey(runID, pending.ToolCallID, digest),
+		}
+		record, err = service.prepareRecoveredSubagentTerminal(record, envelope)
+		if err != nil {
+			return true, err
+		}
+		if record == nil {
+			return true, fmt.Errorf("subagent recovery run disappeared")
+		}
+	}
+	if !isTerminalRunStatus(record.Status) {
+		if err := service.recoverSubagentTerminalPrepared(record); err != nil {
+			return true, err
+		}
+	}
+	// 新请求中回传旧任务结果时，同步其 checkpoint 内存；后续 replay 可读到已落盘结果。
+	// 与正常追加保持一致的 stream -> conversation 锁顺序，避免旧快照覆盖更新。
+	if stream != nil && !isTerminalIntentStream(stream) {
+		stream.mu.Lock()
+		conversation, loadErr := service.store.LoadConversation(conversationID)
+		if loadErr == nil && conversation != nil {
+			stream.CheckpointConversation = conversation
+			rebuildStreamExecutionEvidenceLocked(stream)
+		}
+		stream.mu.Unlock()
+		if loadErr != nil {
+			return true, loadErr
+		}
+	}
+	return true, nil
+}
+
+// prepareRecoveredSubagentTerminal 只重试 durable prepare 的版本竞争，不重放执行桥或工具。
+// 已有终态始终胜出；非版本错误直接返回，连续竞争也有明确次数上限。
+func (service *Service) prepareRecoveredSubagentTerminal(record *SubagentRunRecord, envelope *SubagentResultEnvelope) (*SubagentRunRecord, error) {
+	runID := record.Identity.SubagentRunID
+	for attempt := 0; attempt < 3; attempt++ {
+		prepared, err := service.subagentRuns.PrepareTerminal(runID, record.Version, envelope)
+		if err == nil {
+			return prepared, nil
+		}
+		if !errors.Is(err, errSubagentPrepareVersionConflict) && !errors.Is(err, errSubagentTerminalConflict) {
+			return nil, err
+		}
+		terminalConflict := errors.Is(err, errSubagentTerminalConflict)
+		record, err = service.subagentRuns.LoadRun(runID)
+		if err != nil {
+			return nil, err
+		}
+		if record == nil {
+			return nil, fmt.Errorf("subagent recovery run disappeared")
+		}
+		if isTerminalRunStatus(record.Status) || record.Status == SubagentRunTerminalPrepared || record.Status == SubagentRunAwaitingParentResume {
+			return record, nil
+		}
+		if terminalConflict {
+			// 上次可能在 result.json 与 run.json 两次原子写之间崩溃，
+			// 使用已落盘的胜出信封修复 run 状态，而不是覆盖它。
+			envelope, err = service.subagentRuns.LoadResult(runID)
+			if err != nil {
+				return nil, err
+			}
+			if envelope == nil {
+				return nil, fmt.Errorf("subagent recovery terminal result missing")
+			}
+		}
+	}
+	return nil, fmt.Errorf("subagent recovery prepare contention: %w", errSubagentPrepareVersionConflict)
 }
 
 func (service *Service) markSubagentAwaitingParentResume(runID string) error {

@@ -70,7 +70,7 @@ func (service *Service) completePreDispatchToolError(
 			return err
 		}
 		if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
-			withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID),
+			overlayHistoryReasoningOrigin(withHistoryModelCallID(newToolCallEntryWithProviderMetadata(stream.TurnSeq, stream.RequestID, invocation.CallID, invocation.ToolName, invocation.ReasoningContent, invocation.ReasoningSignature, invocation.ReasoningSignatureSource, invocation.ReasoningProviderItemID, invocation.ReasoningProviderStatus, invocation.ReasoningProviderSummary, invocation.ProviderItemID, invocation.ProviderCallID, invocation.ProviderStatus, toolCallPayload), invocation.ModelCallID), activeStreamReasoningOrigin(stream)),
 		}); err != nil {
 			return err
 		}

@@ -9,66 +9,105 @@ import (
 	"strconv"
 	"strings"
 
+	"cursor/internal/appearance"
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
+	"cursor/internal/subscriptionauth"
 )
 
 const (
-	DefaultBackendListenAddr                = "127.0.0.1:18090"
-	DefaultProxyListenAddr                  = "127.0.0.1:18080"
-	DefaultFrontendBaseURL                  = "http://127.0.0.1"
-	DefaultRoutingMode                      = "local"
-	DefaultTheme                            = "light"
-	DefaultProviderStreamIdleTimeoutSeconds = 240
-	MinProviderStreamIdleTimeoutSeconds     = 30
-	DefaultObservabilityMode                = "basic"
-	ObservabilityModeOff                    = "off"
-	ObservabilityModeBasic                  = "basic"
-	ObservabilityModeFull                   = "full"
-	DefaultObservabilityRetentionDays       = 7
-	DefaultObservabilityMaxDiskMB           = 1024
-	MinObservabilityRetentionDays           = 1
-	MaxObservabilityRetentionDays           = 90
-	MinObservabilityMaxDiskMB               = 64
-	MaxObservabilityMaxDiskMB               = 10240
+	DefaultBackendListenAddr          = "127.0.0.1:18090"
+	DefaultProxyListenAddr            = "127.0.0.1:18080"
+	DefaultFrontendBaseURL            = "http://127.0.0.1"
+	DefaultRoutingMode                = "local"
+	DefaultTheme                      = "light"
+	DefaultObservabilityMode          = "basic"
+	ObservabilityModeOff              = "off"
+	ObservabilityModeBasic            = "basic"
+	ObservabilityModeFull             = "full"
+	DefaultObservabilityRetentionDays = 7
+	DefaultObservabilityMaxDiskMB     = 1024
+	MinObservabilityRetentionDays     = 1
+	MaxObservabilityRetentionDays     = 90
+	MinObservabilityMaxDiskMB         = 64
+	MaxObservabilityMaxDiskMB         = 10240
 
-	DefaultProviderFallbackMaxHttpAttempts = 5
-	MinProviderFallbackMaxHttpAttempts     = 2
-	MaxProviderFallbackMaxHttpAttempts     = 9
-	DefaultProviderFallbackMaxWaitSeconds  = 8
-	MinProviderFallbackMaxWaitSeconds      = 1
-	MaxProviderFallbackMaxWaitSeconds      = 30
-	MaxProviderFallbackCandidates          = 4
+	DefaultProviderFallbackMaxHttpAttempts          = 5
+	MinProviderFallbackMaxHttpAttempts              = 2
+	MaxProviderFallbackMaxHttpAttempts              = 9
+	DefaultProviderFallbackMaxWaitSeconds           = 8
+	MinProviderFallbackMaxWaitSeconds               = 1
+	MaxProviderFallbackMaxWaitSeconds               = 30
+	DefaultProviderFallbackMaxAttemptsPerChannel    = 2
+	MinProviderFallbackMaxAttemptsPerChannel        = 1
+	MaxProviderFallbackMaxAttemptsPerChannel        = 3
+	DefaultProviderFallbackConnectTimeoutSeconds    = 30
+	MinProviderFallbackConnectTimeoutSeconds        = 5
+	MaxProviderFallbackConnectTimeoutSeconds        = 120
+	DefaultProviderFallbackFirstEventTimeoutSeconds = 600
+	MinProviderFallbackFirstEventTimeoutSeconds     = 60
+	MaxProviderFallbackFirstEventTimeoutSeconds     = 1800
+	DefaultProviderFallbackStreamIdleTimeoutSeconds = 240
+	MinProviderFallbackStreamIdleTimeoutSeconds     = 30
+	MaxProviderFallbackStreamIdleTimeoutSeconds     = 900
+	DefaultProviderFallbackCallTimeoutSeconds       = 7200
+	MinProviderFallbackCallTimeoutSeconds           = 900
+	MaxProviderFallbackCallTimeoutSeconds           = 21600
+	MaxProviderFallbackCandidates                   = 4
 
 	MinMaxConcurrentRequests = 1
 	MaxMaxConcurrentRequests = 16
+
+	DefaultGatewayListenAddr      = "127.0.0.1:18091"
+	MaxGatewayPublicModelIDLength = 128
+	GatewayTokenByteLength        = 32
+	PreGatewayBackupSuffix   = ".bak-pre-gateway"
+	configFilePerm           = 0o600
+
+	DefaultStreamContinuationMaxPerTurn         = 1
+	MaxStreamContinuationMaxPerTurn             = 1
+	DefaultStreamContinuationDeadlineSeconds    = 120
+	MinStreamContinuationDeadlineSeconds        = 5
+	MaxStreamContinuationDeadlineSeconds        = 600
+	DefaultStreamContinuationOverlapWindowChars = 2048
+	MinStreamContinuationOverlapWindowChars     = 64
+	MaxStreamContinuationOverlapWindowChars     = 8192
+
+	// SubagentRescheduleMaxAttempts 是首版 Task 重调度的固定总尝试次数（含首次尝试）。
+	SubagentRescheduleMaxAttempts = 3
 )
 
 type ModelAdapterConfig struct {
-	ID                          string `json:"id,omitempty" yaml:"-"`
-	Sort                        int    `json:"sort" yaml:"sort"`
-	DisplayName                 string `json:"displayName" yaml:"displayName"`
-	Type                        string `json:"type" yaml:"type"`
-	BaseURL                     string `json:"baseURL" yaml:"baseURL"`
-	APIKey                      string `json:"apiKey" yaml:"apiKey"`
-	TooltipData                 string `json:"tooltipData" yaml:"tooltipData"`
-	ModelID                     string `json:"modelID" yaml:"modelID"`
-	ReasoningEffort             string `json:"reasoningEffort" yaml:"reasoningEffort"`
-	OpenAIEndpoint              string `json:"openAIEndpoint" yaml:"openAIEndpoint"`
-	OpenAIExtraParamsEnabled    bool   `json:"openAIExtraParamsEnabled" yaml:"openAIExtraParamsEnabled"`
-	OpenAIExtraParamsJSON       string `json:"openAIExtraParamsJSON" yaml:"openAIExtraParamsJSON"`
-	CustomHeadersEnabled        bool   `json:"customHeadersEnabled" yaml:"customHeadersEnabled"`
-	CustomHeadersJSON           string `json:"customHeadersJSON" yaml:"customHeadersJSON"`
-	AnthropicExtraParamsEnabled bool   `json:"anthropicExtraParamsEnabled" yaml:"anthropicExtraParamsEnabled"`
-	AnthropicExtraParamsJSON    string `json:"anthropicExtraParamsJSON" yaml:"anthropicExtraParamsJSON"`
-	ContextWindowTokens         int    `json:"contextWindowTokens" yaml:"contextWindowTokens"`
-	MaxCompletionTokens         int    `json:"maxCompletionTokens" yaml:"maxCompletionTokens"`
-	AnthropicMaxTokens          int    `json:"anthropicMaxTokens" yaml:"anthropicMaxTokens"`
-	AnthropicThinkingEffort     string `json:"anthropicThinkingEffort,omitempty" yaml:"anthropicThinkingEffort,omitempty"`
-	ThinkingBudgetTokens        int    `json:"thinkingBudgetTokens" yaml:"thinkingBudgetTokens"`
+	ID                           string `json:"id,omitempty" yaml:"-"`
+	Sort                         int    `json:"sort" yaml:"sort"`
+	DisplayName                  string `json:"displayName" yaml:"displayName"`
+	Enabled                      *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Type                         string `json:"type" yaml:"type"`
+	BaseURL                      string `json:"baseURL" yaml:"baseURL"`
+	APIKey                       string `json:"apiKey" yaml:"apiKey"`
+	CredentialSource             string `json:"credentialSource,omitempty" yaml:"credentialSource,omitempty"`
+	TooltipData                  string `json:"tooltipData" yaml:"tooltipData"`
+	ModelID                      string `json:"modelID" yaml:"modelID"`
+	ReasoningEffort              string `json:"reasoningEffort" yaml:"reasoningEffort"`
+	OpenAIEndpoint               string `json:"openAIEndpoint" yaml:"openAIEndpoint"`
+	OpenAIExtraParamsEnabled     bool   `json:"openAIExtraParamsEnabled" yaml:"openAIExtraParamsEnabled"`
+	OpenAIExtraParamsJSON        string `json:"openAIExtraParamsJSON" yaml:"openAIExtraParamsJSON"`
+	OpenAIImageGenerationEnabled bool   `json:"openAIImageGenerationEnabled" yaml:"openAIImageGenerationEnabled"`
+	CustomHeadersEnabled         bool   `json:"customHeadersEnabled" yaml:"customHeadersEnabled"`
+	CustomHeadersJSON            string `json:"customHeadersJSON" yaml:"customHeadersJSON"`
+	AnthropicExtraParamsEnabled  bool   `json:"anthropicExtraParamsEnabled" yaml:"anthropicExtraParamsEnabled"`
+	AnthropicExtraParamsJSON     string `json:"anthropicExtraParamsJSON" yaml:"anthropicExtraParamsJSON"`
+	ContextWindowTokens          int    `json:"contextWindowTokens" yaml:"contextWindowTokens"`
+	MaxCompletionTokens          int    `json:"maxCompletionTokens" yaml:"maxCompletionTokens"`
+	AnthropicMaxTokens           int    `json:"anthropicMaxTokens" yaml:"anthropicMaxTokens"`
+	AnthropicThinkingEffort      string `json:"anthropicThinkingEffort,omitempty" yaml:"anthropicThinkingEffort,omitempty"`
+	ThinkingBudgetTokens         int    `json:"thinkingBudgetTokens" yaml:"thinkingBudgetTokens"`
 	// MaxConcurrentRequests 是物理上游组共享的可选并发上限。缺失/0 表示不限制，非零合法范围 1–16。
 	MaxConcurrentRequests int `json:"maxConcurrentRequests,omitempty" yaml:"maxConcurrentRequests,omitempty"`
 	// ProviderFallback 表示该渠道的 provider fallback 配置；默认关闭。
 	ProviderFallback ProviderFallbackConfig `json:"providerFallback,omitempty" yaml:"providerFallback,omitempty"`
+	// OutboundProxy 是该模型出站请求的可选自定义代理；关闭表示继承全局。
+	OutboundProxy netproxy.Config `json:"outboundProxy" yaml:"outboundProxy"`
 }
 
 type RoutingConfig struct {
@@ -104,7 +143,18 @@ type ProviderFallbackConfig struct {
 	// MaxHttpAttempts 是整条 fallback 链共享的 HTTP 尝试上限。缺失/0 归一化为 5，合法范围 2–9。
 	MaxHttpAttempts int `json:"maxHttpAttempts,omitempty" yaml:"maxHttpAttempts,omitempty"`
 	// MaxWaitSeconds 是整条 fallback 链共享的退避等待上限（秒）。缺失/0 归一化为 8，合法范围 1–30。
+	// 只累计 sleep，不得当作调用墙钟 timeout。
 	MaxWaitSeconds int `json:"maxWaitSeconds,omitempty" yaml:"maxWaitSeconds,omitempty"`
+	// MaxAttemptsPerChannel 是单渠道最大 HTTP 尝试次数。缺失/0 归一化为 2，合法范围 1–3。
+	MaxAttemptsPerChannel int `json:"maxAttemptsPerChannel,omitempty" yaml:"maxAttemptsPerChannel,omitempty"`
+	// ConnectTimeoutSeconds 是建连超时。缺失/0 归一化为 30，合法范围 5–120。
+	ConnectTimeoutSeconds int `json:"connectTimeoutSeconds,omitempty" yaml:"connectTimeoutSeconds,omitempty"`
+	// FirstEventTimeoutSeconds 是首事件超时。缺失/0 归一化为 600，合法范围 60–1800。
+	FirstEventTimeoutSeconds int `json:"firstEventTimeoutSeconds,omitempty" yaml:"firstEventTimeoutSeconds,omitempty"`
+	// StreamIdleTimeoutSeconds 是流空闲超时。缺失/0 归一化为 240，合法范围 30–900。
+	StreamIdleTimeoutSeconds int `json:"streamIdleTimeoutSeconds,omitempty" yaml:"streamIdleTimeoutSeconds,omitempty"`
+	// CallTimeoutSeconds 是整次调用超时。缺失/0 归一化为 7200，合法范围 900–21600。
+	CallTimeoutSeconds int `json:"callTimeoutSeconds,omitempty" yaml:"callTimeoutSeconds,omitempty"`
 }
 
 // InvalidProviderFallbackBudgetError 表示保存入口拒绝的非零越界 fallback 预算。
@@ -140,19 +190,39 @@ type ObservabilityConfig struct {
 	MaxDiskMB     int    `json:"maxDiskMB" yaml:"maxDiskMB"`
 }
 
+// StreamContinuationConfig 控制同一 turn 下中断后的自动续写。
+// 缺省关闭；旧配置缺失视为 disabled，无磁盘迁移。maxPerTurn 固定上限 1，禁止嵌套。
+type StreamContinuationConfig struct {
+	Enabled              bool `json:"enabled" yaml:"enabled"`
+	MaxPerTurn           int  `json:"maxPerTurn,omitempty" yaml:"maxPerTurn,omitempty"`
+	TotalDeadlineSeconds int  `json:"totalDeadlineSeconds,omitempty" yaml:"totalDeadlineSeconds,omitempty"`
+	OverlapWindowChars   int  `json:"overlapWindowChars,omitempty" yaml:"overlapWindowChars,omitempty"`
+}
+
+// SubagentRescheduleConfig 控制只读 Task 在安全证据充分时重启新 child。
+// 旧配置缺失时保持关闭；首版固定 readonly-only、总计最多 3 attempts，
+// 不开放这些边界为用户参数。
+type SubagentRescheduleConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
 type Config struct {
-	LegacyLog                 *bool                `json:"-" yaml:"log,omitempty"`
-	Observability             ObservabilityConfig  `json:"observability" yaml:"observability"`
-	ProviderStreamIdleTimeout int                  `json:"providerStreamIdleTimeout" yaml:"providerStreamIdleTimeout"`
-	BackendListenAddr         string               `json:"backendListenAddr" yaml:"backendListenAddr"`
-	ProxyListenAddr           string               `json:"proxyListenAddr" yaml:"proxyListenAddr"`
-	ModelAdapters             []ModelAdapterConfig `json:"modelAdapters" yaml:"modelAdapters"`
-	Routing                   RoutingConfig        `json:"routing" yaml:"routing"`
-	HomeMetrics               HomeMetricsConfig    `json:"homeMetrics" yaml:"homeMetrics"`
-	Appearance                AppearanceConfig     `json:"appearance" yaml:"appearance"`
-	Advertising               AdvertisingConfig    `json:"advertising" yaml:"advertising"`
-	Updates                   UpdatesConfig        `json:"updates" yaml:"updates"`
-	LastAgentModelHash        string               `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
+	LegacyLog          *bool                    `json:"-" yaml:"log,omitempty"`
+	Observability      ObservabilityConfig      `json:"observability" yaml:"observability"`
+	BackendListenAddr  string                   `json:"backendListenAddr" yaml:"backendListenAddr"`
+	ProxyListenAddr    string                   `json:"proxyListenAddr" yaml:"proxyListenAddr"`
+	ModelAdapters      []ModelAdapterConfig     `json:"modelAdapters" yaml:"modelAdapters"`
+	Routing            RoutingConfig            `json:"routing" yaml:"routing"`
+	HomeMetrics        HomeMetricsConfig        `json:"homeMetrics" yaml:"homeMetrics"`
+	Appearance         AppearanceConfig         `json:"appearance" yaml:"appearance"`
+	Advertising        AdvertisingConfig        `json:"advertising" yaml:"advertising"`
+	Updates            UpdatesConfig            `json:"updates" yaml:"updates"`
+	LastAgentModelHash string                   `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
+	Gateway            GatewayConfig            `json:"gateway" yaml:"gateway"`
+	StreamContinuation StreamContinuationConfig `json:"streamContinuation,omitempty" yaml:"streamContinuation,omitempty"`
+	SubagentReschedule SubagentRescheduleConfig `json:"subagentReschedule,omitempty" yaml:"subagentReschedule,omitempty"`
+	// OutboundProxy 是 BYOK 进程全局自定义出站代理；关闭表示继承 env/OS。
+	OutboundProxy netproxy.Config `json:"outboundProxy" yaml:"outboundProxy"`
 }
 
 func DefaultConfig() Config {
@@ -162,10 +232,9 @@ func DefaultConfig() Config {
 			RetentionDays: DefaultObservabilityRetentionDays,
 			MaxDiskMB:     DefaultObservabilityMaxDiskMB,
 		},
-		ProviderStreamIdleTimeout: DefaultProviderStreamIdleTimeoutSeconds,
-		BackendListenAddr:         DefaultBackendListenAddr,
-		ProxyListenAddr:           DefaultProxyListenAddr,
-		ModelAdapters:             []ModelAdapterConfig{},
+		BackendListenAddr: DefaultBackendListenAddr,
+		ProxyListenAddr:   DefaultProxyListenAddr,
+		ModelAdapters:     []ModelAdapterConfig{},
 		Routing: RoutingConfig{
 			Mode: DefaultRoutingMode,
 		},
@@ -178,16 +247,21 @@ func DefaultConfig() Config {
 		Updates: UpdatesConfig{
 			CheckOnStartup: false,
 		},
+		Gateway:       DefaultGatewayConfig(),
+		OutboundProxy: netproxy.Config{Enabled: false, URL: ""},
 	}
 }
 
 func NormalizeConfig(input Config) (Config, error) {
+	return normalizeConfig(input, nil)
+}
+
+func normalizeConfig(input Config, previousAdapters []ModelAdapterConfig) (Config, error) {
 	output := DefaultConfig()
 	if strings.TrimSpace(input.Observability.Mode) != "" && normalizeObservabilityMode(input.Observability.Mode) == "" {
 		return Config{}, errors.New("observability.mode 仅支持 off、basic 或 full")
 	}
 	output.Observability = normalizeObservabilityConfig(input.Observability, input.LegacyLog)
-	output.ProviderStreamIdleTimeout = normalizeProviderStreamIdleTimeout(input.ProviderStreamIdleTimeout)
 	backendListenAddr, err := normalizeListenAddr(input.BackendListenAddr, DefaultBackendListenAddr, "backendListenAddr")
 	if err != nil {
 		return Config{}, err
@@ -199,25 +273,76 @@ func NormalizeConfig(input Config) (Config, error) {
 	output.BackendListenAddr = backendListenAddr
 	output.ProxyListenAddr = proxyListenAddr
 	output.HomeMetrics.IncludeCacheWriteInHitRate = input.HomeMetrics.IncludeCacheWriteInHitRate
-	output.Appearance.Theme = normalizeTheme(input.Appearance.Theme)
+	output.Appearance.Theme = appearance.Normalize(input.Appearance.Theme)
 	output.Advertising.Enabled = input.Advertising.Enabled
 	output.Updates.CheckOnStartup = input.Updates.CheckOnStartup
-	output.LastAgentModelHash = strings.TrimSpace(input.LastAgentModelHash)
 	output.Routing.Mode = normalizeRoutingMode(input.Routing.Mode)
 	if output.Routing.Mode == "" {
 		output.Routing.Mode = DefaultRoutingMode
 	}
-	adapters, err := NormalizeModelAdapterConfigs(input.ModelAdapters)
+	adapters, knownIDs, err := normalizeModelAdapterIdentities(input.ModelAdapters)
 	if err != nil {
 		return Config{}, err
 	}
+	// Use the submitted previous IDs as stable identity hints. Newly added
+	// adapters have no hint, so deletion plus insertion is never auto-paired.
+	remap := deriveChannelIDRemap(previousAdapters, input.ModelAdapters, adapters)
+	applyChannelIDRemap(adapters, remap)
+	normalizeModelAdapterSorts(adapters)
+	if err := validateProviderFallbacks(adapters, knownIDs); err != nil {
+		return Config{}, err
+	}
+	if err := validateUpstreamCapacityGroups(adapters); err != nil {
+		return Config{}, err
+	}
 	output.ModelAdapters = adapters
+	gateway := input.Gateway
+	applyChannelIDRemapToGateway(&gateway, remap)
+	normalizedGateway, err := NormalizeGatewayConfig(gateway)
+	if err != nil {
+		return Config{}, err
+	}
+	output.Gateway = normalizedGateway
+	output.LastAgentModelHash = rewriteChannelID(strings.TrimSpace(input.LastAgentModelHash), remap)
+	output.StreamContinuation = normalizeStreamContinuationConfig(input.StreamContinuation)
+	output.SubagentReschedule.Enabled = input.SubagentReschedule.Enabled
+	outboundProxy, err := netproxy.Normalize(input.OutboundProxy)
+	if err != nil {
+		return Config{}, err
+	}
+	output.OutboundProxy = outboundProxy
 	return output, nil
 }
 
 func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterConfig, error) {
+	adapters, knownIDs, err := normalizeModelAdapterIdentities(input)
+	if err != nil {
+		return nil, err
+	}
+	normalizeModelAdapterSorts(adapters)
+	if err := validateProviderFallbacks(adapters, knownIDs); err != nil {
+		return nil, err
+	}
+	if err := validateUpstreamCapacityGroups(adapters); err != nil {
+		return nil, err
+	}
+	return adapters, nil
+}
+
+// NormalizeModelAdapterDrafts 为导入草稿计算每行规范 ID 并完成字段级归一化。
+// 跨行 fallback/容量校验推迟到与当前草稿合并后再做，因为候选渠道可能仍在现有配置中。
+func NormalizeModelAdapterDrafts(input []ModelAdapterConfig) ([]ModelAdapterConfig, error) {
+	adapters, _, err := normalizeModelAdapterIdentities(input)
+	if err != nil {
+		return nil, err
+	}
+	normalizeModelAdapterSorts(adapters)
+	return adapters, nil
+}
+
+func normalizeModelAdapterIdentities(input []ModelAdapterConfig) ([]ModelAdapterConfig, map[string]struct{}, error) {
 	if len(input) == 0 {
-		return []ModelAdapterConfig{}, nil
+		return []ModelAdapterConfig{}, map[string]struct{}{}, nil
 	}
 
 	normalized := make([]ModelAdapterConfig, 0, len(input))
@@ -225,7 +350,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 	for _, item := range input {
 		baseURL, err := modelchannel.NormalizeBaseURL(item.BaseURL)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		nextType := normalizeModelAdapterType(item.Type)
 		next := ModelAdapterConfig{
@@ -234,6 +359,7 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			Type:                  nextType,
 			BaseURL:               baseURL,
 			APIKey:                strings.TrimSpace(item.APIKey),
+			CredentialSource:      string(subscriptionauth.NormalizeCredentialSource(item.CredentialSource)),
 			TooltipData:           strings.TrimSpace(item.TooltipData),
 			ModelID:               strings.TrimSpace(item.ModelID),
 			ReasoningEffort:       normalizeReasoningEffort(item.ReasoningEffort),
@@ -252,60 +378,81 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 			next.AnthropicExtraParamsEnabled = item.AnthropicExtraParamsEnabled
 			next.AnthropicExtraParamsJSON = strings.TrimSpace(item.AnthropicExtraParamsJSON)
 		}
+		next.Enabled = copyOptionalBool(item.Enabled)
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
+		next.OpenAIImageGenerationEnabled = item.OpenAIImageGenerationEnabled
+		source := subscriptionauth.NormalizeCredentialSource(next.CredentialSource)
+		if source == "" {
+			return nil, nil, errors.New("模型适配器 credentialSource 仅支持 static、codex 或 grok")
+		}
+		next.CredentialSource = string(source)
+		if source.Managed() {
+			next.APIKey = ""
+		}
+		if next.Type == "openai" {
+			switch source {
+			case subscriptionauth.CredentialSourceCodex:
+				next.BaseURL = subscriptionauth.CodexResponsesURL
+				next.OpenAIEndpoint = modelchannel.OpenAIEndpointResponses
+			case subscriptionauth.CredentialSourceGrok:
+				next.BaseURL = subscriptionauth.GrokAPIBaseURL
+				next.OpenAIEndpoint = modelchannel.OpenAIEndpointChatCompletions
+			}
+		}
 		switch {
 		case next.DisplayName == "":
-			return nil, errors.New("模型适配器 displayName 不能为空")
+			return nil, nil, errors.New("模型适配器 displayName 不能为空")
 		case next.Type == "":
-			return nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
-		case next.APIKey == "":
-			return nil, errors.New("模型适配器 apiKey 不能为空")
+			return nil, nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
+		case !source.Managed() && next.APIKey == "":
+			return nil, nil, errors.New("模型适配器 apiKey 不能为空")
 		case next.TooltipData == "":
-			return nil, errors.New("模型适配器 tooltipData 不能为空")
+			return nil, nil, errors.New("模型适配器 tooltipData 不能为空")
 		case next.ModelID == "":
-			return nil, errors.New("模型适配器 modelID 不能为空")
+			return nil, nil, errors.New("模型适配器 modelID 不能为空")
 		case next.Type == "openai" && !isSupportedReasoningEffort(next.ReasoningEffort):
-			return nil, errors.New("模型适配器 reasoningEffort 仅支持空值、low、medium、high、xhigh、max")
+			return nil, nil, errors.New("模型适配器 reasoningEffort 仅支持空值、low、medium、high、xhigh、max")
 		case next.Type == "openai" && next.OpenAIEndpoint == "":
-			return nil, errors.New("模型适配器 openAIEndpoint 仅支持 /v1/responses、/v1/chat/completions 或 /custom（自定义路径）")
+			return nil, nil, errors.New("模型适配器 openAIEndpoint 仅支持 /v1/responses、/v1/chat/completions 或 /custom（自定义路径）")
 		case next.Type == "openai" && next.OpenAIExtraParamsEnabled:
 			if err := validateJSONMap(next.OpenAIExtraParamsJSON, "openAIExtraParamsJSON"); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.CustomHeadersEnabled:
 			if err := validateHeadersJSON(next.CustomHeadersJSON); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.Type == "anthropic" && next.AnthropicExtraParamsEnabled:
 			if err := validateJSONMap(next.AnthropicExtraParamsJSON, "anthropicExtraParamsJSON"); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		case next.Type == "anthropic" && next.AnthropicThinkingEffort == "":
-			return nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
+			return nil, nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
+		}
+		if err := validateOpenAIImageGenerationEnabled(next); err != nil {
+			return nil, nil, err
 		}
 		limit, err := normalizeMaxConcurrentRequests(next.MaxConcurrentRequests)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		next.MaxConcurrentRequests = limit
-		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
+		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, subscriptionauth.ChannelIDSecret(source, next.APIKey), next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
-			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
+			return nil, nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
 		seenChannelIDs[next.ID] = struct{}{}
-		// 原样复制 ProviderFallback；第二遍在 validateProviderFallbacks 中校验与归一化。
+		// 原样复制 ProviderFallback；引用重写在 normalizeConfig 中、校验在 validateProviderFallbacks。
 		next.ProviderFallback = item.ProviderFallback
+		outboundProxy, err := netproxy.Normalize(item.OutboundProxy)
+		if err != nil {
+			return nil, nil, err
+		}
+		next.OutboundProxy = outboundProxy
 		normalized = append(normalized, next)
 	}
-	normalizeModelAdapterSorts(normalized)
-	if err := validateProviderFallbacks(normalized, seenChannelIDs); err != nil {
-		return nil, err
-	}
-	if err := validateUpstreamCapacityGroups(normalized); err != nil {
-		return nil, err
-	}
-	return normalized, nil
+	return normalized, seenChannelIDs, nil
 }
 
 func normalizeModelAdapterSorts(adapters []ModelAdapterConfig) {
@@ -360,6 +507,17 @@ func validateHeadersJSON(value string) error {
 	return nil
 }
 
+func validateOpenAIImageGenerationEnabled(adapter ModelAdapterConfig) error {
+	if !adapter.OpenAIImageGenerationEnabled {
+		return nil
+	}
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
+	if adapter.Type == "openai" && source == subscriptionauth.CredentialSourceStatic && adapter.OpenAIEndpoint == modelchannel.OpenAIEndpointResponses {
+		return nil
+	}
+	return errors.New("模型适配器 openAIImageGenerationEnabled 仅允许在 openai、static 凭据且 /v1/responses 端点时为 true")
+}
+
 func normalizeReasoningEffort(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
@@ -403,14 +561,26 @@ func normalizeListenAddr(value string, defaultValue string, fieldName string) (s
 	return net.JoinHostPort(host, strconv.Itoa(parsedPort)), nil
 }
 
-func normalizeProviderStreamIdleTimeout(value int) int {
-	if value <= 0 {
-		return DefaultProviderStreamIdleTimeoutSeconds
+func normalizeStreamContinuationConfig(input StreamContinuationConfig) StreamContinuationConfig {
+	output := StreamContinuationConfig{Enabled: input.Enabled}
+	if input.MaxPerTurn > 0 || input.Enabled {
+		output.MaxPerTurn = DefaultStreamContinuationMaxPerTurn
+		if input.MaxPerTurn > MaxStreamContinuationMaxPerTurn {
+			output.MaxPerTurn = MaxStreamContinuationMaxPerTurn
+		} else if input.MaxPerTurn > 0 {
+			output.MaxPerTurn = input.MaxPerTurn
+			if output.MaxPerTurn > MaxStreamContinuationMaxPerTurn {
+				output.MaxPerTurn = MaxStreamContinuationMaxPerTurn
+			}
+		}
 	}
-	if value < MinProviderStreamIdleTimeoutSeconds {
-		return MinProviderStreamIdleTimeoutSeconds
+	if input.TotalDeadlineSeconds > 0 || input.Enabled {
+		output.TotalDeadlineSeconds = clampPositiveInt(input.TotalDeadlineSeconds, DefaultStreamContinuationDeadlineSeconds, MinStreamContinuationDeadlineSeconds, MaxStreamContinuationDeadlineSeconds)
 	}
-	return value
+	if input.OverlapWindowChars > 0 || input.Enabled {
+		output.OverlapWindowChars = clampPositiveInt(input.OverlapWindowChars, DefaultStreamContinuationOverlapWindowChars, MinStreamContinuationOverlapWindowChars, MaxStreamContinuationOverlapWindowChars)
+	}
+	return output
 }
 
 func normalizeObservabilityConfig(input ObservabilityConfig, legacyLog *bool) ObservabilityConfig {
@@ -482,9 +652,12 @@ func normalizeModelAdapterType(value string) string {
 
 // validateProviderFallbacks 在所有渠道 ID 已计算完毕后，对每个启用 fallback 的适配器
 // 执行引用完整性、自引用、重复检测，并原地归一化（trim）候选列表。
+// 启用与禁用都会归一化并保留预算字段。
 func validateProviderFallbacks(normalized []ModelAdapterConfig, knownIDs map[string]struct{}) error {
 	logicalIDs := make(map[string]struct{}, len(normalized))
+	byID := make(map[string]ModelAdapterConfig, len(normalized))
 	for i := range normalized {
+		byID[normalized[i].ID] = normalized[i]
 		if normalized[i].ProviderFallback.Enabled {
 			logicalIDs[normalized[i].ID] = struct{}{}
 		}
@@ -511,6 +684,9 @@ func validateProviderFallbacks(normalized []ModelAdapterConfig, knownIDs map[str
 		if _, logical := logicalIDs[primary]; logical {
 			return fmt.Errorf("模型适配器 providerFallback.primaryChannelID 必须引用未启用 fallback 的物理渠道 %q", primary)
 		}
+		if err := rejectIncompatibleFallbackChannel(normalized[i], byID[primary], "primaryChannelID"); err != nil {
+			return err
+		}
 		if len(fb.CandidateChannelIDs) == 0 || len(fb.CandidateChannelIDs) > MaxProviderFallbackCandidates {
 			return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 数量必须为 1–%d 个，当前为 %d 个", MaxProviderFallbackCandidates, len(fb.CandidateChannelIDs))
 		}
@@ -534,19 +710,54 @@ func validateProviderFallbacks(normalized []ModelAdapterConfig, knownIDs map[str
 			if _, logical := logicalIDs[cid]; logical {
 				return fmt.Errorf("模型适配器 providerFallback.candidateChannelIDs 必须引用未启用 fallback 的物理渠道 %q", cid)
 			}
+			if err := rejectIncompatibleFallbackChannel(normalized[i], byID[cid], "candidateChannelIDs"); err != nil {
+				return err
+			}
 			seenInChain[cid] = struct{}{}
 			trimmed = append(trimmed, cid)
 		}
-		// 写回归一化后的 fallback 配置
-		normalized[i].ProviderFallback = ProviderFallbackConfig{
-			Enabled:             true,
-			PrimaryChannelID:    primary,
-			CandidateChannelIDs: trimmed,
-			MaxHttpAttempts:     fb.MaxHttpAttempts,
-			MaxWaitSeconds:      fb.MaxWaitSeconds,
-		}
+		fb.Enabled = true
+		fb.PrimaryChannelID = primary
+		fb.CandidateChannelIDs = trimmed
+		normalized[i].ProviderFallback = fb
 	}
 	return nil
+}
+
+func rejectIncompatibleFallbackChannel(from, to ModelAdapterConfig, field string) error {
+	if !fallbackChannelsCompatible(from, to) {
+		return fmt.Errorf("模型适配器 providerFallback.%s 必须与当前渠道使用相同的适配器类型和协议端点", field)
+	}
+	return nil
+}
+
+func fallbackChannelsCompatible(from, to ModelAdapterConfig) bool {
+	fromType := strings.ToLower(strings.TrimSpace(from.Type))
+	toType := strings.ToLower(strings.TrimSpace(to.Type))
+	if fromType == "" || toType == "" || fromType != toType {
+		return false
+	}
+	return adapterEndpointFamily(from) == adapterEndpointFamily(to)
+}
+
+func adapterEndpointFamily(adapter ModelAdapterConfig) string {
+	provider := strings.ToLower(strings.TrimSpace(adapter.Type))
+	if provider == "anthropic" {
+		return "anthropic:messages"
+	}
+	endpoint := strings.TrimSpace(adapter.OpenAIEndpoint)
+	base := strings.TrimRight(strings.ToLower(strings.TrimSpace(adapter.BaseURL)), "/")
+	switch {
+	case strings.HasSuffix(base, "/responses"):
+		endpoint = modelchannel.OpenAIEndpointResponses
+	case strings.HasSuffix(base, "/chat/completions"):
+		endpoint = modelchannel.OpenAIEndpointChatCompletions
+	}
+	shape := modelchannel.OpenAIEndpointShape(endpoint)
+	if shape == "" {
+		shape = "chat/completions"
+	}
+	return "openai:" + shape
 }
 
 func normalizeProviderFallbackBudget(fb *ProviderFallbackConfig) error {
@@ -561,8 +772,33 @@ func normalizeProviderFallbackBudget(fb *ProviderFallbackConfig) error {
 	if err != nil {
 		return err
 	}
+	perChannel, err := normalizeProviderFallbackInt(fb.MaxAttemptsPerChannel, "maxAttemptsPerChannel", DefaultProviderFallbackMaxAttemptsPerChannel, MinProviderFallbackMaxAttemptsPerChannel, MaxProviderFallbackMaxAttemptsPerChannel)
+	if err != nil {
+		return err
+	}
+	connect, err := normalizeProviderFallbackInt(fb.ConnectTimeoutSeconds, "connectTimeoutSeconds", DefaultProviderFallbackConnectTimeoutSeconds, MinProviderFallbackConnectTimeoutSeconds, MaxProviderFallbackConnectTimeoutSeconds)
+	if err != nil {
+		return err
+	}
+	firstEvent, err := normalizeProviderFallbackInt(fb.FirstEventTimeoutSeconds, "firstEventTimeoutSeconds", DefaultProviderFallbackFirstEventTimeoutSeconds, MinProviderFallbackFirstEventTimeoutSeconds, MaxProviderFallbackFirstEventTimeoutSeconds)
+	if err != nil {
+		return err
+	}
+	idle, err := normalizeProviderFallbackInt(fb.StreamIdleTimeoutSeconds, "streamIdleTimeoutSeconds", DefaultProviderFallbackStreamIdleTimeoutSeconds, MinProviderFallbackStreamIdleTimeoutSeconds, MaxProviderFallbackStreamIdleTimeoutSeconds)
+	if err != nil {
+		return err
+	}
+	call, err := normalizeProviderFallbackInt(fb.CallTimeoutSeconds, "callTimeoutSeconds", DefaultProviderFallbackCallTimeoutSeconds, MinProviderFallbackCallTimeoutSeconds, MaxProviderFallbackCallTimeoutSeconds)
+	if err != nil {
+		return err
+	}
 	fb.MaxHttpAttempts = attempts
 	fb.MaxWaitSeconds = wait
+	fb.MaxAttemptsPerChannel = perChannel
+	fb.ConnectTimeoutSeconds = connect
+	fb.FirstEventTimeoutSeconds = firstEvent
+	fb.StreamIdleTimeoutSeconds = idle
+	fb.CallTimeoutSeconds = call
 	return nil
 }
 
@@ -587,10 +823,11 @@ func normalizeMaxConcurrentRequests(value int) (int, error) {
 }
 
 func upstreamCapacityGroupIdentity(adapter ModelAdapterConfig) string {
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
 	return strings.Join([]string{
 		strings.TrimSpace(adapter.Type),
 		strings.TrimSpace(adapter.BaseURL),
-		strings.TrimSpace(adapter.APIKey),
+		subscriptionauth.ChannelIDSecret(source, strings.TrimSpace(adapter.APIKey)),
 	}, "\n")
 }
 
@@ -621,15 +858,20 @@ func validateUpstreamCapacityGroups(normalized []ModelAdapterConfig) error {
 	return nil
 }
 
-func normalizeTheme(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "light":
-		return "light"
-	case "dark":
-		return "dark"
-	default:
-		return DefaultTheme
+func copyOptionalBool(value *bool) *bool {
+	if value == nil {
+		return nil
 	}
+	copied := *value
+	return &copied
+}
+
+func optionalBoolOrTrue(value *bool) bool {
+	return value == nil || *value
+}
+
+func ModelAdapterEnabled(adapter ModelAdapterConfig) bool {
+	return optionalBoolOrTrue(adapter.Enabled)
 }
 
 func normalizeRoutingMode(value string) string {

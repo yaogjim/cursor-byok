@@ -46,10 +46,11 @@ import { modalState, resolveModal } from "@/composables/useModal";
 
 import InputModal from "@/components/ui/InputModal.vue";
 import { inputModalState, resolveInputModal } from "@/composables/useInputModal";
+import { isMainWindowPath } from "@/router";
 import { appState, confirmUpdatePrompt, dismissUpdatePrompt, updateViewState } from "@/state/appState";
 import { computed } from "vue";
 import { useRoute } from "vue-router";
 
 const route = useRoute();
-const isMainWindow = computed(() => route.path === "/");
+const isMainWindow = computed(() => isMainWindowPath(route.path));
 </script>

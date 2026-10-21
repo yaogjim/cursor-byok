@@ -60,6 +60,10 @@ func (service *Service) appendSubagentToolResultIdempotent(
 	}
 	runID := strings.TrimSpace(pending.SubagentRunID)
 
+	// attempts fencing is intentionally not part of this production handoff.
+	// Stable Cursor fixture evidence is required before attempt IDs can safely
+	// fence a logical run; the standalone attempts API must not alter this path.
+
 	// 快速路径：已 parent_committed / acknowledged → 幂等返回。
 	record, err := service.subagentRuns.LoadRun(runID)
 	if err != nil {
@@ -283,6 +287,10 @@ func computeSubagentParentCommitKey(runID, toolCallID, resultDigest string) stri
 	raw := fmt.Sprintf("%s:%s:%s", runID, toolCallID, resultDigest)
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:16])
+}
+
+func isSubagentExecClientMessage(msg *agentv1.ExecClientMessage) bool {
+	return msg != nil && (msg.GetSubagentResult() != nil || msg.GetSubagentAwaitResult() != nil || msg.GetForceBackgroundSubagentResult() != nil)
 }
 
 // categorizeSubagentResultMsg 根据 ExecClientMessage 中的 SubagentResult 一键字段

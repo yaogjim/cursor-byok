@@ -10,6 +10,10 @@ import (
 
 // ApplyCursorSettings 用于处理与 ApplyCursorSettings 相关的逻辑。
 func (s *ProxyService) ApplyCursorSettings() error {
+	return s.applyCursorSettingsWithPlan(nil)
+}
+
+func (s *ProxyService) applyCursorSettingsWithPlan(plan *cursor.SettingsSnapshot) error {
 	if s == nil || s.proxy == nil {
 		return fmt.Errorf("proxy is not initialized")
 	}
@@ -35,30 +39,66 @@ func (s *ProxyService) ApplyCursorSettings() error {
 		if err := cursor.EnsureCACertInstalled(s.caCertPEM, caCertPath); err != nil {
 			return fmt.Errorf("install ca cert: %w", err)
 		}
-		if err := cursor.SetSystemNodeExtraCACerts(caCertPath); err != nil {
-			return fmt.Errorf("set node extra ca certs: %w", err)
-		}
 	}
 
-	if err := cursor.WriteUserProxySettings(cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr)); err != nil {
+	if s.cursorSettingsStore == nil {
+		return fmt.Errorf("Cursor settings store is not initialized")
+	}
+	proxyURL := cursor.ProxyURLFromListenAddr(s.proxy.Snapshot().ListenAddr)
+	if plan == nil {
+		snapshot, err := s.cursorSettingsStore.Plan(proxyURL)
+		if err != nil {
+			return err
+		}
+		plan = &snapshot
+	}
+	if err := s.cursorSettingsStore.ApplyPlanned(proxyURL, s.cursorSettingsOwnerID, *plan); err != nil {
 		return err
+	}
+	if goruntime.GOOS == "darwin" {
+		if err := cursor.SetSystemNodeExtraCACerts(caCertPath); err != nil {
+			if restoreErr := s.cursorSettingsStore.Restore(*plan, s.cursorSettingsOwnerID); restoreErr != nil {
+				return fmt.Errorf("set node extra ca certs: %w; 未能恢复原设置: %v", err, restoreErr)
+			}
+			return fmt.Errorf("set node extra ca certs: %w", err)
+		}
 	}
 	s.setCursorSettingsApplied(true)
 	return nil
 }
 
-// ClearCursorSettings 用于处理与 ClearCursorSettings 相关的逻辑。
+// ClearCursorSettings 仅清理当前实例成功注入且仍持有所有权的 Cursor 设置。
 func (s *ProxyService) ClearCursorSettings() error {
+	if s == nil || !s.ownsAppliedCursorSettings() {
+		return nil
+	}
+	if s.cursorSettingsStore == nil {
+		return fmt.Errorf("Cursor settings store is not initialized")
+	}
+	var beforeClear func() error
 	if goruntime.GOOS == "darwin" {
-		if err := cursor.ClearSystemNodeExtraCACerts(); err != nil {
-			return err
+		beforeClear = cursor.ClearSystemNodeExtraCACerts
+		if s.clearSystemNodeExtraCACertsFn != nil {
+			beforeClear = s.clearSystemNodeExtraCACertsFn
 		}
 	}
-	if err := cursor.ClearUserProxySettings(); err != nil {
+	cleared, err := s.cursorSettingsStore.ClearOwned(s.cursorSettingsOwnerID, beforeClear)
+	if err != nil {
 		return err
+	}
+	if !cleared {
+		logger.Infof("clearCursorSettings skipped: ownership transferred to another instance")
+		s.setCursorSettingsApplied(false)
+		return nil
 	}
 	s.setCursorSettingsApplied(false)
 	return nil
+}
+
+func (s *ProxyService) ownsAppliedCursorSettings() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cursorSettingsApplied
 }
 
 // GetDeviceID 用于处理与 GetDeviceID 相关的逻辑。

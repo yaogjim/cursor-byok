@@ -23,6 +23,9 @@ type Settings struct {
 	MaxDiskMB     int
 	QueueSize     int
 	Metadata      SessionMetadata
+	// RuntimeFingerprint carries routing/model metadata for events only.
+	// It must not participate in recorder rotation.
+	RuntimeFingerprint string
 }
 
 type SessionMetadata struct {
@@ -45,6 +48,8 @@ type Correlation struct {
 	ParentConversationID string `json:"parent_conversation_id,omitempty"`
 	ParentToolCallID     string `json:"parent_tool_call_id,omitempty"`
 	SubagentRunID        string `json:"subagent_run_id,omitempty"`
+	SubagentAttemptID    string `json:"subagent_attempt_id,omitempty"`
+	SubagentAttemptNo    int    `json:"subagent_attempt_no,omitempty"`
 	ChildConversationID  string `json:"child_conversation_id,omitempty"`
 	AgentID              string `json:"agent_id,omitempty"`
 	ParentModelCallID    string `json:"parent_model_call_id,omitempty"`
@@ -72,6 +77,8 @@ type Event struct {
 	ParentConversationID string         `json:"parent_conversation_id,omitempty"`
 	ParentToolCallID     string         `json:"parent_tool_call_id,omitempty"`
 	SubagentRunID        string         `json:"subagent_run_id,omitempty"`
+	SubagentAttemptID    string         `json:"subagent_attempt_id,omitempty"`
+	SubagentAttemptNo    int            `json:"subagent_attempt_no,omitempty"`
 	ChildConversationID  string         `json:"child_conversation_id,omitempty"`
 	AgentID              string         `json:"agent_id,omitempty"`
 	ParentModelCallID    string         `json:"parent_model_call_id,omitempty"`
@@ -103,6 +110,10 @@ type Event struct {
 	PayloadRef           string         `json:"payload_ref,omitempty"`
 }
 
+// Optional stream diagnostic keys may appear in Event.Fields:
+// header_at, first_byte_at, last_byte_at, body_end_at, last_effective_content_at,
+// close_cause, partial_boundary, transport_outcome. Missing values are unknown/not_recorded.
+
 type Payload struct {
 	Name        string
 	ContentType string
@@ -116,13 +127,22 @@ type Capture struct {
 }
 
 type Status struct {
-	Enabled         bool   `json:"enabled"`
-	Mode            string `json:"mode"`
-	SessionID       string `json:"session_id,omitempty"`
-	SessionPath     string `json:"session_path,omitempty"`
-	PayloadDegraded bool   `json:"payload_degraded"`
-	DroppedEvents   uint64 `json:"dropped_events"`
-	LastError       string `json:"last_error,omitempty"`
+	Enabled             bool   `json:"enabled"`
+	Mode                string `json:"mode"`
+	SessionID           string `json:"session_id,omitempty"`
+	SessionPath         string `json:"session_path,omitempty"`
+	PayloadDegraded     bool   `json:"payload_degraded"`
+	DroppedEvents       uint64 `json:"dropped_events"`
+	LastError           string `json:"last_error,omitempty"`
+	QuotaBlocked        bool   `json:"quota_blocked"`
+	DiagnosticEnabled   bool   `json:"diagnostic_enabled"`
+	DiagnosticDegraded  bool   `json:"diagnostic_degraded"`
+	DiagnosticDropped   uint64 `json:"diagnostic_dropped"`
+	DiagnosticLastError string `json:"diagnostic_last_error,omitempty"`
+	AppLogEnabled       bool   `json:"app_log_enabled"`
+	AppLogDegraded      bool   `json:"app_log_degraded"`
+	AppLogDropped       uint64 `json:"app_log_dropped"`
+	AppLogLastError     string `json:"app_log_last_error,omitempty"`
 }
 
 type Manifest struct {
@@ -181,6 +201,8 @@ func ChildSpan(parent Correlation) Correlation {
 		ParentConversationID: parent.ParentConversationID,
 		ParentToolCallID:     parent.ParentToolCallID,
 		SubagentRunID:        parent.SubagentRunID,
+		SubagentAttemptID:    parent.SubagentAttemptID,
+		SubagentAttemptNo:    parent.SubagentAttemptNo,
 		ChildConversationID:  parent.ChildConversationID,
 		AgentID:              parent.AgentID,
 		ParentModelCallID:    parent.ParentModelCallID,
@@ -209,6 +231,10 @@ func applyCorrelation(event *Event, correlation Correlation) {
 	event.ParentConversationID = firstNonEmpty(event.ParentConversationID, correlation.ParentConversationID)
 	event.ParentToolCallID = firstNonEmpty(event.ParentToolCallID, correlation.ParentToolCallID)
 	event.SubagentRunID = firstNonEmpty(event.SubagentRunID, correlation.SubagentRunID)
+	event.SubagentAttemptID = firstNonEmpty(event.SubagentAttemptID, correlation.SubagentAttemptID)
+	if event.SubagentAttemptNo == 0 {
+		event.SubagentAttemptNo = correlation.SubagentAttemptNo
+	}
 	event.ChildConversationID = firstNonEmpty(event.ChildConversationID, correlation.ChildConversationID)
 	event.AgentID = firstNonEmpty(event.AgentID, correlation.AgentID)
 	event.ParentModelCallID = firstNonEmpty(event.ParentModelCallID, correlation.ParentModelCallID)
@@ -245,6 +271,10 @@ func mergeCorrelation(base Correlation, overlay Correlation) Correlation {
 	mergeString(&base.ParentConversationID, overlay.ParentConversationID)
 	mergeString(&base.ParentToolCallID, overlay.ParentToolCallID)
 	mergeString(&base.SubagentRunID, overlay.SubagentRunID)
+	mergeString(&base.SubagentAttemptID, overlay.SubagentAttemptID)
+	if overlay.SubagentAttemptNo != 0 {
+		base.SubagentAttemptNo = overlay.SubagentAttemptNo
+	}
 	mergeString(&base.ChildConversationID, overlay.ChildConversationID)
 	mergeString(&base.AgentID, overlay.AgentID)
 	mergeString(&base.ParentModelCallID, overlay.ParentModelCallID)
@@ -275,6 +305,7 @@ func normalizeCorrelation(value Correlation) Correlation {
 	value.ParentConversationID = strings.TrimSpace(value.ParentConversationID)
 	value.ParentToolCallID = strings.TrimSpace(value.ParentToolCallID)
 	value.SubagentRunID = strings.TrimSpace(value.SubagentRunID)
+	value.SubagentAttemptID = strings.TrimSpace(value.SubagentAttemptID)
 	value.ChildConversationID = strings.TrimSpace(value.ChildConversationID)
 	value.AgentID = strings.TrimSpace(value.AgentID)
 	value.ParentModelCallID = strings.TrimSpace(value.ParentModelCallID)

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -22,11 +23,43 @@ import (
 	"cursor/internal/netproxy"
 	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 const healthPath = "/healthz"
 
 const tabServerBaseURL = "https://tab.leokun.cn"
+
+const shutdownDrainTimeout = 5 * time.Second
+
+const (
+	ShutdownReasonAppQuit     = "app_quit"
+	ShutdownReasonServiceStop = "service_stop"
+
+	ShutdownInitiatorTray       = "tray"
+	ShutdownInitiatorOnShutdown = "on_shutdown"
+	ShutdownInitiatorStopProxy  = "stop_proxy"
+	ShutdownInitiatorStartFail  = "start_fail"
+
+	ShutdownOutcomeDrained        = "drained"
+	ShutdownOutcomeCanceled       = "canceled"
+	ShutdownOutcomeAlreadyStopped = "already_stopped"
+	ShutdownOutcomeError          = "error"
+)
+
+type ShutdownCause struct {
+	Reason    string
+	Initiator string
+}
+
+type ShutdownReport struct {
+	Reason              string
+	Initiator           string
+	ActiveProviderCount int
+	DrainDuration       time.Duration
+	CancelCount         int
+	Outcome             string
+}
 
 type Host struct {
 	store              *serverconfig.Store
@@ -36,17 +69,21 @@ type Host struct {
 	stopConfigObserver func()
 	healthHTTP         *http.Client
 	controlPlaneAuth   upstream.AuthorizationProvider
+	credentials        subscriptionauth.CredentialResolver
 
-	runMu       sync.RWMutex
-	httpServer  *http.Server
-	agentModule *forwarder.Module
+	runMu         sync.RWMutex
+	httpServer    *http.Server
+	agentModule   *forwarder.Module
+	agentSessions *upstream.AgentSessionStore // Shared by handlers across configuration rebuilds.
 
 	lastRunErr error
 
 	mux http.Handler
+
+	lastShutdown ShutdownReport
 }
 
-func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationProvider) (*Host, error) {
+func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationProvider, credentials ...subscriptionauth.CredentialResolver) (*Host, error) {
 	if store == nil {
 		return nil, fmt.Errorf("backend config store is required")
 	}
@@ -55,12 +92,17 @@ func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationP
 		return nil, err
 	}
 	cfg := configs.Current()
+	var creds subscriptionauth.CredentialResolver
+	if len(credentials) > 0 {
+		creds = credentials[0]
+	}
 	host := &Host{
 		store:            store,
 		listenAddr:       cfg.BackendListenAddr,
 		configs:          configs,
 		healthHTTP:       newLoopbackHTTPClient(),
 		controlPlaneAuth: controlPlaneAuth,
+		credentials:      creds,
 	}
 	controller, observabilityErr := observability.NewControllerWithHumanSink(
 		store.LogsRoot(),
@@ -71,12 +113,21 @@ func NewHost(store *serverconfig.Store, controlPlaneAuth upstream.AuthorizationP
 		logger.Errorf("初始化链路日志采集失败 error_category=recorder_init_failed")
 	} else {
 		host.observability = controller
-		host.stopConfigObserver = configs.Subscribe(func(next serverconfig.Config) {
-			if err := controller.Reconfigure(observabilitySettings(next)); err != nil {
+		// logger.Init runs before the config is known; now that the controller
+		// holds the real observability budget, enable application file output so
+		// every app log byte shares the same normal partition as traces.
+		logger.ConfigureAppLogWriter(controller)
+	}
+	netproxy.SetGlobal(cfg.OutboundProxy)
+	unsubProxy := configs.Subscribe(func(next serverconfig.Config) {
+		netproxy.SetGlobal(next.OutboundProxy)
+		if host.observability != nil {
+			if err := host.observability.Reconfigure(observabilitySettings(next)); err != nil {
 				logger.Errorf("更新链路日志采集配置失败 error_category=recorder_reconfigure_failed")
 			}
-		})
-	}
+		}
+	})
+	host.stopConfigObserver = unsubProxy
 	if err := host.rebuild(cfg); err != nil {
 		if host.stopConfigObserver != nil {
 			host.stopConfigObserver()
@@ -92,6 +143,13 @@ func (host *Host) ConfigManager() *serverconfig.Manager {
 		return nil
 	}
 	return host.configs
+}
+
+func (host *Host) CredentialResolver() subscriptionauth.CredentialResolver {
+	if host == nil {
+		return nil
+	}
+	return host.credentials
 }
 
 func (host *Host) Observability() *observability.Controller {
@@ -233,22 +291,176 @@ func (host *Host) Start() error {
 }
 
 func (host *Host) Stop(ctx context.Context) error {
+	return host.StopWithCause(ctx, ShutdownCause{
+		Reason:    ShutdownReasonServiceStop,
+		Initiator: ShutdownInitiatorStopProxy,
+	})
+}
+
+func (host *Host) StopWithCause(ctx context.Context, cause ShutdownCause) error {
 	if host == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(cause.Reason) == "" {
+		cause.Reason = ShutdownReasonServiceStop
+	}
+	if strings.TrimSpace(cause.Initiator) == "" {
+		cause.Initiator = ShutdownInitiatorStopProxy
+	}
+
+	drainCtx, cancelDrain := context.WithTimeout(ctx, shutdownDrainTimeout)
+	defer cancelDrain()
+	startedAt := time.Now()
+
 	host.runMu.Lock()
 	serverInstance := host.httpServer
 	module := host.agentModule
 	host.httpServer = nil
 	host.agentModule = nil
 	host.runMu.Unlock()
+
+	activeCount := 0
 	if module != nil {
-		defer module.Close()
+		activeCount = module.ActiveProviderCount()
 	}
-	if serverInstance == nil {
+
+	if serverInstance == nil && module == nil {
+		host.recordShutdown(cause, 0, time.Since(startedAt), 0, ShutdownOutcomeAlreadyStopped)
 		return nil
 	}
-	return serverInstance.Shutdown(ctx)
+
+	var shutdownErr error
+	if serverInstance != nil {
+		shutdownErr = serverInstance.Shutdown(drainCtx)
+	}
+	if module != nil {
+		module.WaitForProvidersIdle(drainCtx)
+	}
+
+	cancelCount := 0
+	if module != nil && module.ActiveProviderCount() > 0 {
+		cancelCount = module.CancelActiveProviders(shutdownCancelMessage(cause))
+	}
+	if module != nil {
+		module.Close()
+	}
+	if serverInstance != nil {
+		_ = serverInstance.Close()
+	}
+
+	drainDuration := time.Since(startedAt)
+	outcome := ShutdownOutcomeDrained
+	if cancelCount > 0 {
+		outcome = ShutdownOutcomeCanceled
+	}
+	if shutdownErr != nil && !errors.Is(shutdownErr, context.DeadlineExceeded) && !errors.Is(shutdownErr, context.Canceled) && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		outcome = ShutdownOutcomeError
+	}
+	host.recordShutdown(cause, activeCount, drainDuration, cancelCount, outcome)
+	if shutdownErr != nil && !errors.Is(shutdownErr, context.DeadlineExceeded) && !errors.Is(shutdownErr, context.Canceled) && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		return shutdownErr
+	}
+	return nil
+}
+
+func (host *Host) LastShutdown() ShutdownReport {
+	if host == nil {
+		return ShutdownReport{}
+	}
+	host.runMu.RLock()
+	defer host.runMu.RUnlock()
+	return host.lastShutdown
+}
+
+func (host *Host) ActiveProviderCount() int {
+	if host == nil {
+		return 0
+	}
+	host.runMu.RLock()
+	module := host.agentModule
+	host.runMu.RUnlock()
+	if module == nil {
+		return 0
+	}
+	return module.ActiveProviderCount()
+}
+
+func (host *Host) BeginActiveProvider(requestID string, onCancel func()) (finish func()) {
+	finish = func() {}
+	if host == nil {
+		return finish
+	}
+	host.runMu.RLock()
+	module := host.agentModule
+	host.runMu.RUnlock()
+	if module == nil || module.Service == nil {
+		return finish
+	}
+	return module.Service.BeginActiveProvider(requestID, onCancel)
+}
+
+func shutdownCancelMessage(cause ShutdownCause) string {
+	return fmt.Sprintf("shutdown reason=%s initiator=%s", strings.TrimSpace(cause.Reason), strings.TrimSpace(cause.Initiator))
+}
+
+func (host *Host) recordShutdown(cause ShutdownCause, activeCount int, drainDuration time.Duration, cancelCount int, outcome string) {
+	report := ShutdownReport{
+		Reason:              cause.Reason,
+		Initiator:           cause.Initiator,
+		ActiveProviderCount: activeCount,
+		DrainDuration:       drainDuration,
+		CancelCount:         cancelCount,
+		Outcome:             outcome,
+	}
+	host.runMu.Lock()
+	host.lastShutdown = report
+	host.runMu.Unlock()
+
+	drainMS := drainDuration.Milliseconds()
+	logger.Infof(
+		"backend shutdown reason=%s initiator=%s active_providers=%d drain_ms=%d cancel_count=%d outcome=%s",
+		cause.Reason,
+		cause.Initiator,
+		activeCount,
+		drainMS,
+		cancelCount,
+		outcome,
+	)
+	if host.observability == nil {
+		return
+	}
+	semantic := observability.OutcomeSucceeded
+	switch outcome {
+	case ShutdownOutcomeCanceled:
+		semantic = observability.OutcomeCanceled
+	case ShutdownOutcomeError:
+		semantic = observability.OutcomeFailed
+	case ShutdownOutcomeAlreadyStopped:
+		semantic = observability.OutcomeSucceeded
+	}
+	_ = host.observability.RecordEvent(context.Background(), observability.Event{
+		Layer:               "runtime",
+		Event:               "shutdown",
+		Capability:          "config",
+		Operation:           "lifecycle.shutdown",
+		Direction:           observability.DirectionProxyInternal,
+		Status:              outcome,
+		SemanticOutcome:     semantic,
+		ImplementationState: observability.ImplementationImplemented,
+		Severity:            observability.SeverityInfo,
+		DurationMS:          drainMS,
+		Fields: map[string]any{
+			"reason":                cause.Reason,
+			"initiator":             cause.Initiator,
+			"active_provider_count": activeCount,
+			"drain_duration_ms":     drainMS,
+			"cancel_count":          cancelCount,
+			"outcome":               outcome,
+		},
+	})
 }
 
 func (host *Host) HealthCheck(ctx context.Context) error {
@@ -308,12 +520,23 @@ func (host *Host) InProcessHealthCheck() error {
 }
 
 func observabilitySettings(cfg serverconfig.Config) observability.Settings {
-	fingerprintValues := []string{
+	storageFingerprint := observability.ConfigFingerprint(
 		cfg.Observability.Mode,
 		fmt.Sprint(cfg.Observability.RetentionDays),
 		fmt.Sprint(cfg.Observability.MaxDiskMB),
+	)
+	return observability.Settings{
+		Mode:               cfg.Observability.Mode,
+		RetentionDays:      cfg.Observability.RetentionDays,
+		MaxDiskMB:          cfg.Observability.MaxDiskMB,
+		Metadata:           observability.RuntimeMetadata(buildinfo.CurrentVersion(), storageFingerprint),
+		RuntimeFingerprint: observabilityRuntimeFingerprint(cfg),
+	}
+}
+
+func observabilityRuntimeFingerprint(cfg serverconfig.Config) string {
+	fingerprintValues := []string{
 		cfg.Routing.Mode,
-		fmt.Sprint(cfg.ProviderStreamIdleTimeout),
 		fmt.Sprint(cfg.HomeMetrics.IncludeCacheWriteInHitRate),
 	}
 	for _, adapter := range cfg.ModelAdapters {
@@ -326,26 +549,88 @@ func observabilitySettings(cfg serverconfig.Config) observability.Settings {
 			fmt.Sprint(adapter.MaxCompletionTokens),
 			fmt.Sprint(adapter.AnthropicMaxTokens),
 			fmt.Sprint(adapter.ThinkingBudgetTokens),
+			fmt.Sprint(adapter.ProviderFallback.MaxHttpAttempts),
+			fmt.Sprint(adapter.ProviderFallback.MaxWaitSeconds),
+			fmt.Sprint(adapter.ProviderFallback.MaxAttemptsPerChannel),
+			fmt.Sprint(adapter.ProviderFallback.ConnectTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.FirstEventTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.StreamIdleTimeoutSeconds),
+			fmt.Sprint(adapter.ProviderFallback.CallTimeoutSeconds),
 		)
 	}
-	fingerprint := observability.ConfigFingerprint(fingerprintValues...)
-	return observability.Settings{
-		Mode:          cfg.Observability.Mode,
-		RetentionDays: cfg.Observability.RetentionDays,
-		MaxDiskMB:     cfg.Observability.MaxDiskMB,
-		Metadata:      observability.RuntimeMetadata(buildinfo.CurrentVersion(), fingerprint),
+	return observability.ConfigFingerprint(fingerprintValues...)
+}
+
+// observabilitySummaryFieldKeys is the closed whitelist of provider/retry
+// diagnostic fields that may reach the human-readable app log. It deliberately
+// excludes raw blobs, request bodies, full URLs and credential-bearing keys.
+var observabilitySummaryFieldKeys = []string{
+	"status_code", "http_status",
+	"attempt", "max_attempts", "retry_decision", "retryable",
+	"failure_category", "failure_cause", "failure_phase", "failure_stage",
+	"recovery_action", "business_outcome", "protocol_final_status",
+	"model_call_final_status", "retry_suppression_reason", "skip_reason",
+	"missing_blob_key_count", "missing_blob_count", "checkpoint_request_id",
+	"phase", "checkpoint_result", "blob_count", "pending_blob_count",
+	"error_summary", "provider_error_summary", "provider_error_summary_type",
+}
+
+const observabilitySummaryMaxRunes = 512
+
+// observabilitySummaryValue re-sanitizes a scalar field and caps it so a
+// credential or oversized body cannot leak into the summary line.
+func observabilitySummaryValue(value any) (string, bool) {
+	if value == nil {
+		return "", false
 	}
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return "", false
+	}
+	text = observability.SanitizeText(text)
+	runes := []rune(text)
+	if len(runes) > observabilitySummaryMaxRunes {
+		text = string(runes[:observabilitySummaryMaxRunes])
+	}
+	return text, true
 }
 
 func logObservabilityEvent(event observability.Event) {
 	args := []any{
 		"layer", event.Layer,
 		"event", event.Event,
+		"app_session_id", strings.TrimSpace(event.AppSessionID),
+		"sequence", event.Sequence,
+		"severity", strings.TrimSpace(event.Severity),
+		"semantic_outcome", strings.TrimSpace(event.SemanticOutcome),
+		"direction", strings.TrimSpace(event.Direction),
 		"trace_id", event.TraceID,
 		"route", event.Route,
 		"execution_target", event.ExecutionTarget,
 		"status", event.Status,
 		"duration_ms", event.DurationMS,
+	}
+	if requestID := strings.TrimSpace(event.CursorRequestID); requestID != "" {
+		args = append(args, "request_id", requestID)
+	} else if requestID := strings.TrimSpace(event.HTTPRequestID); requestID != "" {
+		args = append(args, "request_id", requestID)
+	}
+	if modelCallID := strings.TrimSpace(event.ModelCallID); modelCallID != "" {
+		args = append(args, "model_call_id", modelCallID)
+	}
+	if category := strings.TrimSpace(event.ErrorCategory); category != "" {
+		args = append(args, "error_category", category)
+	}
+	for _, key := range observabilitySummaryFieldKeys {
+		value, ok := event.Fields[key]
+		if !ok {
+			continue
+		}
+		text, ok := observabilitySummaryValue(value)
+		if !ok {
+			continue
+		}
+		args = append(args, key, text)
 	}
 	switch strings.ToLower(strings.TrimSpace(event.Severity)) {
 	case observability.SeverityError:
@@ -381,7 +666,7 @@ func (host *Host) rebuild(cfg serverconfig.Config) error {
 
 func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 	host.listenAddr = cfg.BackendListenAddr
-	agentModule := forwarder.NewModule(appdata.HistoryRootPath(), host.configs, host.observability)
+	agentModule := forwarder.NewModuleWithCredentials(appdata.HistoryRootPath(), host.configs, host.credentials, host.observability)
 	legacyBidiAppendProcedure := "/aiserver.v1.BidiService/BidiAppend"
 	legacyRunSSEProcedure := "/agent.v1.AgentService/RunSSE"
 	routeDeps := upstream.Dependencies{
@@ -389,6 +674,32 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		HTTPClient:           netproxy.NewHTTPClient(30000 * time.Second),
 		Capture:              host.observability,
 	}
+	availableModels := upstream.MergedCatalogAction(routeDeps, upstream.CompatRouteConfig{
+		Name: "available_models", StatusCode: http.StatusOK,
+		MockProtoType: "aiserver.v1.AvailableModelsResponse", MockBuilder: upstream.AvailableModelsMockBuilder,
+	})
+	usableModels := upstream.MergedCatalogAction(routeDeps, upstream.CompatRouteConfig{
+		Name: "usable_models", StatusCode: http.StatusOK,
+		MockProtoType: "aiserver.v1.GetUsableModelsResponse", MockBuilder: upstream.UsableModelsMockBuilder,
+	})
+	defaultModelForCli := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name: "default_model_for_cli", StatusCode: http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelForCliResponse", MockBuilder: upstream.DefaultModelForCliMockBuilder,
+	})
+	defaultModel := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name: "default_model", StatusCode: http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelResponse", MockBuilder: upstream.DefaultModelMockBuilder,
+	})
+	defaultModelNudge := upstream.OfficialDefaultModelAction(routeDeps, upstream.CompatRouteConfig{
+		Name: "default_model_nudge", StatusCode: http.StatusOK,
+		MockProtoType: "aiserver.v1.GetDefaultModelNudgeDataResponse", MockBuilder: upstream.DefaultModelNudgeMockBuilder,
+	})
+	if host.agentSessions == nil {
+		host.agentSessions = upstream.NewAgentSessionStore()
+	}
+	bidiRoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalBidiHandler)
+	runSSERoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalRunSSE)
+	agentServicePassthrough := upstream.AgentRouteAction(routeDeps, host.agentSessions, http.NotFoundHandler())
 
 	host.mux = server.New(
 		server.Use(
@@ -413,12 +724,14 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		server.POST(legacyBidiAppendProcedure,
 			server.Name("bidi_append"),
 			server.ConnectUnary(),
-			server.Local(server.HTTPHandlerAction(agentModule.LocalBidiHandler)),
+			server.Local(bidiRoute),
+			server.Upstream(bidiRoute),
 		),
 		server.POST(legacyRunSSEProcedure,
 			server.Name("run_sse"),
 			server.ConnectStream(),
-			server.Local(server.HTTPHandlerAction(agentModule.LocalRunSSE)),
+			server.Local(runSSERoute),
+			server.Upstream(runSSERoute),
 		),
 		server.POST("/aiserver.v1.AiService/ServerTime",
 			server.Name("server_time"),
@@ -453,52 +766,56 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		server.POST("/aiserver.v1.AiService/AvailableModels",
 			server.Name("available_models"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "available_models",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.AvailableModelsResponse",
-				MockBuilder:   upstream.AvailableModelsMockBuilder,
-			})),
+			server.Local(availableModels),
+			server.Upstream(availableModels),
 		),
 		server.POST("/aiserver.v1.AiService/GetUsableModels",
 			server.Name("usable_models"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "usable_models",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetUsableModelsResponse",
-				MockBuilder:   upstream.UsableModelsMockBuilder,
-			})),
+			server.Local(usableModels),
+			server.Upstream(usableModels),
+		),
+		server.POST("/agent.v1.AgentService/GetUsableModels",
+			server.Name("usable_models"),
+			server.ConnectUnary(),
+			server.Local(usableModels),
+			server.Upstream(usableModels),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModelForCli",
 			server.Name("default_model_for_cli"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model_for_cli",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelForCliResponse",
-				MockBuilder:   upstream.DefaultModelForCliMockBuilder,
-			})),
+			server.Local(defaultModelForCli),
+			server.Upstream(defaultModelForCli),
+		),
+		server.POST("/agent.v1.AgentService/GetDefaultModelForCli",
+			server.Name("default_model_for_cli"),
+			server.ConnectUnary(),
+			server.Local(defaultModelForCli),
+			server.Upstream(defaultModelForCli),
+		),
+		server.POST("/agent.v1.AgentService/GetNewChatNudgeParameterizedModelPicker",
+			server.Name("agent_model_picker_nudge"),
+			server.HTTP(),
+			server.Local(agentServicePassthrough),
+			server.Upstream(agentServicePassthrough),
+		),
+		server.POST("/agent.v1.AgentService/UpdateConversationMetadata",
+			server.Name("agent_conversation_metadata"),
+			server.HTTP(),
+			server.Local(agentServicePassthrough),
+			server.Upstream(agentServicePassthrough),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModel",
 			server.Name("default_model"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelResponse",
-				MockBuilder:   upstream.DefaultModelMockBuilder,
-			})),
+			server.Local(defaultModel),
+			server.Upstream(defaultModel),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModelNudgeData",
 			server.Name("default_model_nudge"),
 			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "default_model_nudge",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetDefaultModelNudgeDataResponse",
-				MockBuilder:   upstream.DefaultModelNudgeMockBuilder,
-			})),
+			server.Local(defaultModelNudge),
+			server.Upstream(defaultModelNudge),
 		),
 		server.POST("/aiserver.v1.AnalyticsService/BootstrapStatsig",
 			server.Name("bootstrap_statsig"),
@@ -552,6 +869,10 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 			server.Name("oauth_token"),
 			server.HTTP(),
 			server.Local(upstream.MockOAuthAction(routeDeps, upstream.CompatRouteConfig{
+				Name:       "oauth_token",
+				StatusCode: http.StatusOK,
+			})),
+			server.Upstream(upstream.MockOAuthAction(routeDeps, upstream.CompatRouteConfig{
 				Name:       "oauth_token",
 				StatusCode: http.StatusOK,
 			})),

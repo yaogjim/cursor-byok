@@ -10,8 +10,49 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/internal/netproxy"
+
 	"gopkg.in/yaml.v3"
 )
+
+func TestNormalizeConfigDefaultsSubagentRescheduleDisabled(t *testing.T) {
+	config, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if config.SubagentReschedule.Enabled {
+		t.Fatal("missing subagentReschedule must remain disabled")
+	}
+	if SubagentRescheduleMaxAttempts != 3 {
+		t.Fatalf("SubagentRescheduleMaxAttempts = %d, want 3", SubagentRescheduleMaxAttempts)
+	}
+}
+
+func TestNormalizeConfigPreservesSubagentRescheduleEnabled(t *testing.T) {
+	config, err := NormalizeConfig(Config{
+		SubagentReschedule: SubagentRescheduleConfig{Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if !config.SubagentReschedule.Enabled {
+		t.Fatal("explicit subagentReschedule.enabled=true was not preserved")
+	}
+}
+
+func TestSubagentRescheduleYAMLOldConfigDefaultsDisabled(t *testing.T) {
+	var config Config
+	if err := yaml.Unmarshal([]byte("backendListenAddr: 127.0.0.1:18090\nproxyListenAddr: 127.0.0.1:18080\n"), &config); err != nil {
+		t.Fatalf("unmarshal old config: %v", err)
+	}
+	normalized, err := NormalizeConfig(config)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.SubagentReschedule.Enabled {
+		t.Fatal("old config without subagentReschedule must remain disabled")
+	}
+}
 
 func TestNormalizeConfigMigratesLegacyLogFlag(t *testing.T) {
 	legacyFull := true
@@ -117,6 +158,49 @@ func testModelAdapter(displayName string, sortValue int) ModelAdapterConfig {
 		ModelID:         displayName,
 		ReasoningEffort: "medium",
 		OpenAIEndpoint:  "/v1/responses",
+	}
+}
+
+func TestNormalizeModelAdapterConfigsPinsManagedSubscriptionEndpoints(t *testing.T) {
+	tests := []struct {
+		name               string
+		credentialSource   string
+		wantBaseURL        string
+		wantOpenAIEndpoint string
+	}{
+		{
+			name:               "codex",
+			credentialSource:   "codex",
+			wantBaseURL:        "https://chatgpt.com/backend-api/codex/responses",
+			wantOpenAIEndpoint: "/v1/responses",
+		},
+		{
+			name:               "grok",
+			credentialSource:   "grok",
+			wantBaseURL:        "https://api.x.ai/v1",
+			wantOpenAIEndpoint: "/v1/chat/completions",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := testModelAdapter(test.name, 1)
+			adapter.BaseURL = "http://127.0.0.1:18091/v1"
+			adapter.APIKey = "must-not-persist"
+			adapter.CredentialSource = test.credentialSource
+			adapter.OpenAIEndpoint = "/v1/responses"
+
+			adapters, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+			if err != nil {
+				t.Fatalf("NormalizeModelAdapterConfigs returned error: %v", err)
+			}
+			got := adapters[0]
+			if got.BaseURL != test.wantBaseURL || got.OpenAIEndpoint != test.wantOpenAIEndpoint {
+				t.Fatalf("managed endpoint = %q %q, want %q %q", got.BaseURL, got.OpenAIEndpoint, test.wantBaseURL, test.wantOpenAIEndpoint)
+			}
+			if got.APIKey != "" {
+				t.Fatalf("managed api key persisted: %q", got.APIKey)
+			}
+		})
 	}
 }
 
@@ -415,9 +499,20 @@ func TestProviderFallbackBudgetDefaultsMissingAndZero(t *testing.T) {
 	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
 		t.Fatalf("missing budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
 	}
+	if fb.MaxAttemptsPerChannel != DefaultProviderFallbackMaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != DefaultProviderFallbackConnectTimeoutSeconds {
+		t.Fatalf("missing recovery = %d/%d", fb.MaxAttemptsPerChannel, fb.ConnectTimeoutSeconds)
+	}
+	if fb.FirstEventTimeoutSeconds != DefaultProviderFallbackFirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != DefaultProviderFallbackStreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != DefaultProviderFallbackCallTimeoutSeconds {
+		t.Fatalf("missing timeouts = %d/%d/%d", fb.FirstEventTimeoutSeconds, fb.StreamIdleTimeoutSeconds, fb.CallTimeoutSeconds)
+	}
 
 	adapters[0].ProviderFallback.MaxHttpAttempts = 0
 	adapters[0].ProviderFallback.MaxWaitSeconds = 0
+	adapters[0].ProviderFallback.MaxAttemptsPerChannel = 0
+	adapters[0].ProviderFallback.ConnectTimeoutSeconds = 0
+	adapters[0].ProviderFallback.FirstEventTimeoutSeconds = 0
+	adapters[0].ProviderFallback.StreamIdleTimeoutSeconds = 0
+	adapters[0].ProviderFallback.CallTimeoutSeconds = 0
 	got, err = NormalizeModelAdapterConfigs(adapters)
 	if err != nil {
 		t.Fatalf("zero budget should normalize: %v", err)
@@ -426,59 +521,71 @@ func TestProviderFallbackBudgetDefaultsMissingAndZero(t *testing.T) {
 	if fb.MaxHttpAttempts != DefaultProviderFallbackMaxHttpAttempts || fb.MaxWaitSeconds != DefaultProviderFallbackMaxWaitSeconds {
 		t.Fatalf("zero budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, DefaultProviderFallbackMaxHttpAttempts, DefaultProviderFallbackMaxWaitSeconds)
 	}
+	if fb.MaxAttemptsPerChannel != DefaultProviderFallbackMaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != DefaultProviderFallbackConnectTimeoutSeconds || fb.FirstEventTimeoutSeconds != DefaultProviderFallbackFirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != DefaultProviderFallbackStreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != DefaultProviderFallbackCallTimeoutSeconds {
+		t.Fatalf("zero recovery = %+v", fb)
+	}
 }
 
 func TestProviderFallbackBudgetLegalBoundsPreserved(t *testing.T) {
-	cases := []struct {
-		attempts, wait int
-	}{
-		{2, 1},
-		{5, 8},
-		{7, 20},
-		{9, 30},
+	cases := []ProviderFallbackConfig{
+		{MaxHttpAttempts: 2, MaxWaitSeconds: 1, MaxAttemptsPerChannel: 1, ConnectTimeoutSeconds: 5, FirstEventTimeoutSeconds: 60, StreamIdleTimeoutSeconds: 30, CallTimeoutSeconds: 900},
+		{MaxHttpAttempts: 5, MaxWaitSeconds: 8, MaxAttemptsPerChannel: 2, ConnectTimeoutSeconds: 30, FirstEventTimeoutSeconds: 600, StreamIdleTimeoutSeconds: 240, CallTimeoutSeconds: 7200},
+		{MaxHttpAttempts: 7, MaxWaitSeconds: 20, MaxAttemptsPerChannel: 3, ConnectTimeoutSeconds: 120, FirstEventTimeoutSeconds: 1800, StreamIdleTimeoutSeconds: 900, CallTimeoutSeconds: 21600},
+		{MaxHttpAttempts: 9, MaxWaitSeconds: 30, MaxAttemptsPerChannel: 1, ConnectTimeoutSeconds: 5, FirstEventTimeoutSeconds: 60, StreamIdleTimeoutSeconds: 30, CallTimeoutSeconds: 900},
 	}
-	for _, test := range cases {
+	for _, budget := range cases {
 		adapters, _, idB, idC := testFallbackChain(t)
-		adapters[0].ProviderFallback = ProviderFallbackConfig{
-			Enabled:             true,
-			PrimaryChannelID:    idB,
-			CandidateChannelIDs: []string{idC},
-			MaxHttpAttempts:     test.attempts,
-			MaxWaitSeconds:      test.wait,
-		}
+		budget.Enabled = true
+		budget.PrimaryChannelID = idB
+		budget.CandidateChannelIDs = []string{idC}
+		adapters[0].ProviderFallback = budget
 		got, err := NormalizeModelAdapterConfigs(adapters)
 		if err != nil {
-			t.Fatalf("legal budget %d/%d rejected: %v", test.attempts, test.wait, err)
+			t.Fatalf("legal budget %+v rejected: %v", budget, err)
 		}
 		fb := got[0].ProviderFallback
-		if fb.MaxHttpAttempts != test.attempts || fb.MaxWaitSeconds != test.wait {
-			t.Fatalf("budget = %d/%d, want %d/%d", fb.MaxHttpAttempts, fb.MaxWaitSeconds, test.attempts, test.wait)
+		if fb.MaxHttpAttempts != budget.MaxHttpAttempts || fb.MaxWaitSeconds != budget.MaxWaitSeconds || fb.MaxAttemptsPerChannel != budget.MaxAttemptsPerChannel || fb.ConnectTimeoutSeconds != budget.ConnectTimeoutSeconds || fb.FirstEventTimeoutSeconds != budget.FirstEventTimeoutSeconds || fb.StreamIdleTimeoutSeconds != budget.StreamIdleTimeoutSeconds || fb.CallTimeoutSeconds != budget.CallTimeoutSeconds {
+			t.Fatalf("budget = %+v, want %+v", fb, budget)
 		}
 	}
 }
 
 func TestProviderFallbackBudgetOutOfRangeFailsTyped(t *testing.T) {
 	cases := []struct {
-		name           string
-		attempts, wait int
-		field          string
+		name   string
+		mutate func(*ProviderFallbackConfig)
+		field  string
 	}{
-		{"attempts_1", 1, 8, "maxHttpAttempts"},
-		{"attempts_10", 10, 8, "maxHttpAttempts"},
-		{"attempts_negative", -3, 8, "maxHttpAttempts"},
-		{"wait_31", 5, 31, "maxWaitSeconds"},
-		{"wait_negative", 5, -1, "maxWaitSeconds"},
+		{"attempts_1", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = 1 }, "maxHttpAttempts"},
+		{"attempts_10", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = 10 }, "maxHttpAttempts"},
+		{"attempts_negative", func(fb *ProviderFallbackConfig) { fb.MaxHttpAttempts = -3 }, "maxHttpAttempts"},
+		{"wait_31", func(fb *ProviderFallbackConfig) { fb.MaxWaitSeconds = 31 }, "maxWaitSeconds"},
+		{"wait_negative", func(fb *ProviderFallbackConfig) { fb.MaxWaitSeconds = -1 }, "maxWaitSeconds"},
+		{"per_channel_4", func(fb *ProviderFallbackConfig) { fb.MaxAttemptsPerChannel = 4 }, "maxAttemptsPerChannel"},
+		{"connect_4", func(fb *ProviderFallbackConfig) { fb.ConnectTimeoutSeconds = 4 }, "connectTimeoutSeconds"},
+		{"connect_121", func(fb *ProviderFallbackConfig) { fb.ConnectTimeoutSeconds = 121 }, "connectTimeoutSeconds"},
+		{"first_event_59", func(fb *ProviderFallbackConfig) { fb.FirstEventTimeoutSeconds = 59 }, "firstEventTimeoutSeconds"},
+		{"first_event_1801", func(fb *ProviderFallbackConfig) { fb.FirstEventTimeoutSeconds = 1801 }, "firstEventTimeoutSeconds"},
+		{"idle_29", func(fb *ProviderFallbackConfig) { fb.StreamIdleTimeoutSeconds = 29 }, "streamIdleTimeoutSeconds"},
+		{"idle_901", func(fb *ProviderFallbackConfig) { fb.StreamIdleTimeoutSeconds = 901 }, "streamIdleTimeoutSeconds"},
+		{"call_899", func(fb *ProviderFallbackConfig) { fb.CallTimeoutSeconds = 899 }, "callTimeoutSeconds"},
+		{"call_21601", func(fb *ProviderFallbackConfig) { fb.CallTimeoutSeconds = 21601 }, "callTimeoutSeconds"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
+			if test.mutate == nil {
+				t.Fatal("missing mutate")
+			}
 			adapters, _, idB, idC := testFallbackChain(t)
-			adapters[0].ProviderFallback = ProviderFallbackConfig{
+			fb := ProviderFallbackConfig{
 				Enabled:             true,
 				PrimaryChannelID:    idB,
 				CandidateChannelIDs: []string{idC},
-				MaxHttpAttempts:     test.attempts,
-				MaxWaitSeconds:      test.wait,
+				MaxHttpAttempts:     5,
+				MaxWaitSeconds:      8,
 			}
+			test.mutate(&fb)
+			adapters[0].ProviderFallback = fb
 			_, err := NormalizeModelAdapterConfigs(adapters)
 			if err == nil {
 				t.Fatal("expected typed budget validation error")
@@ -559,6 +666,72 @@ func TestProviderFallbackBudgetYAMLJSONRoundtrip(t *testing.T) {
 	jsonFB := jsonRoundtrip[0].ProviderFallback
 	if !jsonFB.Enabled || jsonFB.MaxHttpAttempts != 7 || jsonFB.MaxWaitSeconds != 20 || jsonFB.PrimaryChannelID != idB {
 		t.Fatalf("json roundtrip fallback = %+v", jsonFB)
+	}
+}
+
+func TestNormalizeModelAdapterDraftsRestoresIDsWithoutCrossCollectionValidation(t *testing.T) {
+	adapters, _, idB, idC := testFallbackChain(t)
+	adapters[0].ProviderFallback = ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    idB,
+		CandidateChannelIDs: []string{idC},
+	}
+	want, err := NormalizeModelAdapterConfigs(adapters)
+	if err != nil {
+		t.Fatalf("normalize full collection: %v", err)
+	}
+
+	payload, err := yaml.Marshal(want)
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v", err)
+	}
+	var decoded []ModelAdapterConfig
+	if err := yaml.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	for _, row := range decoded {
+		if row.ID != "" {
+			t.Fatalf("yaml.Marshal omitted IDs expected, got %q", row.ID)
+		}
+	}
+
+	got, err := NormalizeModelAdapterDrafts(decoded)
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterDrafts() error = %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("NormalizeModelAdapterDrafts() len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID {
+			t.Fatalf("adapter[%d].ID = %q, want %q", i, got[i].ID, want[i].ID)
+		}
+	}
+	if !got[0].ProviderFallback.Enabled || got[0].ProviderFallback.PrimaryChannelID != idB {
+		t.Fatalf("fallback primary = %+v, want %q", got[0].ProviderFallback, idB)
+	}
+	if len(got[0].ProviderFallback.CandidateChannelIDs) != 1 || got[0].ProviderFallback.CandidateChannelIDs[0] != idC {
+		t.Fatalf("fallback candidates = %#v, want [%q]", got[0].ProviderFallback.CandidateChannelIDs, idC)
+	}
+
+	partial := []ModelAdapterConfig{decoded[0]}
+	if _, err := NormalizeModelAdapterConfigs(partial); err == nil {
+		t.Fatal("NormalizeModelAdapterConfigs should reject alias without the candidate set")
+	}
+	drafts, err := NormalizeModelAdapterDrafts(partial)
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterDrafts(partial) error = %v", err)
+	}
+	if drafts[0].ID != want[0].ID {
+		t.Fatalf("partial alias ID = %q, want %q", drafts[0].ID, want[0].ID)
+	}
+	if drafts[0].ProviderFallback.PrimaryChannelID != idB || drafts[0].ProviderFallback.CandidateChannelIDs[0] != idC {
+		t.Fatalf("partial alias refs = %+v", drafts[0].ProviderFallback)
+	}
+
+	invalid := []ModelAdapterConfig{testModelAdapter("", 1)}
+	if _, err := NormalizeModelAdapterDrafts(invalid); err == nil {
+		t.Fatal("NormalizeModelAdapterDrafts should still reject empty displayName")
 	}
 }
 
@@ -757,5 +930,296 @@ func TestMaxConcurrentRequestsYAMLJSONRoundtrip(t *testing.T) {
 	}
 	if strings.Contains(string(zeroPayload), "maxConcurrentRequests") {
 		t.Fatalf("zero/missing maxConcurrentRequests should be omitted from yaml:\n%s", zeroPayload)
+	}
+}
+
+func TestNormalizeStreamContinuationMissingIsDisabled(t *testing.T) {
+	normalized, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.StreamContinuation.Enabled {
+		t.Fatal("missing streamContinuation must stay disabled")
+	}
+	if normalized.StreamContinuation != (StreamContinuationConfig{}) {
+		t.Fatalf("missing streamContinuation = %+v, want zero value so yaml omitempty skips disk writes", normalized.StreamContinuation)
+	}
+
+	enabled, err := NormalizeConfig(Config{StreamContinuation: StreamContinuationConfig{Enabled: true, MaxPerTurn: 9}})
+	if err != nil {
+		t.Fatalf("NormalizeConfig(enabled) error = %v", err)
+	}
+	if !enabled.StreamContinuation.Enabled {
+		t.Fatal("explicit enabled was dropped")
+	}
+	if enabled.StreamContinuation.MaxPerTurn != DefaultStreamContinuationMaxPerTurn {
+		t.Fatalf("maxPerTurn = %d, want capped %d", enabled.StreamContinuation.MaxPerTurn, DefaultStreamContinuationMaxPerTurn)
+	}
+	if enabled.StreamContinuation.TotalDeadlineSeconds != DefaultStreamContinuationDeadlineSeconds {
+		t.Fatalf("deadline = %d, want %d", enabled.StreamContinuation.TotalDeadlineSeconds, DefaultStreamContinuationDeadlineSeconds)
+	}
+	if enabled.StreamContinuation.OverlapWindowChars != DefaultStreamContinuationOverlapWindowChars {
+		t.Fatalf("overlap = %d, want %d", enabled.StreamContinuation.OverlapWindowChars, DefaultStreamContinuationOverlapWindowChars)
+	}
+}
+
+func TestNormalizeModelAdapterConfigsAllowsManagedCredentialSourceWithoutAPIKey(t *testing.T) {
+	adapter := testModelAdapter("codex-model", 1)
+	adapter.APIKey = ""
+	adapter.CredentialSource = "codex"
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+	if err != nil {
+		t.Fatalf("managed adapter should allow empty apiKey: %v", err)
+	}
+	if got[0].APIKey != "" {
+		t.Fatalf("managed adapter persisted apiKey %q", got[0].APIKey)
+	}
+	if got[0].CredentialSource != "codex" {
+		t.Fatalf("credentialSource = %q", got[0].CredentialSource)
+	}
+	static := testModelAdapter("static-model", 1)
+	static.APIKey = ""
+	if _, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{static}); err == nil {
+		t.Fatal("static adapter still requires apiKey")
+	}
+	tokenA := testModelAdapter("same", 1)
+	tokenA.APIKey = ""
+	tokenA.CredentialSource = "codex"
+	tokenB := tokenA
+	tokenB.APIKey = "should-be-stripped"
+	normalizedA, _ := NormalizeModelAdapterConfigs([]ModelAdapterConfig{tokenA})
+	normalizedB, _ := NormalizeModelAdapterConfigs([]ModelAdapterConfig{tokenB})
+	if normalizedA[0].ID != normalizedB[0].ID {
+		t.Fatal("managed channel ID must not depend on a rotating token")
+	}
+}
+
+func TestOpenAIImageGenerationEnabledJSONYAMLIdentifier(t *testing.T) {
+	var fromJSON ModelAdapterConfig
+	if err := json.Unmarshal([]byte(`{"openAIImageGenerationEnabled":true}`), &fromJSON); err != nil {
+		t.Fatalf("json unmarshal: %v", err)
+	}
+	if !fromJSON.OpenAIImageGenerationEnabled {
+		t.Fatal("json tag openAIImageGenerationEnabled was not decoded")
+	}
+
+	var fromYAML ModelAdapterConfig
+	if err := yaml.Unmarshal([]byte("openAIImageGenerationEnabled: true\n"), &fromYAML); err != nil {
+		t.Fatalf("yaml unmarshal: %v", err)
+	}
+	if !fromYAML.OpenAIImageGenerationEnabled {
+		t.Fatal("yaml tag openAIImageGenerationEnabled was not decoded")
+	}
+
+	var missing ModelAdapterConfig
+	if err := yaml.Unmarshal([]byte("displayName: model\n"), &missing); err != nil {
+		t.Fatalf("yaml unmarshal missing field: %v", err)
+	}
+	if missing.OpenAIImageGenerationEnabled {
+		t.Fatal("missing openAIImageGenerationEnabled must default false")
+	}
+}
+
+func TestNormalizeModelAdapterConfigsOpenAIImageGenerationEnabled(t *testing.T) {
+	allowed := testModelAdapter("img-allowed", 1)
+	allowed.OpenAIImageGenerationEnabled = true
+	got, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{allowed})
+	if err != nil {
+		t.Fatalf("openai+static+responses should allow true: %v", err)
+	}
+	if !got[0].OpenAIImageGenerationEnabled {
+		t.Fatal("allowed true was dropped")
+	}
+
+	missing := testModelAdapter("img-default", 1)
+	got, err = NormalizeModelAdapterConfigs([]ModelAdapterConfig{missing})
+	if err != nil {
+		t.Fatalf("default false should normalize: %v", err)
+	}
+	if got[0].OpenAIImageGenerationEnabled {
+		t.Fatal("missing field must stay false")
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*ModelAdapterConfig)
+		wantErr string
+	}{
+		{
+			name: "anthropic",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.Type = "anthropic"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "chat_completions",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.OpenAIEndpoint = "/v1/chat/completions"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "custom_endpoint",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.OpenAIEndpoint = "/custom"
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "codex",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.CredentialSource = "codex"
+				adapter.APIKey = ""
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+		{
+			name: "grok",
+			mutate: func(adapter *ModelAdapterConfig) {
+				adapter.CredentialSource = "grok"
+				adapter.APIKey = ""
+			},
+			wantErr: "openAIImageGenerationEnabled",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := testModelAdapter("img-"+test.name, 1)
+			adapter.OpenAIImageGenerationEnabled = true
+			test.mutate(&adapter)
+			_, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("NormalizeModelAdapterConfigs() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestOutboundProxyJSONYAMLRoundtripAndDefaults(t *testing.T) {
+	missing, err := NormalizeConfig(Config{})
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if missing.OutboundProxy.Enabled || missing.OutboundProxy.URL != "" {
+		t.Fatalf("missing outboundProxy = %+v", missing.OutboundProxy)
+	}
+
+	input := DefaultConfig()
+	input.OutboundProxy = netproxy.Config{Enabled: false, URL: "http://user:s3cret@proxy.example:8080"}
+	adapter := testModelAdapter("proxy-model", 1)
+	adapter.OutboundProxy = netproxy.Config{Enabled: true, URL: "socks5://127.0.0.1:1080"}
+	input.ModelAdapters = []ModelAdapterConfig{adapter}
+
+	normalized, err := NormalizeConfig(input)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() error = %v", err)
+	}
+	if normalized.OutboundProxy.Enabled || normalized.OutboundProxy.URL != "http://user:s3cret@proxy.example:8080" {
+		t.Fatalf("disabled global must retain URL: %+v", normalized.OutboundProxy)
+	}
+	if !normalized.ModelAdapters[0].OutboundProxy.Enabled || normalized.ModelAdapters[0].OutboundProxy.URL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("model outboundProxy = %+v", normalized.ModelAdapters[0].OutboundProxy)
+	}
+
+	yamlPayload, err := yaml.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	if !strings.Contains(string(yamlPayload), "outboundProxy:") {
+		t.Fatalf("yaml lost outboundProxy:\n%s", yamlPayload)
+	}
+	var fromYAML Config
+	if err := yaml.Unmarshal(yamlPayload, &fromYAML); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	roundtrip, err := NormalizeConfig(fromYAML)
+	if err != nil {
+		t.Fatalf("yaml roundtrip normalize: %v", err)
+	}
+	if roundtrip.OutboundProxy != normalized.OutboundProxy || roundtrip.ModelAdapters[0].OutboundProxy != normalized.ModelAdapters[0].OutboundProxy {
+		t.Fatalf("yaml roundtrip = %+v / %+v", roundtrip.OutboundProxy, roundtrip.ModelAdapters[0].OutboundProxy)
+	}
+
+	jsonPayload, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if !strings.Contains(string(jsonPayload), `"outboundProxy"`) {
+		t.Fatalf("json lost outboundProxy: %s", jsonPayload)
+	}
+	var fromJSON Config
+	if err := json.Unmarshal(jsonPayload, &fromJSON); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	jsonRoundtrip, err := NormalizeConfig(fromJSON)
+	if err != nil {
+		t.Fatalf("json roundtrip normalize: %v", err)
+	}
+	if jsonRoundtrip.OutboundProxy != normalized.OutboundProxy || jsonRoundtrip.ModelAdapters[0].OutboundProxy != normalized.ModelAdapters[0].OutboundProxy {
+		t.Fatalf("json roundtrip = %+v / %+v", jsonRoundtrip.OutboundProxy, jsonRoundtrip.ModelAdapters[0].OutboundProxy)
+	}
+}
+
+func TestNormalizeConfigRejectsInvalidEnabledOutboundProxy(t *testing.T) {
+	_, err := NormalizeConfig(Config{OutboundProxy: netproxy.Config{Enabled: true, URL: "ftp://proxy.example"}})
+	if err == nil || !strings.Contains(err.Error(), "outboundProxy.url") || strings.Contains(err.Error(), "ftp://") {
+		t.Fatalf("global invalid error = %v", err)
+	}
+	adapter := testModelAdapter("bad-proxy", 1)
+	adapter.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://user:s3cret@"}
+	_, err = NormalizeModelAdapterConfigs([]ModelAdapterConfig{adapter})
+	if err == nil || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("model invalid error = %v", err)
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func TestNormalizeModelAdapterEnabledMissingIsTrueAndFalseDisables(t *testing.T) {
+	missing := testModelAdapter("enabled-default", 1)
+	normalizedMissing, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{missing})
+	if err != nil {
+		t.Fatalf("missing enabled: %v", err)
+	}
+	if !ModelAdapterEnabled(normalizedMissing[0]) || normalizedMissing[0].Enabled != nil {
+		t.Fatalf("missing enabled = %#v, want nil/true", normalizedMissing[0].Enabled)
+	}
+
+	explicitTrue := missing
+	explicitTrue.Enabled = boolPtr(true)
+	normalizedTrue, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{explicitTrue})
+	if err != nil {
+		t.Fatalf("explicit true: %v", err)
+	}
+	if !ModelAdapterEnabled(normalizedTrue[0]) || normalizedTrue[0].Enabled == nil || !*normalizedTrue[0].Enabled {
+		t.Fatalf("explicit true = %#v", normalizedTrue[0].Enabled)
+	}
+
+	explicitFalse := missing
+	explicitFalse.Enabled = boolPtr(false)
+	normalizedFalse, err := NormalizeModelAdapterConfigs([]ModelAdapterConfig{explicitFalse})
+	if err != nil {
+		t.Fatalf("explicit false: %v", err)
+	}
+	if ModelAdapterEnabled(normalizedFalse[0]) || normalizedFalse[0].Enabled == nil || *normalizedFalse[0].Enabled {
+		t.Fatalf("explicit false = %#v", normalizedFalse[0].Enabled)
+	}
+	if normalizedFalse[0].ID != normalizedMissing[0].ID || normalizedTrue[0].ID != normalizedMissing[0].ID {
+		t.Fatalf("enabled must not change channel ID: missing=%q true=%q false=%q", normalizedMissing[0].ID, normalizedTrue[0].ID, normalizedFalse[0].ID)
+	}
+
+	var fromYAML Config
+	if err := yaml.Unmarshal([]byte("modelAdapters:\n  - displayName: enabled-default\n    type: openai\n    baseURL: https://api.example.com/v1\n    apiKey: test-key\n    tooltipData: enabled-default\n    modelID: enabled-default\n    reasoningEffort: medium\n    openAIEndpoint: /v1/responses\n"), &fromYAML); err != nil {
+		t.Fatalf("unmarshal missing enabled: %v", err)
+	}
+	loaded, err := NormalizeConfig(fromYAML)
+	if err != nil {
+		t.Fatalf("normalize yaml: %v", err)
+	}
+	if len(loaded.ModelAdapters) != 1 || !ModelAdapterEnabled(loaded.ModelAdapters[0]) {
+		t.Fatalf("old yaml missing enabled must stay enabled: %+v", loaded.ModelAdapters)
 	}
 }

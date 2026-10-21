@@ -130,10 +130,15 @@ const (
 )
 
 type StreamEvent struct {
-	Message              *agentv1.AgentServerMessage
-	End                  bool
-	TerminalErrorCode    string
-	TerminalErrorMessage string
+	Message               *agentv1.AgentServerMessage
+	End                   bool
+	TerminalErrorCode     string
+	TerminalErrorMessage  string
+	TerminalRetryable     *bool
+	TerminalHTTPStatus    string
+	TerminalErrorCategory string
+	TerminalModelCallID   string
+	TerminalRequestID     string
 }
 
 type StreamSubscriber struct {
@@ -173,6 +178,7 @@ type ActiveStream struct {
 	CurrentProviderToken                        uint64
 	CurrentCompactionToken                      uint64
 	TimerTokens                                 map[string]uint64
+	NextTimerToken                              uint64 // 同一流内递增；清理或重建 TimerTokens 时不得重置。
 	ProviderAccumulatedText                     string
 	ProviderAccumulatedReasoning                string
 	ProviderAccumulatedReasoningSignature       string
@@ -180,15 +186,34 @@ type ActiveStream struct {
 	ProviderAccumulatedReasoningItemID          string
 	ProviderAccumulatedReasoningStatus          string
 	ProviderAccumulatedReasoningSummary         json.RawMessage
+	ProviderAccumulatedReasoningOrigin          modeladapter.ReasoningOrigin
 	ProviderSyntheticThinkingStartedAt          time.Time
 	ProviderSyntheticThinkingPublished          bool
+	ProviderPublishedToolArgs                   bool
 	ProviderFinishReason                        string
 	ProviderUsage                               turnUsageSnapshot
 	ProviderStreamStats                         ProviderStreamStats
+	ProviderStreamDiagnostics                   *modeladapter.StreamDiagnostics
 	ProviderTerminalRecorded                    bool
 	FinalizedModelCallIDs                       map[string]struct{}
 	ProviderTerminalToolInvocation              bool
+	StreamSource                                string
+	TurnProviderStartedAt                       time.Time
+	ContinuationIndex                           int
+	ContinuedFromModelCallID                    string
+	ContinuationSpawned                         bool
+	ContinuationParentText                      string
+	ContinuationParentReasoning                 string
+	ContinuationOverlapWindow                   int
+	ContinuationOverlapResolved                 bool
+	ContinuationOverlapMismatch                 bool
+	ContinuationRemainderText                   string
+	ContinuationRemainderReasoning              string
+	ContinuationNewVisibleBytes                 int
+	ContinuationDeadline                        time.Time
+	ContinuationAbortReason                     string
 	PendingCompaction                           *PendingCompaction
+	OverflowRecoveryAttempted                   bool
 	PendingCheckpointBlobWrites                 map[uint32]string
 	ConfirmedCheckpointBlobs                    map[string]struct{}
 	NextCheckpointBlobRequestID                 uint32
@@ -264,6 +289,11 @@ type checkpointTerminalAction struct {
 	ErrorCode                 string
 	ErrorMessage              string
 	AcknowledgeSubagentRunIDs []string
+	Retryable                 *bool
+	HTTPStatus                string
+	ErrorCategory             string
+	ModelCallID               string
+	RequestID                 string
 }
 
 type pendingCheckpointPublish struct {
@@ -293,37 +323,73 @@ type PendingCompaction struct {
 	HookMessage               string
 	SummaryModelCallID        string
 	StartedAt                 time.Time
+	// HomologousPrefixFrozen 标记生产 plan 已按连续归档前缀冻结；旧单测直接构造的 Pending 保持零值。
+	HomologousPrefixFrozen bool
+	// FrozenPrefixStart/End/Entries 是 plan 时深拷贝的同源前缀身份、内容和半开区间，
+	// 无论 native 能否编码都必须保留，apply 按稳定 JSON 核对。
+	FrozenPrefixStart   int
+	FrozenPrefixEnd     int
+	FrozenPrefixEntries []HistoryEntry
+	// NativeArchiveSource 仅在前缀可无损原生编码时设置，经 clone/event 传递到 apply。
+	NativeArchiveSource *compactionNativeArchiveSource
 }
 
 type ProviderStreamStats struct {
-	Provider               string
-	Model                  string
-	Attempt                int
-	HTTPAttempt            int
-	HTTPStatus             string
-	Attribution            string
-	CompletionMarker       bool
-	ModelEventCount        int
-	ChunkCount             int
-	VisibleTextBytes       int
-	ReasoningBytes         int
-	PartialToolCount       int
-	CompletedToolCount     int
-	DispatchedToolCount    int
-	ToolDispatchState      string
-	DownstreamPublished    bool
-	PotentialSideEffect    string
-	FirstEventAt           time.Time
-	StartedAt              time.Time
-	FinishedAt             time.Time
-	StreamDuration         time.Duration
-	Retryable              string
-	RetryReason            string
-	RetrySuppressionReason string
-	ProtocolFinalStatus    string
-	ModelCallFinalStatus   string
-	FailureStage           string
-	ErrorCategory          string
+	Provider                 string
+	Model                    string
+	Attempt                  int
+	HTTPAttempt              int
+	HTTPStatus               string
+	HTTPProtocol             string
+	ContentEncoding          string
+	AutoDecompressed         bool
+	ContentLength            int64
+	ConnectionReused         bool
+	ConnectionWasIdle        bool
+	ConnectionObserved       bool
+	RawByteCount             int64
+	LastErrorType            string
+	LastSSEEventType         string
+	LastSSEEventIDHash       string
+	LastSSESequence          int64
+	LastResponseStatus       string
+	StreamRecoveryAttempts   int
+	Attribution              string
+	CompletionMarker         bool
+	ModelEventCount          int
+	ChunkCount               int
+	VisibleTextBytes         int
+	ReasoningBytes           int
+	PartialToolCount         int
+	CompletedToolCount       int
+	DispatchedToolCount      int
+	ToolDispatchState        string
+	DownstreamPublished      bool
+	PotentialSideEffect      string
+	FirstEventAt             time.Time
+	HeaderAt                 time.Time
+	FirstByteAt              time.Time
+	LastByteAt               time.Time
+	BodyEndAt                time.Time
+	LastEffectiveContentAt   time.Time
+	FirstEffectiveContentAt  time.Time
+	CloseCause               string
+	PartialBoundary          string
+	TransportOutcome         string
+	StartedAt                time.Time
+	FinishedAt               time.Time
+	StreamDuration           time.Duration
+	Retryable                string
+	RetryReason              string
+	RetrySuppressionReason   string
+	ProtocolFinalStatus      string
+	ModelCallFinalStatus     string
+	FailureStage             string
+	ErrorCategory            string
+	ProviderErrorSummary     string
+	ProviderErrorSummaryType string
+	ContinuedFromModelCallID string
+	ContinuationIndex        int
 }
 
 type ProviderRequest struct {
@@ -338,11 +404,13 @@ type ProviderRequest struct {
 	StableMessageCount  int
 	Tools               []json.RawMessage
 	MaxTokens           int
+	EnforceOutputLimit  bool // 仅摘要等内部调用启用：强制把 MaxTokens 作为输出预算发送。
 	RequestKnobs        map[string]any
 	CompileSummary      string
 	Observer            modeladapter.LLMArtifactObserver
 	ArtifactPaths       *modeladapter.LLMArtifactPaths
 	RequestBodyOverride map[string]any
+	StreamDiagnostics   *modeladapter.StreamDiagnostics
 }
 
 type ProviderGateway interface {
@@ -404,45 +472,48 @@ func (err providerTerminalError) Unwrap() error {
 }
 
 type toolResultEntryPayload struct {
-	ToolCallID               string          `json:"tool_call_id"`
-	ToolName                 string          `json:"tool_name"`
-	Arguments                string          `json:"arguments,omitempty"`
-	ResultText               string          `json:"result_text,omitempty"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
-	ProviderItemID           string          `json:"provider_item_id,omitempty"`
-	ProviderCallID           string          `json:"provider_call_id,omitempty"`
-	ProviderStatus           string          `json:"provider_status,omitempty"`
-	ToolCall                 json.RawMessage `json:"tool_call,omitempty"`
+	ToolCallID               string                       `json:"tool_call_id"`
+	ToolName                 string                       `json:"tool_name"`
+	Arguments                string                       `json:"arguments,omitempty"`
+	ResultText               string                       `json:"result_text,omitempty"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
+	ProviderItemID           string                       `json:"provider_item_id,omitempty"`
+	ProviderCallID           string                       `json:"provider_call_id,omitempty"`
+	ProviderStatus           string                       `json:"provider_status,omitempty"`
+	ToolCall                 json.RawMessage              `json:"tool_call,omitempty"`
 }
 
 type toolCallEntryPayload struct {
-	ToolCallID               string          `json:"tool_call_id"`
-	ToolName                 string          `json:"tool_name"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
-	ProviderItemID           string          `json:"provider_item_id,omitempty"`
-	ProviderCallID           string          `json:"provider_call_id,omitempty"`
-	ProviderStatus           string          `json:"provider_status,omitempty"`
-	ToolCall                 json.RawMessage `json:"tool_call"`
+	ToolCallID               string                       `json:"tool_call_id"`
+	ToolName                 string                       `json:"tool_name"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
+	ProviderItemID           string                       `json:"provider_item_id,omitempty"`
+	ProviderCallID           string                       `json:"provider_call_id,omitempty"`
+	ProviderStatus           string                       `json:"provider_status,omitempty"`
+	ToolCall                 json.RawMessage              `json:"tool_call"`
 }
 
 type assistantTextPayload struct {
-	Text                     string          `json:"text"`
-	ReasoningContent         string          `json:"reasoning_content,omitempty"`
-	ReasoningSignature       string          `json:"reasoning_signature,omitempty"`
-	ReasoningSignatureSource string          `json:"reasoning_signature_source,omitempty"`
-	ReasoningItemID          string          `json:"reasoning_item_id,omitempty"`
-	ReasoningStatus          string          `json:"reasoning_status,omitempty"`
-	ReasoningSummary         json.RawMessage `json:"reasoning_summary,omitempty"`
+	Text                     string                       `json:"text"`
+	ReasoningContent         string                       `json:"reasoning_content,omitempty"`
+	ReasoningSignature       string                       `json:"reasoning_signature,omitempty"`
+	ReasoningSignatureSource string                       `json:"reasoning_signature_source,omitempty"`
+	ReasoningItemID          string                       `json:"reasoning_item_id,omitempty"`
+	ReasoningStatus          string                       `json:"reasoning_status,omitempty"`
+	ReasoningSummary         json.RawMessage              `json:"reasoning_summary,omitempty"`
+	ReasoningOrigin          modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
 }
 
 type metadataPayload struct {
@@ -459,12 +530,22 @@ type promptContextEntryPayload struct {
 
 type modelMessageEntryPayload struct {
 	Message modeladapter.Message `json:"message"`
+	// NativeMessage 保存已支持原生 CoreMessage 的正文，仅在映射首条设置；
+	// 随外层 JSON 序列化可规范化空白及 HTML 转义，不保证原始内容哈希不变。
+	NativeMessage json.RawMessage `json:"native_message,omitempty"`
+	// NativeMessageParts 是该原文对应的连续 model_message 条目数，默认1。
+	NativeMessageParts int `json:"native_message_parts,omitempty"`
 }
 
 type runtimeStateEntryPayload struct {
 	PlanText string                                `json:"plan_text,omitempty"`
 	Plans    map[string]*agentv1.PlanRegistryEntry `json:"plans,omitempty"`
 	Todos    []*agentv1.TodoItem                   `json:"todos,omitempty"`
+	// NativeSummary/NativeSummaryArchive/NativeSummaryArchives 仅记录已保全的
+	// 外来摘要/归档父图 raw32 ID；旧内联 root 路径不得绑定这些字段。
+	NativeSummary         []byte   `json:"native_summary,omitempty"`
+	NativeSummaryArchive  []byte   `json:"native_summary_archive,omitempty"`
+	NativeSummaryArchives [][]byte `json:"native_summary_archives,omitempty"`
 }
 
 type compactionSummaryEntryPayload struct {
@@ -475,6 +556,18 @@ type compactionSummaryEntryPayload struct {
 	CompactTurnCount          int32  `json:"compact_turn_count,omitempty"`
 	MessagesToCompact         int32  `json:"messages_to_compact,omitempty"`
 	PreserveCurrentTurnInputs bool   `json:"preserve_current_turn_inputs,omitempty"`
+	// NativeArchiveSource 为可选 JSON 对象；缺省走旧本地读，native writer 拒绝。
+	NativeArchiveSource json.RawMessage `json:"native_archive_source,omitempty"`
+}
+
+// compactionNativeArchiveSource 是 §19.3k 冻结的同源归档来源。五字段写入不得 omitempty，
+// 读取必须逐项检查存在性；0 与缺字段不是同一状态。
+type compactionNativeArchiveSource struct {
+	PrefixStart    int    `json:"prefix_start"`
+	PrefixEnd      int    `json:"prefix_end"`
+	CandidateCount uint32 `json:"candidate_count"`
+	ActualCount    uint32 `json:"actual_count"`
+	WindowTail     uint32 `json:"window_tail"`
 }
 
 type ModeSource string

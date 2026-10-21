@@ -165,6 +165,58 @@ flowchart LR
 
 注释：控制面负责“用户配置与本地服务生命周期”，流量面负责“让 Cursor 请求进入本地 backend”，Agent Runtime 负责“把 Cursor Agent 协议翻译成用户模型调用并回灌工具结果”。
 
+### 4.1 控制面双集成导航
+
+主窗口控制面按已批准计划拆成五条同层路由，由 [`frontend/src/router/index.js`](../frontend/src/router/index.js) 与 [`frontend/src/layouts/MainLayout.vue`](../frontend/src/layouts/MainLayout.vue) 共用一个壳。产品名称与保存合同见工作决策基线 §10.13。
+
+```mermaid
+flowchart LR
+    App[主窗口 1100x720]
+    App --> Overview["数据概览 /"]
+    App --> Cursor["Cursor 集成 /cursor"]
+    App --> Gateway["网关集成 /gateway"]
+    App --> Models["上游模型 /models"]
+    App --> Settings["系统设置 /settings"]
+    Cursor --> Runtime[共享模型运行时]
+    Gateway --> Runtime
+    Models --> Runtime
+```
+
+实现约束：
+
+- 侧栏短名为「概览 / Cursor / 网关 / 模型 / 设置」；页面标题使用完整名称。Cursor 与 Gateway 显示运行状态圆点；Gateway 未启用显示「未启用」，运行失败显示告警。
+- 旧 `/config` 重定向到 `/settings`，旧 `/model-config` 重定向到 `/models`。模型配置不再打开独立窗口。
+- 离开 dirty 页面时由路由守卫确认并丢弃本页草稿；各页通过 `SaveCursorConfig` / `SaveGatewayConfig` / `SaveModelAdapters` / `SaveSystemSettings` 做 section 合并，不提交整份用户配置覆盖其他页。
+- 启停 Cursor 只走 `StartProxy` / `StopProxy`；启停 Gateway 只走独立 `StartGateway` / `StopGateway`。两者不共用一个 `serviceBusy` 语义去阻塞对方生命周期。
+- 本小节描述当前源码中的导航与保存接线。Wails 窗口视觉点击不属于本 PRD 的已确认运行证据。
+- 已批准但未实现的四页 IA、`/access` 路由与小时桶见 §4.2、§10.2 与 §14.16；不得把那些合同写成当前源码行为。
+
+### 4.2 控制面 v5 四页导航（已批准，未实现）
+
+已批准的下一代控制面改为顶部四页，由未来的 `MainLayout` 顶部标签栏与 `/access` 接入中心承载。产品名称与保存合同见工作决策基线 §10.14。在代码落地前，本小节不是当前运行证据。
+
+```mermaid
+flowchart LR
+    App[主窗口 1100x720]
+    App --> Overview["总览 /"]
+    App --> Access["接入 /access?client="]
+    App --> Models["模型 /models"]
+    App --> Settings["设置 /settings"]
+    Access --> Cursor["client=cursor"]
+    Access --> Gateway["client=gateway"]
+    Access --> Future["codex/claude 生产未开通"]
+    Cursor --> Runtime[共享模型运行时]
+    Gateway --> Runtime
+    Models --> Runtime
+```
+
+目标约束：
+
+- 旧 `/cursor` → `/access?client=cursor`，`/gateway` → `/access?client=gateway`；`/config` → `/settings`，`/model-config` → `/models` 保持。
+- 接入内部切换与离开页面都按当前 client 对应 scope 做 dirty 确认；保存仍是单 scope，禁止总保存。
+- 接入/模型计数来自真实状态。Codex/Claude 生产面板为空态或 unsupported。
+- 窗口最小尺寸仍为 `980×640`；系统主题与小时报告见 §10.2 / §14.16。
+
 ## 5. 模块职责边界
 
 | 模块 | 主要路径 | 职责 | 不应承担的职责 |
@@ -185,7 +237,50 @@ flowchart LR
 | 更新 | [`internal/updater`](../internal/updater) | 手动检查、下载确认、校验、安装确认和临时文件清理 | 不自动下载或跳过用户确认 |
 | Tab relay 服务 | [`cursor-tab-server`](../cursor-tab-server) | 独立 relay，使用 Cursor token 转发 Tab/Cpp/FileSync/Git 相关 RPC 到官方 upstream | 不是根应用内嵌服务，不是用户 BYOK provider |
 
+### 5.1 托管订阅凭据与 Codex 账户池
+
+模型适配器只持久化 `credentialSource=codex|grok`，不保存订阅账户 ID 或运行时 token。`internal/subscriptionauth` 在请求进入 provider adapter 前解析当前激活账户，并仅将实际账户 ID 和 access token 放入当次内存请求；接入页通过脱敏的 `AccountStatus` 管理账户，不接触 token。
+
+Codex 使用版本化的本机私有 `codex-auth.json`。旧 schema v1 单账户文件在首次读取时原子迁移为 schema v2 `accounts[]`，原账户保持激活；第一个新账户自动激活，后续导入或设备授权账户保持备用，重复导入只更新同一账户的凭据并保留其激活与用量状态。用户可在 Codex 接入页列出、激活、逐账户刷新用量和删除账户。
+
+运行时遵循以下边界：
+
+- `Resolve(codex)` 选择唯一激活且可用的账户；没有激活账户时选择第一个可用账户并持久化为 active。
+- 401 只定向刷新原请求的账户。刷新成功后同账户重试一次；OAuth 明确认证失效时只标记该账户 `auth_required`，再选择备用账户。
+- 只有明确 quota 错误且尚未产生模型事件、不是模型测试、共享 fallback budget 仍有余额时，才将失败账户标记为耗尽并切换到下一个可用账户；同一旧账户的重复耗尽信号不得再次推进 active。
+- Codex 周窗口与会话窗口按账户存储。额度账户在已知重置时间到达后恢复候选资格；重置时间未知时通过逐账户刷新用量恢复。认证失效与仍处于额度阻塞期的账户不会被自动选中。
+- 401 刷新和 quota 轮换都只允许一次内部重试；已产生输出后不切换账户，避免重复内容或副作用。
+
+### 5.2 Rule 事实源、索引恢复与同步授权合同
+
+Rule 正文的唯一事实源是应用私有 Rule 目录中的规范 Markdown 文件；文件名提供 Rule `id`，文件正文提供 `content`。docs index 同时承载 Rule 投影、用户上传文档与 `additional_docs`，因此它不是 Rule 事实源，也不能整体由 Rule 文件重建。
+
+运行时遵循以下边界：
+
+- reconciliation 只幂等替换或删除可识别的 Rule 投影，必须保留上传文档、`additional_docs` 和其他非 Rule 记录。损坏 index 先隔离，再恢复可从有效 Rule 文件重建的投影；无法恢复的上传记录不伪造。
+- Rule CRUD 成功表示 Rule 文件已原子提交。索引更新失败只将投影标记为 dirty 并触发后续 reconciliation，不回滚已提交 Rule；dirty 未修复前 Rule Prompt 继续使用有效 Rule 文件，Rule 来源的 docs query fail closed，避免返回已删除的陈旧正文。
+- Rule 文件无法恢复 `title`、`git_origin` 或 URL 时，重建仅使用 `title=id`，其他字段留空，不把推断值写成事实。
+- 初始容量合同按字节计算：单 Rule 128 KiB、最多 128 个 Rule、磁盘 Rule 正文总量 1 MiB、单次 Prompt 注入 256 KiB。超限不截断；既有超限文件保留在磁盘但隔离，不进入 Prompt。
+- Rule 远端同步为 `manual-opt-in`：默认纯本地，不允许后台自动上传正文。未来 consent 存在应用私有状态中，绑定脱敏 Cursor 控制面账号与 consent 版本，不进入普通 YAML 导入导出；关闭同步立即停止网络，不自动删除本地或远端副本。
+
+### 5.3 managed Codex 缓存亲和合同
+
+managed Codex 只在稳定本地账号身份、稳定 conversation 和逻辑 `ModelCallID` 均存在时启用亲和。应用私有订阅目录保存独立 32 字节 `codex-affinity.key`，不得复用观测密钥，也不得进入配置、Wails DTO、日志或导出。
+
+- Router 使用 HMAC 域分离派生 `prompt_cache_key`、`session-id`、`thread-id` 和 `x-client-request-id`。前三项在同一稳定账号与同一 conversation 内稳定；请求 ID 额外绑定 `ModelCallID`，同一 HTTP retry 保持不变，不同逻辑请求唯一。
+- 401 刷新后稳定账号不变时保持亲和；quota 切换账号后重新分区。token 指纹 fallback、邮箱和 `ChatGPTAccountID` 不直接作为亲和键。
+- 只对 `credentialSource=codex` 且精确 ChatGPT Codex Responses 端点注入。调用方 body/header 同名值先删除或覆盖；`previous_response_id` 继续无条件剥离，`store=false` 保持。
+- 内部 profile 为 `control | prompt_key | full`，空值或未知值回到 `control`。字段已注入不代表缓存收益；收益只能由后续 fake upstream、脱敏指标和同负载 A/B 证明。
+
 ## 6. 服务生命周期
+
+### 6.0 重开 BYOK 复用已应用配置（2026-09-08）
+
+用户确认退出保留接入配置，替代旧实现中已注入实例退出即清盘的行为。`ShutdownForQuitFrom` 仍幂等停止服务和 drain 请求，但不调用 `ClearCursorSettings`，代理设置、owner 文件及 `NODE_EXTRA_CA_CERTS` 保留。下一实例 `StartProxy` 继续由 `Plan.NeedsChange` 检查实际键值；一致时启动服务并按现有 `ApplyPlanned` 接管 owner，不触发退出 Cursor。首次/真变更仍走确认、正常退出、应用设置、重启及失败补偿，所有权锁不变。
+
+显式 `StopProxy` 仍只清理本实例成功应用且持有所有权的配置；新进程未成功 Start 时不清理旧 owner。用户接受暂停期间代理不可用（包括期间重新打开 Cursor）；彻底断开需成功启动接管后停止。本次不引入遗留 owner 强制接管/自动清理，不将确认永久持久化。回退只恢复退出清理调用，原配置及所有权格式不迁移。
+
+验收用隔离设置目录和服务端口验证“确认启动→退出→新实例启动”不再确认、backend/proxy 正常运行，并验证显式停止清理、真实设置变更仍确认和跨 owner 保护。系统 CA/钥匙串/launchctl/真实 Cursor 使用替身，实机证据另记。需求见工作决策基线 §10.14「Cursor 启动与重启」，执行与缺口见 `task/todo.md`。
 
 服务启动链路由控制面发起，核心顺序如下：
 
@@ -406,6 +501,58 @@ flowchart TD
 - `conversation.lock` 保护同一 conversation 的并发写入。
 - `logs/traces/<session>/events.jsonl` 和 payload 文件是版本化诊断输入，不是业务事实源；客户端不得反向读取它们驱动路由、会话或 UI 状态。
 - `basic` 日志禁止正文；用户明确启用的本机 `full` 可以保存写盘前已清除凭据的业务原文。广告缓存、更新临时包、审计文件和任何日志模式都不得包含 API Key、Authorization、Cookie 或完整敏感 headers。
+
+### 10.1 数据概览 metrics report 数据流
+
+数据概览不扫描 `context.json` 或 `recent_events` 现场重算历史。趋势、日历热力图和范围内 KPI 都从 `usage.json` 的 `daily[]` 投影。
+
+```mermaid
+flowchart TD
+    ProviderEvents[Provider / turn 终态] --> UsageStore[forwarder UsageFileStore]
+    UsageStore --> UsageJson["usage.json daily[]"]
+    UsageJson --> LoadSummary[historymetrics.LoadUsageSummary]
+    LoadSummary --> FilterRange["GetHomeMetricsReport range=7d|30d|all"]
+    FilterRange --> Report["HomeMetricsReport range timezone summary daily"]
+    Report --> HomeUI[数据概览 KPI / 趋势 / 日历]
+    HomeUI -->|刷新| FilterRange
+    HomeUI -->|重置| ResetUsage[ResetHomeMetricsSummary]
+    ResetUsage --> UsageStore
+```
+
+合同：
+
+- Wails 入口是 [`internal/bridge/metrics.go`](../internal/bridge/metrics.go) 的 `GetHomeMetricsReport(rangeName)`；前端经 `getHomeMetricsReport` 写入 `appState.homeMetricsReport`。
+- `range` 只实现 `7d`、`30d`、`all`，未知值归一为 `all`。`7d`/`30d` 按 UTC 日历日截取含今天在内的最近 N 天；空日期由前端热力图按区间补零，后端不虚构小时桶。
+- `timezone` 固定返回 `UTC`，与现有 usage 写入口径一致。页面必须标明该时区。
+- `summary` 由过滤后的 `daily[]` 再聚合：`providerCallsTotal`、`turnsTotal`、`validTurnsTotal`、`invalidTurnsTotal`、Token 与缓存命中率。`providerCallsTotal` 不得被前端映射成 `turnsTotal`。
+- 全量 KPI 仍可通过 `GetHomeMetricsSummary` 读取；概览趋势切换必须以 report 接口为准，保证 KPI 与图表使用同一范围。
+- 重置只调用 `UsageFileStore.Reset()`，清零聚合与 `daily[]`，不删除会话 history。
+- 读取失败必须把错误投影到页面并提供重试；无 `daily[]` 时保留零值 KPI 并显示「暂无按日数据」。
+- 已批准的 `24h` 小时桶尚未实现，见 §10.2。当前已交付合同仍仅为 daily `7d|30d|all`。
+
+### 10.2 v5 小时 usage 报告（已批准，未实现）
+
+v5 总览需要 `24h` 小时粒度，但小时序列不得从 `recent_events` 推断。必须先扩展 `usage.json` 持久小时聚合，再扩展 `GetHomeMetricsReport`。
+
+```mermaid
+flowchart TD
+    ProviderEvents[Provider / turn 终态] --> UsageStore[forwarder UsageFileStore]
+    UsageStore --> Daily["usage.json daily[]"]
+    UsageStore --> Hourly["usage.json hourly[] 持久 UTC 小时桶"]
+    Daily --> DayReport["range=30d|all|7d granularity=day"]
+    Hourly --> HourReport["range=24h granularity=hour"]
+    DayReport --> Report["HomeMetricsReport range granularity timezone dataVersion summary buckets"]
+    HourReport --> Report
+    Report --> HomeUI[总览 KPI / 趋势 / 52周日热力图]
+```
+
+合同：
+
+- 小时桶在写入 usage 时与日桶一并原子更新；保留至少最近 48 个完整 UTC 小时，更旧小时可修剪。日桶仍服务 `30d`/`all` 与 52 周热力图。
+- 旧文件无 `hourly` 时：日报告继续可读；`24h` 返回空桶并显式「无小时数据」，禁止用日桶、正弦图或 `recent_events` 补造。
+- 报告字段至少包括 `range`、`granularity`、UTC 起止、`dataVersion`/`generatedAt`、桶数组和同一版本 `summary`。`24h` 不得展示日数据冒充小时；`30d`/`all` 不得伪造小时数据。
+- Token 与缓存命中率使用双轴或独立轨道。重置清零 daily 与 hourly，不删除 `history/<conversation-id>/`。
+- 回滚小时 UI 时保留已迁移的小时字段和既有 `7d|30d|all` 日报告。
 
 ## 11. 模型适配与 provider 数据流
 
@@ -812,6 +959,40 @@ new → triaged → exported → analyzed → fix_linked → verifying
 - **完成门禁**：协议、查询、案例、AI 包、GUI、启动器和独立归档均有测试；实际可用平台完成按钮启动 smoke；其他平台只能声明构建证据。
 - **verdict**：用户已确认关键产品与安全边界，`Design Readiness=approved`。实现必须按 analysis project、schema v2、query、diagnostics、case、bundle、GUI、launcher、distribution 的依赖顺序增量交付。
 
+
+#### DESIGN-LOG-ENHANCEMENT-20260910：日志增强与总额度内异常保留
+
+需求锚点：工作决策基线 §5.5 / LOG-ENH-1–4。`Design Readiness=approved`，实现状态 `verified-partial`；代码与隔离自动化验证已完成，真实运行实例与现场故障复验尚未执行。
+
+**已批准并实现的合同**
+
+- 复用 schema v2 `Event`、`logsink.RotatingFile`、现有分析器 events 表、查询和报告；WARN/ERROR 安全副本写入 `logs/diagnostics/diagnostics-*.jsonl`，不引入新平台、案例系统或外部依赖。事件在分流前固定 `(app_session_id, sequence, timestamp)`；异常副本清除 `payload_ref`，其他事实保持一致。
+- 总磁盘预算仍为配置值 B。异常预留 `D=floor(B/8)`，普通分区使用 `B-D`；app、trace、payload 与受管元数据均属于普通分区，原 app 100 MiB 轮转上限只是分区内的次级上限，不叠加到 B 之外。异常期限继承 `retentionDays`，分片容量或期限先达到即轮转最旧受管分片，不承诺保留满期限。
+- 普通分区先清理过期受管日志，再清理 closed/full trace，然后把 closed/basic trace 与旧 app 分片合并为按时间排序的单一档（时间相同以路径为稳定次序）。正在使用的 trace 和 app 分片、未知或损坏 manifest、未知普通文件及 symlink 目标受保护。保护对象占满时停止超额写入并报告配额受阻，业务请求继续。
+- app、trace/payload 与 diagnostics 写入共享预算协调；配置重载复用同一预算，创建新 recorder 失败时恢复旧预算。应用启动读取配置前只输出控制台，配置生效后文件日志通过 controller 准入；关闭与并发写入使用既有锁边界，日志失败不递归写入同一 sink。
+- 仍会继续恢复且 `status=retrying`、`retry_decision=retry|retry_stream_pre_event_eof` 的 attempt 投影为 WARN，错误类别原样保留；exhausted/no_retry 和业务失败继续为 ERROR。分析器不为该 WARN attempt 生成终态 `request_error`，最终调用统计仍以 `model_call_final` 为准，正常取消不计为失败。
+- checkpoint 只记录 `checkpoint_request_id`、计数、phase、`checkpoint_result` 与安全 error summary；ACK 无匹配 pending 项时标为 `unmatched`，不猜测 late ACK，不保存 blob key 数组，不引入持久 ACK 账本。`FetchUpstream` 与 `ForwardToUpstream` 对齐记录构造、请求、读取、响应过大等实际阶段，不改变请求、重试或 fallback 行为。
+- human sink 与分析器采用关闭白名单和二次净化；自由文本摘要上限 512 runes，完整 URL、常见凭据形态、正文、headers、查询、真实 payload 和敏感 key 不进入详情或导出。旧 v1/v2 事件缺新字段时保持 `unknown/not_recorded`。
+- 分析器目录和直接文件输入均识别 diagnostics 分片。同一 dataset 只以 `(app_session_id, sequence)` 识别副本；fingerprint 忽略 diagnostics 主动清除的 `payload_ref`，但事件、attempt 或安全字段真实不一致会报冲突。目录装载优先 trace 事件，确保 full trace 的 `payload_ref` 和来源不被异常副本覆盖；缺稳定身份的旧事件不猜测去重。
+- 状态链区分 trace/payload、队列、diagnostics 与 app 日志降级；客户端和两个设置入口显示配额阻止、丢弃计数及最近错误。磁盘整体不可写时只保证可获得的内存状态或 stderr 提示，不承诺异常持久化。
+
+**复核补齐的边界合同**
+
+- 普通分区准入覆盖事件、payload、app 文本与 manifest：任一写入被拒绝时不落盘并进入降级状态；manifest 被拒绝时保留上一份完好文件，关闭失败不再静默，由状态上报。任一写入失败使缓存用量失效，下次准入按磁盘重新计量，避免临时文件或失败清理造成隐性超额。
+- app 与事件写入保留普通分区内既有的 1 MiB 事件预留，供 manifest 等元数据与原子替换使用，总额度不变。
+- 异常分区准入先回收最旧封存分片，必要时封存当前写入器自己的分片后再判断；超大单条记录不会先触发历史分片删除。每个写入器的活跃分片在预算内登记并受保护，日志轮转不删除其他写入器正在使用的分片，也不跟随或删除 symlink。
+- 回收只接受受支持 schema 版本（v1/v2）、已知 mode（full/basic）、身份与目录一致且开始时间有效的已结束会话；未知 schema、未知 mode、身份不符或时间缺失的会话一律保留，避免较旧构建删除未来格式。
+- 队列保留原有 `QueueSize` 与单一 FIFO，异常事件预留 `max(1, QueueSize/8)` 槽位，普通事件不得占用；队列丢弃总数含义不变，异常队列丢弃另计入 `DiagnosticDropped` 并在排空和关闭后保持可见；`off` 模式不启用预留。
+- 消费端在多输入路径下统一排序，保证 trace 事件先于异常副本进入数据集；冲突按净化前事件的规范化摘要判定，只忽略 `payload_ref`；仅有异常分片的会话通过既有 warning、报告和 GUI 总览明确提示材料不完整，且不输出原始会话标识。
+- checkpoint 拒绝 ACK 只记录固定类别，不写入 blob key 或客户端原始错误正文。
+
+**验证与边界**
+
+- 隔离 HOME 下，根模块相关 Go 包测试、observability/logsink race、受影响包 vet 通过（收口输出 `FINAL_ROOT_REVIEW_PASS`）；分析器 load/report/gui/analyze/project 测试与 vet、分析器 GUI 前端 production build 通过。完整命令、回归用例清单与一次字段白名单回归见 `docs/process.md`。
+- 未读取或修改真实日志、运行配置和运行实例；未发真实上游请求、部署、重启、commit 或 push。GLM、checkpoint 恢复业务逻辑、证书信任、上游请求/重试/fallback 行为均未改变。
+- `delivery_status=verified-partial`：待增强版本实际运行后复验 checkpoint ACK/timeout、客户端 CA 来源和上游断点；不同请求后续成功仍不能作为原请求恢复证据。现有 `0.0.71.2` 本机构建产物早于本轮复核修复，不作为本次修复的验收证据；重新构建须另行安排。
+- 回退边界：仅撤销本轮代码；不改写历史事件，不删除已产生的 diagnostics 分片冒充回退，不改变业务恢复策略。自动淘汰不可恢复，因此仅删除上述明确受管且可回收的分片。
+
 ### 14.5 DESIGN-PROVIDER-DISCONNECT-001：Provider 断连终态与安全恢复
 
 - **Design Readiness**：`approved`（P0 终态、观测和安全重试）；subagent 原子结果提交为后续独立切片。
@@ -1005,10 +1186,10 @@ AND retry_budget_available
 
 架构约束：
 
-- 保留 `SelectChannelForModel` 单渠道接口，并新增 `ChannelPlan`（primary + ordered candidates）解析；fallback 关闭时返回单渠道计划，现有路径不变。
+- 保留 `SelectChannelForModel` 单渠道接口，并新增 `ChannelPlan`（primary + ordered candidates）解析；单渠道计划仍注入 RecoverySettings 与四阶段活性，不走旧的无设置 Router 路径。
 - `FallbackAwareRouter` 按计划逐个重建 provider request，不复用上一渠道 raw body；旧 response body 由 retry/adapter 关闭。
 - adapter/retry 通过 typed `FallbackSafetyInfo` 记录 `raw_bytes_observed`、`model_event_observed`、request-build、HTTP attempts 和等待预算；router 不根据错误文本推断输出安全状态。
-- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`。原始 P1 默认值为最多 5 次 HTTP attempt 与 8 秒退避预算；产品化后的配置范围、默认/兼容、单渠道 3 次上限和 wait 哨兵由 §14.9.4 覆盖。
+- 整条 fallback chain 保持同一 `model_call_id`；每渠道尝试独立 `channel_attempt`。默认值为最多 5 次 HTTP attempt、每渠道 2 次与 8 秒退避预算；产品化后的配置范围、默认/兼容、每渠道上限和 wait 哨兵由 §14.9.4 覆盖。
 - `RequestBodyOverride`、provider opaque reasoning/tool state、图片、跨 Provider tools、不足的 context/output 容量会抑制候选；连续被跳过候选不能改变最后一个已实际尝试渠道的兼容性基准。
 - fallback 工件后缀按“最后一个实际兼容候选”计算；若剩余候选都会被门禁跳过，当前渠道保留原始 `model_call_id`，观测中的 `fallback_to` 也指向真正会尝试的下一渠道。
 - 显式 allowlist 代表用户授权候选模型语义变化；UI 明示费用、隐私、模型语义和工具兼容风险。
@@ -1208,21 +1389,26 @@ cli-model-pool.yaml + stdin prompt
 `ProviderFallbackConfig` 新增：
 
 - `maxHttpAttempts: int`：缺失/0 默认 5；保存合法范围 2–9。
-- `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30，单位为秒。
+- `maxWaitSeconds: int`：缺失/0 默认 8；保存合法范围 1–30。只累计实际退避 sleep，不是调用墙钟。
+- `maxAttemptsPerChannel: int`：缺失/0 默认 2；保存合法范围 1–3。
+- `connectTimeoutSeconds: int`：缺失/0 默认 30；保存合法范围 5–120。
+- `firstEventTimeoutSeconds: int`：缺失/0 默认 600；保存合法范围 60–1800。
+- `streamIdleTimeoutSeconds: int`：缺失/0 默认 240；保存合法范围 30–900。根级 `providerStreamIdleTimeout` 删除。
+- `callTimeoutSeconds: int`：缺失/0 默认 7200；保存合法范围 900–21600。退避期间暂停该时钟。
 
-归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时字段保留但不参与运行。
+归一化顺序必须先为全部 adapter 重算派生 `id`，再校验 fallback 引用与预算。启用 fallback 的逻辑 adapter 只能引用 `providerFallback.enabled=false` 的物理渠道作为 primary/candidate；禁止逻辑 alias 嵌套进另一条链，避免向 alias 的虚拟 endpoint 直接发请求或形成隐式重试链。每条链最多包含 1 个 primary 与 1–4 个有序 candidate，即总共最多 5 个物理渠道；前端和后端都必须拒绝第 5 个 candidate，并保持引用、自引用、重复和顺序校验。非零越界在保存/规范化 API 返回 typed validation error；router 接收的 `ChannelPlan` 再防御性 clamp 到范围，防止手工或旧内存数据绕过保存入口。禁用 fallback 时仍注入同一套 RecoverySettings 与活性，只是不切换渠道。候选必须同一 adapter 类型和 endpoint family；不允许 OpenAI/Anthropic 跨协议混排。熔断、按供应商拆网络、partial-output continuation 均不实施。
 
-每次 fallback chain 创建一个 `FallbackRetryBudget(maxHttpAttempts, maxWaitSeconds)`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, 3)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `3+1+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `3+3+1+1+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
+每次 fallback chain 创建一个共享 `FallbackRetryBudget` 与一条跨渠道 `providerLiveness`。启用 fallback 时采用覆盖优先分配：先按实际切换顺序统计当前请求下后续兼容渠道并各预留 1 次 attempt，当前渠道获得 `min(remainingAttempts - reservedAttempts, maxAttemptsPerChannel)`；预算不足以覆盖当前与全部后续渠道时，当前渠道仍按顺序获得 1 次，预算耗尽后的链尾不发送 HTTP。真实 `client.Do` 前消费一次 attempt，真实 sleep 前从同一链预留 wait，切换渠道不重置。典型分配为 3 渠道/5 attempts → `2+2+1`、5 渠道/5 attempts → `1+1+1+1+1`、5 渠道/9 attempts → `2+2+2+2+1`。不兼容候选不占预留；运行时始终不突破全链 attempt/wait 预算。退避保持 `200ms × 2^(attempt-1)`、单次 cap 2s、full jitter `U(0, cap)`；`Retry-After` 优先。
 
-wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认 4s。普通单渠道 `FallbackBudget == nil` 时继续使用 4s。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
+wait 覆盖的哨兵是 `FallbackBudget != nil`，不是 `FallbackRemainingWait > 0`。adapter 先完成普通 `normalizeProviderRetry`，随后在 fallback 路径把 `maxTotalWait` **直接覆盖**为该链当前剩余 wait（包括 0）；0 表示禁止任何后续 sleep，绝不能回落到单渠道默认值。若 `Retry-After` 大于链剩余 wait，则不 sleep、也不做零延迟同渠道重试；本渠道以 `wait_budget_exhausted` 结束，router 仅在错误类别和安全窗口仍允许时切到下一兼容渠道。
 
-跨 Provider 继续执行 §14.7 的 messages、tools、图片/附件、context/output、opaque state 与 `RequestBodyOverride` 门禁。同渠道 P0 可以按既有合同重试 HTTP 500，但 **500 不允许切换渠道**；router 的切换 allowlist 只能包含 transport、429、502/503/504、零原始字节且首 model event 前的 EOF/decode/idle failure，不得复用宽泛 `status >= 500` 或统一 `ProviderErrorServer5xx` 判定。任意 raw byte、model event、工具/checkpoint/downstream 副作用或 context cancel 后立即终止链。
+动作矩阵由 `classifyProviderFailure` 唯一决定。HTTP 500/502/503/504/524、可恢复 transport、TLS handshake EOF、网关建连/首事件超时：当前渠道最多 2 次，仍失败且安全则切换。429 遵守可容纳的 `Retry-After`，否则跳过等待并安全切换。401 只走凭据刷新/账号轮换。403、其他 4xx、529、父取消、证书校验、永久 DNS、请求构建、协议解析、provider terminal、流空闲超时和整呼超时快速失败，不切渠道。任意 raw byte、model event、工具/checkpoint/downstream 副作用或父 context cancel 后立即终止链。不得复用宽泛 `status >= 500` 或统一 `ProviderErrorServer5xx` 判定。健康请求的首 Token 晚于 90 秒但早于 600 秒不得被旧全局 idle 或 `maxWaitSeconds` 误杀。
 
 ### 14.9.5 前端保存、交互与观测合同
 
 保存必须对含派生 ID 的完整 adapter 集合完成引用、自引用、重复和预算校验，随后才在序列化 payload 时删除 `id`；Go 后端重新计算 ID。导入导出、禁用回显和旧配置 roundtrip 使用同一纯投影合同，不得让 `appState` 与 `configProjection` 对禁用字段采用不同语义。
 
-`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供“全链最大 HTTP 尝试次数（默认 5）”和“全链最大等待秒数（默认 8）”。帮助文本必须说明：单渠道最多 3、实际按剩余预算分配、alias 自身不发请求、已有输出后不切换，以及跨 Provider 的费用、隐私、模型语义和工具兼容风险。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
+`ModelEditor` 对 fallback-enabled adapter 显示“逻辑路由（建议仅子代理）”，提供全链 attempt/wait、每渠道次数和四项活性输入。帮助文本必须说明：单渠道默认 2（1–3）、累计等待不含推理时间、alias 自身不发请求、已有输出后不切换，以及同协议/endpoint family 限制。候选编辑使用 4 个连续有序槽位；后一槽仅在前一槽已选择时出现，清空中间槽会截断后续槽，每个下拉排除 primary、逻辑 alias 和其他槽已选渠道。长列表必须把视口可用高度施加到真实滚动容器，鼠标滚动、点击末项和键盘导航都能到达全部物理 adapter。
 
 逻辑 alias 的“保存并测试”及单卡片“测试”只保存或阻止直接 endpoint 请求，并提示使用运行验证；物理渠道仍可单独测试。“测试全部”只调度物理 adapter，静默跳过逻辑 alias，不显示保存提示，也不把跳过计入批量测试总数。
 
@@ -1322,7 +1508,450 @@ resolver 把 limit 与瞬态组 key 投影到 `ResolvedChannel`，router 再覆�
 
 验收必须包含配置两方向交错和 race、hash no-op/replace、同组峰值、异组隔离、retry 持槽、capacity fallback、同组跳过、取消无泄漏、前端默认/边界/roundtrip，以及根 module test/race/vet、前端 build 和差异检查。当前真实 `grok-HA` 按用户决定保持缺失/`0`；因此只允许声明容量能力经受控非零 fixture 验证，不得声明当前在线上游已经受容量保护。
 
-## 15. 核心不变量
+## 14.11 DESIGN-MULTI-CLIENT-CHAT-GATEWAY-001：最小 Chat Gateway
+
+- **Design Readiness**：`approved`（计划 `.cursor/plans/placeholder_6b5e8b5a.plan.md`）。
+- **决策时间**：2026-08-25。
+- **范围边界**：阶段 1 只交付独立 18091 的 models + 纯文本 Chat Completions。不改 proto、MITM、certs，不扰动真实 18080/18090，不做 tools/Responses/ACP/独立生命周期。
+
+### 14.11.1 拓扑与生命周期
+
+```text
+Cursor IDE/CLI --> 18080/18090 --> 现有 Cursor Host mux --> Router
+Cherry/OpenAI SDK --> 18091 + Bearer --> internal/gateway http.Server --> DefaultProviderGateway/Router
+```
+
+Gateway 是独立 `http.Server`，默认关闭、loopback-only。阶段 1 随当前服务启动：Cursor（backend + MITM + 设置注入）成功后再启动 Gateway。Gateway 启动失败写入独立 `GatewayLastError`，不回滚 Cursor。停止时先尽力停 Gateway，失败也不阻止 MITM/设置/Backend 清理。阶段 4 之前不宣称可脱离 Cursor Integration 单独运行。
+
+### 14.11.2 复用与禁止复制
+
+请求经现有 `forwarder.DefaultProviderGateway` 进入 Router/fallback/retry/包级容量 limiter。`stream=false` 由 handler 聚合 `ModelEvent`。Gateway 不得复制 limiter，不得调用 `SaveLastAgentModelHash`。公开别名解析发生在进入 Router 之前，Router 只看到 target adapter ID。
+
+### 14.11.3 配置、token 与降级
+
+最小 YAML：`enabled`、`listenAddr`、`token`、`publicModels`. token 由后端生成。`SaveUserConfig` 在锁内 overlay 磁盘 token，与 hash overlay 并列。默认导出调用 `StripGatewayToken`；再导入时若文档 token 为空则 overlay 现有 token，显式带 token 的 YAML 才替换。JSON/Wails 使用 `json:"-"`，前端投影和 localStorage 只有 `tokenConfigured`。复制/轮换是显式 Wails 方法。配置与临时文件 `0600`；首次写入 `gateway` 键前备份 `.bak-pre-gateway`。旧版本 struct 无该字段，再次保存会丢块。
+
+### 14.11.3a DESIGN-MODEL-AVAILABILITY-20260924：启停与默认公开
+
+- **Design Readiness**：`approved`（用户确认停用全入口、重名稳定后缀及最小实施方案；2026-09-24）。继承 §14.11.1–3 的 Gateway 生命周期、鉴权、token 与分区保存合同；本节只覆盖模型可用性和公开模型派生规则。
+- **现状与原因（已核实）**：`config/types.go` 的模型配置无启用状态；`config/gateway.go` 只解析显式 `publicModels`，公开 ID 禁空白且最多 32 项；`config/resolver.go`、Cursor catalog 与 Gateway 分别消费模型配置。直接在前端隐藏无法阻断旧 ID 调用；直接对缺失映射补行会复活被用户取消公开的模型。真实用户数据分布未读取，不作为实施前提；不改用户现有配置或运行实例。
+- **数据和身份**：`modelAdapters[].enabled` 缺失即 true，显式 false 为停用；不参加渠道 ID/分组哈希。`gateway.publicModels` 保留既有 `id,targetAdapterID` 自定义公开名，增加按 `targetAdapterID` 关联的显式不公开状态；没有自定义项表示“随模型启用自动公开”，不能把缺映射解释为停用公开。目标身份变化沿现有 remap；旧自定义名称保留。独立取消公开不会停用模型；停用模型保留公开偏好，重新启用后按原偏好恢复。删除模型应同时清理该目标的公开偏好，不能留下失效映射阻断模型页保存。
+- **默认名和冲突**：按已保存模型顺序展示所有启用且未取消公开的模型；无自定义公开名时用规范化后的 `displayName`（允许内部空白）；自定义公开名优先保留。与自定义名冲突或两个默认名相同的默认项，使用其模型 ID 的稳定短后缀区分，并保证最终唯一；未冲突项不变。公开名最大长度与现有校验保持一致，超长时仅截断为容纳后缀；取消 32 项硬上限以实现全量默认公开，且不静默截断。不存在的旧目标不自动改绑到其他模型，旧 ID 不能越权回落到 provider `modelID`。
+- **运行边界**：Cursor/CLI 目录、默认选择只展示可用模型；显式旧 ID 命中停用项时拒绝调用而不路由到其他本地或官方模型；自动选择跳到首个可用模型，无可用模型明确失败。fallback alias 停用时失败，primary/candidate 停用时从实际计划移除，全部不可用则失败；不把停用渠道发送到上游。Gateway 的 Chat/Responses 请求与 `/v1/models` 使用同一公开解析，取消公开/停用后旧公开 ID 不可调用；保留 loopback/Bearer/token 安全边界。
+- **保存、交互与恢复**：模型页编辑启停并按模型分区保存，共享入口可逐行调整公开状态/名称并按 Gateway 分区保存；页面草稿与后端生效配置区分。模型保存事务仍在磁盘最新配置上合并，不用陈旧 Gateway 草稿覆盖已保存的公开偏好；失败不改变已保存状态。旧 YAML 缺字段即全模型启用，旧自定义映射继续有效；回退本次源码即可恢复旧行为，但旧版本再次保存可能丢新状态，回退前应备份配置。
+- **验收/回退**：覆盖缺字段/显式 false、启用→停用→恢复、目录/旧 ID/自动选择/fallback、Gateway 列表与 Chat/Responses、重名/含空白/>32、保留旧别名/取消公开不反弹/删除目标、分区保存与失败无副作用；前端配置投影及构建、受影响 Go 包定向测试、必要的隔离 UI 检查。无真实 Cursor/外部客户端验证时只报部分验证；不部署、不改真实配置、不新增依赖或迁移脚本。
+- **Design Gate（2026-09-24）**：正向链路为模型保存→可用性投影→Cursor/Gateway 目录和实际调用，失败链路为旧 ID、冲突公开名与已取消公开的配置保存；配置持久化、对外接口、UI、回退均适用，其余后台任务/权限体系新增为 N/A。独立只读调查已核实 Go 运行入口和前端分区保存，主控完成跨层审视；无承重真实配置前提，阻塞决策由用户确认。实际测试与浏览器验收仍为实施阶段任务，不当作设计完成证据。
+
+- **阶段 1 HTTP 合同**
+
+- 鉴权失败 401；未知公开别名 404；stale mapping 400 `mapping_invalid`；tools/multimodal/reasoning 400。
+- `GET /v1/models` 只返回有效公开别名，不含 token、API Key、Base URL、内部 hash。
+- `POST /v1/chat/completions` 支持纯文本 `content` 字符串或仅含 `text` parts 的数组、非流聚合、SSE、usage、取消。
+
+- 阶段 1 补充验证：`TestGatewayHTTPServerSmoke` 在独立 TCP `127.0.0.1:18091` 上使用生成 token 验证 `/v1/models`、非流式 Chat 和流式 Chat（首块含 `assistant` 角色与 `[DONE]`）；Provider 为内存 fixture，未替代真实 OpenAI SDK/Cherry Studio。
+
+### 14.11.5 Cursor 回归门禁
+
+只补承重 characterization：`GET /healthz` 返回 `ok`；`POST /aiserver.v1.BidiService/BidiAppend` 与 `POST /agent.v1.AgentService/RunSSE` 已注册；`POST /v1/traces` 为兼容 200；AvailableModels 投影 16 位渠道 hash 而不是 provider `modelID`。fallback/capacity 继续以现有定向测试为合同。Gateway 实现不得改变这些 Cursor procedure。
+
+## 14.12 DESIGN-MULTI-CLIENT-CHAT-TOOLS-001：Chat 工具透传
+
+- **Design Readiness**：`approved`（已批准计划阶段 2；OpenCode 1.2.25 本机 metadata-only 校准）。
+- **边界**：Gateway 是 Model-provider facade，只转发工具定义、模型调用和客户端工具结果；工具执行器属于 OpenCode，不接 Cursor 工具桥。
+
+### 14.12.1 入站与 canonical 映射
+
+`tools[].function` 保持原始 JSON 进入 `ProviderRequest.Tools`。assistant `tool_calls[]` 转为 `Message.ToolCalls`，`role=tool` 转为 `Message{Role:"tool", ToolCallID, Name, Content}`。调用 ID 必须原样回放，禁止生成替代 ID。`tool_choice` 仅接受缺省、`null` 或 `auto`；`parallel_tool_calls` 接受布尔值并作为请求 knob 透传；旧 functions、非标准 tool choice、reasoning 和多模态明确 4xx。
+
+### 14.12.2 出站与流式语义
+
+`ModelEventKindToolLikeCompleted` 的 `ToolInvocation` 聚合为 OpenAI `tool_calls`。非流响应返回完整数组；SSE 对每个完成调用发送一次完整 `delta.tool_calls`，index 按事件顺序稳定递增。Provider 没有通用参数增量时不伪造增量。任意工具调用存在时终态统一为 `tool_calls`，Anthropic `tool_use` 不向外泄漏为非 OpenAI finish reason。
+
+现有 fallback router 在任意 ModelEvent 后关闭切换窗口；Gateway 不复制该状态机。HTTP 头或 SSE 数据写出后错误只写当前 SSE error，不重新调用其他 Provider。
+
+### 14.12.3 验收
+
+覆盖单/多工具、ID/参数关联、assistant 回放、tool result、OpenAI/Anthropic finish reason、非流/SSE、输出后失败不拼流、Gateway 零工具执行和 hash 不变。真实门禁是 OpenCode 自定义 Provider 完成 read/shell/edit 循环，并在隔离 fixture 证明 Cursor 与 Gateway 共用进程级容量限制。
+
+## 14.13 DESIGN-MULTI-CLIENT-RESPONSES-001：Codex Responses 子集
+
+- **Design Readiness**：`approved`（已批准计划阶段 3；Codex 0.144.4 本机 metadata-only 校准）。
+- **协议事实**：Codex 自定义 Provider 只使用 HTTP Responses SSE；`response.completed` 是硬终态，function 参数增量不足以替代完整 `response.output_item.done`。
+
+### 14.13.1 入站映射
+
+`instructions` 作为 system message。typed `input` 的 text message、function_call 和 function_call_output 映射到现有 Message；function tools 转为现有 OpenAI 工具 JSON。reasoning item 保存 encrypted content、item id、status 与 summary 供同 Provider stateless replay。`store` 只允许 false；`tool_choice` 只允许 auto；stream 首版只允许 true。
+
+hosted/custom/freeform tools、图片、previous response state、WebSocket 和压缩体返回 4xx。Codex 随普通 function 一同发送的 `namespace`、`web_search` 和 `tool_search` 描述只代表 Codex 本地能力：Gateway 跳过它们，不展平、不转发、更不执行。`prompt_cache_key` 只可作为本次 ConversationID 的非敏感路由值，不建立服务端会话状态。
+
+### 14.13.2 SSE 生命周期
+
+先发送 `response.created`。文本用 `response.output_text.delta`；工具完成时发送包含 name/call_id/arguments 的 `response.output_item.done`。成功必须且只能发送一次 `response.completed`，其中包含 response id、output、usage 和完成状态；失败发送 `response.failed` 并结束，不再输出 completed。`[DONE]` 仅兼容可选，不能承担业务终态。
+
+### 14.13.3 安全和验收
+
+Gateway 不执行 Codex 工具。fallback 继续由 Router 的输出与兼容性门禁控制；reasoning replay 不允许跨不兼容 Provider 降级。验收覆盖 typed input、call/output 关联、reasoning 回放、usage、错误终态、取消和输出后禁止拼流；真实 smoke 使用隔离 CODEX_HOME，先 read-only，再由 Codex 自己执行 shell/patch。
+
+## 14.14 DESIGN-MULTI-CLIENT-GATEWAY-RUNTIME-001：独立生命周期与入站观测
+
+Gateway 提供独立 `StartGateway`/`StopGateway` API 和 UI 入口。启动只创建 `18091` listener 并复用已构造的 config manager、Provider Gateway、Router、fallback、retry 与容量 limiter；不调用 `Host.Start`、不监听 `18080`/`18090`、不启动 MITM、不注入账号、不写 Cursor 设置。Cursor `StopProxy` 不停止独立 Gateway；进程退出仍以有界关闭停止它。
+
+入站观测复用现有 process sink 的 `request_started`/`request_finished` 事件，不修改 MITM 或公共 schema。事件只含 HTTP method/path/status/字节数、`client_protocol` 和公开别名 `public_model_id`；不记录 Authorization、token、请求正文、tool 参数或 Provider 凭据。物理 `channel_id` 继续只由已有 Provider fallback 事件产生，避免在入口伪造渠道事实。日志分析器 allowlist 仅新增上述两个入站字段。
+
+验收必须证明 Gateway 可在 Cursor backend/MITM/Cursor 设置均未运行时启动和停止，且 Cursor 停止不会影响其 listener；反向启动/停止不改变 Cursor 状态。UI/API 和观测失败保持 Gateway 独立错误，不污染 Cursor `lastError`。
+
+## 14.15 DESIGN-DUAL-NAV-OVERVIEW-001：双集成导航与数据概览
+
+- **Design Readiness**：`approved`（计划 `.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md`）。
+- **决策时间**：2026-08-26。
+- **适用范围**：主窗口导航壳、五页路由、section 保存、Gateway token 复制与启停文案、数据概览 daily 报告。
+- **不包含**：把 Gateway 提升为产品根节点；修改 Cursor 18080/18090、MITM、工具桥；新增远程监听或 Gateway 协议；用 `recent_events` 伪造完整热力图；小时级热力图。
+
+### 14.15.1 导航与窗口
+
+五页共用主窗口：`/` 数据概览、`/cursor` Cursor 集成、`/gateway` 网关集成、`/models` 上游模型、`/settings` 系统设置。旧路由重定向见 §4.1。主窗口默认 `1100×720`、最小 `980×640`，由 [`internal/app/runner.go`](../internal/app/runner.go) 创建。`App.vue` / `MainLayout.vue` 以 `MAIN_NAV_PATHS` 判断主窗口、广告和更新，不再用 `route.path === "/"`。
+
+### 14.15.2 Section 保存与运行隔离
+
+配置存储在锁内 `readLatest → merge section → Normalize → 原子写入`：
+
+| 入口 | 合并字段 | 必须保留 |
+| --- | --- | --- |
+| `SaveGatewayConfig` | `gateway.enabled`、`listenAddr`、`publicModels` | 磁盘 token、其他页面、`lastAgentModelHash` |
+| `SaveCursorConfig` | `routing`、`BackendListenAddr`、`ProxyListenAddr`、`ProviderStreamIdleTimeout` | Gateway、模型、系统设置、hash |
+| `SaveModelAdapters` | `modelAdapters` | Gateway token、系统设置、Cursor 字段；映射目标失效则拒绝 |
+| `SaveSystemSettings` | `observability`、`appearance`、`advertising`、`updates` | Gateway token、Cursor 运行配置、模型 |
+
+前端每页独立 dirty；启停只读已保存配置。Gateway 启动失败不回滚 Cursor；Cursor 启停不操作 18091。
+
+### 14.15.3 概览报告
+
+见 §10.1。首期范围仅 `7d` / `30d` / `all`。本设计不把 Wails 视觉点击写成已确认证据。v5 小时桶与四页 IA 见 §14.16，尚未实现。
+
+## 14.16 DESIGN-V5-UI-001：四页控制面、小时统计与账号 fixture 门控
+
+- **Design Readiness**：`approved`（已批准计划「v5 界面重构复审后的完整实施计划」；原型 `docs/cursor-assistant-v5.html`）。
+- **决策时间**：2026-08-26。
+- **实现状态**：未开始。阶段 0 只冻结文档；不得把四页 UI、`system` 主题、小时桶、打开 Cursor 或 Codex/Claude 授权写成已交付。
+- **适用范围**：主窗口 IA、`/access` 路由与 scope 脏状态、真实计数、完整配置导入导出文案、`appearance.theme=system`、持久小时 usage、Cursor 启动/重启安全语义、Codex/Claude UI 契约与生产门控。
+- **不包含**：把原型静态 JS/示例数据迁入产品；用 `recent_events` 推断小时曲线；生产构建内嵌 fixture 账号；未过 Design Gate 的真实 Codex/Claude 授权；修改 Cursor 18080/18090、MITM、工具桥或 Gateway 协议。
+
+### 14.16.1 导航与脏状态
+
+当前源码仍为 §4.1 五页。目标路由为 `/`、`/access?client=gateway|cursor|codex|claude`、`/models`、`/settings`。旧 `/cursor`、`/gateway` 重定向到对应 client。守卫按当前 client 解析单个 scope；接入标签脏点为已支持客户端 scope 的 OR；保存继续走既有 section 入口。
+
+### 14.16.2 统计与主题
+
+小时聚合必须进入 `usage.json` 持久字段，见 §10.2。`system` 主题持久化枚举、运行时解析并同步窗口背景，默认仍为 `light`。
+
+### 14.16.3 Cursor 生命周期与账号门控
+
+`RestartProxy` 未批准前不展示重启。`LaunchCursor` 必须区分未发现/权限失败/启动失败，不得把路由跳转当成功。Codex/Claude fixture 仅测试或 DEV 模块；生产为空态/`unsupported`。真实授权另开 Design Gate。
+
+### 14.16.4 模型导入导出
+
+模型页导入导出文案必须标明完整配置。新的仅模型格式不得静默改变现有 YAML/token overlay。
+
+## 14.17 DESIGN-INTERRUPT-RECOVERY-001：中断恢复、自动续写、错误传播与生命周期
+
+- **Design ID**：`DESIGN-INTERRUPT-RECOVERY-001`
+- **Design Readiness**：`approved`（用户 2026-08-27 确认执行并批准当前计划；本轮只冻结文档，不是已实现声明）
+- **决策时间**：2026-08-27
+- **关联计划**：`.cursor/plans/interrupt_recovery_hardening_330c266b.plan.md`
+- **需求锚点**：工作决策基线 §6.2、§10.5、§10.15
+- **继承且不得改写**：§14.5 `DESIGN-PROVIDER-DISCONNECT-001`、§14.7 / §14.9 的 post-output replay gate、三层结果、`model_call_id` 幂等 final、529 不在 retry/fallback allowlist、fallback 默认关闭与共享预算。HTTP 500 的同渠道 2 次后安全切换由预算化恢复合同覆盖，见 §14.9.4 与工作决策基线 §10.5。
+- **适用范围**：HTTP 524 精确 allowlist、同一 turn 的 automatic-continuation、provider 错误到 RunSSE/Connect terminal 的跨层投影、流诊断字段、session rotation 与 shutdown drain/cancel、TLS/SCM/FSSync/checkpoint 预期噪声。
+- **不包含**：调查 `api.aigo0.com` 等源站性能；新增未经批准的 `RestartProxy`；改变 SCM/FSSync 对 Cursor 的 HTTP 响应语义；修改 `proto/`、证书、MITM CONNECT/whitelist、18080/18090；把 continuation 接到 Gateway Chat/Responses 或 subagent child；默认开启 continuation。
+- **UI**：`N/A`（本工作包不要求新控制面；配置为可回滚 YAML/schema 开关，缺省关闭。若后续暴露 UI，必须另开切片且不得改变默认 disabled）。
+
+### 14.17.1 问题机制、已核实事实与目标
+
+**表面痛点**：provider 流在 Cloudflare/网关 524、reset/TLS close、idle 或进程退出时中断后，观测把 typed HTTP 状态或可恢复窗口投影成 `transport`/`not_recorded`，`retryable`/`IsRetryable` 与真实动作不一致；已有文本的截断只能失败，不能在安全门内用新 pass 续写；session rotation 与预期 404/TLS 噪声污染 ERROR。
+
+**根因 / 承重不变量**：
+
+1. retry/fallback 资格由**动作 allowlist** 决定，观测分类 `server_5xx` 不能代替动作。当前 `isRetryableHTTPStatus` 与 `classifyProviderFailure` 为 429/500/502/503/504/524；529 与其他未列入状态快速失败。HTTP 500 同渠道最多 2 次后可在安全窗口切换。
+2. `providerRetryObservation` 对全部 `ProviderErrorServer5xx` 写 `retryable=true`，RunSSE `ErrorDetails.IsRetryable` 在 `buildRunSSEStructuredErrorWithDetail` 中硬编码 `true`，与真实 decision 脱节。
+3. P0 明确禁止原 attempt 在已有输出后普通重放；这不等于禁止**新** `model_call_id` 的安全续写。缺少独立 continuation 状态机时，实现者会把续写误接成 retry/fallback。
+4. `observability.Controller.Reconfigure` 在任意 settings/fingerprint 变化时同步 `previous.Close()`；`observabilitySettings` 把 routing/model 字段打进 fingerprint，存在轮换 recorder、阻塞或误伤在途流的路径。
+5. HTTP 2xx 头、body 首字节、有效内容与 completion marker 被压缩成同一“成功/失败”，无法区分 header completion 与 stream/body completion。
+
+**所选机制**：在零输出窗口把 524 **精确**加入既有 retry/fallback allowlist；用独立 `providerActionContinue` 创建同一 turn 的 child pass；把 typed HTTP 状态、retry decision、Request ID 和 header/body 时间线作为跨层合同；收窄 rotation 触发并把 shutdown 变成 drain-then-cancel；把预期噪声从 app-level ERROR 解耦。
+
+**证伪条件**：若 524 在已有 raw byte/模型事件/工具/checkpoint 后仍 retry 或 fallback；若 continuation 复用原 `model_call_id` 或在工具进度后继续；若 typed 524 在 terminal 变成 `transport`/`not_recorded`；若 `IsRetryable=true` 但系统不会再试；若 session rotation 取消在途 provider 请求——则设计被证伪，必须停止该切片。
+
+**已核实事实（`evidence_status=verified`）**：
+
+| 事实 | 锚点 |
+| --- | --- |
+| 同渠道 HTTP retry allowlist 为 429/500/502/503/504/524 | `internal/backend/agent/model/retry.go` `isRetryableHTTPStatus` |
+| fallback HTTP allowlist 为 429/500/502/503/504/524；529 禁止切换 | `fallback_router.go` `isFallbackEligibleError` / `classifyProviderFailure` |
+| 524/529 观测分类为 `server_5xx` | `http_error.go` `ClassifyHTTPStatus`；`http_error_test.go` 覆盖 529 |
+| 529 当前不在 retry/fallback 动作 allowlist | 上述两个函数；`fallback_router_test.go` `5xx_529` |
+| 观测层把全部 `server_5xx` 标为 retryable | `forwarder/actor.go` `providerRetryObservation` |
+| RunSSE `IsRetryable` 硬编码 true | `forwarder/service.go` `buildRunSSEStructuredErrorWithDetail` |
+| 现有 providerAction 仅 `start`/`resume` | `forwarder/actor.go` |
+| recorder 在 settings 变化时同步 Close | `internal/observability/controller.go` `Reconfigure` |
+| fingerprint 含 routing/model 字段 | `internal/backend/host.go` `observabilitySettings` |
+| bidi 真实解码失败才写 `decode_error`；stale 走独立 kind | `forwarder/service.go` `BidiAppend` |
+| P0 三层结果与安全重试门禁 | 本文件 §14.5 |
+| P1 fallback 保持同一 `model_call_id`，500 同渠道 2 次后可安全切换 | 本文件 §14.7.6、§14.9.4；工作决策基线 §10.5 |
+
+**推断（`evidence_status=inferred`）**：真实 Cursor 对同一 RunSSE 多段 assistant 的兼容性需在启用 continuation 前用故障注入 + 真实流验收；未完成前默认 disabled 覆盖该风险。
+
+**未知（`evidence_status=unknown`，不阻塞本 Design，但阻塞“默认开启 continuation / 已验证 Cursor 多段兼容”的完成声明）**：真实 Cursor 客户端对 parent partial + child 新 `model_call_id` 的 UI 呈现；外部 524 源站耗时分布。
+
+### 14.17.2 HTTP 524 分类、allowlist 与 decision 一致性
+
+**观测分类**：524 继续使用既有 `server_5xx`（与 500/502/503/504/529 相同观测桶），不新增 HTTP 状态枚举。分析器兼容 `error_category=server_5xx` + `http_status=524`。
+
+**动作 allowlist（本设计新增的唯一 HTTP 状态）**：
+
+| 状态 | 同渠道 retry | fallback 切换 | 备注 |
+| --- | --- | --- | --- |
+| 524 | 仅零 raw byte、零模型事件、零工具进度、零 checkpoint、context 未取消 | 同左，且满足 §14.7/§14.9 其余 fallback 门禁 | 新增 |
+| 500 | 允许，每渠道最多 2 次 | 安全窗口内允许 | 预算化恢复合同 |
+| 529 | 保持禁止 | 保持禁止 | 不得扩大 |
+| 429/502/503/504 | 保持现状 | 保持现状 | 不得缩小或改写成“全部 5xx” |
+
+实现落点：`retry.go` `isRetryableHTTPStatus` 与 `fallback_router.go` `isFallbackEligibleHTTPStatus` **精确加入 524**；禁止改成 `status >= 500`。`ClassifyHTTPStatus` 保持 `server_5xx`。
+
+**安全窗口**（继承 §14.5，524 不得放宽）：
+
+```text
+retryable_error
+AND raw_bytes_observed == 0
+AND model_events_emitted == 0
+AND downstream_published == false
+AND partial_tool_seen == false
+AND completed_tool_seen == false
+AND tool_dispatched == false
+AND checkpoint_committed == false
+AND context_not_canceled
+AND retry_budget_available
+```
+
+**decision 字段合同**：内部 `retryable`、`retry_reason`、`retry_suppression_reason`、fallback `suppression`、RunSSE `IsRetryable` 必须描述**实际会不会再发 HTTP**。524 在安全窗口且预算未耗尽：`retryable=true`，`retry_reason` 使用稳定值（建议 `http_524`，不得写成宽泛 `http_5xx` 以致与 500/529 不可区分）。524 被 post-output gate 抑制：`retryable=false`，`retry_reason` 不得仍为可重试原因。500 保持可同渠道重试的既有 reason；529 必须是不可重试。禁止再出现“观测 retryable=true 但 allowlist 不会重试”。
+
+回滚点：只还原两个 allowlist 中的 524，不影响 continuation 与观测字段扩展。
+
+### 14.17.3 automatic-continuation 状态机
+
+**身份**：continuation 是同一 `turn_id` / conversation 下的新 provider pass。必须生成新 `model_call_id`，递增独立 `http_attempt` 空间；记录 `continued_from_model_call_id`、`continuation_index`（从 1 起，初始 `maxPerTurn=1`）。P1 fallback chain **不得**用于 continuation：fallback 保持同一 `model_call_id`；continuation 禁止复用 HTTP retry wrapper 或把 child 帧伪装成原 attempt。
+
+**模块职责**：
+
+- `forwarder/actor.go` 新增独立 `providerActionContinue`；`driveProvider` 为 child 创建新 `model_call_id`。
+- `forwarder/types.go`、`service.go` 与持久化路径保存父子关联、spawn 幂等标记、parent partial final、独立 usage 事件。
+- 禁止把 continuation 接到 `providerActionStart`/`Resume`、Gateway Chat/Responses 或 subagent child。
+
+**执行顺序（不可交换）**：
+
+1. 把已产生的 assistant 文本/思考按既有幂等键持久化（继承 §14.5：最多落盘一次）。
+2. 父 `model_call_id` 写唯一 `model_call_final=partial`（或等价 protocol `truncated` + business `partial`），并记录该 pass 的 usage。
+3. 检查 continuation 安全门、每 turn 上限、总时限、开关与 spawn 幂等。
+4. 只有全部通过才创建 child pass；失败则 stop，不发第二份 HTTP。
+5. 仅当 **turn** 最终失败/取消且不会再续时，才发 RunSSE/Connect terminal。父 partial 不是 Cursor 整轮 terminal。
+
+**初始安全门（任一为真即禁止续写，parent fail-closed 为 partial）**：
+
+- 无已持久化文本且无已持久化思考；
+- `partial_tool_count > 0` 或 `partial_not_dispatched` 或 `completed_tool_seen` 或 `tool_dispatched`；
+- `potential_side_effect`；
+- pending external/user interaction；
+- `checkpoint_committed`；
+- client cancel / deadline / 父 context 已取消；
+- subagent child；
+- Gateway Chat / Responses 路径；
+- 开关关闭、本 turn 已续过、或检测到重叠 spawn。
+
+**prompt 与重叠**：
+
+- child 请求注入已持久化断点和尾部上下文，要求仅从断点继续；不得重放原 HTTP body。
+- 向下游发布前做最长前缀重叠剥离：若 child 可见文本以 parent 已发布/已持久化后缀为前缀，只发布剩余后缀。
+- **无共同前缀**：fail-closed 为 `partial`，不向下游发布 child 正文，记录 `continuation_overlap_mismatch`。禁止猜测对齐。
+- **无新增有效字节**、再次截断、预算/总时限耗尽：熔断为 `partial`，不再发起第二次 continuation（`maxPerTurn=1` 已禁止嵌套）。
+
+**配置（缺省关闭，无磁盘迁移）**：
+
+```yaml
+streamContinuation:
+  enabled: false          # 旧文件缺失视为 false
+  maxPerTurn: 1           # 固定上限 1，禁止嵌套
+  # 总时限与重叠窗口为实现细节，必须有上限且可回滚；不得在未确认前写成产品默认开启
+```
+
+**计费与审计**：parent/child 各自产生 usage 事件；禁止把 child token 合并进 parent 或重复计费。checkpoint 若在 child 期间提交，只属于 child；parent 已是 partial 终态后不得再改写 parent checkpoint。trace 必须能从 child `model_call_id` 反查 parent。
+
+**崩溃后不自动续**：进程重启后不得根据磁盘上的 partial parent 自动 spawn child；只有同一进程、同一 live stream actor、开关开启且安全门通过时才续。
+
+### 14.17.4 跨层错误传播：provider → 观测 → RunSSE/Connect
+
+事实源优先级：typed `HTTPStatusError.StatusCode` > 稳定 `error_category` > 文本摘要。文本摘要不得作为分类或 retry 依据。
+
+**禁止降级**：已经拿到 HTTP 状态码的错误，在 `provider_stream_finished`、`model_call_final`、RunSSE/Connect terminal、app log 中都必须携带该状态码。缺失 attempt 时可写 `http_attempt=not_recorded`，但 **不得**把 `http_status` 改成空后再把 `error_category` 设为 `transport`。
+
+**`IsRetryable` 对齐规则**：
+
+| 真实 decision | 内部 `retryable` | RunSSE `IsRetryable` |
+| --- | --- | --- |
+| 将按 allowlist 再发同渠道 HTTP 或 fallback | `"true"` | `true` |
+| 安全门/预算/取消禁止再试，或将走 continuation（不再重放原 attempt） | `"false"` | `false` |
+| 终态已发出，用户侧不应再自动重试同一请求 | `"false"` | `false` |
+
+continuation 不是原请求 retry：对 Cursor 而言该 turn 尚未 terminal 时，不要用 `IsRetryable=true` 诱导客户端重放同一 RunSSE。Turn 最终 partial/failed 时 `IsRetryable=false`，除非未来另有已批准的客户端重试合同。
+
+**Request ID**：terminal 可展示/关联 `request_id`、`model_call_id`、attempt；`ShowRequestId` 允许打开。detail/title 只使用稳定 safe message + typed category；Authorization、Cookie、API key、完整 query、请求体、未清洗 provider 正文不得进入 basic 日志、history 或用户终态（继承 §14.5）。
+
+**HTTP 200 header vs stream/body completion**：
+
+- `header_at`：响应头接收完成。此时可记录 HTTP status；2xx 只更新 `transport_outcome` 相关事实，不得把 `protocol_outcome` 设为 `completed`。
+- `first_byte_at` / `last_byte_at`：body 原始字节。
+- `body_end`：body 读取结束（含 EOF/reset），不等于 completion marker。
+- `protocol_outcome=completed` 仍只允许 provider 明确 completion marker（继承 §14.5）。
+
+### 14.17.5 流诊断字段与 canonical identity
+
+在 `http_error.go` / `retry.go` / `stream_idle.go`、OpenAI/Anthropic 流适配器和 forwarder 观测结构中增加**可选**字段；旧日志缺失时分析器显示 `unknown/not_recorded`，不得推断成功。
+
+| 字段 | 语义 |
+| --- | --- |
+| `header_at` | HTTP 响应头完成时间 |
+| `first_byte_at` | 首个 raw body byte |
+| `last_byte_at` | 最后 raw body byte |
+| `body_end` | body 读取结束时间 |
+| `first_event_at` | 首个模型事件 |
+| `last_effective_content_at` | 最后有效文本/思考/工具内容（stall watchdog 用此，而非 raw byte） |
+| `close_cause` | `eof` / `unexpected_eof` / `reset` / `tls` / `idle_timeout` / `context_canceled` / `deadline` / `stream_decode` / `http_status` |
+| `partial_boundary` | 截断停在哪一类内容之后，例如 `none` / `text` / `reasoning` / `partial_tool` / `completed_tool` / `checkpoint` |
+
+**2026-08-30 流截断细化合同**：
+
+- 诊断字段扩展为 `http_protocol`、`content_encoding`、`auto_decompressed`、`content_length`、`connection_observed`、`connection_reused`、`connection_was_idle`、`raw_byte_count`、`last_error_type`、`last_sse_event_type`、`last_sse_event_id_hash`、`last_sse_sequence`、`last_response_status` 与 `stream_recovery_attempts`。重试后只投影最终 attempt 的连接/协议/编码字段，同时保留累计恢复次数；response ID 只允许不可逆短哈希。
+- OpenAI Responses 的成功终态只有 `[DONE]` 或标准 `response.completed`；`response.failed`、`response.cancelled/canceled`、`response.incomplete` 和显式 `error` 是 Provider 协议终态，不得归为 transport EOF 或进入自动恢复。Anthropic 对应成功终态为 `message_stop`，显式 `error` 使用同一 Provider 终态分类。未知类终态事件即使携带 `response.status=completed` 也不得猜成成功。
+- 零事件流恢复必须同时满足 `raw_byte_count=0`、未发布任何 `ModelEvent`、context 未取消、未恢复过且错误属于 typed EOF/unexpected EOF/TCP reset/HTTP/2 stream reset/GOAWAY 白名单；最多新增一次同渠道请求，并受现有 attempt/wait 预算约束。任何原始字节都会禁止原请求重放，避免跨响应拼接半个 SSE frame。
+- automatic-continuation 只接受可恢复的 `StreamTruncatedError`；明确 Provider 终态、语法错误、4xx、取消和 deadline 直接抑制。§14.17.3 的默认关闭及工具、副作用、checkpoint、pending interaction、subagent child、Gateway Chat/Responses 门禁保持不变。
+- HTTP/1.1、禁用压缩、禁用连接复用和绕过显式代理只能作为默认关闭的单变量 Transport 实验；环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` 的允许值为 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`，未知或组合值回退 `auto`。`direct` 不能绕过操作系统 TUN。没有真实 A/B 数据前不得改变默认 Transport 策略。
+
+保留现有 `error_category` 以兼容分析器。stall 由有效内容 idle watchdog 判定；shell/tool stall 不得混入 provider stream stall。完成只由 completion marker 判定。
+
+**canonical identity**：每条 attempt 事件必须有稳定的 `provider`、`model`、`model_call_id`、`attempt`/`channel_attempt`。不得从错误字符串解析身份。parent/child 用 `continued_from_model_call_id` 关联。
+
+**`decode_error`**：仅真实解码失败。`BidiAppend` 在 `DecodeAgentClientMessage` 失败时使用 `decode_error`；stale append 继续用 `stale`，intent 错误用 `intent_error`。禁止把 basic 模式下无法展示的 body 标成 `decode_error`。
+
+**app log**：`internal/backend/host.go` `logObservabilityEvent` 及等价路径必须能按 `trace_id` / `request_id` / `model_call_id` 检索；不提升敏感 payload。`debug_recorder.go`、`internal/observability/contract.go`、`tools/log-analyzer/internal/sanitize/sanitize.go` 同步 allowlist，保证新字段可查询且不泄漏内容。
+
+### 14.17.6 session rotation、shutdown drain/cancel
+
+**session rotation**：
+
+- 只有观测**存储**设置变化（mode / retention / disk quota 等）才轮换 recorder。
+- 路由模式、模型 adapter fingerprint、provider idle timeout 等只写入事件 metadata，不触发 Close。
+- 轮换不得 cancel 在途 provider context；新事件写入新 recorder，旧流的后续事件允许跟随新 recorder 或带原 session id 的显式衔接，但 HTTP 请求继续。
+- recorder 切换必须非阻塞或有界关闭；慢 sink 不得阻塞 provider 流或配置读取。
+
+**shutdown**：
+
+1. 停止接收新请求；
+2. 最多 5 秒 drain 在途 provider；
+3. 超时后按 shutdown cause 取消剩余 provider 请求，记录 `reason`、`initiator`、active provider count、drain duration、cancel count、outcome；
+4. 再清理 Cursor 设置/服务。
+
+托盘退出与 `OnShutdown` 必须幂等去重。普通配置保存与 observability rotation **不**进入此取消路径。不实现新的 restart 命令；现有 start/stop/quit 的空档、健康检查和失败原因必须可追踪。落点：`internal/app/runner.go`、`internal/client/lifecycle.go`、`internal/backend/host.go`、updater 退出入口。
+
+### 14.17.7 预期噪声与严重性投影
+
+`severity` 与原始 `status` / `error_category` 解耦（继承 §14.4：后者继续存盘查询）。禁止仅因 `status=error` 就投影为 app-level ERROR。
+
+| 信号 | HTTP/运行语义 | app/analyzer 严重性 | 采样/聚合 |
+| --- | --- | --- | --- |
+| client TLS / unknown CA / handshake mismatch | 不改变握手失败事实 | 连接级 warning | 按 source/host/category 采样 |
+| upstream TLS、backend unavailable、timeout、真实 5xx | 保持失败 | ERROR，不采样 | 可按 path 查询 |
+| SCM 404、FSSync 404 | **保持原 HTTP 响应** | 预期噪声 warning | 按 capability/operation/status 聚合，不按 trace 刷 `request_error` |
+| `backend_forward_finished` 的 expected 4xx | 不改变响应 | warning | — |
+| checkpoint blob / FSSync skip | 非致命，turn 可成功 | `degraded` 结构化事件 | 不升 ERROR |
+| 未知通用 MITM 路径 | 不发明能力 | `implementation_state=unknown` | — |
+
+落点：`internal/observability/semantics.go`、`internal/backend/host.go`、`internal/mitm/observe.go` / `service.go` / `traffic_class.go`、`internal/backend/forwarder/checkpoint_blobs.go`、log-analyzer。
+
+### 14.17.8 失败、兼容、迁移与回滚
+
+- 所有新字段为可选扩展；无持久 schema 强制迁移。`streamContinuation` 缺失 = disabled。
+- 切片独立回滚：524 allowlist、continuation 开关、诊断字段、rotation 触发、严重性投影可分别还原。
+- 任一回滚都不得放松 post-output replay gate，不得把 500/529 改成与 524 相同动作，不得恢复“观测 retryable 与动作不一致”。
+- 启用顺序：先诊断与严重性 → 再 524 allowlist → 最后小范围打开 continuation。
+
+### 14.17.9 验证合同与实施落点
+
+| 链路 | 切片 | 必须证据 |
+| --- | --- | --- |
+| 524 零输出 retry/fallback 成功、预算耗尽、输出后/工具后抑制；500/529 不回归 | `http-524-allowlist` | `retry_test.go`、`fallback_router_test.go`、`fallback_http_test.go`、`http_error_test.go`、forwarder provider-stream 测试 |
+| typed HTTP 不降级；`IsRetryable` 与 decision 一致；Request ID 可关联不泄漏 | `error-propagation-terminal` | forwarder terminal / RunSSE 测试；basic 日志无凭据 |
+| continuation spawn 一次、父子关联、前缀去重、mismatch fail-closed、无进展、工具/checkpoint/cancel 拦截、两次独立计费、默认关闭 | `automatic-continuation` | actor/service/persistence 测试；Cursor 多段兼容未通过前不得默认 enabled |
+| header/首末字节/body_end/close_cause/partial_boundary；故障注入 | `stream-diagnostics` | httptest：首字节前超时、部分输出后 reset/TLS、长停顿、完成边界断开、missing completion marker |
+| rotation 不中断在途流；drain 成功与超时取消；双 shutdown 幂等 | `lifecycle-hardening` | host/observability/lifecycle/updater 测试 |
+| 预期 TLS/SCM/checkpoint 噪声不污染 ERR；真实失败仍 ERROR 且可查询 | `noise-governance` | semantics/mitm/checkpoint/analyzer 测试 |
+
+验证命令（按改动范围选择，完成声明须匹配实际运行）：`go test` / `go test -race` / `go vet` 覆盖 `internal/backend/agent/model`、`internal/backend/forwarder`、`internal/observability`、`internal/backend`、`internal/client`、`internal/mitm`、`internal/updater`、`tools/log-analyzer`；`git diff --check`。未经运行证据不得把工作包标为 `accepted`。
+
+### 14.17.10 备选方案、自由裁量与 Design Gate 记录
+
+**采用方案**：524 精确加入动作 allowlist；续写用新 `model_call_id`；rotation 不取消在途请求；退出 drain 5s 后取消。
+
+**否决**：
+
+- 把 524 当全部 5xx 开放：会改变 500/529 合同。
+- 原 `model_call_id` 透明重放已有输出：违反 post-output replay gate。
+- 默认开启 continuation：真实 Cursor 多段兼容尚未验证。
+- rotation 时取消在途 HTTP：把观测存储变化变成用户可见失败。
+- 退出时丢弃在途请求不 cancel：造成孤儿计费与不可观测终态。
+
+**实现者可自由裁量、不得改变外部契约的部分**：字段存放 helper 拆分、重叠窗口具体字节数、drain 等待的内部计时器实现、采样率数值（但必须按 source/host/category 采样且真实 ERROR 不采样）。
+
+**反向审计（未做独立评审）**：作者按文档模拟 — ① 零输出 524 → 同渠道重试成功，terminal 不出现；② 文本已出后 524 → 零 retry/fallback，若开关开且无工具则 child 新 `model_call_id` 续写，parent partial、usage 两次；③ 工具 partial 后断流 → fail-closed，不续、不重放；④ typed 524 在 final/terminal 仍为 524，`IsRetryable` 与是否还会发 HTTP 一致；⑤ 配置保存不 cancel 在途流，quit 超时后 cancel 并留下 reason。模拟中无需临场补充关键阈值或枚举。
+
+**Design Gate 记录**：
+
+- **锚点**：`DESIGN-INTERRUPT-RECOVERY-001` / 工作决策基线 §10.15
+- **评审者与时间**：2026-08-27；用户已批准当前计划。本轮未做独立外部评审，以上反向审计代替。
+- **适用项**：数据/接口/状态/失败恢复/并发/可观测/回滚已闭合；UI 为 `N/A`（无新控制面）。
+- **最高风险失败链路**：已有工具进度或 checkpoint 后的 524/reset 被误续写或误重放。
+- **迁移回滚链路**：无磁盘迁移；关开关 / 还原 allowlist 即可。
+- **阻塞缺口**：无实施阻塞缺口。真实 Cursor 多段 assistant 兼容与源站耗时不阻塞编码，但阻塞“默认开启 / 性能已修复”的完成声明。
+- **最终 verdict**：`Design Readiness=approved`。可进入 `task/todo.md` 工作包的实施切片；本轮不得改代码。
+
+### 14.18 DESIGN-SUBAGENT-RESCHEDULE-001：只读 Task 新 child 重调度
+
+#### 14.18.1 配置与固定产品边界
+
+`config.yaml` 顶层 `subagentReschedule.enabled` 是未来兼容开关，默认 `false`，旧配置缺失仍关闭。真实 fixture 核查后，当前生产运行时不消费该开关，也不接线自动 relaunch；Settings 只显示固定禁用占位，前端保存强制为 `false`。未来若解除阻塞，首版仍只接受 readonly Task，总计最多 3 attempts；readonly 与 attempt 上限是代码常量，不是可配置参数。
+
+#### 14.18.2 四个独立状态机
+
+以下状态机拥有不同身份、预算和终态，必须分别建模：
+
+1. **Provider HTTP retry**：`http_attempt_started -> response_headers/transport_error -> completed/exhausted`。它保持同一 provider/model call，只重发 HTTP，不创建 Task child。
+2. **Stream continuation**：`partial_persisted -> continuation_eligible -> new_model_call -> completed/partial_failed`。它在已有输出后创建新的模型调用，不是 HTTP retry，也不是 Task relaunch。
+3. **`resume_agent_id`**：`awaiting_client_resume -> cursor_resume_bound -> running -> terminal`。它只在 Cursor 提供可验证的既有 agent 身份时恢复绑定；Backend 不自行生成 resume 信号。
+4. **Task relaunch**：`attempt_terminal -> evidence_eligible -> child_relaunched -> terminal/exhausted`。每次生成新的 child/agent identity，逻辑 Task identity 不变；总计到第 3 次 attempt 后必须 `exhausted`。
+
+四者不能共享 attempt 字段、互相递归触发或把 relaunch 描述成原地 resume。一个请求可以在不同层先后经历多个状态机，但每次动作必须记录明确的 `recovery_kind` 和对应 identity。
+
+#### 14.18.3 Typed evidence 与 fail-closed 门禁
+
+Task relaunch 仅在 typed evidence 稳定关联 `parent_tool_call_id`、`subagent_run_id`、逻辑 Task、前后 attempt、child conversation/agent ID、readonly mode 与 terminal category 时允许。还必须证明前一 child 已终结、没有 mutation、没有可见工具副作用、没有未提交 handoff。
+
+真实 Cursor fixture 核查已确认：当前生产链没有能稳定产出上述关联的 typed failure producer，也没有消费完整证据并驱动在线 relaunch 的 consumer。现有 terminal、错误文本或时间邻近关系均不足以建立安全关联。因此本状态机当前为 `blocked`，运行时不得接线；任何字段缺失、来源冲突、只能靠时间窗口或错误字符串推断，均进入 `suppressed`，不启动新 child，配置与 UI 均保持关闭。
+
+#### 14.18.4 `attempts.json`、重启与回滚
+
+每个逻辑 Task 的 `attempts.json` 只保存版本化 attempt ledger、稳定关联、eligibility evidence 摘要与终态，不复制敏感 prompt/result 正文。写入采用原子替换，并与既有 run/result handoff 分工：ledger 证明“尝试过什么”，run/result 仍是 child 终态和 parent 交接事实源。
+
+回滚边界是关闭 `subagentReschedule.enabled`：停止创建新 attempts，保留已写 ledger 和既有 parent history；不得删除或改写已完成 attempt，不得回滚已提交 tool result。Backend 重启后，未终结 attempt 仍为 `awaiting_client_resume`，不会因为开关开启而自动 relaunch；只有后续可验证的 Cursor resume/bind 才能推进原 run。
+
+#### 14.18.5 证据缺口与完成门禁
+
+配置、前端投影、attempt ledger/policy foundation 和文档落地只证明静态基础合同成立，不证明 Task relaunch 运行时已接线。当前生产 verdict 为 `blocked`。必须先补齐真实 Cursor readonly Task 的稳定 typed failure producer/consumer，以及成功、错误、取消、断连、Backend 重启、`resume_agent_id` 与新 child relaunch fixture，并证明 parent 只收到一次最终结果、费用/usage 按 attempt 独立记录后，才能进入 online relaunch 实施和验收；在此之前不得把能力标记为已解决。
 
 后续任何实现、合并或重构都必须保护以下不变量：
 
@@ -1338,6 +1967,36 @@ resolver 把 limit 与瞬态组 key 投影到 `ResolvedChannel`，router 再覆�
 10. 客户端只采集，不读取历史日志、不分析、不生成报告；只允许通过受限启动器打开独立 `tools/log-analyzer`。分析器不进入客户端二进制或更新归档。
 11. 运行中唯一代理实例不能在无维护窗口时被替换。
 12. `agent-transcripts` 公共投影只包含可见文本与结构化工具调用，不得把 `ReasoningContent` 降格为普通 `text`；内部 history/context 仍保留 provider replay 所需 reasoning signature 与 item/call ID。
+
+## 14.19 DESIGN-MODEL-IMPORT-PROXY-001：模型导入、全部测试与分层出站代理
+
+2026-09-08 用户确认计划并选择 Build；本节定义实施合同，不代表运行验收已完成。需求见工作决策基线 §10.14，执行与证据见 `task/todo.md`、`docs/process.md`。
+
+### 14.19.1 现实与改动边界
+
+实施前核实：`ModelConfig.vue` 在服务运行时禁用导入；`useConfigTransfer` 调用的 `ImportUserConfig` 覆盖整份配置；批量测试 handler 已有但工具栏未接线且输入是筛选结果。`netproxy.ProxyForRequest` 已读取环境/OS 代理，但 Config/模型/UI 尚无自定义代理字段。macOS 原生文件窗口是否另有故障未复现，需真实 Wails 点击验证，不预先改变窗口参数。
+
+### 14.19.2 模型导入与批量测试
+
+模型专用桥接方法 `ReadModelAdaptersForImport` 只读 YAML `modelAdapters`，经 `NormalizeModelAdapterDrafts` 复用单项身份规范化和排序，恢复不在 YAML 保存的派生 ID；跨模型引用/容量校验延至合并与保存，不要求部分导入自带全部候选。不写盘、不停服务、不把其他根字段导入。前端以当前草稿整批合并：同渠道身份优先，随后按 trim 后唯一同名更新；保留原位与未命中项，新项追加，无法唯一匹配则失败。匹配项保留当前草稿 ID，新增项保留导入派生 ID，将导入模型的 fallback 引用映射到合并后 ID，未命中的既有引用不重写。合并及既有校验全成功才替换草稿，提示新增/更新与待保存；取消或错误不改草稿。模型保存仍经 `SaveModelAdapters` 的原子配置事务和既有派生 ID/fallback/Gateway 引用处理；不改变完整配置导入、导出或 Gateway token 合同。
+
+“全部测试”取全部草稿快照、跳过逻辑 alias，复用单项接口/事件，不受筛选影响、不隐式保存。并发上限 10，单项失败继续；停止只停排队，等待在途测试完成或现有超时，UI 在此期间显示停止中。本次不扩展取消 RPC 或持久任务系统。
+
+### 14.19.3 配置与代理选择
+
+根 Config 与 ModelAdapterConfig 均增加 `outboundProxy: {enabled: boolean, url: string}`，缺失为 false/空串。关闭保留 URL 但不使用；仅启用时校验有效 URL 与 http/https/socks5 协议，支持标准 URL 认证。接通默认值、规范化、分区保存、回显、复制与 YAML 往返；代理字段不改变渠道身份/容量分组。
+
+对外请求选择顺序：模型启用的自定义 URL > 全局启用的自定义 URL > 既有 env/OS 自动代理 > 直连。全局关不禁止模型代理，模型关表示继承；自定义不叠加 env/OS 或其绕过列表，保留回环和明确内部直连。显式代理不可达不降级到默认/直连，已有模型 fallback 规则不变，各物理候选使用自己的代理。逻辑 alias 不覆盖候选代理。Provider direct 调试分支不得覆盖启用的自定义代理。
+
+全局作用于 BYOK 进程模型、测试/模型列表、授权、网页工具、更新及上游透传；不改变系统代理、证书/拦截策略/监听端口或其他进程。模型覆盖仅附着该模型出站调用上下文，不修改共享 client，保证并发请求隔离。路径为配置→ResolvedChannel→StreamRequest→HTTP context→netproxy；测试和模型发现也必须透传。
+
+全局配置加载/保存/重载同步到 netproxy；成功保存后新请求使用新选择，清理空闲连接而不打断在途流。保留原协议 timeout/retry；网页工具继续原有 URL/DNS 校验。前端使用已保存全局代理判断继承，模型代理/继承全局改变后历史测试结果需重测；hash 不暴露 URL 认证。状态栏显示当前来源且凭据脱敏。
+
+### 14.19.4 验证与回退
+
+前端覆盖真实 handler/投影的导入草稿合并、全量调度、停止与错误状态；Go 用临时 YAML/配置和本地可观测代理/假上游覆盖默认、仅全局、仅模型、双层、关闭恢复、代理失败不降级、并发隔离、模型推理/测试/发现与候选切换。验证分区保存不覆盖其他设置，既有导出可导回模型，派生引用不悬空。真实 Wails 对话框与浏览器 UI 分开记录，不以静态检查或假上游冒充实机验证。
+
+关闭自定义代理恢复原继承行为，未保存导入重新加载可放弃；无需配置迁移或新服务。失败保存不更新运行代理；代码回退只撤销本任务变更。不增加 PAC/SSL/超时功能、联网保存门禁、额外代理白名单或审批。设计由主控按正常/失败/并发/兼容路径自查；用户已批准实施，未做独立设计文档评审，实际运行完成以任务证据为准。
 
 ## 16. 当前架构风险
 
@@ -1392,3 +2051,284 @@ Tab/Cpp/FileSync/Git RPC 可能包含当前文件全文、路径、diff、worksp
 - Tab/Cpp/FileSync/Git relay 能力被明确标注为外部依赖或待决策，不宣称为纯本地能力。
 
 本文作为系统架构分析基线，后续每次重大路由、Agent 状态机、持久化、provider 或外部出口变化，都应同步更新。
+
+## 18. gateway-duo 合并（已批准设计，2026-09-08）
+
+固定来源 `18ef0e2` 相对 `334f538` 的功能增量移入 `gateway@4e4f2f1`，以当前 gateway 为 owner；保留订阅、provider fallback、分层代理、生命周期、CLI 双路径和观测。对应需求 §10.17，实施与证据见 `task/todo.md` 的 `gateway-duo-merge-20260908`。不改版本、schema、前端页面或独立 module。
+
+### D1 模型与身份
+
+官方身份定义为非空且非 LocalRelayToken 的 Bearer；这不预检过期/额度，缺失与占位身份维持现有本地入口语义。首次 run/prewarm 先匹配本地当前渠道 ID、变体、唯一旧渠道 ID；命中走现有带 CredentialResolver 的 forwarder。其余有官方身份的请求（含与 provider ModelID 同名、auto/fast/default、空初始选模）原样透传官方；纯本地沿用 ResolveAdapterIndex 的唯一 provider ID/旧 ID 与首模型默认行为。配置解析错误返回错误，不误分官方。共享本地 resolver 不增加官方逻辑；已配置 fallback 不变，不新增跨官方/BYOK 切换。
+
+### D2 请求级路由
+
+复用内存 AgentSessionStore，request_id 首次 Local/Official 决策保持。存储归属 Host 生命周期，在既有 runMu 保护下初始化并跨配置重建复用，使旧 mux 的等待流与新 mux 的上行共享路由事实。后续工具/心跳/取消先读已决策路由，不因无模型重新默认；必须区分空模型 run/prewarm 与不携带选模的后续消息。未知后续请求报错不猜。RunSSE 先到等待 BidiAppend，取消清理等待；保留来源清理机制，不新增持久化或调度器，重启需新运行请求建立归属。官方目标只来自现有原始 URL，缺失报错不猜地址。
+
+### D2.1 分流前请求编码兼容（0.0.71.0 回归修复，已批准）
+
+BidiAppend 与 RunSSE 的分流解析显式接收 Content-Type、HTTP Content-Encoding 和原始 body；在只读解码副本上按 HTTP 整体解压 → Connect 帧解析（若适用）→ protobuf/JSON codec 顺序处理。支持本次 Cursor Connect 路径使用的 unary application/proto、application/json 和流式 application/connect+proto、application/connect+json；HTTP 空/identity 与 gzip 按实际含义处理，已有帧内 gzip 与 HTTP gzip 区分，复用现有有界解压，不新增协议栈或配置。JSON 未知字段与既有 Connect codec 一致忽略；媒体类型参数不得影响格式识别。损坏/不支持的编码使用现有错误链路，不猜渠道、不新增错误协议。
+
+路由决策只消费解码结果，后续本地处理器/官方请求保留原始 body、Content-Type、Content-Encoding 和身份；D1、D2 的首决策保持、已知会话后续消息及取消语义不变。此次不修改 AgentSessionStore、等待时限、CA、账号、客户端压缩或代理。实现落点限定 agent_action.go/agent_route.go 与既有回归文件；单元/处理器测试和真实 Host 模拟 provider 回复共同验证，不将临时 overlay 或任意返回 200 的替身当作完整入口成功证据。实际官方/Auto/BYOK 对话在另行确认的实机窗口验收。
+
+### D3 目录、默认与显示
+
+纯本地不请求官方，返回当前本地完整目录/默认。官方成功保留官方 metadata、默认和 protobuf unknown fields，官方原顺序后追加本地配置顺序；按 ID 去重，同 ID 本地替换官方，同名不同 ID 并列。官方目录失败返回本地可选项，但移除合成本地默认/fallback 推荐配置；官方默认接口失败保持错误，不默认本地。AvailableModels、两命名空间 GetUsableModels/GetDefaultModelForCli、GetDefaultModel/GetDefaultModelNudgeData 接线一致。现有 newProtoMessage 兼容类型映射不变。
+
+名称只修饰响应投影：桌面 clientDisplayName/inputboxShortModelName、CLI displayName/displayNameShort、默认 ModelDetails，以及模型变体名称增加 `[官方]`/`[BYOK]`；空值回退名称/ID，同来源后缀不重复。本地变体从修饰名称生成，官方保留 HTML/参数和强度展示。name/serverModelName/modelId/displayModelId/aliases/variantStringRepresentation、磁盘 DisplayName 和 hash 一律不改。Cursor 固定不读目录的 Auto 文案不通过二进制补丁处理。
+
+本地 CLI Credentials 只重建 apiKey=cursor-byok-local 的既有占位，无真实 key/baseURL；官方 Credentials 不注入该占位。保留静态/托管订阅/备用渠道运行时凭据解析，不全盘照搬来源的 Credentials=nil。
+
+### D4 身份与代理
+
+state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入本地组；Statsig override 保持。存量占位保留至用户正常登录，不能恢复以前被覆盖的真实 token。ForwardOptions.PreserveInboundIdentity 用于官方 Fetch/Forward。OAuth 仅已知本地占位 refresh token 保持 mock，其余 grant/refresh 按原体、原 URL、原身份透传；无目标报错，不新增令牌存储/刷新调度。MITM 保留 CONNECT 范围，解密后未分类路径透明回源，原受管服务/日志关联不扩大；backend 直接访问的本地 auth 兼容入口不删除。
+
+### 验证、迁移与回退
+
+无 schema/config 迁移；只撤销本次代码，不覆盖新增登录身份，旧版本启动会重新注入本地身份。验证链为实际 Host 路由→目录→模拟 provider/官方、身份×模型×初始/后续消息、stream-first/取消、CLI 占位不外发、Connect gzip/trailer、同名/同 ID/空名称/变体、官方失败不降级默认及 auth 事务/OAuth。定向 TDD 后一次 internal 全量、四核心包 race 与相关 vet。真实 Cursor 登录/刷新、Auto 支持、目录视觉消费与真实对话独立取证；环境不可用保留 test/env gap，不以 synthetic 测试冒充。
+
+设计复核：主控及独立只读检查已识别并闭合旧分支拒绝 Auto、provider 同名拦截、空 run/后续消息混淆、CLI 占位清空、OAuth 模拟刷新与目录降级默认等差异；用户确认语义和来源标识并批准实施。低层实现保持现有结构，不增加能力注册表、审批、功能开关或额外发布门禁。
+
+## 19. DESIGN-MIXED-CHANNEL-COMPAT-001：官方/BYOK 混用兼容
+
+### 19.1 状态、目标与取证边界
+
+**设计版本：阶段 0 取证基线 v0.1，附 §19.3c 独立检查点写出合同 C0-W1 v1；整体 Design Readiness=not-ready。** 对应 PRD §17 `REQ-MIXED-CHANNEL-001`。本节固化已核实合同、候选机制和阻塞项；已闭合切片以各自明确的数据域和门禁为准，不是整个专项已批准的实施规格。执行证据与任务状态只记入 `task/todo.md`、`docs/process.md`。
+
+保持 §18 的身份隔离、请求级出口和目录身份规则；本专项不把 request_id 固定路由当作已证实共同根因，不新增跨渠道自动重试，不改客户端安装。冲突遵循已确认的 preserve-and-stop。仅调查当前客户端发布代码与合成数据，未读取真实会话正文、凭据或配置。
+
+客户端基线：Cursor `3.15.19`，安装根 `/Applications/Cursor.app/Contents/Resources/app/`。工作台文件 `out/vs/workbench/workbench.desktop.main.js` 的 SHA-256 为 `18f9a52779fa03f58989bf45f4abbcf18f3efec8dbf205e6aa71429297fd2ef9`，40,774,701 字节、40,774,692 个 Python 字符。下列客户端偏移均为 Python 字符位置，只适用于本版源码；不能混用字节偏移或假定不同 bundle 中的同名压缩函数相同。
+
+### 19.2 已核实的原生内容合同（evidence_status=verified）
+
+1. `ConversationStateStructure.root_prompt_messages_json` 每项是原始 **32 字节 SHA-256 引用**；对应 Blob 是 UTF-8 JSON 编码的**单条 CoreMessage 对象**，不是消息数组，不是 JSON 包装后的引用。protobuf JSON 的 bytes/base64 表达与客户端存储键的 hex 表达只属于传输/索引编码，不能写进 raw bytes 字段。
+2. 工作台 `YMs`（字符 19538061）逐项 `getBlob` 后反序列化；exec 包 `fromConversationStateStructure`（2496004）同样读取 root，每项加载为一条消息，随后 clear/append 消息序列。exec 包 `OY`（2490476）注册 `coreMessage:GH`；`LH/OH`（2481935/2482049）将二进制往返为 `{__type:"Uint8Array",hex:…}`。
+3. plain CoreMessage 使用 `role/content`；工具调用是 assistant 内容块 `{type:"tool-call",toolCallId,toolName,args}`，工具结果是 tool 内容块 `{type:"tool-result",toolCallId,toolName,result,isError?,experimental_content?}`。user 支持 text/image/file；assistant 支持 text/tool-call，并经 `pi`（1446069）把其余内容块包成内部 `unknown`，`hi`（1449148）再还原原对象。reasoning/redacted-reasoning 可以经此通路保留，不能因 `hi` 没有同名 case 就判为不支持。保留数据不等于任意模型服务商都接受另一服务商的推理签名；后者仍遵循既有 provider 合同。
+4. exec 包 `EL.writeToBlobStore` 用 serde 序列化，再以 `jJ` 计算 SHA-256 并写内容。`summary` 引用 `ConversationSummary` protobuf；`summaryArchives[]` 引用 **ConversationSummaryArchive** protobuf，其 `summarized_messages[]` 与 `summary_message` 再引用 CoreMessage JSON，`window_tail` 是内联 uint32，不是 Blob。
+5. 工作台 `DIu` 先展开各 summary archive，再追加 root 中非 system、非 summary 的消息，**不会自动去重**。exec 恢复活动模型消息时使用 root，turns 和 archive 则由各自句柄持有。因此不能把 root、turns、archive 全部拼接为模型输入，也不能假定客户端会修复重复输出。
+6. 仓库默认 `projector.go::ProjectCheckpointProjection` 当前 root 使用 `prompt.EncodeReplayMessages` 内联本地格式；默认 summary/archive/plan/todos 也未按上述原生引用合同输出。§19.3c/e 的独立 native 接缝只闭合有限 root/工具与 plan/todos 数据域，未替换默认入口。`token_usage.go::importedConversationStateModelMessagesWithBlobs` 已按 §19.3a/b 支持完整预取的原生文本/工具 root，全部缺失且有 turns 时仍有旧回退；`runtimeStatePayloadFromConversationState(state, blobs)` 与 `imported_blobs.go` 已按 §19.3e 接入 plan/todos 的完整预取双读。这些同步读取不能作为主动 GetBlob、压缩编码或默认新写出已支持的证据。本地 replay 编码与原生 CoreMessage 编码需在检查点边界区分，禁止全局替换所有 provider 的消息格式。
+
+### 19.3 历史恢复与持久化：已核实落点及待定合同
+
+- 已核实：`actor.go:285–327` 串行接收 run、KV 响应与定时器；KV 目前仅接 `handleCheckpointBlobResult`。`GetBlobArgs` 只带 blob_id；`GetBlobResult` 带可选 blob_data/error，没有回显 Blob ID。必须由流身份和 KV request_id 找到原请求，再校验期望哈希，不能设计不存在的响应 ID 字段。
+- 已核实：`ContentBlobStore.Get/Put` 校验 SHA-256，存储不可变内容；`checkpoint_blobs.go` 只有写确认及 5 秒写超时语义。历史读取不能复用其“已有成功结果可降级”的处理。读取限制的本轮有限校准确认 `ContentBlobStore.Get` 使用 `os.ReadFile`、`Put` 写入全部 data，已预取仓库也没有数量或总字节预算；这些落点没有可直接继承的 GetBlob 等待期限。原生 root 的 5,000,000 字节显示限制不是通用 Blob 预算，provider 出站限制和其它模块入口限制也不能直接套作此读取合同。读写共用编号空间、等待集合分开已由计划明确，不再次作为未决选项；仍须冻结读取请求总期限、数量/总字节上限及取消/替代/逐层取回的完整状态转换，未确认值不进入实现。
+- 候选最小机制：在当前流内保存待启动请求及缺失引用，发 GetBlob 后立即返回消息循环；只在输入引用完整、解码和对齐成功后构造本轮 entries 并启动模型。读取顺序为已校验预取、本地内容存储、客户端；取消/替代/超时清理待启动请求，迟到或重复响应不启动第二次；读写共用不冲突的 KV 编号空间并按响应类型分派。无需新增调度服务或通用同步框架。
+- 已核实：`runtime_summary.go:51–57` 只在 Entries 为空时导入；`token_usage.go:48–79` 将导入消息记在 TurnSeq=0；`ImportedTurnIDs` 只保留回合引用，尚无逐消息与本地回合的稳定映射。不能直接按消息数、turn 数或文本相似度判断增量。
+- 已核实：`SaveConversationWithEntries` 在锁内重读，但随后 merge 元数据并 append，不复查调用者的读取基线；`writeConversationLocked` 先写 context.json、再写 state.json，是两次文件原子替换而非两文件事务。`ContextVersion` 为最大 entry 序号，单独使用不能识别等长替换。同步必须在既有锁内复查可判别基线，不能宣称当前锁已满足同步原子性。
+- 已核实：`decideRunRewind` 先按本轮 UserMessage.message_id 匹配本地 user_message，再参考客户端 turn 数识别编辑/重跑。同步不得把任何较短历史都当回退，也不得把明确用户编辑一律当冲突。
+- 候选对齐分类：首次、相同、可证明增量、既有规则可识别回退、冲突；只追加已证明缺失的历史内容，保留执行/用量/子任务元数据，本轮系统与工作区提示来自当前请求。重复内容可以属于不同真实消息，不能用内容哈希全局去重。
+
+上述候选机制尚待完成：读取预算与取消状态的精确合同；root/turn 逐消息对应、末回合追加、压缩前后稳定键；同步元数据与 context/state 部分提交后的恢复。它们分别阻塞异步恢复/增量同步或相关复杂数据域，不能作为 §19.3c W1 独立编码与确认合同的全局前置；新写出只可按已闭合数据域推进，其余域及实际启用仍受对应门禁约束。
+
+阶段 0 续查的反例（仍为 `evidence_status=verified` 的源码事实，不是已选设计）：`imported_blobs.go:45–64,132–150` 只有内容仓库可解的 turn 引用进入 `ImportedTurnIDs`，内联 turn 无此前缀；`projector.go:593,621` 把导入 turn ID 与本地 turn ID 串接，但 root 用内联 replay；`token_usage.go:64–88,120–181` 在有消息时不另建 summary entry；`rewind.go:220–248,283–310` 回退清用量并按客户端回合**数量**截断导入 ID；`file_store.go:471–482` 顺序写两个文件。内容哈希只标识字节，两个相同内容的真实消息可共享哈希，而本地重编码也会改变哈希，故**不能把哈希集合或位置下标直接当跨渠道逐消息身份**。续查者提出的“仅用引用集合比对前缀”和“摘要/用量无损自动成立”均不满足此条件。仍须设计顺序、重复实例、客户端原样引用与本地生成内容之间可验证的映射；无法证明时遵循已确认的保留并停止。既有 `ReplaceEntries` 命中回退即覆盖，不可未经设计直接当作全部同步冲突的安全回退。
+
+### 19.3a 分段门禁：已预取根消息读取与导入失败保全（C0-H1）
+
+本切片承接 PRD §17 HISTORY/CONFLICT 和阶段2A 的输入恢复前置；用户已要求在现有事实基础上继续实施。范围仅为原生 root 内容已经由 `PreFetchedBlob` 提供时的读取，以及导入失败时不修改调用者会话；不新增 GetBlob 消息、检查点写出、同步身份字段或持久化事务。
+
+- **问题与接线**：当前 `importedConversationStateModelMessagesWithBlobs` 只按引用长度跳过 root，完全不读取已有 root Blob；无 turns 时则把引用当 JSON。读取先复用 `newImportedBlobStore` 的 SHA-256 校验，将 root 每个引用解析为单条 JSON 后解码；顺序和相同引用的重复实例保留，不按哈希去重。root 完整时作为模型消息来源，turns 仅保留既有回合引用元数据，不能再拼接一次历史。
+- **兼容判定**：有效内联 JSON 优先按旧 replay 读取（包括恰为32字节的旧 JSON）；其余非空32字节项才按引用识别。内联与引用混合仍明确失败。全部引用都未提供且有 turns 时保留0.0.72.2的旧回退；一旦任意 root 内容可用，则要求全部引用齐全，部分缺失或可用内容损坏必须停止，不改用 turns 掩盖问题。异步读取接线后再替换这一旧回退，不从本切片推导缺失内容已经恢复。
+- **可表达内容与停止边界**：本切片只接通原生 user/assistant 的字符串 content；原生 system 字符串只校验、不导入，系统提示采用本轮请求。原生内容数组、未知角色、空/无效对象继续明确报错，不能丢掉内容块后继续。工具、推理、图片/文件的数组转换保留在后续原生 codec 工作包；旧 replay 的工具/图片等既有字段及过滤/规范化不改变。不宣称已实现完整 CoreMessage serde。
+- **失败保全**：先在临时变量中完成 blobs、turn IDs、消息、summary 和 runtime-state 解码及所有 entry 编码；只有全成功时才更新 `TokenDetailsUsedTokens`、`ImportedTurnIDs` 和 `NextTurnSeq`。任何错误返回 nil entries，调用者会话保持逐字段不变。本切片没有磁盘事务、异步状态、重试或新日志字段；沿用同步调用及会话所有权，不修改两文件提交合同。
+- **验证与回滚**：永久测试从 `importConversationState` 验证带齐 root 且无 turns 的文本历史；另验证 root 优先、重复实例、部分缺失、损坏/哈希、混合格式、32字节内联、数组拒绝和失败前后完整会话一致。入口接线测试沿 `AgentRunRequest`→消息处理→导入/保存→provider 捕获模型输入，禁止真实模型及配置；相关 forwarder/prompt 测试、定向 race、vet 和差异检查验收。仅撤销切片代码即可回退，无新数据格式或客户端检查点需要撤回。
+- **门禁记录**：主会话依据当前代码正向走查完整 root 输入，反向走查部分缺失、根内容损坏、runtime-state 后段失败和旧 turns 回退；上述分支均有确定结果，无新增产品选择。沿用用户已批准的保留停止及最小修复目标。此 S 级兼容读取修复由主会话自审，未新增独立评审；复杂异步/写出/同步合同的独立审查要求不变。`Design Readiness=approved` 仅适用于 C0-H1，不适用于整个历史协议或整体 C0。
+
+### 19.3b 已预取文本块与完整工具批次读取
+
+在 §19.3a 的同一导入边界扩展普通 `text`、assistant `tool-call` 和 tool `tool-result`；文本按块顺序拼接，参数/结构化结果使用原始 JSON，不经 float64 或 map 转换；字符串结果解码为原文本。工具 ID/名称精确配对，结果保持出现顺序，完整批次结束后允许相同内容及 ID 再次出现，不按内容哈希去重。规范化只对具有相同非空实际模型调用身份的交错片段合并，ID 前缀不证明调用身份；单一完整批次不重排结果。
+
+未知/角色失配/不完整批次以及当前不能表示的 reasoning/image/file、`isError=true`、非空多模态工具结果、调用后的文本均整体失败，不裁块继续。系统提示继续采用本轮请求。沿用 §19.3a 的失败保全、入口验证及无迁移回退；没有新增字段、依赖、异步状态或写出协议。此 S 级读取修复仅闭合上述可表达内容（Design Readiness=approved），其余内容和缺失 Blob 恢复分别继续；独立代码审查与执行证据留在任务/过程记录。
+
+### 19.3c 检查点写出的独立合同与回滚边界（C0-W1，v1）
+
+本合同承接 `REQ-MIXED-CHECKPOINT-001`、`REQ-MIXED-CONFLICT-001`、`REQ-MIXED-BOUNDARY-001`，对应 `mixed-checkpoint-codec` 的首个 S/M 切片。**Design Readiness=approved 仅限下述 W1 数据域、输出合同及验证编排；delivery_status=contract-ready，不代表新写路径已实现或启用。** 用户本次授权闭合独立检查点设计，沿用已确认的原生可读、保留停止、最小改动与不部署规则；不由本合同批准压缩映射、丢内容、全局切换或任意旧版回滚。整体 §19.1 仍为 not-ready。
+
+#### 问题机制、证据与适用范围
+
+- `evidence_status=verified`：`projector.go::ProjectCheckpointProjection` 把 `EncodeReplayMessages` 返回的本地内联 JSON 直接写入 root；原生 exec 恢复先 `getBlob` 再 `coreMessage.deserialize`，工作台 `YMs` 同样逐引用读取。修复机制必须同时提供原生消息正文、正文的 SHA-256 引用和已确认的正文集合；只给本地 JSON 加哈希会把格式缺陷转移到解码阶段。证伪条件是原生消费者不能逐条恢复预期角色、内容与工具关联，或发布前任一引用不可解析。
+- 客户端基线继承 §19.1 的 Cursor 3.15.19/workbench 摘要；exec 文件为 `extensions/cursor-agent-exec/dist/main.js`，SHA-256 `1f1ced5c4cb82ec36d2f94cf32d46a7f1f3a030eac19e55c02372a723f2d8a75`。该文件的 `class oi` 至 `function fi(e,t)`（字符 1444321–1451746）包含实际 `pi/hi` 消费转换，`qH/LH/OH`（2481935 起）定义 JSON/二进制 serde，`OY`（2490476）定义各 protobuf serde，`fromConversationStateStructure`（2495991）加载 root，构造器以 `EL` 持有 todo/plan/summary/archive 引用。偏移及哈希只描述这一客户端版本。
+- W1 数据域：本地历史或已经完整解码的历史所形成的 user/assistant 文本与完整工具批次；没有 compaction summary/archive、非空 plan/todos、待完成工具或未解析的外部引用；没有 reasoning、image/file、provider 专有元数据或其他尚不能无损转换的内容。空会话可生成无 root/turn 的空状态。root 消息单条 UTF-8 JSON 大小不得超过 5,000,000 字节：工作台 `$Iu=5e6` 在 `YMs` 中对更大正文替换为省略占位，超限不得拆条、截断或宣称无损。总量沿用现有请求/存储约束，不新增任意预算值。
+- 可表达性必须检查投影前的相关历史载荷，不能先调用会丢弃未知字段的过滤器，再据剩下文本断言 W1 合格。已批准的取消/内部上下文/历史工具回放过滤仍使用当前规则，不增添格式修复专用删减。W1 不是缩减完整产品目标，而是独立实施域；其余数据域按下文各自门禁补齐。编码器对域外输入明确返回错误，不退回内联 JSON、不部分发布；沿用调用方的投影错误传播，不新增“编码错误也成功结束”的降级。全局启用不能靠 W1 成功自动获批。
+
+#### 模块职责与数据合同
+
+1. `HistoryProjector` 保持纯投影：输入当前会话快照，输出现有 `CheckpointProjection{State,Blobs}`，失败返回错误且不修改输入。W1 以独立 `projectNativeCheckpointProjection` 接缝承接；`nativeCheckpointMessages` 从有效原始条目取保存正文，不能把 `ProjectPromptReplay` 已裁剪的工具结果当作无损历史。仅复用既有取消政策、工具批次规范化、历史工具过滤和回合 Blob 图；参数/结果不经过面向模型的结果压缩或 float64 重编码。默认 `ProjectCheckpointProjection`、`ProjectPromptReplay`、`prompt.EncodeReplayMessages`、磁盘 `model_message` 格式和 provider 请求编码保持原样；默认入口切换另受下文门禁约束，不建通用 codec 框架。已有 `checkpointBlobGraph.add/list` 负责内容寻址、字节复制和稳定输出顺序。
+2. `State.RootPromptMessagesJson[i]` 是第 i 条原生 CoreMessage 的 raw32 SHA-256；`Blobs` 包含对应 UTF-8 JSON 字节。正文仅有原生 `role/content`，本地 `tool_calls/tool_call_id/name/content_parts` 不得作为同名顶层字段输出。无工具的 user/assistant 文本写字符串 content；有工具的 assistant 内容先写已有非空文本块，再按原 ToolCalls 顺序写 `{type:"tool-call",toolCallId,toolName,args}`。普通文本块使用 `{type:"text",text}`，既有文本顺序不改变。system 提示遵循本轮请求生成与既有过滤，不借历史写出重新注入旧系统提示。
+3. 工具结果写为 tool 角色的内容数组，每条 `{type:"tool-result",toolCallId,toolName,result}` 与对应调用的 ID/名称匹配，顺序采用已批准的完整批次规则。同一 assistant 含多个调用时，结果携带的原始参数只可恢复匹配 ID 的调用，不能覆盖其他调用；非空结果名称与已派发调用名称失配须整体失败，不能用结果重命名调用。参数使用校验后的原始 JSON，不经 `map[string]any`/float64 重编码；结果 Content 是有效 JSON 时嵌入该 JSON 值，否则编码为 JSON 字符串，不擅自增加 `isError`。空结果保留为空字符串。无效参数或不完整/失配批次整体报错，不制造工具结果，不再执行历史工具。
+4. 原生客户端的 JavaScript JSON 消费会舍入超出安全整数的数值，`pi/hi` 还会把结果字符串 `"123"` 转为数值 123；因此原生无损不能仅靠 Go 保存原始 JSON 字节证明。W1 JSON 值域为 string/bool/null、递归数组/对象及绝对值不超过 9,007,199,254,740,991 的整数；分数或更大数值的跨语言精度承诺独立阻塞于 `W-NUMERIC`。结果若是字符串且其字符串正文又是合法 JSON，另归 `W-RESULT-TYPE`，不得声称客户端可保留原类型。旧读取切片对大整数原始字节的保留能力不受此限制改变。域外值不转成字符串规避限制，不据此宣称完整工具写出已支持。
+5. root 是有序消息序列，消息实例位置不是跨渠道身份键；SHA-256 只作内容寻址/字节相等键。相同正文可以只存一个 Blob，但 root 中重复引用必须保留，每个实例都回放。`Turns` 保留现有逻辑回合顺序，使用 `ConversationTurnStructure` protobuf 引用，依次引用 `UserMessage` 和 `ConversationStep` protobuf；resume 活动归入原用户回合，fork 快照不含后来历史。root 是活动模型消息来源，turns 是结构化回合视图，不拼接两份模型历史，不用哈希集合做历史同步。
+6. `Blobs` 必须覆盖本状态所有可达内容引用，包括 turn 的子引用；同 ID 必须同字节且 SHA-256 校验成功。本地生成内容按首次加入顺序列出，消息序列另保留重复实例。已有导入 turn 引用只有在已校验内容仓库能解析全部子图时才可保留并纳入写确认集合；缺内容阻塞对应导入写出切片，不假设“客户端以前有过所以永远可读”。W1 不新增 `ConversationFile`、context/state 字段或磁盘格式版本。
+
+#### 接口、顺序、失败与并发合同
+
+- 真实调用方向仍为 `publishCheckpointWithTerminalAction` → `snapshotCheckpointConversation` → 投影 → 补 PendingToolCalls/显示 token → `queueCheckpointProjectionWithTerminal` → KV SetBlob/SetBlobResult → `buildCheckpointMessage` → 既有终态。W1 先完整编码/检查引用图，再进入队列，不能发送一半内容后才发现编码错误。`SetBlobArgs` 的 blob_id/blob_data 复用既有协议；KV uint32 id 是本流写确认关联号，不是 Blob 身份或历史同步身份。
+- 不修改 `checkpoint_blobs.go` 的流锁、Required/Confirmed/Pending 集合、同流确认复用和 5 秒超时。正文按唯一 ID 发送，全部 Required ACK 后才能发布状态；发布状态成功后才执行既有子任务 MarkAcknowledged，再按原 terminal action 收尾。SetBlob ACK 只证明存储确认，不证明正文符合原生格式，也不证明业务终态成功。确认集合仅在当前流有效，重建服务/新流不能继承“已同步”结论。
+- 持久历史已经存在于本地，检查点是其输出视图；生成/发送本视图不改 `Entries`、ContextVersion、NextTurnSeq、用量、子任务执行记录或 rewind 基线。因而 W1 不依赖 §19.3 尚未闭合的两文件同步事务，不宣称 context/state 已有原子提交。Blob 存储仍使用现有不可变内容合同，无迁移、删除或清理任务。
+- 编码/引用图错误在任何 SetBlob 前停止投影；会话不变，错误采用固定类别，不含正文或 Blob ID 数组。SetBlob 投递失败、拒绝、当前写超时沿用 `finishAfterCheckpointSyncFailure`：丢弃未发布状态，保留旧检查点；已成功回合仍按原 completion 结束，失败回合保留失败终态，不能变成成功。降级不得发布引用不齐的状态，不调用 MarkAcknowledged，不标记本检查点同步成功。
+- 取消/替代请求通过既有 `discardPendingCheckpoint` 清 pending 与 timer；重复/迟到/未知 id/错误响应类型不创建新发布。新投影替代旧 pending 时只发布最新状态，复用同流已确认 Blob，原 terminal action 按既有 merge 规则合并；旧 timer 由单调令牌隔离。停止、超时或进程中断后可能留下无引用的不可变 Blob，允许保留；本切片不做自动重试或持久 ACK 账本。
+- 观测沿用 checkpoint dispatch/result/timeout/canceled/sync-skipped 事件和现有白名单，只报告阶段、计数、耗时与固定错误类别。鉴权/出口继承 §18，本合同不复制官方身份或 BYOK 凭据。UI/配置页及新角色权限为 N/A；异步确认、持久数据保护、接口兼容和回滚不是 N/A。
+
+#### 兼容读取与回滚合同
+
+- 写入与读取分离：保留旧内联 replay 读取，包括恰为32字节的合法 JSON；新输出统一 raw32 引用，不能双写“原生引用+旧内联”到同一 root 数组。源码基线 `07aa83f`（0.0.75.0）的 §19.3a/b 读取可以在所有必需 Blob 预取齐全时还原 W1 文本/完整工具批次；这一能力不等于无预取读取、完整结构化状态或旧于该基线的版本兼容。
+- 最低回滚目标限定为经过 W1 双读回归的 `07aa83f` 源码基线或保留等价读能力的版本。不能仅凭版本号认定某个安装包包含它；部署前须核对实际产物与源码。早于 C0-H1 的读取会跳过引用式 root/依赖 turns，不能保证新格式完整回放，不列为无条件回滚目标。合法 JSON 的 raw32 哈希会与该基线的 JSON 优先检测产生歧义，属于 `W-ID-AMBIGUITY`；W1 验证在编码后检查该歧义，命中则明确失败，不篡改内容或哈希掩盖问题，兼容读修复独立设计。
+- 回滚前先停止产生新检查点（须另行授权运行窗口），等待在途写入收尾或明确取消；保留现有 context/state 和全部内容 Blob，不恢复旧磁盘快照、不 reset 存量会话。随后换回上述可读取基线，使用同一合成新旧检查点和预取集合验证恢复与再投影；输入缺必要内容时保留停止，不靠旧 turns 的偶然回退承诺无损。服务重建必须重新确认本流所需内容。
+- **发布是不可撤回边界**：SetBlob 成功而状态尚未发布时，回滚只留下未引用 Blob；状态发布后客户端持有新引用，撤销服务端代码不会撤回该状态。若目标读能力/必要内容不满足，停止受影响会话的继续运行，保留现有记录和读取能力，补齐内容恢复或兼容读取后再继续；不得删除历史、覆盖为旧检查点或让用户重建聊天来假装回滚成功。发布后的新增回合始终保留，不从部署前备份覆盖回来。
+- 本合同不新增 Feature Flag、双写格式、批量迁移或部署操作。W1 编码/定向接线可独立 TDD，但将其替换为所有请求的默认 writer，必须先通过适用数据域的读取与回滚回归。域外请求继续由对应尚未闭合切片负责，不把其静默删减或错误写出包装为兼容；本设计任务没有授权实际发布。
+
+#### 结构化状态和其余未知的局部阻塞
+
+- `W-STRUCTURED`：plan 引用 `ConversationPlan` protobuf、todos 每项引用 `TodoItem` protobuf；`Plans` map 值仍是内联 `PlanRegistryEntry`，mode/token/pending tool IDs 仍内联。默认 `state_tools.go::encodeConversationPlanBytes/encodeConversationTodoBytes` 仍产内联 protobuf；§19.3e C0-W2 已另闭合独立引用输出、完整预取双读及其回滚合同，真实读侧不再直接把32字节字段当 protobuf 正文。只给字段加哈希不补同对象读取仍不合格；默认 writer 启用继续受完整数据域门槛约束。此域不再因最初只读取证的未决兼容选择阻塞 W2，也不成为无结构化状态的 W1 前置。
+- `W-COMPACTION`：summary 引用 `ConversationSummary`；summary_archive/summary_archives 必须是 `ConversationSummaryArchive`，其 summarized_messages/summary_message 引用 CoreMessage，window_tail 为内联 uint32。当前 `previousCompactionSummaryBytes/compactionSummaryArchives` 误用 summary protobuf，且尚未冻结被压缩消息对应与窗口。禁止把错误 schema 加哈希或填空 archive 假装修复。须核实当前压缩保留内容、窗口及 root/archive 排他规则：root 承载活动摘要与尾部，archive 保留被压缩消息；客户端 DIu 展开 archive 后不自动去重。只阻塞有压缩/archive 的写出及对应同步切片。
+- `W-CONTENT/W-NUMERIC/W-RESULT-TYPE`：推理/签名/provider 元数据、图片/文件、未完成工具、数字精度与 JSON 字符串结果类型分别要求无损映射、消费者/回读证据；二进制若支持须遵循 `{__type:"Uint8Array",hex:…}`，不把 base64 或 URL 当原始字节。不得以客户端支持未知块为依据猜造本地字段映射。分别阻塞含对应载荷的切片，不改变已闭合普通文本与可无损完整工具批次。
+- `W-IMPORTED`：带未解析 turn/子图、file_states(_v2)、subagent_state_refs 等外部状态只在内容完整且持久来源可证明时可写；当前投影不全量保留这些状态，禁止声称已无损恢复任意官方快照。缺失内容的获取归 `mixed-history-hydration`，逐消息增量/两文件恢复归 `mixed-history-reconciliation`，子模型承载归 `mixed-subagent-contract`，均不成为 W1 本地完整视图的全局前置。
+- 各 fact-gap 的 owner 为主会话，退出标准为指定客户端/当前 schema 的只读探针、对应无损正反例和稳定 Design 子锚点；需新增业务取舍则单独确认。真实官方服务内部恢复为 test/env gap，阻塞真实兼容验收而不是源码/合成 W1 修复。整个 C2B 仍须全部适用域及真实验收缺口分别收口，不能从 W1 通过推导整体通过。
+
+#### 验证合同与 Design Gate
+
+- 永久失败回归落在既有 `projector_fork_test.go`：真实投影生成两条文本 root，断言每项 raw32、正文在 Blobs、哈希匹配、原生 CoreMessage 解码成功；旧代码必须在内容查找处 RED。随后覆盖完整工具批次/结果倒序、相同消息重复、Unicode/引号/空结果、确定性且输入不变、fork/resume/取消策略以及所有 W1 域外错误不产生半份投影。数值/结果类型/5,000,000 与 5,000,001 字节边界作为局部能力门禁，不把故意失败记作已修复。
+- 读取兼容落在 `imported_history_test.go`：旧内联与新引用+完整预取恢复相同语义、完整 root 优先且不重复 turns、部分缺失/哈希损坏/32字节歧义明确失败且原记录不变；对最低回滚基线重复相同样本。涉及新 structured 双读时须追加该对象的回归，不能借 root 的 PASS 证明 plan/todo 可读。
+- 发布接线复用 `checkpoint_blobs_test.go` 及真实 HTTP BidiAppend/RunSSE 测试辅助函数：捕获 SetBlob、模拟逐项 ACK、在最后一项 ACK 前无 checkpoint/终态、之后原生消费者按捕获仓库恢复全部预期消息；验证拒绝/超时/取消、重复和迟到 ACK、旧 timer、新 pending 替代、子结果发布后唯一确认。不得只比较数量或用 `DecodeReplayMessages(root)` 自证兼容。
+- 开发验证在隔离 HOME、固定已安装 Go 缓存、`GOENV=off GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off` 下执行 `go test ./internal/backend/forwarder ./internal/backend/agent/prompt -count=1 -timeout=3m`、checkpoint/import 定向 `-race`、两包 `go vet` 与 `git diff --check`。跨语言样本须固定客户端版本与源码摘要；日常永久回归使用最小冻结契约样本，不依赖机器安装 Cursor，不复制整包客户端。命令是后续实现验收合同，本设计任务不宣称已经全部运行。
+- Gate（2026-10-11，主会话自审，**未做独立评审**，遵循项目本次未授权委派的约束）：正向模拟“无压缩文本/可无损完整工具批次→原生正文/raw32→SetBlob→全 ACK→状态→终态”；反向模拟“域外字段/内容超限/引用缺失→发送前错误”“部分 ACK/拒绝/取消/旧 timer→不发布新状态”“发布后回滚→保留新引用/增量、仅回到已验证读取基线”。适用项包含数据/接口、确定性、异步状态与并发、失败、安全观测、兼容回滚和测试追踪；UI/新配置/新磁盘 schema 为 N/A，无新产品或部署决策。
+- 自审被迫补齐的事项已写入本合同：计划/待办实际为引用且旧读仍内联、summary 与 archive 不同 schema、JavaScript 数字和字符串结果的语义限制、raw32 JSON 歧义及已发布状态无法自动撤回。**verdict：W1 合同闭合，可进入相应永久回归和有界最小实现；其他数据域 not-ready 只阻塞各自切片，整个 C0/C2B 未通过。** 此为作者反向审计而非外部复核；未来复杂压缩/导入/同步合同仍需对应审查，不借本 S/M 切片豁免。
+
+### 19.3d 默认写出前的结构化判别与压缩来源校准（只读取证）
+
+本节承接 §19.3c 的 `W-STRUCTURED/W-COMPACTION`，保留 C0-W2 实施前的有限事实与候选边界，**取证当时 Design Readiness=not-ready**；不是新的实施授权，不改变 C0-W1 的已闭合范围。结构化取舍现已由用户确认并由 §19.3e 承接，以下“未批准/旧读直接解码”均描述取证当时，不覆盖 W2 当前读侧；压缩后续反例及待决方向见 §19.3f。需求仍为 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY，不新增持久化字段、格式标记、配置、迁移或兼容框架。任务与运行证据见 `task/todo.md`、`docs/process.md` 的数据域取证条目。
+
+- **已核实结构化路径**：`projectConversationStructuredState` 从 runtime_state/成功结构化工具结果取状态；默认 `ProjectCheckpointProjection` 调 `encodeConversationPlanBytes/encodeConversationTodoBytes` 直接将 protobuf 正文放入 plan/todos，`Plans` map 保持内联。`importConversationState` 先建已校验预取仓库，但 `runtimeStatePayloadFromConversationState` 不接仓库，仍直接 `proto.Unmarshal`。原生 plan/todos 的引用合同继承 §19.3c，不能仅给正文加哈希而不补读侧。
+- **已核实判别反例**：`ConversationPlan{Plan:30字节ASCII文本}` 和 `TodoItem{Id:30字节ASCII文本}` 都是32字节合法旧内联 protobuf。主会话有界合成搜索找到真实 SHA-256（第167号合成 plan 样本）被两种 `proto.Unmarshal` 都接受为已知字段空、未知字段32字节的对象。因而“没有 Blob 时解析成功就是旧正文”会掩盖缺失引用；root 的 `json.Valid` 歧义检查也不能作为 plan/todos 的 protobuf 判据。只含 runtime_state 的历史不形成 root 消息，旧默认 writer 可以产生空 root 与非空 plan/todos；root 字段没有显式生产者/版本标记，不把其格式推断作为结构化字段来源的可靠证明。
+- **候选最小机制，未批准**：复用已校验 Blob 仓库，引用命中则解析正文；没有引用命中时，非32字节沿旧内联 protobuf 读取，恰32字节则明确停止、保全原会话，不猜是正文还是引用。写侧在独立 native 接缝将 plan/todos 正文纳入既有 Blob 图和 ACK；todos 保留顺序及重复实例，`Plans` 仍内联，整个输入成功后才更新会话。该机制不新增 schema，但会使无来源证据的旧32字节内联计划/待办无法继续；这属于兼容取舍，必须由用户确认，不能由路线的“继续”自动批准。另一方向是保持此类旧读取能力、先取得可靠来源依据，在依据闭合前暂停该域写出；不擅自创建新标记。
+- **回滚差异已核实**：`07aa83f` 的 root 双读证据只适用于 C0-W1，不覆盖引用式 plan/todos；该域发送新状态前，最低回滚源码/实际产物必须具备结构化双读并经同对象样本验证。若切片尚未发布，仅撤销独立代码即可；一旦发布，仍遵循 §19.3c 的不可撤回边界并保留全部内容/新增历史。候选尚未批准，当前不改变 W1 的回滚合同。
+- **已核实压缩来源**：`applyCompactionToConversation` 只追加摘要及 runtime_state，原始 Entries 未删除；`compactedPromptProjectionEntries` 使用摘要条目所在索引、CurrentTurnSeq/CurrentRequestID/PreserveCurrentTurnInputs 和 `autoCompactionPreservedEntryIndexes` 构造实际活动视图。因此实际移除集合可由现有数据/算法重建，不能因 payload 未记录显式 Seq 区间就断言必须扩展持久格式。模型候选、预算裁剪后的实际摘要输入与投影移除集合并不等价，不能将任一集合未经合同直接命名为原生 summarized_messages。
+- **客户端有限证据**：继承 §19.1/§19.3c 的两个 bundle SHA-256；exec 字符2848394附近的生产代码以 `messagesForSummarizationCount - messagesActuallySummarizedCount` 的非负值写 windowTail，并逐项保存实际摘要消息的 CoreMessage 引用（排除旧摘要块）。windowTail 单位为消息条数；本次仅核实该生产处和工作台消费者，不将搜索无命中提升为“所有客户端路径都不消费”。工作台 `DIu`（19538609）按归档次序拼接 summarized_messages，再追加 root 中非 system/非摘要的消息，没有去重，也未在该函数读取 windowTail。
+- **仍阻塞压缩实施**：须固定本地活动摘要的原生标记、每次归档与活动尾部的排他映射、取消/fork/连续压缩/回读与回滚；尤其本地被投影移除但未实际参与模型摘要的正文如何保全，不能通过填空 archive 或给错误 schema 加哈希掩盖。优先验证可由现有字段重建的映射，只有证据证明不足且最小设计获准后才考虑新增持久字段。此处为 fact/design gap，不因取证完成将压缩 writer 标 ready。
+
+**本次取证审查结论**：主会话拒收“proto 解析成功可安全兜底”“JSON 歧义门禁可直接复用到 protobuf”和“压缩必需新增持久字段”三项过宽结论；纠偏后限定了可靠事实、兼容决策与后续最小探针。结构化兼容取舍未确认，压缩映射合同未闭合，verdict=not-ready；默认 writer 仍不得切换。
+
+### 19.3e 计划与待办的独立原生写出及双读（C0-W2，v1）
+
+本切片承接 §19.3c 的 W-STRUCTURED 和 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY；用户通过本轮结构化选择明确批准：**没有已校验正文且字段恰32字节时停止并保全；新结构化格式的最低回滚版本必须具备同对象双读。** 这只批准兼容边界及独立代码/测试，不批准默认切换、实际发布或真实会话操作。§19.3d 的反例为事实输入，整体设计仍 not-ready；本切片在下述独立模拟通过后才为 Design Readiness=approved。
+
+- **范围与职责**：沿用 C0-W1 的完整文本/可无损完整工具批次、纯投影/全部 ACK/失败保全合同，额外支持现有结构化状态的 plan/todos。`Plans` map 继续使用原有内联 `PlanRegistryEntry`，不新增字段或重定义其规范化。压缩、推理/图片、未完成工具、未解析导入子图仍域外。复用 `projectConversationStructuredState` 的既有成功工具结果与取消政策，已有 plan/todo 工具历史过滤不改变；编码接缝仍为未导出的 `projectNativeCheckpointProjection`，默认 `ProjectCheckpointProjection` 和 provider replay 不变。
+- **写侧合同**：先检查有效 runtime_state 的原始 JSON，拒绝未知字段/不能保留的结构化载荷，不能先经 clone/过滤再宣称无损。计划采用既有 PlanText 规范化后的 `ConversationPlan` protobuf；todos 采用既有投影结果的每条 `TodoItem` protobuf，完整保留 id/content/status/created_at/updated_at/dependencies、顺序及重复实例，空列表保持空，nil不产生新条目。非nil全零 TodoItem 的 protobuf 正文为空，既有 Blob 图无法登记该实例；明确返回 `native checkpoint: empty todo`，不写空引用或跳过后成功；引用式 todo 正文若为空，或正文虽非空但显式默认字段解码后仍是全零 TodoItem，同样明确失败并保全；判据须在解码及未知字段校验后检查对象语义，旧非32字节内联不新增这一限制。正文进入同一 `checkpointBlobGraph`，State.Plan/每项 State.Todos 写 raw32 引用；同正文去重，实例不去重。protobuf 编码错误返回 nil projection；全部成功才返回 State/Blobs，投影不改输入，不发送半份内容。root 的 JSON 哈希歧义检查只用于 root，不套用于 protobuf 引用。
+- **读侧合同**：`importConversationState` 使用同一个 `newImportedBlobStore` 已校验仓库解析 plan/todos；不新增异步 GetBlob。每个非空字段若长度为32，必须解析其内容引用：已校验仓库存在则解码正文，不存在则固定 `missing prefetched plan blob`/`missing prefetched todo blob` 错误；**即使这32字节可以被 protobuf 解析也不回退**。非32字节仍按旧内联 protobuf 解码，旧空字段保持空。plan/todos 可逐字段包含新引用与旧非32内联，结果与原顺序一致；解析原生引用正文失败固定对应 decode 类别，原生引用正文的未知 protobuf 字段若会被现有 runtime schema 丢弃则明确拒绝，不剥字段后成功；旧非32字节内联仍沿原有解码/克隆规则，不新增未知字段拒绝。所有 root/turn/结构化输入及 entries 编码成功后才更新会话元数据；任一失败仍 nil entries 且会话逐字段不变。
+- **兼容影响与回滚**：未命中内容的旧32字节内联 plan/todo 将明确失败，原记录保持可由旧代码读取，不迁移/删除/自动生成正文；用户已确认此边界。其余旧内联读取不变，W1 root 的兼容判据不改变。写侧仍未默认接线，部署前至少以 W2 双读源码/实际产物验证新旧结构化样本、完整预取和回读再投影；`07aa83f` 不能作为 W2 最低回滚目标。真实产物验证仍独立授权；发布后不可撤回和新增历史保护继承 §19.3c。
+- **实现落点**：`projector.go` 仅扩展独立接缝、结构化域检查和 Blob 编码；`token_usage.go` 给现有 runtime-state 导入传入仓库；`imported_blobs.go` 增加针对 plan/todo 的小范围解析辅助，不建通用 codec 框架。永久测试复用 `projector_fork_test.go`、`imported_history_test.go`；必要的 SetBlob/ACK 覆盖追加到既有 `checkpoint_blobs_test.go`。`state_tools.go`、proto/schema、ContentBlobStore、依赖/配置和默认 service 入口保持不变。
+- **验证合同**：先在现有导入入口使预取 plan/todos 引用不能还原的用例 RED，再实现 GREEN。样本包括 plan、不同 todo 和相同 todo 的重复引用，逐字段比较结构化投影；新引用/旧非32内联/混合格式、缺失（包括可被 protobuf 接受的真实 SHA-256）、损坏正文/哈希、旧32内联拒绝，均断言具体错误及完整输入不变。独立投影输出的所有结构化引用必须 raw32/正文存在/哈希相同/正确 protobuf 解码，PlanRegistryEntry 仍内联；旧默认 writer 输出不变。至少一个真实 BidiAppend 上行的失败/ACK 接线样本验证在结构化内容齐全前不提交/发布。按本切片修改范围运行 forwarder 包测试、结构化/检查点/导入定向 race、forwarder vet、gofmt 和最终 `git diff --check`，隔离 HOME/禁止下载依赖，不重复无关套件。
+- **原生数值事实及实现限制**：主控复核相同 SHA-256 的 exec `wd/vd`（1598931/1599109），createdAt/updatedAt 原样传递，TodoItem 的字段4/5为 int64，protobuf runtime（745100）使用 BigInt，禁用 BigInt 时用十进制字符串而非 Number。因此 W2 的原生 protobuf 时间戳保留完整 int64，不借 root 工具 JSON 的安全整数门禁拒绝合法时间戳。runtime_state 使用标准 `encoding/json` 与现有 snake_case 字段（含 int64数字），严格检查只放在 W2 独立接缝，不改共享 `projectConversationStructuredState`；原生编码直接 `proto.Marshal` 并检查错误，不复用会吞错的旧 encodeConversationPlanBytes/encodeConversationTodoBytes。
+- **Gate（本轮，独立评审后主控闭合）**：[结构化合同独立复审](5aeaada8-8e56-44c1-91e7-b0737b6e2ae7)模拟正向“原始结构化历史→protobuf/raw32→全 ACK→预取读取→相同 runtime state”，反向“缺失/歧义/损坏后段→nil entries/完整会话保全”和“发布后仅回到具备 W2 读取能力的源码/产物”。首次有条件通过，指出未知字段检查作用域和旧编码器吞错；主控据源码/客户端探针明确仅新引用正文拒绝未知字段、旧非32内联不变、严格写校验不进共享路径、直接 protobuf 编码检查错误。用户已确认唯一兼容取舍；数据/接口、失败、重复、内容确认、兼容与回滚适用，新增UI/配置/schema/真实部署为非目标。int64事实已核实，不新增容量阈值或重试。**verdict：C0-W2 Design Readiness=approved，仅限本独立切片；新读兼容需永久 RED→GREEN，独立新写出仍未默认接线，不代表 C2B 完成。**
+
+### 19.3f 压缩活动序列与原生归档顺序（有限取证，v0.1）
+
+承接 PRD §17 CHECKPOINT/CONFLICT/BOUNDARY、§19.3d 的 W-COMPACTION 及 `mixed-checkpoint-compaction-contract`。**Design Readiness=not-ready；本节记录反例与候选设计方向，不授权修改压缩政策、持久化格式或默认写入口。** 原始 Entries 保留与投影移除集合可重建仍成立，但不能据此推导原生归档的顺序合同已经闭合。运行证据和任务状态见 `task/todo.md`、`docs/process.md`。
+
+- **已核实的顺序约束**：固定 §19.1/§19.3c 两份客户端 SHA-256，工作台实际 `async function DIu` 起点为字符19538609（`function DIu` 为19538615）；该函数先按 summaryArchives 顺序展开 summarizedMessages，再追加 root 中非 system、非摘要消息。实际 `IIu` 判定为 `providerOptions?.cursor?.isSummary === true`。exec 的摘要生产使用 user 消息及此标记；不能用未标记的普通 user 文本假装原生摘要。当前 `decodeImportedNativeMessages` 只接受 role/content，带此标记的正文属于尚未闭合的压缩读兼容，不用 W1/W2 的回滚读取能力兜底。
+- **已核实的稀疏保留**：`compactedPromptProjectionEntries` 在最新摘要前保留本轮 user/request context、最后一组完整工具及必要 reasoning carrier，而不是连续尾段；摘要后条目全部追加。假设无取消、无额外元数据，Seq 1/2 为旧轮 user/assistant，3 为当前 user，4/5 与6/7 为两组工具，8为 `preserve_current_turn_inputs=true` 摘要；现有算法的活动 Seq 为 `[8,3,6,7]`。将其余正文作为候选归档 `[1,2,4,5]` 后，实际 DIu 拼接为 `[1,2,4,5,3,6,7]`，而原序为 `[1,2,3,4,5,6,7]`。连续两次压缩也保留该错序，尽管数量、成员与唯一实例均正确。因此“每次新增移除集合归档、稀疏活动消息写 root”的候选被否证；这不是已实现的原生 archive writer，也不证明现场同一根因。
+- **已核实的时间边界问题**：保留 helper 接受完整 Entries 而非摘要截止前缀。上例在摘要后追加同 turn/request 的第三组工具 Seq9/10 后，活动由 `[8,3,6,7]` 变为 `[8,3,9,10]`，旧工具6/7退出活动集合，没有产生新摘要。因此“在摘要索引前截断 helper 输入”只能作为冻结压缩快照的候选新语义；不能把当前算法描述成已有持久快照。重建某次压缩时刻与计算当前最终视图须分别定义。
+- **事实边界**：`checkpointProjectionEntries` 只是取消过滤后的历史视图，不是 ConversationSummaryArchive 的 summarized_messages 集合；既有 summary/archive 输出仍把摘要文本编码成 ConversationSummary，尚无正确原生归档正文映射。模型实际摘要输入还有 turn 片段裁剪与预算丢弃，不能由投影移除集合推定。保留 tool_result 的现有模型视图会裁剪正文，新原生写出必须另从原始 Entries 取完整结果，不能重复 W1 曾被拒收的有损路径。取消/fork/导入子图与预算超限的合同仍待闭合，不因这两项合成反例获证而自动完成。
+- **用户已确认的设计方向（仅方向，不是实施授权）**：用户选择 `continuous_tail_design`，允许按“摘要+连续尾段”完善压缩设计，继续核验预算与失败保全。普通历史应划分为连续前缀归档与连续后缀活动消息，固定压缩时点边界，并继续保留完整原始 Entries；不重复实例，不篡改摘要标记含义。合同样本可恢复原序，但会改变当前稀疏保留政策：同轮更早工具可能进入连续活动尾段，模型输入可能增大。当前 `validateCompactionCandidateBudget`/`compactionBudgetTokens` 已提供按上下文窗口减预留量的预算及超限错误，可作为后续设计现实基线；尚不能据此宣称完整连续尾段必能放入预算。完整工具批次、无损写出、取消/fork、历史压缩快照与读/回滚兼容仍须闭合并独立模拟。此确认不批准新阈值、新持久字段、编码、默认启用、发布或真实会话操作；保持原稀疏规则且暂停压缩写出的方向未采用。
+
+**取证结论**：集合可重建不足以证明原生有序排他映射；已否证直接按移除集合写归档的候选。活动历史政策的方向决策已关闭，后续按连续尾段闭合连续压缩、预算、取消/fork、读兼容和回滚合同；承重事实与具体合同仍未闭合，verdict=not-ready。
+
+### 19.3g 连续尾段的最小实施合同（2026-10-12）
+
+承接用户本轮“保存→缺失读取→增量→子任务→验收”的连续实施授权及 §19.3f 已确认方向，本合同仅闭合活动历史的连续尾段，不批准默认 writer 切换或真实会话操作；原生归档/摘要双读及其他内容域仍分别验收。
+
+- **事实及机制**：现有摘要追加位置可作为固定时点，原始 Entries 不删除；§19.3f 稀疏反例和本轮 `/tmp/mixed-compaction-probe.4tDd9s/probe.log` 已验证连续区间可以保序且不会因摘要后工具追加改变先前边界。候选超预算仍由 `applyCompactionPlan` 编译后、持久化前的 `validateCompactionCandidateBudget` 拒绝；探针不代表实现已完成。
+- **精确规则**：只以 `entries[:summaryIndex]` 计算已有本轮保留集合，取其中最早普通 prompt 条目为连续尾段起点；无保留条目则起点为摘要位置。输出最新摘要→该起点至摘要前的全部普通 prompt 条目→摘要后新增条目；旧摘要不混入尾段。保留摘要前非 prompt 元数据，既有内部上下文过滤、工具规范化不变。结果展示裁剪机制及作用域均保持原样：只改写原保留集合中的条目，新纳入连续尾段的其它结果不额外裁剪，原始历史仍不变。连续区间必须包含原已保留输入和完整工具批次；若最早保留项为 tool_call 或 tool_result 则向前扩展到对应完整批次起点，不能丢同批次兄弟调用或制造悬空结果；采用真实调用顺序/模型调用身份，不凭 ID 前缀猜批次。重复实例保留，不按内容哈希去重。
+- **失败/取消/fork/预算**：复用既有取消过滤和 fork 截断，不改变取消政策；摘要之后新增条目不重新计算旧边界。完整连续尾段不能满足现有上下文预算时原请求明确失败、原历史与旧摘要保留，不再删掉中间消息或提高阈值。原生保存仍须从原始未裁剪正文另行编码，不把模型展示裁剪当无损归档。
+- **落点与回滚**：仅调整 `projector.go::compactedPromptProjectionEntries` 和必要小 helper；预算入口 `compaction.go::applyCompactionPlan` 保持原顺序，无新 schema、阈值、配置、迁移、后台任务或依赖。该纯投影同时供模型输入及下一次压缩候选使用，连续尾段使其看到同一份较完整活动历史，不另建稀疏候选入口；须覆盖下一次压缩候选不重新纳入已归档前缀。代码回退不删除原始历史；尚未发布原生压缩引用，默认发布入口保持不变。新规则会增加部分当前轮模型输入，属已确认连续尾段方向的直接结果，超预算行为沿用既有失败保全。
+- **验证/Gate**：独立复核已确认固定前缀、预算在提交前检查、取消后置、fork先截断、连续压缩及纯代码回滚可沿既有规则实现，无新增用户业务取舍；指出工具调用批次起点、结果裁剪作用域及下一次摘要候选耦合，已按上述规则闭合。正向为最新摘要+完整有序尾段，最高风险失败为尾段超预算不提交，取消/fork及回滚不改原始 Entries。验证复用 `compaction_append_only_test.go`/既有预算入口测试；隔离 HOME、禁止下载依赖，定向 test/race、相关包 test/vet。需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY；工作=`mixed-checkpoint-compaction-contract` 的活动尾段切片。无 UI、外部请求改写或新持久字段；原生归档读写未决只阻塞归档/默认发布，不阻塞本规则。Design Readiness=approved 仅限活动尾段切片；独立复核为本轮只读实现模拟，完成状态仅记 task/process。
+
+### 19.3h 原生消息正文的可选本地保全（2026-10-13）
+
+用户已明确选择允许在现有历史记录增加可选原生消息/归档来源信息，并要求继续实施；本切片先完成已预取 root 正文保全和摘要标记，归档来源、复杂内容和默认 writer 接线随后按同一授权继续，不再次请求已确认的格式方向。
+
+- **事实/范围**：`modelMessageEntryPayload` 当前仅有转换后 Message，原生摘要的 `providerOptions.cursor.isSummary` 被拒绝；一条原生 tool 消息可能解出多个结果。新增 `native_message`（可选单条 CoreMessage JSON）和 `native_message_parts`（该原文对应的连续 model_message 条目数，默认1）。只在映射首条保存原文，后续条目保留各自 Message；新旧载荷共存，无批量迁移/新数据库/配置/依赖。只保存已支持的消息正文，不保存外部请求头/凭据，不输出到 provider/日志；JSON落盘可规范化空白及HTML转义，解码视图先按相同序列化规则规范化参数/非字符串结果，不经浮点数重编码、不改字符串内空白；内容ID按实际保存字节重算，不复用旧哈希。
+- **导入/关联**：在规范化前逐条解码完整原生 root，绑定原文及所有对应 Message，完整序列工具配对校验后才产生 entries；原文顺序和重复实例保留。system 及既有内部上下文过滤仍按当前规则处理；其它不能表示的内容仍明确失败，不因保全字段而放宽模型内容能力。空字符串消息原文也须有对应entry，不通过 `newModelMessageEntry` 的空文本省略丢实例。旧内联/旧turn回退保持不变。1:N 条目必须连续且同 TurnSeq/RequestID，每条 Message 与同一原文解码视图逐项相同，任何失配、截断或嵌套新原文停止，不写半份。
+- **摘要**：仅接受 user字符串以及严格 `providerOptions:{cursor:{isSummary:true}}`；未知顶层/嵌套字段或错误角色/内容仍拒绝。单条解码器直接产生已包装的 Message.Content（已有 `<conversation_summary>` 包装），以 model_message 保存；ProjectPromptReplay 读取此视图不再次包装。保存原文保持原生标记及未包装文本；不是将官方摘要改成本地压缩摘要，不重复拼接 archive 到模型输入。
+- **写侧/所有权**：独立 native 写出按有效条目遍历，普通本地产生条目仍按旧有界转换；原生载荷须用同一解码器复核 parts 数量、内容及完整序列，经过校验后以原文加入完整 Blob 图，一组只输出一次。原生原文不经过重编码或本地工具白名单裁剪；该例外只用于已验证并保存的原文，既有本地生成工具过滤不变。摘要标记不流入 Message schema。字段缺省走旧路径；parts仅缺省/0表示1，负数或parts存在但缺原文须明确失败；存在但不合法则失败，不忽略后降级。原文直接校验JSON数值安全域及结构，配对独立校验；已明确字符串类型的原生结果不再套用本地重编码的类型猜测，仍不允许原文中的域外数值。本地生成消息原数值/结果类型门禁不变。复用5,000,000字节/root哈希歧义门禁、ACK顺序及取消/fork，原始输入不变。
+- **生命周期/兼容/回滚**：原文随 entry 的既有保存、克隆和回退生命周期；必须完成磁盘保存重读及再投影校验。旧代码能忽略JSON可选字段但会丢原生保全能力，因此发布后最低回滚版本必须保留本读取/写出能力，不能宣称任意旧版安全；未发布时撤销本切片代码但保留所有历史。默认 service 入口、本地压缩schema、provider模型schema和真实会话不改。
+- **验证/Gate**：复用 `types.go`、`imported_blobs.go`、`token_usage.go`、`projector.go` 及既有 import/projector 测试；RED→GREEN覆盖普通/摘要、单原文多工具结果、重复/空实例、保存重读后哈希/原文对应、载荷失配/缺项/域外停止、旧内联读取、HTTP→保存/模型输入。需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY，工作=保存阶段原生正文保全。UI/真实发布/新增数据库为N/A，持久兼容及失败保全按上文。独立模拟指出摘要包装位置和单条工具结果校验问题，已明确：单条解析产生包装视图、不做工具序列检查；完整root统一工具校验，保存时逐组比对单条解码视图并再验证完整序列。实现不重新包装，不回写provider规范化结果。Design Readiness=approved 仅本切片；缺项/失配/域外失败保全，发布后按能力回滚；整体混用仍未交付。
+
+### 19.3i 导入回合引用子图的本地保全（2026-10-13）
+
+承接 PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY 和用户连续实施及委派授权，本切片仅补已预取原生回合图的持久保全与独立原生再写出，不切默认writer，不实现异步读取或归档。本地压缩归档仍另行闭合实际摘要输入计数，不能用活动尾段长度代替window_tail。
+
+- **事实与机制**：Service已持有 `ContentBlobStore`，其Put/Get校验SHA-256并保存不可变正文；ImportedTurnIDs只保存回合引用，预取正文导入后未保全，native writer因此拒绝。复用现有 `.blobs` 内容存储保全可达正文，不新增schema、数据库、迁移或任意预取内容镜像。
+- **范围与数据合同**：只对具名字段Turns元素、agent_conversation_turn.user_message和steps元素应用32字节引用规则；每个非空具名字段恰32字节必须命中正文，非32内联保持原字节，不猜测32字节旧内联。Read/Write/MCP/图片的内联bytes即使32字节也不是引用，不按长度扫描任意字段。只处理原生引用回合→ConversationTurnStructure.agent_conversation_turn→UserMessage/ConversationStep；回合顺序和重复实例由ImportedTurnIDs保留，图正文按首次遍历去重。空user/step槽保留在回合原文中，不能丢回合；dynamic_tool_count保持原值，encrypted_model非空及shell turn明确拒绝。原生引用图节点和其嵌套protobuf未知字段明确拒绝；旧非引用内联回合仍沿原读取路径，不批量规范化既有文件。Put和加入Blobs使用已校验原始字节，禁止protobuf重编码改变ID。
+- **额外引用的精确边界**：本切片不跟随UserMessage的conversation_state_blob_id/text_blob_id/rich_text_blob_id；SelectedContext的extra_context_entries.blob_id、invocation_context.data.blob_id、selected_images/documents/videos的blob_id或blob_id_with_data、selected_external_links.blob_id、git_pr_diff_selections.blob_id、selected_pull_requests.blob_id；ToolCall中的ReadToolSuccess.output.data_blob_id/content_blob_id、ReadSuccess.output_blob_id、TruncatedToolCall.original_step_blob_id。上述非空字段明确拒绝，不剥字段或跳步。TaskSuccess.conversation_steps为内联步骤，递归检查同一精确拒绝表；其它内联数据保持原文，不当引用。不存在可达引用时不要求内容存储。
+- **执行顺序**：全部输入解码、消息视图及结构化状态校验成功后，在内存构建并验证整个回合子图；再幂等Put全部可达节点；全部Put成功后才更新ImportedTurnIDs/NextTurnSeq/TokenDetails并返回entries。不存在可达引用时不要求内容存储。缺失、哈希失配、域外、写入错误返回nil entries且调用者会话不变；Put中途已写入但未被会话引用的不可变内容允许保留，不能宣称两文件事务或删除旧内容作为补偿。不保存请求头、外部凭据或未被支持子图引用的预取正文。
+- **写侧与生命周期**：独立native投影显式接受现有内容存储；含ImportedTurnIDs时先Get并重新验证全部可达图，成功才将原回合ID和子图纳入Blobs及既有ACK集合。无来源、缺节点或损坏时停止并返回nil projection，不改会话/原文。root仍由已保存的模型消息视图生成，不从回合图再拼接一次历史。纯root无Turns不受影响；默认ProjectCheckpointProjection与发布入口不改。fork/rewind沿既有ImportedTurnIDs前缀截断，内容不删除；服务重建后同historyRoot可再次完整投影。发布后的回退版本必须能读取并保全本子图，未发布时仅回退本切片代码。
+- **验证与实施落点**：imported_blobs.go负责有限闭包校验，token_usage.go负责提交前保全，projector.go负责独立写出接入；复用imported_history_test.go/projector_fork_test.go和ContentBlobStore，不新增通用框架。先RED覆盖完整图未落盘/未进入Blobs、root齐全但回合子节点缺失及存储失败保全，再GREEN覆盖重启/重复引用/旧内联/混合子节点/原生root不重复/未知与嵌套引用拒绝；HTTP入口至少覆盖缺子节点不启动模型不写会话。隔离HOME、禁下载、相关包test及定向race/vet，不访问真实会话。归档、其它State域、异步GetBlob、增量与默认切换为本切片域外而非已完成。
+- **Gate**：两项独立只读核查已确认回合ID与正文断链、现有ContentBlobStore可复用，主控限定仅回合图，不采用“空user跳过回合”或“dynamic_tool_count一律拒绝”等无依据裁剪。独立实施模拟指出具名引用边界、嵌套ToolCall引用和原字节哈希问题，已按上述精确表闭合；主控补充原生引用图内嵌protobuf未知字段也须拒绝，旧非引用路径不变。正常链为完整预取→全图校验→Put→会话落盘→重建→原ID再写出；最高风险为缺子节点/Put失败/重启后损坏，均保全记录并停止；fork只截断IDs、共享不可变内容。无新UI、协议、schema或迁移，只有旧内容存储中新增已支持原生节点。Design Readiness=approved仅本节，归档未知不阻塞该有限图保全。
+
+### 19.3j 已预取原生摘要与归档来源保全（2026-10-13）
+
+承接用户已批准的现有载荷可选原生来源字段及连续保存授权，仅保全原生root齐全时的外来摘要/归档，不实现本地压缩归档或默认切换。需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY；复用现有runtime_state载荷、ContentBlobStore、原文解码和独立native投影。
+
+- **字段与生效**：runtimeStateEntryPayload增加可选native_summary/native_summary_archive（[]byte raw32）、native_summary_archives（[][]byte raw32）。仅在已解析齐全的原生引用root导入时绑定，旧内联root路径保持不变；任一有效来源即生成runtime_state，即使无plan/todos。该entry只保存来源，不进入模型输入、不产生compacted_summary，也不把archive展开拼入root。root为空仅summary的旧compacted_summary分支仍是独立writer域外，不偷偷启用。
+- **内容合同**：State.Summary及两个Archive字段非空恰32字节必为已校验内容引用；非32字段按正确类型旧内联protobuf校验并以其原字节哈希存入现有内容库。ConversationSummary只允许已知字段，空摘要字符串也保留原节点；ConversationSummaryArchive只允许已知字段，summary/window_tail保留原文不重算。Archive.summarized_messages每个非空元素及summary_message必须raw32引用并命中单条CoreMessage原文，不能把内联JSON当引用或给错误旧schema仅加哈希；空summary_message、空messages列表/槽可保留，整个空State字段视缺省。子CoreMessage逐条按已批准parser校验并沿native JSON安全数值域，不要求其单独工具批次闭合、不与root配对；归档内跨组工具是历史保存数据，不新增模型回放能力。域外/unknown/缺失/失配停止，不跳过数据。
+- **顺序与一致性**：先完成root/结构化/回合图和所有新来源的内存校验、entries编码，再Put所有可达节点，最后才改会话metadata并返回。Put失败不返回半份entries、不改会话；已Put孤儿不可变内容可留。singular与repeated独立保留原顺序及重复实例，不合并/互推；图正文去重，引用原字节不重编码；旧非32父正文只获得内容ID，内部已存在raw32不改。
+- **生命周期与写侧**：来源随runtime_state原entry保存/克隆/截断，禁止改写原Payload；后续本地runtime状态只能追加不含来源字段的新entry。writer在既有取消过滤后取最后一条含任一非空来源字段的runtime_state作为整组来源，后续无来源entry不擦除；若存在但长度非法停止。显式ContentBlobStore重新Get/全图校验成功后，覆盖State.Summary/SummaryArchive/SummaryArchives整组（缺省字段清空），不能留下默认writer错误schema；以addOriginal把完整正文纳入现有ACK图。无来源不要求store，有源无store/缺内容/损坏停止且nil projection，原会话不变。root仍使用已保存消息；本地压缩标记出现时继续域外拒绝，不混写外来archive与本地压缩。fork/重建共享现有historyRoot内容库，无迁移/新DB/凭据保存；发布后回滚须保留新增来源读能力。
+- **独立模拟与Gate**：独立评审发现runtime字段重写、默认Archive污染及32字节Summary内联误判，已按上述整组覆盖、只追加来源和具名引用闭合。主控拒绝将archive中的非32JSON原样再次发布为引用，也不丢空字符串Summary节点；本切片只支持合法raw32子图，旧错误schema明确失败。正常链=原生完整root+来源→Put→落盘/重建→原ID完整图→全ACK发布；失败链=缺归档子节点/Put失败/重建后损坏保全并停止。Design Readiness=approved仅此域；UI/默认启用/本地压缩及后续阶段不在本切片。
+- **验收与落点**：types.go/imported_blobs.go/token_usage.go/projector.go及既有import/projector/checkpoint测试。RED→GREEN覆盖无plan来源entry、32Summary解析、错误Archive schema、singular/repeated/重复/空槽、跨Archive不完整工具片段保全、不泄入模型输入、后追加runtime更新不擦除、缺内容/坏hash/unknown/Put失败保全、磁盘重读。HTTP缺archive子blob须不启动模型不写原会话，实际ACK保留一个归档子节点至末次确认前不得发布。隔离HOME禁下载，相关test/race/vet，真实官方验收另行授权。
+
+### 19.3k 本地压缩原生归档与同源摘要（2026-10-13）
+
+需求=PRD §17 HISTORY/CHECKPOINT/CONFLICT/BOUNDARY；用户已选择“摘要来源与连续归档前缀一致，预算不足保留历史停止本次压缩”，并再次要求继续。范围仍是保存：只扩展独立native writer已批准的数据域，不切默认入口、不迁移旧会话、不开展缺失读取。以下合同经独立设计模拟后进入实施，Design Readiness=approved仅限本节。
+
+- **事实与本地映射**：官方exec `1f1ced5c…8a75`的handleSummarization（2839736）以qi(f)（1525421）生成A，去system/空assistant/user_info；h来自partition.messagesToSummarize，并非provider文字预算裁剪后的消息列表。window_tail=max(0,A.length−h.length)，归档仅h中非isSummary消息；保留尾段可与h重叠，不能把差值定义成尾段长。本地采用已批准的不重叠连续分区：选定新增归档前缀及旧摘要上下文形成A，完整同一来源形成h；两者按真实CoreMessage实例计数并相减，此规则下可算得0，但缺来源绝不能默认填0。原生一组多entry只计一条CoreMessage，重复实例仍逐条计数；MessagesToCompact旧语义保持。
+- **同源选择与冻结**：在生产build plan时，从canonical Entries按§19.3g同一保留集合/连续批次算法求本次尾段边界，新增归档为前次冻结尾段起点到本次起点的半开连续区间；第一次从0起，旧摘要仅作上下文，不再次归档。取消按既有全局过滤，fork先截断；metadata不入消息集合但不改变canonical区间标识。边界若切原生raw组或完整工具批次，向前扩展尾段以保留完整组；无法闭合则停止本次操作，禁止半组。当前快照与来源深拷贝贯穿newPending/clone/event Plan；摘要请求及提交不重新选择另一前缀。apply前核对冻结来源与当前历史前缀，失配停止，不提交摘要；追加compaction_request/hook等非prompt不改变原区间。
+- **摘要与预算**：继续使用现有compaction prompt及system/user包装，历史部分覆盖冻结前缀所有实例；允许原有逐消息摘要展示方式，但不得为预算丢整条来源/最旧回合，也不能用活动投影裁剪后的工具正文作archive正文。旧摘要同时计入A/h但排除归档；provider请求不携带native保全字段。完整同源请求含输出预留超compactionBudgetTokens即明确错误，不转fallback绕过；输入预算通过后的provider overflow/空摘要仍允许原有同源fallback，不添加重试/阈值。编译候选后validateCompactionCandidateBudget仍在持久化前。生产新plan都使用新政策；直接构造无来源Pending的旧单测/旧记录保持本地兼容，native写侧不能据此推算来源。reasoning/image等当前native域外消息仍参与同源摘要，不为该writer切片强退已有用户压缩能力；native写出继续明确失败。
+- **可选载荷与一致性**：compactionSummaryEntryPayload增指针型可选native_archive_source对象，内部prefix_start/prefix_end/candidate_count/actual_count/window_tail五字段全部必须存在，读取逐项检查存在性，写入不得omitempty；记录canonical半开区间及显式计数；0值必须有存在性，不得与缺字段混同。存量缺对象走旧本地读规则，native拒绝；对象存在但区间、计数、类型或来源失配也拒绝，不忽略降级。可从既有Entries重建原生成员，不新增必填membership/数据库；仅在源集合可以无损原生编码且计数完成时写出原生来源，否则省略native_archive_source（旧无来源），本地压缩仍落盘，native writer停止；不新增incomplete标记。原生raw组遵守§19.3h落盘可改变JSON空白/转义的事实，不承诺旧hash不变；不得用未经稳定化的raw字节hash让合法磁盘重读失配。新摘要CoreMessage按确定编码重建，未包装文本和严格user/isSummary标记，不额外存raw摘要副本。
+- **独立原生输出**：遍历本地摘要标记按来源区间重建每次新增归档，普通实例顺序保持，旧摘要排除。Archive使用正确ConversationSummaryArchive：summarized_messages与summary_message均raw32且所有正文入图，summary为本次摘要，window_tail由存在的冻结计数校验。root只含最新本地isSummary消息及未裁剪连续活动尾，不重复归档实例；State.Summary为最新ConversationSummary raw32，SummaryArchives按压缩次序，纯本地SummaryArchive为空，不承接默认错误schema。现有默认投影、模型replay与ACK/5秒写降级机制不改；独立投影遇旧无来源摘要或坏来源返回nil且不改输入。
+- **导入来源共存**：§19.3j导入图原ID/原bytes不动；singular独立保留，repeated原序作为前缀再追加本地Archive，State.Summary换最新本地summary，root不展开外来archive。旧官方isSummary root只作上下文不入本地archive。来源整组覆盖只用于读取导入来源，不得覆盖掉新本地Archive；若历史出现缺来源本地压缩，整个native投影停止，不用后次来源掩盖缺失。独立复核若证明混合子域未闭合，明确仅该子域停止，纯本地及纯导入切片不回退，不猜测singular展开语义。
+- **Gate与验证**：独立只读精查官方A/h赋值纠正“实际provider裁剪集合”的旧推断；另一独立设计模拟核对plan clone/event、区间冻结、预算fallback及默认错误schema隔离。主控限定混合来源组合和域外压缩兼容，正常链=生产plan→完整同源摘要→预算校验→载荷落盘重读→正确原生图→全ACK才发布；最高风险=源失配/预算不足/工具半组/缺来源，均保全停止。永久RED→GREEN覆盖单次/两次、重复/raw多结果、候选与实摘计数、旧格式/坏来源、取消/fork、unsupported用户压缩兼容、真实HTTP末次archive子节点ACK门禁。落点types.go/compaction.go/projector.go及既有compaction/projector/import/checkpoint测试；隔离HOME禁下载、两包test/定向race/vet/gofmt/diff检查。UI/真实发布/迁移为域外；可回退代码但保留新增可选字段的读取能力与全部历史/内容，不能宣称任意旧版回滚安全。本节只批准该切片，不等于保存阶段完成。
+
+### 19.4 子模型参数：原拟议承载方案被否证
+
+已核实链路为 `SubagentArgs.model_id` → `toSubagentExecutorArgs` → `createOrResumeSubagent` → 模型配置 → `RequestedModel`。协议没有独立 parameters/max_mode 字段；取证基线中仓库 `service.go` 的 `parseSubagentModelOverrides` 及 `core/types.go` 只保留参数数量，`bridge/exec/bridge.go` 只发送 model_id。内存参数保留的最小修复合同现见 §19.4b；它不改变客户端消费路径。
+
+客户端事实：
+- 非 fork 新建（工作台 `createOrResumeSubagent`，21653527）：`fixupModelConfigForCurrentFlag` → `resolveSelectedModelsFromModelName`（19363903）只生成 `{modelId,parameters:[]}`，不消费 `variantStringRepresentation`。最终 `resolveModelParametersForSubmission`（19378945）先使用显式参数，否则读取该模型全局偏好，再选择目录变体。找不到精确目录 name 时返回空参数。
+- 创建阶段的非 fork Max Mode 来自 `getModelConfig("composer")`，fork 初始取克隆来源，resume 创建分支不改 model_id；**这些不是最终提交语义**。主会话续查 `_runSubagent`（21672903）：提交前重新取已加载父会话的 modelConfig.maxMode（父未加载时 false），覆盖子配置并构造 ModelDetails。resume 若收到空模型或被识别为父模型/父模型前缀，则保留旧子模型，否则使用本次 model_id；模型列表相同时保留既有参数。故独立 Max Mode 仍不可据当前协议保证，恢复也不是“永不改模”，不能仅验收创建分支。
+- 云端同步和模型选择器存在变体解析，不能据此推断本地子任务也执行该解析。合成目录下 low/high 变体串走本地创建配置路径得到相同空参数；普通目录 name 携显式 low/high 则可区分，空参数可能使用全局偏好而非必然目录默认。
+
+因此撤回“把参数编码进目录变体字符串即可修复”的实施前提。保留参数键值本身只能解决服务端信息丢失，不能解决客户端消费缺口，也不能单独通过 C4。
+
+**用户已确认的支持边界**：保留完整参数目标，继续只读设计和验证替代承载方案；不以拒绝子任务替代修复，不静默丢参数或降级。历史兼容设计独立继续。这只确认目标与调查方向，不授权修改客户端、扩展目录或新增映射机制。增加每参数组合的目录别名会改变 §18 D3 的目录身份合同，还须解决官方模型映射、独立 Max Mode 与恢复语义；目前不是已证实可行方案，不据合成目录实验启用。新映射/关联机制必须先给出最小方案和影响再获授权。
+
+### 19.4a 替代承载候选：现有父子请求关联（未批准）
+
+客户端 `ODg`（20594527）可生成 `x-parent-request-id`、`x-root-parent-request-id`、`x-parent-agent-tool-call-id`；`_deriveLineageFromParent`（21672202）取父 `chatGenerationUUID/latestChatGenerationUUID`。`runInternal`（20632155）则区分 attempt request ID 与 original/generation ID。因此“有 header 即可直接匹配父 stream.RequestID”尚不成立，实际 BidiAppend/RunSSE 的 header 传递与 ID 对应仍须追踪；不得按模型名、子类型或时间猜测关联。
+
+仓库派发 Task 前在取证基线 `service.go:2071–2090` 创建持久 run，含父 request/tool-call/conversation 标识；但当前 Identity.ModelID 实际填写父 stream.ModelID，不可当成最终子模型。基线中 `SubagentModelOverrides` 在解析时就丢了参数键值，§19.4b 仅修复运行期参数快照；持久记录仍不含完整选择、generation/attempt 关联。可靠关联、持久选择快照与重启恢复仍属于拟议修改而非已有能力。
+
+若关联成立，候选是在子初始请求进入既有出口前补回已确认的原始选择，不改 Cursor 或模型目录。官方子请求也要补参数时，必然需要改写其 RequestedModel 所在正文，现有 `ForwardToUpstream` 原文透传本身做不到；须证明未知字段、帧、压缩、身份与其余正文均保留，明确这是对 §18 D2.1 原体透传的局部例外。官方父任务的派发记录不在本地 forwarder，反向组合还需独立闭合。用户已允许把受严格校验的局部改写纳入 C0 候选设计，但未授权实现新关联机制或正文改写。
+
+续查关联证据与边界：工作台 `runInternal` 确实构造 `x-request-id`（attempt）和 `x-original-request-id`（generation），`ODg` 构造 `x-parent-request-id` 与 `x-parent-agent-tool-call-id`；`proto/agent_v1.proto:2828–2844` 的 KV 请求/响应只有 uint32 id，`RequestedModel:4979–4994` 有 parameters/max_mode，而 `SubagentArgs:6249–6271` 没有。`agent_action.go:42–79` 路由按消息体 request_id 固定出口，`client.go:293–303` 透传非逐跳头；基线中本地父 run 的 override 在 `service.go:51–95` 被降为计数（§19.4b 修复仅限此内存信息丢失），`bridge/exec/bridge.go:783–831` 仍只给子 model_id。尚无跨官方父与本地父的完整选择快照索引；对纯官方父不能从本地 `SubagentRunStore` 推出参数。父 generation 与 attempt 重试发散时不能直接用 header 命中 stream.RequestID；只凭 subagent_type、名称或时间推测亦不可靠。子请求若带官方身份且模型是本地目录 ID，现有路由会选 Local；官方子只有带官方身份且不命中本地 ID 才会走 Official（`agent_route.go:47–55`、`agent_action.go:59–72,118–123`），不能把“BYOK 父必导致官方子被路由 Local”当成事实。客户端头从渲染进程至实际网关的完整合成链、纯官方父请求的可解析捕获、重试/并发/恢复及官方正文无损重写仍属于 `research-required`；不以只读源码推演宣称四组合已通过。
+
+**用户本轮确认的边界（仅设计方向，不是编码授权）**：允许把“仅在父子关联和原始参数来源都经过严格校验时，局部改写发往官方的子请求 `RequestedModel.parameters/max_mode`，其他请求及字段保持原样透传”纳入 C0 候选设计。不修改 Cursor、目录身份或官方凭据。必须先在模拟协议中验证父 generation/attempt 与 tool-call 关联、纯官方父的选择快照、帧与压缩/未知字段保留、重复/恢复和失败保全；关联缺失时不可猜测补参或静默丢显式参数。此项仅解决已确认的方案取舍，`evidence_status=unknown` 的传输及兼容事实仍是 `research-required`，C0 保持 `Design Readiness=not-ready`；完整设计尚须再确认，未授权实现正文改写。
+
+### 19.4b 分段门禁：子模型参数保留切片（C0-P1）
+
+本切片落实既定计划中“保留覆盖选择中的参数键值并正确深拷贝”，不是批准 §19.4a 的新父子关联或官方请求改写。用户本轮要求在现有代码/文档事实基础上跨过门禁、继续实施；据此仅对本合同已经明确、无新产品取舍的切片进入实施，其余工作包的设计状态不变。
+
+- **根因与边界**：`RequestedModel.parameters` 的 id/value 在 `parseSubagentModelOverrides` 被丢弃成 ParameterCount。在 core 选择结构增加参数序列，解析时复制完整 id/value，保留原顺序、重复键、空字符串及 protobuf 未知字段，不标准化参数值、不替用户选择新的默认值。Max Mode、built-in/variant 标识、explicit/inherit/disabled、重复 override 最后有效项及子类型别名的既有语义保持不变。没有显式 model 的选择不附带参数。
+- **所有权与接线**：参数作为当前父 run 的内存快照，使用现有 `agentv1.RequestedModel_ModelParameterValue` 和 `proto.Clone`，不引入通用框架。解析不能引用客户端可变对象；`cloneSubagentModelOverrides` 在保存 stream 和派发 `OpenExecContext` 时分别深拷贝参数切片及每个参数对象；`LookupSubagentModelOverride` 返回独立副本，调用方修改它不能污染父状态。nil 切片/元素保持 nil。旧无参数结构仍可读取；不改变参数数量的既有日志摘要，不新增值日志或凭据快照。
+- **失败、并发与恢复**：沿用解析忽略 nil/空类型/空模型及日志分类，无新增错误/重试。深拷贝在已有 stream 锁内完成，参数快照不跨流共享；此切片不新增持久化或跨进程恢复能力。切片不改变真实客户端的最终参数提交结果，不能单独宣称“完整子任务参数已传通”。
+- **验证与回滚**：永久 RED 从真实 `decodeInboundIntent` 入口比较相同模型 low/high 的参数状态，旧代码必须在参数丢失断言失败；GREEN 后验证逐字段/顺序保留、源请求/克隆/查找副本独立、选择优先级、Task 执行桥收到完整快照且原模型 ID 保持、日志摘要无参数值。用现有合成服务与 test bridge，禁止真实模型/配置。定向测试、相关三包测试/vet 与定向 race 是本切片验收；撤销切片即可回退，没有数据迁移、检查点或官方正文需要撤回。
+- **审查**：适用数据/接口、可变状态所有权、重复选择、并发和日志合同已闭合；UI、数据库事务、客户端协议写入和部署不在本切片，不能将其标成整个专项的 N/A。主会话正反向模拟“入口→intent→stream→OpenExecContext/lookup”，无需临场决定业务参数；本轮未新增委派评审，复杂历史/承载合同仍须独立审查。`Design Readiness=approved` **仅适用于 C0-P1**，整体 §19.1 仍为 not-ready。未来子请求的实际参数承载、持久恢复与历史同步不得从此审批推导。
+
+### 19.5 追踪、后续取证与设计审查结论
+
+- 官方历史首次进入 BYOK：需求 HISTORY/CONFLICT → `mixed-history-hydration` → §19.3/§19.3a/b；已预取文本/工具可读，异步预算、完整输入判定、取消与启动提交边界仍需闭合。
+- BYOK 状态被原生读取：需求 CHECKPOINT → `mixed-checkpoint-codec` → §19.3c C0-W1/§19.3e C0-W2；文本/可无损完整工具批次的 raw32/正文图、确认与回滚合同独立闭合，plan/todos 的引用输出与完整预取双读另按 W2 同对象回归验收。执行证据见任务/过程记录，默认入口仍未切换。compaction/archive、其他内容/精度/导入子图和歧义兼容分别只阻塞自己的切片，不将完整 C2B 标为已通过。
+- 同会话往返：需求 HISTORY/CONFLICT → `mixed-history-reconciliation` → §19.3；稳定映射、压缩/末回合/回退、幂等持久化与部分提交恢复尚未闭合。
+- 混合父子任务：需求 SUBAGENT → `mixed-subagent-contract` → §19.4/§19.4a/b；快照切片已闭合，完整替代承载仍需证据与确认，不能继续原变体假设。
+
+阶段 0 早期审查记录：主会话复核两个独立取证交付，拒收“变体透传即参数生效”“空参数恒默认”“创建配置即最终提交行为”和“reasoning 因缺 case 不支持”等过宽结论；Max Mode 与 resume 的最终语义以 §19.4 的 `_runSubagent` 复核为准。复杂历史/承载设计尚未完成独立实现模拟，最高风险仍为历史基线错配/两文件部分提交及子模型静默改用偏好参数。C0-W1 的本次作者反向审计与局部限制见 §19.3c；不将其表述为独立评审或真实官方验收。
+
+**当前门禁：C0-P1（§19.4b）、C0-H1（§19.3a/b）、C0-W1（§19.3c 的有限数据域）及 C0-W2（§19.3e 的 plan/todos 域）分别闭合；整个 C0 和 C1/C2A/C2B/C4 完整验收仍未通过。** 未启用异步恢复、默认原生检查点写出/增量同步或官方正文改写。未知项只阻塞对应工作包或数据域；不再要求全部取证结束后才修复已确认且合同清晰的缺陷。

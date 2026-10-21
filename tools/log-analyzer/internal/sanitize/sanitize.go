@@ -7,12 +7,16 @@ import (
 )
 
 const maxPathRunes = 160
+const maxSummaryRunes = 512
 
 var (
 	identifierSegment = regexp.MustCompile(`(?i)^(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f-]{27,}|\d{8,})$`)
+	urlPattern        = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s]+`)
+	credentialPattern = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+`)
+	assignedSecret    = regexp.MustCompile(`(?i)\b(?:api[_-]?key|token|authorization|password|secret)\b\s*[:=]\s*[^\s,;]+`)
 	allowedFields     = map[string]struct{}{
-		"method": {}, "status_code": {}, "client_kind": {}, "message_case": {},
-		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "append_seqno": {},
+		"method": {}, "status_code": {}, "client_kind": {}, "client_protocol": {}, "public_model_id": {}, "message_case": {},
+		"kind": {}, "finish_reason": {}, "ttft_ms": {}, "ttfr_ms": {}, "append_seqno": {},
 		"host": {}, "connection_id": {}, "traffic_class": {}, "action": {},
 		"tls_role": {}, "path": {}, "host_hint": {}, "source": {}, "port": {},
 		"target_host":     {},
@@ -22,6 +26,25 @@ var (
 		"chain_attempts_used": {}, "chain_attempts_remaining": {},
 		"chain_wait_used_ms": {}, "chain_wait_remaining_ms": {},
 		"channel_allocation_max_attempts": {}, "retry_delay_ms": {},
+		"header_at": {}, "first_byte_at": {}, "last_byte_at": {}, "body_end_at": {},
+		"first_event_at": {}, "last_effective_content_at": {}, "first_effective_content_at": {},
+		"close_cause": {}, "partial_boundary": {}, "transport_outcome": {},
+		"completion_marker": {}, "http_status": {},
+		"artifact_model_call_id": {}, "fallback_channel_index": {}, "payload_bytes": {},
+		"failure_class": {}, "failure_origin": {}, "reschedule_decision": {}, "reschedule_suppressed_reason": {},
+		"attempts_used": {}, "attempts_remaining": {}, "last_event_sequence": {}, "last_event_at": {},
+		"bytes_received": {}, "events_received": {}, "completion_marker_seen": {},
+		"terminal_prepare_state": {}, "terminal_commit_state": {},
+		"error_summary": {}, "provider_error_summary": {}, "provider_error_summary_type": {},
+		"skip_reason": {}, "missing_blob_key_count": {}, "attempt": {}, "max_attempts": {},
+		"retry_decision": {}, "retryable": {}, "failure_category": {}, "failure_cause": {},
+		"failure_phase": {}, "failure_stage": {}, "recovery_action": {}, "business_outcome": {},
+		"protocol_final_status": {}, "model_call_final_status": {}, "retry_suppression_reason": {},
+		"status": {}, "provider_pass": {}, "http_attempt": {}, "checkpoint_result": {},
+	}
+	summaryFields = map[string]struct{}{
+		"error_summary": {}, "provider_error_summary": {}, "skip_reason": {},
+		"failure_cause": {}, "recovery_action": {}, "retry_suppression_reason": {},
 	}
 )
 
@@ -49,6 +72,9 @@ func AllowlistedFields(input map[string]any) map[string]any {
 			if key == "host" || key == "target_host" {
 				cleaned = Host(cleaned)
 			}
+			if _, ok := summaryFields[key]; ok {
+				cleaned = Summary(cleaned)
+			}
 			if cleaned == "" {
 				continue
 			}
@@ -66,6 +92,10 @@ func AllowlistedFields(input map[string]any) map[string]any {
 }
 
 func ForbiddenKey(key string) bool {
+	trimmed := strings.TrimSpace(key)
+	if _, ok := allowedFields[trimmed]; ok {
+		return false
+	}
 	normalized := normalizeFieldKey(key)
 	switch normalized {
 	case "authorization", "proxyauthorization", "cookie", "setcookie", "apikey", "xapikey",
@@ -115,6 +145,20 @@ func Path(value string) string {
 		}
 	}
 	return truncateRunes(strings.Join(segments, "/"), maxPathRunes)
+}
+
+// Summary bounds free-text diagnostic summaries: it caps the value at
+// maxSummaryRunes and strips full URLs and common inline credential shapes so
+// allowlisted summaries never carry raw endpoints or secrets.
+func Summary(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = urlPattern.ReplaceAllString(value, "[url]")
+	value = credentialPattern.ReplaceAllString(value, "[credential]")
+	value = assignedSecret.ReplaceAllString(value, "[credential]")
+	return truncateRunes(value, maxSummaryRunes)
 }
 
 func Host(value string) string {

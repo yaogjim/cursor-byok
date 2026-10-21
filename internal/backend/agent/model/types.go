@@ -4,11 +4,13 @@ package modeladapter
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
 	"cursor/gen/agentv1"
 	runtimecore "cursor/internal/backend/agent/core"
+	"cursor/internal/netproxy"
 )
 
 const (
@@ -17,6 +19,40 @@ const (
 	// ReasoningSignatureSourceOpenAIResponses 表示 signature 来自 OpenAI Responses encrypted reasoning content。
 	ReasoningSignatureSourceOpenAIResponses = "openai_responses"
 )
+
+// ReasoningOrigin 是 opaque reasoning / Responses item 元数据的最小来源身份。
+// 仅用于发送边界兼容判断与 omitempty 透传，不记录凭据或完整 URL。
+type ReasoningOrigin struct {
+	Provider         string `json:"provider,omitempty"`
+	Endpoint         string `json:"endpoint,omitempty"`
+	CredentialSource string `json:"credential_source,omitempty"`
+	AccountID        string `json:"account_id,omitempty"`
+	ModelID          string `json:"model_id,omitempty"`
+}
+
+// IsZero 表示没有可比较的来源身份。
+func (origin ReasoningOrigin) IsZero() bool {
+	return strings.TrimSpace(origin.Provider) == "" &&
+		strings.TrimSpace(origin.Endpoint) == "" &&
+		strings.TrimSpace(origin.CredentialSource) == "" &&
+		strings.TrimSpace(origin.AccountID) == "" &&
+		strings.TrimSpace(origin.ModelID) == ""
+}
+
+// Equal 按规范化后的身份字段严格相等比较。
+func (origin ReasoningOrigin) Equal(other ReasoningOrigin) bool {
+	return origin.normalized() == other.normalized()
+}
+
+func (origin ReasoningOrigin) normalized() ReasoningOrigin {
+	return ReasoningOrigin{
+		Provider:         strings.ToLower(strings.TrimSpace(origin.Provider)),
+		Endpoint:         strings.TrimSpace(origin.Endpoint),
+		CredentialSource: strings.ToLower(strings.TrimSpace(origin.CredentialSource)),
+		AccountID:        strings.TrimSpace(origin.AccountID),
+		ModelID:          strings.TrimSpace(origin.ModelID),
+	}
+}
 
 // Message 表示模型适配层统一使用的消息结构。
 type Message struct {
@@ -38,6 +74,8 @@ type Message struct {
 	OpenAIResponsesReasoningStatus string `json:"openai_responses_reasoning_status,omitempty"`
 	// OpenAIResponsesReasoningSummary 保存 Responses reasoning output item 的原始 summary。
 	OpenAIResponsesReasoningSummary json.RawMessage `json:"openai_responses_reasoning_summary,omitempty"`
+	// ReasoningOrigin 保存签发 opaque reasoning / Responses item 元数据的最小来源身份。
+	ReasoningOrigin ReasoningOrigin `json:"reasoning_origin,omitempty"`
 	// ToolCalls 表示 assistant 发起的函数调用。
 	ToolCalls []ToolCallDescriptor `json:"tool_calls,omitempty"`
 	// ToolCallID 表示 tool role 关联的调用 id。
@@ -59,6 +97,14 @@ type ToolCallDescriptor struct {
 type ToolCallFunctionShape struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// CodexAffinity 是仅内存的 managed Codex 缓存亲和字段，禁止记录值或可关联摘要。
+type CodexAffinity struct {
+	PromptCacheKey  string
+	SessionID       string
+	ThreadID        string
+	ClientRequestID string
 }
 
 // StreamRequest 表示一次统一的模型流请求。
@@ -83,6 +129,16 @@ type StreamRequest struct {
 	BaseURL string
 	// APIKey 表示 provider 鉴权凭据。
 	APIKey string
+	// CredentialSource 表示渠道凭据来源：static、codex 或 grok。
+	CredentialSource string
+	// CredentialID 表示本次请求实际使用的订阅账号 ID。
+	CredentialID string
+	// ChatGPTAccountID 表示 Codex 请求使用的 ChatGPT 账号 ID。
+	ChatGPTAccountID string
+	// StableAccountID 表示 CredentialID 来自持久账号记录，而非 token fingerprint fallback。
+	StableAccountID bool
+	// CodexAffinity 是仅内存的 managed Codex 缓存亲和结果，禁止写入配置、日志或导出。
+	CodexAffinity CodexAffinity
 	// MaxConcurrentRequests 是物理上游组的可选并发上限。
 	// 0 表示不限流；非零合法范围 1–16。路由解析后以 ResolvedChannel 的值为准。
 	MaxConcurrentRequests int
@@ -106,6 +162,8 @@ type StreamRequest struct {
 	OpenAIExtraParamsEnabled bool
 	// OpenAIExtraParamsJSON 表示 OpenAI 额外请求参数 JSON 对象。
 	OpenAIExtraParamsJSON string
+	// OpenAIImageGenerationEnabled 表示是否允许 OpenAI Responses 注入原生图片生成工具。
+	OpenAIImageGenerationEnabled bool
 	// CustomHeadersEnabled 表示是否启用自定义请求头。
 	CustomHeadersEnabled bool
 	// CustomHeadersJSON 表示自定义请求头 JSON 对象。
@@ -128,6 +186,10 @@ type StreamRequest struct {
 	Tools []json.RawMessage
 	// MaxTokens 表示本轮最大输出 token 数。
 	MaxTokens int
+	// EnforceOutputLimit 表示必须把 MaxTokens 作为 provider 输出预算显式发送，
+	// 且不被渠道额度或 extra params 覆盖。仅 compaction 摘要等内部调用启用；
+	// 普通 Agent 调用保持既有省略/裁剪行为。
+	EnforceOutputLimit bool
 	// Stream 表示当前请求必须使用流式。
 	Stream bool
 	// RequestKnobs 保存本轮请求的附加参数摘要。
@@ -140,8 +202,15 @@ type StreamRequest struct {
 	ArtifactPaths *LLMArtifactPaths
 	// RequestBodyOverride 表示直接复用的 provider 原始请求体；设置后由 adapter 原样发送。
 	RequestBodyOverride map[string]any
-	// ProviderStreamIdleTimeout 表示 provider 流式响应无有效内容时的空闲超时。
-	ProviderStreamIdleTimeout time.Duration
+	// RecoverySettings 是同一逻辑调用共享的恢复与活性预算。零值使用默认归一化。
+	RecoverySettings RecoverySettings
+	// liveness 由 fallback router 或 adapter 注入；跨渠道共享 call timeout。
+	liveness *providerLiveness
+	// StreamDiagnostics 收集本次 HTTP 流的可选 header/body 时间线与 close_cause。
+	// nil 表示调用方不需要回读；适配器仍可分配局部实例。
+	StreamDiagnostics *StreamDiagnostics
+	// StreamRecoveryAttempt 是适配器级零模型事件同渠道恢复次数；仅内部递归调用使用。
+	StreamRecoveryAttempt int
 	// FallbackMaxAttempts 表示 FallbackAwareRouter 分配给当前渠道的最大尝试次数（共享预算）。
 	// 0 表示使用适配器默认值（providerRequestMaxAttempts）。非零值将覆盖适配器默认 maxAttempts，
 	// 以确保所有渠道共用同一总 attempt 预算，防止 fallback 链无限放大重试次数。
@@ -162,6 +231,8 @@ type StreamRequest struct {
 	// FallbackBudget 是整条 fallback chain 共享的 HTTP attempt 与退避等待预算。
 	// nil 表示普通单渠道路径，仍使用原有 providerRetry 本地预算。
 	FallbackBudget *FallbackRetryBudget
+	// OutboundProxy 是本次请求的模型级自定义代理；关闭表示继承全局。按请求附着，不修改共享 transport。
+	OutboundProxy netproxy.Config
 }
 
 // FallbackSafetyInfo 是单个渠道尝试的 typed 安全状态。Router 不根据错误
@@ -170,6 +241,7 @@ type FallbackSafetyInfo struct {
 	mu                 sync.Mutex
 	rawBytesObserved   bool
 	modelEventObserved bool
+	sideEffectObserved bool
 	requestBuildFailed bool
 	httpAttempts       int
 	waited             time.Duration
@@ -180,6 +252,7 @@ type FallbackSafetyInfo struct {
 type FallbackSafetySnapshot struct {
 	RawBytesObserved   bool
 	ModelEventObserved bool
+	SideEffectObserved bool
 	RequestBuildFailed bool
 	HTTPAttempts       int
 	Waited             time.Duration
@@ -202,6 +275,15 @@ func (s *FallbackSafetyInfo) MarkModelEventObserved() {
 	}
 	s.mu.Lock()
 	s.modelEventObserved = true
+	s.mu.Unlock()
+}
+
+func (s *FallbackSafetyInfo) MarkSideEffectObserved() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.sideEffectObserved = true
 	s.mu.Unlock()
 }
 
@@ -251,6 +333,7 @@ func (s *FallbackSafetyInfo) Snapshot() FallbackSafetySnapshot {
 	return FallbackSafetySnapshot{
 		RawBytesObserved:   s.rawBytesObserved,
 		ModelEventObserved: s.modelEventObserved,
+		SideEffectObserved: s.sideEffectObserved,
 		RequestBuildFailed: s.requestBuildFailed,
 		HTTPAttempts:       s.httpAttempts,
 		Waited:             s.waited,
@@ -392,6 +475,8 @@ type ModelEvent struct {
 	ThinkingSignature string
 	// ThinkingSignatureSource 表示思考签名的 provider 语义来源。
 	ThinkingSignatureSource string
+	// ReasoningOrigin 保存签发 opaque reasoning / Responses item 元数据的最小来源身份。
+	ReasoningOrigin ReasoningOrigin
 	// ProviderItemID 保存 provider 原始 output item id，用于 stateless Responses replay。
 	ProviderItemID string
 	// ProviderStatus 保存 provider 原始 output item status，用于 stateless Responses replay。

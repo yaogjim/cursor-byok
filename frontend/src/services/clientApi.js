@@ -29,6 +29,7 @@ import { Call } from "@wailsio/runtime";
 const API_LOG_PREFIX = "[clientApi]";
 const PROXY_SERVICE_NAME = "cursor/internal/bridge.ProxyService";
 const METRICS_SERVICE_NAME = "cursor/internal/bridge.MetricsService";
+const WINDOW_SERVICE_NAME = "cursor/internal/bridge.WindowService";
 
 function logSuccess(name) {
   console.debug(`${API_LOG_PREFIX} ${name} completed`);
@@ -59,9 +60,58 @@ export function saveUserConfig(payload) {
   return withApiLogging("SaveUserConfig", () => SaveUserConfig(payload));
 }
 
+export function saveGatewayConfig(payload) {
+  return withApiLogging("SaveGatewayConfig", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveGatewayConfig`, payload),
+  );
+}
+
+export function saveModelAdapters(payload) {
+  return withApiLogging("SaveModelAdapters", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveModelAdapters`, payload),
+  );
+}
+
+export function saveCursorConfig(payload) {
+  return withApiLogging("SaveCursorConfig", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveCursorConfig`, payload),
+  );
+}
+
+export function saveSystemSettings(payload) {
+  return withApiLogging("SaveSystemSettings", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveSystemSettings`, payload),
+  );
+}
+
+export function saveHomeMetrics(payload) {
+  return withApiLogging("SaveHomeMetrics", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.SaveHomeMetrics`, payload),
+  );
+}
+
+export function copyGatewayToken() {
+  return withApiLogging("CopyGatewayToken", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.CopyGatewayToken`),
+  );
+}
+
+
+export function rotateGatewayToken() {
+  return withApiLogging("RotateGatewayToken", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RotateGatewayToken`),
+  );
+}
+
 export function exportUserConfig(path) {
   return withApiLogging("ExportUserConfig", () =>
     Call.ByName(`${PROXY_SERVICE_NAME}.ExportUserConfig`, path),
+  );
+}
+
+export function readModelAdaptersForImport(path) {
+  return withApiLogging("ReadModelAdaptersForImport", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ReadModelAdaptersForImport`, path),
   );
 }
 
@@ -101,9 +151,21 @@ export function getHomeMetricsSummary() {
   return withApiLogging("GetHomeMetricsSummary", () => GetHomeMetricsSummary());
 }
 
+export function getHomeMetricsReport(range) {
+  return withApiLogging("GetHomeMetricsReport", () =>
+    Call.ByName(`${METRICS_SERVICE_NAME}.GetHomeMetricsReport`, range),
+  );
+}
+
 export function resetHomeMetricsSummary() {
   return withApiLogging("ResetHomeMetricsSummary", () =>
     Call.ByName(`${METRICS_SERVICE_NAME}.ResetHomeMetricsSummary`),
+  );
+}
+
+export function launchCursor() {
+  return withApiLogging("LaunchCursor", () =>
+    Call.ByName(`${WINDOW_SERVICE_NAME}.LaunchCursor`),
   );
 }
 
@@ -119,8 +181,38 @@ export function startProxyService() {
   return withApiLogging("StartProxy", () => StartProxy());
 }
 
+export function inspectCursorProxyStart() {
+  return withApiLogging("InspectCursorProxyStart", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.InspectCursorProxyStart`),
+  );
+}
+
+export function startProxyAfterRestartConfirm() {
+  return withApiLogging("StartProxyAfterRestartConfirm", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartProxyAfterRestartConfirm`),
+  );
+}
+
 export function stopProxyService() {
   return withApiLogging("StopProxy", () => StopProxy());
+}
+
+export function startGatewayService() {
+  return withApiLogging("StartGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartGateway`),
+  );
+}
+
+export function stopGatewayService() {
+  return withApiLogging("StopGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StopGateway`),
+  );
+}
+
+export function testGatewayService() {
+  return withApiLogging("TestGateway", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.TestGateway`),
+  );
 }
 
 export function getLogCaptureStatus() {
@@ -171,6 +263,12 @@ export function openModelConfig() {
   return withApiLogging("OpenModelConfigWindow", () => OpenModelConfigWindow());
 }
 
+export function setAppearanceTheme(theme) {
+  return withApiLogging("SetAppearanceTheme", () =>
+    Call.ByName(`${WINDOW_SERVICE_NAME}.SetAppearanceTheme`, theme),
+  );
+}
+
 export function testModelAdapter(adapter) {
   return Call.ByName(`${PROXY_SERVICE_NAME}.TestModelAdapter`, adapter).then(
     (result) => {
@@ -191,7 +289,112 @@ export function getModelAdapterTestResults() {
 }
 
 export function fetchModelAdapterModels(payload) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  const credentialSource = String(source.credentialSource || "").trim().toLowerCase();
+  const managed = credentialSource === "codex" || credentialSource === "grok";
+  const request = {
+    type: source.type,
+    baseURL: source.baseURL,
+    apiKey: managed ? "" : source.apiKey,
+    credentialSource: credentialSource || "static",
+    customHeadersEnabled: source.customHeadersEnabled,
+    customHeadersJSON: source.customHeadersJSON,
+    outboundProxy: source.outboundProxy && typeof source.outboundProxy === "object"
+      ? {
+          enabled: Boolean(source.outboundProxy.enabled),
+          url: String(source.outboundProxy.url || ""),
+        }
+      : { enabled: false, url: "" },
+  };
   return withApiLogging("FetchModelAdapterModels", () =>
-    Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, payload),
+    Call.ByName(`${PROXY_SERVICE_NAME}.FetchModelAdapterModels`, request),
+  );
+}
+
+export function getCodexAuthStatus() {
+  return withApiLogging("GetCodexAuthStatus", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.GetCodexAuthStatus`),
+  );
+}
+
+export function importCodexAuth(path) {
+  return withApiLogging("ImportCodexAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ImportCodexAuth`, path),
+  );
+}
+
+export function clearCodexAuth() {
+  return withApiLogging("ClearCodexAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ClearCodexAuth`),
+  );
+}
+
+export function startCodexDeviceAuth() {
+  return withApiLogging("StartCodexDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartCodexDeviceAuth`),
+  );
+}
+
+export function pollCodexDeviceAuth(input) {
+  return withApiLogging("PollCodexDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PollCodexDeviceAuth`, input),
+  );
+}
+
+export function startGrokDeviceAuth() {
+  return withApiLogging("StartGrokDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.StartGrokDeviceAuth`),
+  );
+}
+
+export function pollGrokDeviceAuth(input) {
+  return withApiLogging("PollGrokDeviceAuth", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PollGrokDeviceAuth`, input),
+  );
+}
+
+export function listSubscriptionAccounts(provider) {
+  return withApiLogging("ListSubscriptionAccounts", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ListSubscriptionAccounts`, provider),
+  );
+}
+
+export function activateSubscriptionAccount(accountID) {
+  return withApiLogging("ActivateSubscriptionAccount", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ActivateSubscriptionAccount`, accountID),
+  );
+}
+
+export function deleteSubscriptionAccount(accountID) {
+  return withApiLogging("DeleteSubscriptionAccount", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.DeleteSubscriptionAccount`, accountID),
+  );
+}
+
+export function refreshSubscriptionUsage(provider) {
+  return withApiLogging("RefreshSubscriptionUsage", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RefreshSubscriptionUsage`, provider),
+  );
+}
+
+export function refreshSubscriptionAccountUsage(provider, accountID) {
+  return withApiLogging("RefreshSubscriptionAccountUsage", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.RefreshSubscriptionAccountUsage`, provider, accountID),
+  );
+}
+
+export function previewSub2APIImport(path, provider) {
+  return withApiLogging("PreviewSub2APIImport", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.PreviewSub2APIImport`, path, provider),
+  );
+}
+
+export function importSub2APIAccounts(path, provider, accountIDs) {
+  return withApiLogging("ImportSub2APIAccounts", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ImportSub2APIAccounts`, {
+      path,
+      provider,
+      accountIds: Array.isArray(accountIDs) ? accountIDs : [],
+    }),
   );
 }

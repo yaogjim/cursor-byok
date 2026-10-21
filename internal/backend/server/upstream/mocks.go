@@ -451,7 +451,7 @@ func buildAvailableModelsPayload(reqCtx *RequestContext) (map[string]any, error)
 	if len(modelRefs) > 0 {
 		defaultModel = modelRefs[0]
 	}
-	modelEntries := buildAvailableModelEntries(adapters)
+	modelEntries := buildAvailableModelEntriesWithDisplaySuffix(adapters, localCatalogDisplaySuffix(reqCtx))
 	return map[string]any{
 		"backgroundComposerModelConfig": map[string]any{
 			"bestOfNDefaultModels": append([]string(nil), modelRefs...),
@@ -503,7 +503,7 @@ func buildUsableModelsPayload(reqCtx *RequestContext) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"models": buildCLIModelDetails(adapters)}, nil
+	return map[string]any{"models": buildCLIModelDetailsWithDisplaySuffix(adapters, localCatalogDisplaySuffix(reqCtx))}, nil
 }
 
 func buildDefaultModelForCliPayload(reqCtx *RequestContext) (map[string]any, error) {
@@ -511,7 +511,7 @@ func buildDefaultModelForCliPayload(reqCtx *RequestContext) (map[string]any, err
 	if err != nil {
 		return nil, err
 	}
-	models := buildCLIModelDetails(adapters)
+	models := buildCLIModelDetailsWithDisplaySuffix(adapters, localCatalogDisplaySuffix(reqCtx))
 	if len(models) == 0 {
 		return map[string]any{"model": map[string]any{}}, nil
 	}
@@ -673,6 +673,11 @@ func loadConfiguredModelAdapters(reqCtx *RequestContext) ([]legacyruntime.ModelA
 }
 
 func buildAvailableModelEntries(adapters []legacyruntime.ModelAdapterConfig) []map[string]any {
+	return buildAvailableModelEntriesWithDisplaySuffix(adapters, catalogDisplaySuffixBYOK)
+}
+
+func buildAvailableModelEntriesWithDisplaySuffix(adapters []legacyruntime.ModelAdapterConfig, displaySuffix string) []map[string]any {
+	adapters = catalogModelAdapters(adapters)
 	if len(adapters) == 0 {
 		return []map[string]any{}
 	}
@@ -689,12 +694,19 @@ func buildAvailableModelEntries(adapters []legacyruntime.ModelAdapterConfig) []m
 		if modelDisplayName == "" {
 			modelDisplayName = modelID
 		}
+		clientDisplayName := displayName
+		inputboxShortModelName := displayName
+		if strings.TrimSpace(displaySuffix) != "" {
+			clientDisplayName = applyCatalogDisplaySuffix(displayName, channelID, displaySuffix)
+			inputboxShortModelName = applyCatalogDisplaySuffix(displayName, channelID, displaySuffix)
+			modelDisplayName = applyCatalogDisplaySuffix(modelDisplayName, channelID, displaySuffix)
+		}
 		defaultThinkingEffort := defaultThinkingEffortForAdapter(adapter)
 		output = append(output, map[string]any{
-			"clientDisplayName":                  displayName,
+			"clientDisplayName":                  clientDisplayName,
 			"defaultOn":                          true,
 			"degradationStatus":                  "DEGRADATION_STATUS_UNSPECIFIED",
-			"inputboxShortModelName":             displayName,
+			"inputboxShortModelName":             inputboxShortModelName,
 			"isRecommendedForBackgroundComposer": false,
 			"name":                               channelID,
 			"namedModelSectionIndex":             1,
@@ -721,20 +733,30 @@ func buildAvailableModelEntries(adapters []legacyruntime.ModelAdapterConfig) []m
 }
 
 func buildCLIModelDetails(adapters []legacyruntime.ModelAdapterConfig) []map[string]any {
+	return buildCLIModelDetailsWithDisplaySuffix(adapters, catalogDisplaySuffixBYOK)
+}
+
+func buildCLIModelDetailsWithDisplaySuffix(adapters []legacyruntime.ModelAdapterConfig, displaySuffix string) []map[string]any {
+	adapters = catalogModelAdapters(adapters)
 	models := make([]map[string]any, 0, len(adapters))
 	for _, adapter := range adapters {
 		channelID := strings.TrimSpace(adapter.ID)
 		if channelID == "" {
 			continue
 		}
+		displayName := strings.TrimSpace(adapter.DisplayName)
+		displayNameShort := displayName
+		if strings.TrimSpace(displaySuffix) != "" {
+			displayName = applyCatalogDisplaySuffix(displayName, channelID, displaySuffix)
+			displayNameShort = applyCatalogDisplaySuffix(displayNameShort, channelID, displaySuffix)
+		}
 		models = append(models, map[string]any{
 			"modelId":          channelID,
 			"displayModelId":   channelID,
-			"displayName":      strings.TrimSpace(adapter.DisplayName),
-			"displayNameShort": strings.TrimSpace(adapter.DisplayName),
+			"displayName":      displayName,
+			"displayNameShort": displayNameShort,
 			"apiKeyCredentials": map[string]any{
-				"apiKey":  strings.TrimSpace(adapter.APIKey),
-				"baseUrl": strings.TrimSpace(adapter.BaseURL),
+				"apiKey": localCLICatalogAPIKey,
 			},
 		})
 	}
@@ -873,9 +895,20 @@ func thinkingEffortDisplayName(value string) string {
 	}
 }
 
+func catalogModelAdapters(adapters []legacyruntime.ModelAdapterConfig) []legacyruntime.ModelAdapterConfig {
+	output := make([]legacyruntime.ModelAdapterConfig, 0, len(adapters))
+	for _, adapter := range adapters {
+		if adapter.Disabled {
+			continue
+		}
+		output = append(output, adapter)
+	}
+	return output
+}
+
 func collectModelAdapterRefs(adapters []legacyruntime.ModelAdapterConfig) []string {
 	output := make([]string, 0, len(adapters))
-	for _, adapter := range adapters {
+	for _, adapter := range catalogModelAdapters(adapters) {
 		channelID := strings.TrimSpace(adapter.ID)
 		if channelID == "" {
 			continue

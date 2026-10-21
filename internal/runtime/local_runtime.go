@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
+	"cursor/internal/subscriptionauth"
 )
 
 var (
@@ -36,59 +38,80 @@ const (
 	configurableChannelAnthropicThinkingEffort = "xhigh"
 )
 
-// ProviderFallbackConfig 定义显式有序 fallback 链。默认关闭（Enabled=false）。
-// 启用后，路由器按 PrimaryChannelID → CandidateChannelIDs 顺序尝试，
-// 仅在零字节/零事件的安全窗口内切换；所有渠道共用总 attempt 预算。
-type ProviderFallbackConfig struct {
-	Enabled             bool     `json:"enabled"`
-	PrimaryChannelID    string   `json:"primaryChannelID"`
-	CandidateChannelIDs []string `json:"candidateChannelIDs"`
-	MaxHttpAttempts     int      `json:"maxHttpAttempts,omitempty"`
-	MaxWaitSeconds      int      `json:"maxWaitSeconds,omitempty"`
-}
-
 const (
-	DefaultFallbackMaxHttpAttempts = 5
-	MinFallbackMaxHttpAttempts     = 2
-	MaxFallbackMaxHttpAttempts     = 9
-	DefaultFallbackMaxWaitSeconds  = 8
-	MinFallbackMaxWaitSeconds      = 1
-	MaxFallbackMaxWaitSeconds      = 30
-	MinMaxConcurrentRequests       = 1
-	MaxMaxConcurrentRequests       = 16
+	DefaultFallbackMaxHttpAttempts          = 5
+	MinFallbackMaxHttpAttempts              = 2
+	MaxFallbackMaxHttpAttempts              = 9
+	DefaultFallbackMaxWaitSeconds           = 8
+	MinFallbackMaxWaitSeconds               = 1
+	MaxFallbackMaxWaitSeconds               = 30
+	DefaultFallbackMaxAttemptsPerChannel    = 2
+	MinFallbackMaxAttemptsPerChannel        = 1
+	MaxFallbackMaxAttemptsPerChannel        = 3
+	DefaultFallbackConnectTimeoutSeconds    = 30
+	MinFallbackConnectTimeoutSeconds        = 5
+	MaxFallbackConnectTimeoutSeconds        = 120
+	DefaultFallbackFirstEventTimeoutSeconds = 600
+	MinFallbackFirstEventTimeoutSeconds     = 60
+	MaxFallbackFirstEventTimeoutSeconds     = 1800
+	DefaultFallbackStreamIdleTimeoutSeconds = 240
+	MinFallbackStreamIdleTimeoutSeconds     = 30
+	MaxFallbackStreamIdleTimeoutSeconds     = 900
+	DefaultFallbackCallTimeoutSeconds       = 7200
+	MinFallbackCallTimeoutSeconds           = 900
+	MaxFallbackCallTimeoutSeconds           = 21600
+	MinMaxConcurrentRequests                = 1
+	MaxMaxConcurrentRequests                = 16
 )
 
 // ChannelPlan 表示一次请求所有候选渠道（按优先顺序）。
 // Channels[0] 为首选，Channels[1:] 为依次尝试的候选。
 // FallbackEnabled=false 时始终只有一个渠道（现有路径不变）。
-// MaxHttpAttempts / MaxWaitSeconds 是归一化后的全链预算；router 再做防御性 clamp。
+// 预算字段是归一化后的秒级整数；router 再做防御性 clamp。
+// MaxWaitSeconds 只约束累计 sleep，不得当作调用墙钟 timeout。
 type ChannelPlan struct {
-	Channels        []ResolvedChannel
-	FallbackEnabled bool
-	MaxHttpAttempts int
-	MaxWaitSeconds  int
+	Channels                 []ResolvedChannel
+	FallbackEnabled          bool
+	MaxHttpAttempts          int
+	MaxWaitSeconds           int
+	MaxAttemptsPerChannel    int
+	ConnectTimeoutSeconds    int
+	FirstEventTimeoutSeconds int
+	StreamIdleTimeoutSeconds int
+	CallTimeoutSeconds       int
 }
 
 // ClampFallbackChainBudget 把运行时预算钳到合法范围。只有 0 使用默认 5/8；
 // 负数属于非零越界，钳到最小 2/1，不得放宽到默认值。
 func ClampFallbackChainBudget(attempts, waitSeconds int) (int, int) {
+	return clampFallbackInt(attempts, DefaultFallbackMaxHttpAttempts, MinFallbackMaxHttpAttempts, MaxFallbackMaxHttpAttempts),
+		clampFallbackInt(waitSeconds, DefaultFallbackMaxWaitSeconds, MinFallbackMaxWaitSeconds, MaxFallbackMaxWaitSeconds)
+}
+
+func clampFallbackInt(value, defaultValue, minValue, maxValue int) int {
 	switch {
-	case attempts == 0:
-		attempts = DefaultFallbackMaxHttpAttempts
-	case attempts < MinFallbackMaxHttpAttempts:
-		attempts = MinFallbackMaxHttpAttempts
-	case attempts > MaxFallbackMaxHttpAttempts:
-		attempts = MaxFallbackMaxHttpAttempts
+	case value == 0:
+		return defaultValue
+	case value < minValue:
+		return minValue
+	case value > maxValue:
+		return maxValue
+	default:
+		return value
 	}
-	switch {
-	case waitSeconds == 0:
-		waitSeconds = DefaultFallbackMaxWaitSeconds
-	case waitSeconds < MinFallbackMaxWaitSeconds:
-		waitSeconds = MinFallbackMaxWaitSeconds
-	case waitSeconds > MaxFallbackMaxWaitSeconds:
-		waitSeconds = MaxFallbackMaxWaitSeconds
+}
+
+// ClampChannelPlanRecovery 把 ChannelPlan 上的恢复预算钳到合法范围。
+func ClampChannelPlanRecovery(plan *ChannelPlan) {
+	if plan == nil {
+		return
 	}
-	return attempts, waitSeconds
+	plan.MaxHttpAttempts, plan.MaxWaitSeconds = ClampFallbackChainBudget(plan.MaxHttpAttempts, plan.MaxWaitSeconds)
+	plan.MaxAttemptsPerChannel = clampFallbackInt(plan.MaxAttemptsPerChannel, DefaultFallbackMaxAttemptsPerChannel, MinFallbackMaxAttemptsPerChannel, MaxFallbackMaxAttemptsPerChannel)
+	plan.ConnectTimeoutSeconds = clampFallbackInt(plan.ConnectTimeoutSeconds, DefaultFallbackConnectTimeoutSeconds, MinFallbackConnectTimeoutSeconds, MaxFallbackConnectTimeoutSeconds)
+	plan.FirstEventTimeoutSeconds = clampFallbackInt(plan.FirstEventTimeoutSeconds, DefaultFallbackFirstEventTimeoutSeconds, MinFallbackFirstEventTimeoutSeconds, MaxFallbackFirstEventTimeoutSeconds)
+	plan.StreamIdleTimeoutSeconds = clampFallbackInt(plan.StreamIdleTimeoutSeconds, DefaultFallbackStreamIdleTimeoutSeconds, MinFallbackStreamIdleTimeoutSeconds, MaxFallbackStreamIdleTimeoutSeconds)
+	plan.CallTimeoutSeconds = clampFallbackInt(plan.CallTimeoutSeconds, DefaultFallbackCallTimeoutSeconds, MinFallbackCallTimeoutSeconds, MaxFallbackCallTimeoutSeconds)
 }
 
 // ModelAdapterConfig 定义了当前模块中的 ModelAdapterConfig 类型。
@@ -98,12 +121,16 @@ type ModelAdapterConfig struct {
 	Sort int `json:"sort"`
 	// DisplayName 表示当前声明中的 DisplayName。
 	DisplayName string `json:"displayName"`
+	// Disabled 表示该模型在运行时不可用；旧 fixture 缺失时视为未禁用。
+	Disabled bool `json:"disabled,omitempty"`
 	// Type 表示当前声明中的 Type。
 	Type string `json:"type"`
 	// BaseURL 表示当前声明中的 BaseURL。
 	BaseURL string `json:"baseURL"`
 	// APIKey 表示当前声明中的 APIKey。
 	APIKey string `json:"apiKey"`
+	// CredentialSource 表示凭据来源：static、codex 或 grok。
+	CredentialSource string `json:"credentialSource,omitempty"`
 	// TooltipData 表示当前声明中的 TooltipData。
 	TooltipData string `json:"tooltipData"`
 	// ModelID 表示当前声明中的 ModelID。
@@ -116,6 +143,8 @@ type ModelAdapterConfig struct {
 	OpenAIExtraParamsEnabled bool `json:"openAIExtraParamsEnabled"`
 	// OpenAIExtraParamsJSON 表示 OpenAI 额外请求参数 JSON 对象。
 	OpenAIExtraParamsJSON string `json:"openAIExtraParamsJSON"`
+	// OpenAIImageGenerationEnabled 表示是否允许 OpenAI Responses 注入原生图片生成工具。
+	OpenAIImageGenerationEnabled bool `json:"openAIImageGenerationEnabled"`
 	// CustomHeadersEnabled 表示是否启用自定义请求头。
 	CustomHeadersEnabled bool `json:"customHeadersEnabled"`
 	// CustomHeadersJSON 表示自定义请求头 JSON 对象。
@@ -136,14 +165,14 @@ type ModelAdapterConfig struct {
 	ThinkingBudgetTokens int `json:"thinkingBudgetTokens"`
 	// MaxConcurrentRequests 是物理上游组共享的可选并发上限。缺失/0 表示不限制，非零合法范围 1–16。
 	MaxConcurrentRequests int `json:"maxConcurrentRequests,omitempty"`
+	// OutboundProxy 是该模型出站请求的可选自定义代理。
+	OutboundProxy netproxy.Config `json:"outboundProxy"`
 }
 
 // RuntimeConfigSnapshot 定义了当前模块中的 RuntimeConfigSnapshot 类型。
 type RuntimeConfigSnapshot struct {
 	// ObservabilityLogEnabled 表示当前声明中的 ObservabilityLogEnabled。
 	ObservabilityLogEnabled bool
-	// ProviderStreamIdleTimeout 表示 provider 流式响应无有效内容时的空闲超时，单位秒。
-	ProviderStreamIdleTimeout int
 	// ModelAdapters 表示当前声明中的 ModelAdapters。
 	ModelAdapters []ModelAdapterConfig
 }
@@ -167,9 +196,11 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		next := ModelAdapterConfig{
 			Sort:                  item.Sort,
 			DisplayName:           strings.TrimSpace(item.DisplayName),
+			Disabled:              item.Disabled,
 			Type:                  normalizeModelAdapterType(item.Type),
 			BaseURL:               baseURL,
 			APIKey:                strings.TrimSpace(item.APIKey),
+			CredentialSource:      string(subscriptionauth.NormalizeCredentialSource(item.CredentialSource)),
 			TooltipData:           strings.TrimSpace(item.TooltipData),
 			ModelID:               strings.TrimSpace(item.ModelID),
 			ReasoningEffort:       normalizeReasoningEffort(item.ReasoningEffort),
@@ -190,12 +221,26 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		}
 		next.CustomHeadersEnabled = item.CustomHeadersEnabled
 		next.CustomHeadersJSON = strings.TrimSpace(item.CustomHeadersJSON)
+		next.OpenAIImageGenerationEnabled = item.OpenAIImageGenerationEnabled
+		outboundProxy, err := netproxy.Normalize(item.OutboundProxy)
+		if err != nil {
+			return nil, err
+		}
+		next.OutboundProxy = outboundProxy
+		source := subscriptionauth.NormalizeCredentialSource(next.CredentialSource)
+		if source == "" {
+			return nil, errors.New("模型适配器 credentialSource 仅支持 static、codex 或 grok")
+		}
+		next.CredentialSource = string(source)
+		if source.Managed() {
+			next.APIKey = ""
+		}
 		switch {
 		case next.DisplayName == "":
 			return nil, errors.New("模型适配器 displayName 不能为空")
 		case next.Type == "":
 			return nil, errors.New("模型适配器 type 仅支持 openai 或 anthropic")
-		case next.APIKey == "":
+		case !source.Managed() && next.APIKey == "":
 			return nil, errors.New("模型适配器 apiKey 不能为空")
 		case next.TooltipData == "":
 			return nil, errors.New("模型适配器 tooltipData 不能为空")
@@ -220,12 +265,15 @@ func NormalizeModelAdapterConfigs(input []ModelAdapterConfig) ([]ModelAdapterCon
 		case next.Type == "anthropic" && next.AnthropicThinkingEffort == "":
 			return nil, errors.New("模型适配器 anthropicThinkingEffort 仅支持 low、medium、high、xhigh、max")
 		}
+		if err := validateOpenAIImageGenerationEnabled(next); err != nil {
+			return nil, err
+		}
 		limit, err := normalizeMaxConcurrentRequests(next.MaxConcurrentRequests)
 		if err != nil {
 			return nil, err
 		}
 		next.MaxConcurrentRequests = limit
-		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, next.APIKey, next.DisplayName, next.OpenAIEndpoint)
+		next.ID = modelchannel.BuildChannelID(next.BaseURL, next.ModelID, subscriptionauth.ChannelIDSecret(source, next.APIKey), next.DisplayName, next.OpenAIEndpoint)
 		if _, exists := seenChannelIDs[next.ID]; exists {
 			return nil, errors.New("模型适配器渠道不能重复，请检查 url、modelID、apiKey、displayName、endpoint 组合")
 		}
@@ -286,6 +334,17 @@ func validateHeadersJSON(value string) error {
 		}
 	}
 	return nil
+}
+
+func validateOpenAIImageGenerationEnabled(adapter ModelAdapterConfig) error {
+	if !adapter.OpenAIImageGenerationEnabled {
+		return nil
+	}
+	source := subscriptionauth.NormalizeCredentialSource(adapter.CredentialSource)
+	if adapter.Type == "openai" && source == subscriptionauth.CredentialSourceStatic && adapter.OpenAIEndpoint == modelchannel.OpenAIEndpointResponses {
+		return nil
+	}
+	return errors.New("模型适配器 openAIImageGenerationEnabled 仅允许在 openai、static 凭据且 /v1/responses 端点时为 true")
 }
 
 func normalizeReasoningEffort(value string) string {
@@ -389,6 +448,8 @@ type ResolvedChannel struct {
 	OpenAIExtraParamsEnabled bool
 	// OpenAIExtraParamsJSON 表示 OpenAI 额外请求参数 JSON 对象。
 	OpenAIExtraParamsJSON string
+	// OpenAIImageGenerationEnabled 表示是否允许 OpenAI Responses 注入原生图片生成工具。
+	OpenAIImageGenerationEnabled bool
 	// CustomHeadersEnabled 表示是否启用自定义请求头。
 	CustomHeadersEnabled bool
 	// CustomHeadersJSON 表示自定义请求头 JSON 对象。
@@ -409,6 +470,10 @@ type ResolvedChannel struct {
 	MaxConcurrentRequests int
 	// UpstreamCapacityGroupKey 是按 provider type + 归一化 BaseURL + API Key 计算的瞬态组身份，仅内存使用。
 	UpstreamCapacityGroupKey string
+	// CredentialSource 表示渠道凭据来源。
+	CredentialSource string
+	// OutboundProxy 是该渠道出站请求的自定义代理；关闭表示继承全局。
+	OutboundProxy netproxy.Config
 }
 
 // ChannelUsageRecordCreatePayload 定义了一次渠道使用记录的最小载荷。
@@ -494,45 +559,59 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 		if err != nil {
 			return nil, err
 		}
-		matchIndex, ok := modelchannel.ResolveAdapterIndex(
-			adapters,
-			modelID,
-			func(adapter ModelAdapterConfig) string { return adapter.ID },
-			func(adapter ModelAdapterConfig) string { return adapter.ModelID },
-			func(adapter ModelAdapterConfig) string {
-				return modelchannel.BuildLegacyChannelID(adapter.BaseURL, adapter.ModelID, adapter.APIKey, adapter.DisplayName)
-			},
+		requested := strings.TrimSpace(modelID)
+		var (
+			matchIndex int
+			ok         bool
 		)
+		if requested == "" || modelchannel.IsMetaModelAlias(requested) {
+			matchIndex, ok = firstEnabledRuntimeAdapterIndex(adapters)
+		} else {
+			matchIndex, ok = modelchannel.ResolveAdapterIndex(
+				adapters,
+				modelID,
+				func(adapter ModelAdapterConfig) string { return adapter.ID },
+				func(adapter ModelAdapterConfig) string { return adapter.ModelID },
+				func(adapter ModelAdapterConfig) string {
+					return modelchannel.BuildLegacyChannelID(adapter.BaseURL, adapter.ModelID, adapter.APIKey, adapter.DisplayName)
+				},
+			)
+			if ok && adapters[matchIndex].Disabled {
+				return nil, ErrChannelNotAvailable
+			}
+		}
 		if !ok {
 			return nil, ErrChannelNotAvailable
 		}
 		adapter := adapters[matchIndex]
 		resolved := ResolvedChannel{
-			ID:                          strings.TrimSpace(adapter.ID),
-			Name:                        strings.TrimSpace(adapter.DisplayName),
-			GroupName:                   "local",
-			Code:                        strings.TrimSpace(adapter.ID),
-			Provider:                    strings.TrimSpace(adapter.Type),
-			BaseURL:                     strings.TrimSpace(adapter.BaseURL),
-			APIKey:                      strings.TrimSpace(adapter.APIKey),
-			Model:                       strings.TrimSpace(adapter.ModelID),
-			TimeoutMS:                   configurableChannelTimeoutMS,
-			ContextWindowTokens:         configurableChannelContextWindowTokens,
-			MaxTokens:                   configurableChannelMaxTokens,
-			ReasoningEffort:             strings.TrimSpace(adapter.ReasoningEffort),
-			OpenAIEndpoint:              strings.TrimSpace(adapter.OpenAIEndpoint),
-			OpenAIExtraParamsEnabled:    adapter.OpenAIExtraParamsEnabled,
-			OpenAIExtraParamsJSON:       strings.TrimSpace(adapter.OpenAIExtraParamsJSON),
-			CustomHeadersEnabled:        adapter.CustomHeadersEnabled,
-			CustomHeadersJSON:           strings.TrimSpace(adapter.CustomHeadersJSON),
-			AnthropicExtraParamsEnabled: adapter.AnthropicExtraParamsEnabled,
-			AnthropicExtraParamsJSON:    strings.TrimSpace(adapter.AnthropicExtraParamsJSON),
-			AnthropicMaxTokens:          configurableChannelMaxTokens,
-			AnthropicThinkingEffort:     configurableChannelAnthropicThinkingEffort,
-			ThinkingEnabled:             true,
-			ThinkingBudgetTokens:        configurableChannelThinkingBudgetTokens,
-			MaxConcurrentRequests:       adapter.MaxConcurrentRequests,
-			UpstreamCapacityGroupKey:    BuildUpstreamCapacityGroupKey(adapter.Type, adapter.BaseURL, adapter.APIKey),
+			ID:                           strings.TrimSpace(adapter.ID),
+			Name:                         strings.TrimSpace(adapter.DisplayName),
+			GroupName:                    "local",
+			Code:                         strings.TrimSpace(adapter.ID),
+			Provider:                     strings.TrimSpace(adapter.Type),
+			BaseURL:                      strings.TrimSpace(adapter.BaseURL),
+			APIKey:                       strings.TrimSpace(adapter.APIKey),
+			Model:                        strings.TrimSpace(adapter.ModelID),
+			TimeoutMS:                    configurableChannelTimeoutMS,
+			ContextWindowTokens:          configurableChannelContextWindowTokens,
+			MaxTokens:                    configurableChannelMaxTokens,
+			ReasoningEffort:              strings.TrimSpace(adapter.ReasoningEffort),
+			OpenAIEndpoint:               strings.TrimSpace(adapter.OpenAIEndpoint),
+			OpenAIExtraParamsEnabled:     adapter.OpenAIExtraParamsEnabled,
+			OpenAIExtraParamsJSON:        strings.TrimSpace(adapter.OpenAIExtraParamsJSON),
+			OpenAIImageGenerationEnabled: adapter.OpenAIImageGenerationEnabled,
+			CustomHeadersEnabled:         adapter.CustomHeadersEnabled,
+			CustomHeadersJSON:            strings.TrimSpace(adapter.CustomHeadersJSON),
+			AnthropicExtraParamsEnabled:  adapter.AnthropicExtraParamsEnabled,
+			AnthropicExtraParamsJSON:     strings.TrimSpace(adapter.AnthropicExtraParamsJSON),
+			AnthropicMaxTokens:           configurableChannelMaxTokens,
+			AnthropicThinkingEffort:      configurableChannelAnthropicThinkingEffort,
+			ThinkingEnabled:              true,
+			ThinkingBudgetTokens:         configurableChannelThinkingBudgetTokens,
+			MaxConcurrentRequests:        adapter.MaxConcurrentRequests,
+			UpstreamCapacityGroupKey:     BuildUpstreamCapacityGroupKey(adapter.Type, adapter.BaseURL, adapter.APIKey),
+			OutboundProxy:                adapter.OutboundProxy,
 		}
 		if adapter.ContextWindowTokens > 0 {
 			resolved.ContextWindowTokens = adapter.ContextWindowTokens
@@ -558,6 +637,15 @@ func (s *FixedChannelService) SelectChannelForModel(ctx context.Context, modelID
 	return &resolved, nil
 }
 
+func firstEnabledRuntimeAdapterIndex(adapters []ModelAdapterConfig) (int, bool) {
+	for index, adapter := range adapters {
+		if !adapter.Disabled {
+			return index, true
+		}
+	}
+	return -1, false
+}
+
 // SelectChannelPlanForModel 为指定模型构建渠道计划。
 // 运行时层不持有 ProviderFallback 配置，始终返回单渠道计划（FallbackEnabled=false）。
 // 实际 fallback 多渠道计划由 config.Manager.SelectChannelPlanForModel 构建。
@@ -566,12 +654,12 @@ func (s *FixedChannelService) SelectChannelPlanForModel(ctx context.Context, mod
 	if err != nil {
 		return nil, err
 	}
-	return &ChannelPlan{
+	plan := &ChannelPlan{
 		Channels:        []ResolvedChannel{*ch},
 		FallbackEnabled: false,
-		MaxHttpAttempts: DefaultFallbackMaxHttpAttempts,
-		MaxWaitSeconds:  DefaultFallbackMaxWaitSeconds,
-	}, nil
+	}
+	ClampChannelPlanRecovery(plan)
+	return plan, nil
 }
 
 // RecordRunRequestUsage 用于处理与 RecordRunRequestUsage 相关的逻辑。

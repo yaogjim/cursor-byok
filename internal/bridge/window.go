@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"cursor/internal/appearance"
 	"cursor/internal/buildinfo"
 	"cursor/internal/client"
 	"cursor/internal/updater"
@@ -32,11 +33,7 @@ func NewWindowService() *WindowService {
 
 func (s *WindowService) SetAppearanceTheme(theme string) {
 	s.mu.Lock()
-	if theme == "dark" {
-		s.appearanceTheme = "dark"
-	} else {
-		s.appearanceTheme = "light"
-	}
+	s.appearanceTheme = appearance.Resolve(theme)
 	background := windowBackgroundColour(s.appearanceTheme)
 	windows := []*application.WebviewWindow{s.mainWindow, s.modelConfigWindow}
 	s.mu.Unlock()
@@ -142,7 +139,7 @@ func (s *WindowService) OpenModelConfigWindow() {
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
 		CloseButtonState:    application.ButtonEnabled,
-		BackgroundColour:    windowBackgroundColour(s.appearanceTheme),
+		BackgroundColour:    WindowBackgroundColour(s.appearanceTheme),
 		Mac: application.MacWindow{
 			Backdrop:      application.MacBackdropLiquidGlass,
 			DisableShadow: false,
@@ -180,8 +177,12 @@ func (s *WindowService) OpenHistoryWindow() {
 	openDirectory(client.ResolveLogsRootPath())
 }
 
-func windowBackgroundColour(theme string) application.RGBA {
-	if theme == "dark" {
+func WindowBackgroundColour(theme string) application.RGBA {
+	return windowBackgroundColour(appearance.Resolve(theme))
+}
+
+func windowBackgroundColour(effective string) application.RGBA {
+	if effective == appearance.Dark {
 		return application.RGBA{Red: 25, Green: 25, Blue: 25, Alpha: 255}
 	}
 	return application.RGBA{Red: 246, Green: 248, Blue: 251, Alpha: 255}

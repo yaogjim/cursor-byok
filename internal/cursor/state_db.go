@@ -25,6 +25,7 @@ const (
 	cursorStateDarwinRelativePath  = "Library/Application Support/Cursor/User/globalStorage/state.vscdb"
 	cursorStateLinuxRelativePath   = ".config/Cursor/User/globalStorage/state.vscdb"
 	cursorStateStatsigBootstrapKey = "workbench.experiments.statsigBootstrap"
+	cursorAuthAccessTokenKey       = "cursorAuth/accessToken"
 )
 
 var cursorStateDisabledStatsigGates = []string{
@@ -74,7 +75,7 @@ func buildCursorAuthStateValues(email, token string) map[string]string {
 	token = strings.TrimSpace(token)
 
 	return map[string]string{
-		"cursorAuth/accessToken":              token,
+		cursorAuthAccessTokenKey:              token,
 		"cursorAuth/cachedEmail":              email,
 		"cursorAuth/cachedSignUpType":         cursorStateDefaultSignUpType,
 		"cursorAuth/refreshToken":             token,
@@ -111,21 +112,28 @@ func syncCursorAuthStateDB(path string, values map[string]string) error {
 		}
 	}()
 
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	stmt, err := tx.PrepareContext(ctx, "INSERT OR REPLACE INTO ItemTable(key, value) VALUES(?, ?)")
+	preserveExistingAuth, err := shouldPreserveExistingCursorAuth(ctx, tx)
 	if err != nil {
 		return err
 	}
-	defer stmt.Close()
 
-	for _, key := range keys {
-		if _, err := stmt.ExecContext(ctx, key, values[key]); err != nil {
+	if !preserveExistingAuth {
+		keys := make([]string, 0, len(values))
+		for key := range values {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		stmt, err := tx.PrepareContext(ctx, "INSERT OR REPLACE INTO ItemTable(key, value) VALUES(?, ?)")
+		if err != nil {
 			return err
+		}
+		defer stmt.Close()
+
+		for _, key := range keys {
+			if _, err := stmt.ExecContext(ctx, key, values[key]); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -138,6 +146,26 @@ func syncCursorAuthStateDB(path string, values map[string]string) error {
 	}
 	committed = true
 	return nil
+}
+
+func shouldPreserveExistingCursorAuth(ctx context.Context, tx *sql.Tx) (bool, error) {
+	existing, err := readCursorStateItemValue(ctx, tx, cursorAuthAccessTokenKey)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(existing) != "", nil
+}
+
+func readCursorStateItemValue(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, "SELECT value FROM ItemTable WHERE key = ?", key).Scan(&raw)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func syncCursorStatsigGateOverrides(ctx context.Context, tx *sql.Tx) error {

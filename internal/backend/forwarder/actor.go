@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
+	"cursor/internal/audit"
 	runtimecore "cursor/internal/backend/agent/core"
 	modeladapter "cursor/internal/backend/agent/model"
 )
@@ -33,9 +34,10 @@ const (
 type providerAction string
 
 const (
-	providerActionNone   providerAction = ""
-	providerActionStart  providerAction = "start"
-	providerActionResume providerAction = "resume"
+	providerActionNone     providerAction = ""
+	providerActionStart    providerAction = "start"
+	providerActionResume   providerAction = "resume"
+	providerActionContinue providerAction = "continue"
 )
 
 type pendingCompletionDisposition string
@@ -133,6 +135,11 @@ func (service *Service) dispatchInboundIntent(intent InboundIntent) error {
 		return fmt.Errorf("forwarder service is nil")
 	}
 	stream, err := service.streamForIntent(intent)
+	if (err != nil || stream == nil) && strings.TrimSpace(intent.Kind) == "exec_result" {
+		if handled, recoveryErr := service.recoverLateSubagentResult(intent); handled || recoveryErr != nil {
+			return recoveryErr
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -143,10 +150,16 @@ func (service *Service) dispatchInboundIntent(intent InboundIntent) error {
 	if err != nil {
 		return err
 	}
-	return service.postStreamCommandWait(stream, streamCommand{
+	err = service.postStreamCommandWait(stream, streamCommand{
 		Kind:   commandKind,
 		Intent: intent,
 	})
+	if errors.Is(err, errProviderLoopInterrupted) && commandKind == streamCommandExecResult {
+		if handled, recoveryErr := service.recoverLateSubagentResult(intent); handled || recoveryErr != nil {
+			return recoveryErr
+		}
+	}
+	return err
 }
 
 func (service *Service) streamForIntent(intent InboundIntent) (*ActiveStream, error) {
@@ -253,9 +266,18 @@ func (service *Service) postStreamCommandWait(stream *ActiveStream, command stre
 		return errProviderLoopInterrupted
 	case mailbox <- envelope:
 	}
+	return waitPostedStreamCommand(done, result)
+}
+
+func waitPostedStreamCommand(done <-chan struct{}, result <-chan error) error {
 	select {
 	case <-done:
-		return errProviderLoopInterrupted
+		select {
+		case err := <-result:
+			return err
+		default:
+			return errProviderLoopInterrupted
+		}
 	case err := <-result:
 		return err
 	}
@@ -363,8 +385,12 @@ func (service *Service) requestProviderAction(stream *ActiveStream, action provi
 	switch action {
 	case providerActionStart:
 		stream.PendingProviderAction = providerActionStart
-	case providerActionResume:
+	case providerActionContinue:
 		if stream.PendingProviderAction != providerActionStart {
+			stream.PendingProviderAction = providerActionContinue
+		}
+	case providerActionResume:
+		if stream.PendingProviderAction != providerActionStart && stream.PendingProviderAction != providerActionContinue {
 			stream.PendingProviderAction = providerActionResume
 		}
 	default:
@@ -431,7 +457,7 @@ func (service *Service) reconcileStream(stream *ActiveStream) error {
 	}
 
 	switch action {
-	case providerActionStart:
+	case providerActionStart, providerActionContinue:
 		return service.driveProvider(stream)
 	case providerActionResume:
 		service.setTurnPhase(stream, TurnPhaseWaitingExternal)
@@ -470,8 +496,12 @@ func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.Mo
 		return
 	}
 	stats.ModelEventCount++
+	occurred := providerEventTime(event.OccurredAt, time.Now().UTC())
 	if stats.FirstEventAt.IsZero() {
-		stats.FirstEventAt = providerEventTime(event.OccurredAt, time.Now().UTC())
+		stats.FirstEventAt = occurred
+	}
+	if stats.FirstEffectiveContentAt.IsZero() && isEffectiveProviderContent(event) {
+		stats.FirstEffectiveContentAt = occurred
 	}
 	if strings.TrimSpace(event.Provider) != "" {
 		stats.Provider = strings.TrimSpace(event.Provider)
@@ -483,21 +513,53 @@ func observeProviderModelEvent(stats *ProviderStreamStats, event modeladapter.Mo
 	case modeladapter.ModelEventKindTextDelta:
 		stats.ChunkCount++
 		stats.VisibleTextBytes += len(event.Text)
+		stats.LastEffectiveContentAt = occurred
+		stats.PartialBoundary = modeladapter.PartialBoundaryText
 	case modeladapter.ModelEventKindThinkingDelta:
 		stats.ChunkCount++
 		stats.ReasoningBytes += len(event.Text)
+		stats.LastEffectiveContentAt = occurred
+		stats.PartialBoundary = modeladapter.PartialBoundaryReasoning
 	case modeladapter.ModelEventKindPartialToolCall:
 		stats.PartialToolCount++
+		stats.LastEffectiveContentAt = occurred
+		stats.PartialBoundary = modeladapter.PartialBoundaryPartialTool
+		if stats.ToolDispatchState == "not_dispatched" {
+			stats.ToolDispatchState = "partial_not_dispatched"
+		}
+	case modeladapter.ModelEventKindToolCallDelta:
+		if strings.TrimSpace(event.ToolCallID) == "" || event.ToolCallDelta == nil {
+			break
+		}
+		stats.PartialToolCount++
+		stats.PartialBoundary = modeladapter.PartialBoundaryPartialTool
 		if stats.ToolDispatchState == "not_dispatched" {
 			stats.ToolDispatchState = "partial_not_dispatched"
 		}
 	case modeladapter.ModelEventKindToolLikeCompleted:
 		stats.CompletedToolCount++
+		stats.LastEffectiveContentAt = occurred
+		stats.PartialBoundary = modeladapter.PartialBoundaryCompletedTool
 		if stats.ToolDispatchState == "not_dispatched" || stats.ToolDispatchState == "partial_not_dispatched" {
 			stats.ToolDispatchState = "completed_not_dispatched"
 		}
 	case modeladapter.ModelEventKindTurnFinished:
 		stats.CompletionMarker = true
+	}
+}
+
+func isEffectiveProviderContent(event modeladapter.ModelEvent) bool {
+	switch event.Kind {
+	case modeladapter.ModelEventKindTextDelta, modeladapter.ModelEventKindThinkingDelta:
+		return event.Text != ""
+	case modeladapter.ModelEventKindPartialToolCall:
+		return strings.TrimSpace(event.ToolCallID) != "" && event.ToolCall != nil
+	case modeladapter.ModelEventKindToolCallDelta:
+		return strings.TrimSpace(event.ToolCallID) != "" && event.ToolCallDelta != nil
+	case modeladapter.ModelEventKindToolLikeCompleted:
+		return event.ToolInvocation != nil
+	default:
+		return false
 	}
 }
 
@@ -507,6 +569,15 @@ func markProviderDownstreamPublished(stream *ActiveStream) {
 	}
 	stream.mu.Lock()
 	stream.ProviderStreamStats.DownstreamPublished = true
+	stream.mu.Unlock()
+}
+
+func markProviderPublishedToolArgs(stream *ActiveStream) {
+	if stream == nil {
+		return
+	}
+	stream.mu.Lock()
+	stream.ProviderPublishedToolArgs = true
 	stream.mu.Unlock()
 }
 
@@ -539,10 +610,87 @@ func applyProviderTerminalErrorStats(stats *ProviderStreamStats, err error) {
 	if httpAttempt := providerHTTPAttemptFromError(err); httpAttempt > 0 {
 		stats.HTTPAttempt = httpAttempt
 	}
+	if summary, summaryType := providerHTTPErrorSummary(err); summary != "" || summaryType != "" {
+		if summary != "" {
+			stats.ProviderErrorSummary = summary
+		}
+		if summaryType != "" {
+			stats.ProviderErrorSummaryType = summaryType
+		}
+	}
 	retryable, reason, suppression := providerRetryObservation(err, *stats)
 	stats.Retryable = retryable
 	stats.RetryReason = reason
 	stats.RetrySuppressionReason = suppression
+}
+
+func applyProviderStreamDiagnostics(stats *ProviderStreamStats, diagnostics *modeladapter.StreamDiagnostics, err error, checkpointCommitted bool) {
+	if stats == nil {
+		return
+	}
+	snap := diagnostics.Snapshot()
+	if !snap.HeaderAt.IsZero() {
+		stats.HeaderAt = snap.HeaderAt
+	}
+	if !snap.FirstByteAt.IsZero() {
+		stats.FirstByteAt = snap.FirstByteAt
+	}
+	if !snap.LastByteAt.IsZero() {
+		stats.LastByteAt = snap.LastByteAt
+	}
+	if !snap.BodyEndAt.IsZero() {
+		stats.BodyEndAt = snap.BodyEndAt
+	}
+	if stats.LastEffectiveContentAt.IsZero() && !snap.LastEffectiveContentAt.IsZero() {
+		stats.LastEffectiveContentAt = snap.LastEffectiveContentAt
+	}
+	if snap.HTTPStatus > 0 && (strings.TrimSpace(stats.HTTPStatus) == "" || stats.HTTPStatus == "not_recorded") {
+		stats.HTTPStatus = fmt.Sprintf("%d", snap.HTTPStatus)
+	}
+	if snap.HTTPAttempt > 0 {
+		stats.HTTPAttempt = snap.HTTPAttempt
+	}
+	stats.HTTPProtocol = snap.HTTPProtocol
+	stats.ContentEncoding = snap.ContentEncoding
+	stats.AutoDecompressed = snap.AutoDecompressed
+	stats.ContentLength = snap.ContentLength
+	stats.ConnectionReused = snap.ConnectionReused
+	stats.ConnectionWasIdle = snap.ConnectionWasIdle
+	stats.ConnectionObserved = snap.ConnectionObserved
+	stats.RawByteCount = snap.RawByteCount
+	stats.LastErrorType = snap.LastErrorType
+	stats.LastSSEEventType = snap.LastSSEEventType
+	stats.LastSSEEventIDHash = snap.LastSSEEventIDHash
+	stats.LastSSESequence = snap.LastSSESequence
+	stats.LastResponseStatus = snap.LastResponseStatus
+	stats.StreamRecoveryAttempts = snap.StreamRecoveryAttempts
+	if snap.TransportOutcome != "" {
+		stats.TransportOutcome = snap.TransportOutcome
+	}
+	closeCause := snap.CloseCause
+	classified := modeladapter.ClassifyStreamCloseCause(err)
+	stats.CloseCause = modeladapter.PreferCloseCause(closeCause, classified)
+	if stats.TransportOutcome == "" {
+		stats.TransportOutcome = modeladapter.TransportOutcomeStarted
+	}
+	finalizeProviderPartialBoundary(stats, checkpointCommitted)
+}
+
+func finalizeProviderPartialBoundary(stats *ProviderStreamStats, checkpointCommitted bool) {
+	if stats == nil {
+		return
+	}
+	if stats.ProtocolFinalStatus == "completed" {
+		stats.PartialBoundary = modeladapter.PartialBoundaryNone
+		return
+	}
+	if checkpointCommitted {
+		stats.PartialBoundary = modeladapter.PartialBoundaryCheckpoint
+		return
+	}
+	if strings.TrimSpace(stats.PartialBoundary) == "" {
+		stats.PartialBoundary = modeladapter.PartialBoundaryNone
+	}
 }
 
 func providerHTTPStatusFromError(err error) string {
@@ -559,6 +707,18 @@ func providerHTTPAttemptFromError(err error) int {
 		return httpErr.Attempt
 	}
 	return 0
+}
+
+func providerHTTPErrorSummary(err error) (string, string) {
+	var httpErr *modeladapter.HTTPStatusError
+	if !errors.As(err, &httpErr) || httpErr == nil {
+		return "", ""
+	}
+	summary := strings.TrimSpace(httpErr.Body)
+	if summary != "" {
+		summary = audit.SanitizeMetadataText(summary)
+	}
+	return summary, strings.TrimSpace(httpErr.BodySummaryType)
 }
 
 func providerRetryObservation(err error, stats ProviderStreamStats) (retryable string, reason string, suppression string) {
@@ -581,12 +741,20 @@ func providerRetryObservation(err error, stats ProviderStreamStats) (retryable s
 		}
 		return "false", "pre_event_eof", "not_recorded"
 	}
+	var httpErr *modeladapter.HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
+		eligible, retryReason, retrySuppression := modeladapter.HTTPRetryObservation(httpErr.StatusCode)
+		if eligible {
+			return "true", retryReason, retrySuppression
+		}
+		return "false", retryReason, retrySuppression
+	}
 	category := modeladapter.ClassifyProviderError(err)
 	switch category {
 	case modeladapter.ProviderErrorRateLimited:
 		return "true", "http_429", "not_recorded"
 	case modeladapter.ProviderErrorServer5xx:
-		return "true", "http_5xx", "not_recorded"
+		return "false", "not_recorded", "http_status"
 	case modeladapter.ProviderErrorTransport:
 		return "true", "transport", "not_recorded"
 	case modeladapter.ProviderErrorStatus4xx:
@@ -597,10 +765,6 @@ func providerRetryObservation(err error, stats ProviderStreamStats) (retryable s
 }
 
 func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[string]any {
-	firstEventAt := any("not_recorded")
-	if !stats.FirstEventAt.IsZero() {
-		firstEventAt = stats.FirstEventAt.UTC().Format(time.RFC3339Nano)
-	}
 	duration := stats.StreamDuration
 	if duration <= 0 && !stats.StartedAt.IsZero() && !stats.FinishedAt.IsZero() {
 		duration = stats.FinishedAt.Sub(stats.StartedAt)
@@ -608,23 +772,71 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 	if duration < 0 {
 		duration = 0
 	}
-	return map[string]any{
+	fields := map[string]any{
 		"model_call_id": modelCallID, "provider_pass": stats.Attempt,
 		"status":       providerProtocolStatus(stats.ProtocolFinalStatus),
 		"http_attempt": providerHTTPAttemptField(stats.HTTPAttempt), "http_status": firstNonEmpty(stats.HTTPStatus, "not_recorded"),
-		"provider": firstNonEmpty(stats.Provider, "unknown"), "model": firstNonEmpty(stats.Model, "unknown"), "attribution": firstNonEmpty(stats.Attribution, "unknown"),
+		"http_protocol": firstNonEmpty(stats.HTTPProtocol, "not_recorded"), "content_encoding": firstNonEmpty(stats.ContentEncoding, "not_recorded"),
+		"auto_decompressed": stats.AutoDecompressed, "content_length": stats.ContentLength,
+		"connection_observed": stats.ConnectionObserved, "connection_reused": stats.ConnectionReused, "connection_was_idle": stats.ConnectionWasIdle,
+		"raw_byte_count": stats.RawByteCount, "last_error_type": firstNonEmpty(stats.LastErrorType, "not_recorded"),
+		"last_sse_event_type": firstNonEmpty(stats.LastSSEEventType, "not_recorded"), "last_sse_event_id_hash": firstNonEmpty(stats.LastSSEEventIDHash, "not_recorded"),
+		"last_sse_sequence": stats.LastSSESequence, "last_response_status": firstNonEmpty(stats.LastResponseStatus, "not_recorded"),
+		"stream_recovery_attempts": stats.StreamRecoveryAttempts,
+		"provider":                 firstNonEmpty(stats.Provider, "unknown"), "model": firstNonEmpty(stats.Model, "unknown"), "attribution": firstNonEmpty(stats.Attribution, "unknown"),
 		"completion_marker": stats.CompletionMarker, "model_event_count": stats.ModelEventCount,
 		"chunk_count": stats.ChunkCount, "visible_text_bytes": stats.VisibleTextBytes,
 		"reasoning_bytes": stats.ReasoningBytes, "partial_tool_count": stats.PartialToolCount,
 		"completed_tool_count": stats.CompletedToolCount, "dispatched_tool_count": stats.DispatchedToolCount,
 		"tool_dispatch_state": firstNonEmpty(stats.ToolDispatchState, "not_recorded"), "downstream_published": stats.DownstreamPublished,
-		"potential_side_effect": firstNonEmpty(stats.PotentialSideEffect, "unknown"), "first_event_at": firstEventAt,
-		"duration_ms": duration.Milliseconds(), "retryable": firstNonEmpty(stats.Retryable, "unknown"),
+		"potential_side_effect": firstNonEmpty(stats.PotentialSideEffect, "unknown"), "first_event_at": optionalTimeField(stats.FirstEventAt),
+		"header_at": optionalTimeField(stats.HeaderAt), "first_byte_at": optionalTimeField(stats.FirstByteAt),
+		"last_byte_at": optionalTimeField(stats.LastByteAt), "body_end_at": optionalTimeField(stats.BodyEndAt),
+		"last_effective_content_at":  optionalTimeField(stats.LastEffectiveContentAt),
+		"first_effective_content_at": optionalTimeField(stats.FirstEffectiveContentAt),
+		"close_cause":                firstNonEmpty(stats.CloseCause, "not_recorded"), "partial_boundary": firstNonEmpty(stats.PartialBoundary, "none"),
+		"transport_outcome": firstNonEmpty(stats.TransportOutcome, "started"),
+		"duration_ms":       duration.Milliseconds(), "ttfr_ms": providerTTFRMS(stats), "retryable": firstNonEmpty(stats.Retryable, "unknown"),
 		"retry_reason": firstNonEmpty(stats.RetryReason, "not_recorded"), "retry_suppression_reason": firstNonEmpty(stats.RetrySuppressionReason, "not_recorded"),
 		"protocol_final_status": firstNonEmpty(stats.ProtocolFinalStatus, "unknown"), "model_call_final_status": firstNonEmpty(stats.ModelCallFinalStatus, "not_recorded"),
 		"failure_stage":  firstNonEmpty(stats.FailureStage, "not_recorded"),
 		"error_category": firstNonEmpty(stats.ErrorCategory, "not_recorded"), "error_summary": safeProviderErrorSummary(stats),
+		"provider_error_summary":      firstNonEmpty(stats.ProviderErrorSummary, "not_recorded"),
+		"provider_error_summary_type": firstNonEmpty(stats.ProviderErrorSummaryType, "not_recorded"),
 	}
+	if continuedFrom := strings.TrimSpace(stats.ContinuedFromModelCallID); continuedFrom != "" {
+		fields["continued_from_model_call_id"] = continuedFrom
+	}
+	if stats.ContinuationIndex > 0 {
+		fields["continuation_index"] = stats.ContinuationIndex
+	}
+	return fields
+}
+
+func unwrapProviderTerminalCause(err error) error {
+	var providerErr providerTerminalError
+	if errors.As(err, &providerErr) {
+		return providerErr.Unwrap()
+	}
+	return err
+}
+
+func optionalTimeField(value time.Time) any {
+	if value.IsZero() {
+		return "not_recorded"
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func providerTTFRMS(stats ProviderStreamStats) any {
+	if stats.StartedAt.IsZero() || stats.FirstEffectiveContentAt.IsZero() {
+		return "not_recorded"
+	}
+	value := stats.FirstEffectiveContentAt.Sub(stats.StartedAt).Milliseconds()
+	if value < 0 {
+		return int64(0)
+	}
+	return value
 }
 
 func providerHTTPAttemptField(attempt int) any {
@@ -744,15 +956,28 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 	accumulatedReasoningStatus := stream.ProviderAccumulatedReasoningStatus
 	accumulatedReasoningSummary := append([]byte(nil), stream.ProviderAccumulatedReasoningSummary...)
 	observeProviderModelEvent(&stream.ProviderStreamStats, event)
+	dropChildUnsafe := continuationShouldDropChildEventLocked(stream, event)
 	stream.mu.Unlock()
+	if dropChildUnsafe {
+		return nil
+	}
 
 	switch event.Kind {
 	case modeladapter.ModelEventKindTextDelta:
 		stream.mu.Lock()
 		stream.ProviderAccumulatedText += event.Text
+		publishText := event.Text
+		suppressPublish := false
+		mismatch := false
+		if stream.ContinuationIndex > 0 {
+			publishText, suppressPublish, mismatch = consumeContinuationDeltaLocked(stream, "text")
+		}
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
-		if err := service.broker.Publish(requestID, StreamEvent{Message: buildTextDeltaMessage(event.Text)}); err != nil {
+		if mismatch || suppressPublish || publishText == "" {
+			return nil
+		}
+		if err := service.broker.Publish(requestID, StreamEvent{Message: buildTextDeltaMessage(publishText)}); err != nil {
 			return err
 		}
 		markProviderDownstreamPublished(stream)
@@ -760,9 +985,18 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 	case modeladapter.ModelEventKindThinkingDelta:
 		stream.mu.Lock()
 		stream.ProviderAccumulatedReasoning += event.Text
+		publishText := event.Text
+		suppressPublish := false
+		mismatch := false
+		if stream.ContinuationIndex > 0 {
+			publishText, suppressPublish, mismatch = consumeContinuationDeltaLocked(stream, "reasoning")
+		}
 		stream.UpdatedAt = time.Now().UTC()
 		stream.mu.Unlock()
-		if err := service.broker.Publish(requestID, StreamEvent{Message: buildThinkingDeltaMessage(event.Text, event.ThinkingStyle)}); err != nil {
+		if mismatch || suppressPublish || publishText == "" {
+			return nil
+		}
+		if err := service.broker.Publish(requestID, StreamEvent{Message: buildThinkingDeltaMessage(publishText, event.ThinkingStyle)}); err != nil {
 			return err
 		}
 		markProviderDownstreamPublished(stream)
@@ -778,6 +1012,9 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 			stream.ProviderAccumulatedReasoningItemID = strings.TrimSpace(event.ProviderItemID)
 			stream.ProviderAccumulatedReasoningStatus = strings.TrimSpace(event.ProviderStatus)
 			stream.ProviderAccumulatedReasoningSummary = append([]byte(nil), event.ProviderSummary...)
+			if !event.ReasoningOrigin.IsZero() {
+				stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
+			}
 			shouldEmitSyntheticThinking = strings.TrimSpace(stream.ProviderAccumulatedReasoning) == "" &&
 				strings.TrimSpace(event.ThinkingSignatureSource) == modeladapter.ReasoningSignatureSourceOpenAIResponses
 			if shouldEmitSyntheticThinking {
@@ -797,6 +1034,11 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 					suppressThinkingCompleted = true
 				}
 			}
+			stream.UpdatedAt = time.Now().UTC()
+			stream.mu.Unlock()
+		} else if !event.ReasoningOrigin.IsZero() {
+			stream.mu.Lock()
+			stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
 			stream.UpdatedAt = time.Now().UTC()
 			stream.mu.Unlock()
 		}
@@ -851,6 +1093,7 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		}); err != nil {
 			return err
 		}
+		markProviderPublishedToolArgs(stream)
 		markProviderDownstreamPublished(stream)
 		return nil
 	case modeladapter.ModelEventKindToolLikeCompleted:
@@ -860,8 +1103,14 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 		reasoningItemIDForTool := accumulatedReasoningItemID
 		reasoningStatusForTool := accumulatedReasoningStatus
 		reasoningSummaryForTool := append([]byte(nil), accumulatedReasoningSummary...)
+		stream.mu.Lock()
+		if !event.ReasoningOrigin.IsZero() {
+			stream.ProviderAccumulatedReasoningOrigin = event.ReasoningOrigin
+		}
+		flushOrigin := stream.ProviderAccumulatedReasoningOrigin
+		stream.mu.Unlock()
 		if strings.TrimSpace(accumulatedText) != "" {
-			if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, false); err != nil {
+			if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, false, flushOrigin); err != nil {
 				return err
 			}
 		}
@@ -869,6 +1118,7 @@ func (service *Service) applyProviderModelEvent(stream *ActiveStream, event mode
 			return fmt.Errorf("tool invocation is required")
 		}
 		invocation := *event.ToolInvocation
+		invocation.ToolName = runtimecore.CanonicalToolName(strings.TrimSpace(invocation.ToolName))
 		invocation.ReasoningContent = reasoningForTool
 		invocation.ReasoningSignature = reasoningSignatureForTool
 		invocation.ReasoningSignatureSource = reasoningSignatureSourceForTool
@@ -998,12 +1248,30 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	accumulatedReasoningItemID := stream.ProviderAccumulatedReasoningItemID
 	accumulatedReasoningStatus := stream.ProviderAccumulatedReasoningStatus
 	accumulatedReasoningSummary := append([]byte(nil), stream.ProviderAccumulatedReasoningSummary...)
+	accumulatedReasoningOrigin := stream.ProviderAccumulatedReasoningOrigin
 	finishReason := stream.ProviderFinishReason
 	usage := stream.ProviderUsage
 	hadToolInvocation := stream.ToolInvocationCount > 0
 	terminalToolInvocation := stream.ProviderTerminalToolInvocation
 	existingCompletion := stream.PendingProviderCompletion
 	providerPass := stream.ProviderPassCount
+	continuationIndex := stream.ContinuationIndex
+	continuationMismatch := stream.ContinuationOverlapMismatch
+	continuationRemainderText := stream.ContinuationRemainderText
+	continuationRemainderReasoning := stream.ContinuationRemainderReasoning
+	overflowState := overflowRecoveryCallState{
+		Text:              accumulatedText,
+		Reasoning:         accumulatedReasoning,
+		SyntheticThinking: stream.ProviderSyntheticThinkingPublished,
+		HadTool:           hadToolInvocation || terminalToolInvocation,
+		PartialTools:      stream.ProviderStreamStats.PartialToolCount > 0 || stream.ProviderPublishedToolArgs,
+		Pending:           len(stream.PendingExecs) + len(stream.PendingInteractions),
+		Continuation:      stream.ContinuationIndex > 0 || stream.ContinuationSpawned,
+		AlreadyAttempted:  stream.OverflowRecoveryAttempted,
+		Terminal:          isTerminalStreamStatus(stream.Status),
+	}
+	stream.ProviderStreamStats.ContinuedFromModelCallID = stream.ContinuedFromModelCallID
+	stream.ProviderStreamStats.ContinuationIndex = stream.ContinuationIndex
 	stream.ProviderStreamStats.FinishedAt = time.Now().UTC()
 	if !stream.ProviderStreamStats.StartedAt.IsZero() {
 		stream.ProviderStreamStats.StreamDuration = stream.ProviderStreamStats.FinishedAt.Sub(stream.ProviderStreamStats.StartedAt)
@@ -1033,6 +1301,12 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		stream.ProviderStreamStats.FailureStage = "provider_protocol"
 		applyProviderTerminalErrorStats(&stream.ProviderStreamStats, &modeladapter.StreamTruncatedError{Provider: firstNonEmpty(stream.ProviderStreamStats.Provider, "provider")})
 	}
+	checkpointCommitted := len(stream.ConfirmedCheckpointBlobs) > 0
+	diagErr := unwrapProviderTerminalCause(payload.Err)
+	if diagErr == nil && stream.ProviderStreamStats.ProtocolFinalStatus == "truncated" {
+		diagErr = &modeladapter.StreamTruncatedError{Provider: firstNonEmpty(stream.ProviderStreamStats.Provider, "provider")}
+	}
+	applyProviderStreamDiagnostics(&stream.ProviderStreamStats, stream.ProviderStreamDiagnostics, diagErr, checkpointCommitted)
 	stream.ProviderStreamStats.ModelCallFinalStatus = "not_finalized"
 	stream.ProviderActive = false
 	stream.ProviderCancel = nil
@@ -1044,6 +1318,10 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	stream.ProviderAccumulatedReasoningItemID = ""
 	stream.ProviderAccumulatedReasoningStatus = ""
 	stream.ProviderAccumulatedReasoningSummary = nil
+	stream.ProviderAccumulatedReasoningOrigin = modeladapter.ReasoningOrigin{}
+	stream.ProviderSyntheticThinkingStartedAt = time.Time{}
+	stream.ProviderSyntheticThinkingPublished = false
+	stream.ProviderPublishedToolArgs = false
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
 	stream.ProviderTerminalToolInvocation = false
@@ -1060,6 +1338,32 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 	}
 	service.recordProviderTerminal(stream)
 	if payload.Err != nil {
+		spawned, spawnErr := service.trySpawnStreamContinuation(
+			stream, payload, conversationID, turnSeq, requestID, modelCallID, providerPass,
+			accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource,
+			accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, accumulatedReasoningOrigin, usage, hadToolInvocation,
+		)
+		if spawnErr != nil {
+			return service.failStreamIfNonTerminal(stream, "unknown", spawnErr)
+		}
+		if spawned {
+			return nil
+		}
+		accepted, recoverErr := service.tryAcceptOverflowRecovery(stream, payload.Err, overflowState, usage)
+		if recoverErr != nil {
+			return service.failStreamIfNonTerminal(stream, overflowRecoveryFailureCode(recoverErr), recoverErr)
+		}
+		if accepted {
+			return nil
+		}
+		flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)
+		flushReasoning := continuationFlushText(continuationIndex, continuationMismatch, accumulatedReasoning, continuationRemainderReasoning)
+		if fuse, reason := continuationShouldFusePartial(stream, payload); fuse {
+			service.logStreamContinuationEvent(stream, "stream_continuation_fused", map[string]any{
+				"model_call_id": strings.TrimSpace(modelCallID),
+				"reason":        reason,
+			})
+		}
 		stream.mu.Lock()
 		businessOutcome := providerFailureBusinessOutcome(stream.ProviderStreamStats)
 		stream.mu.Unlock()
@@ -1067,9 +1371,9 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		var providerErr providerTerminalError
 		if errors.As(payload.Err, &providerErr) {
 			service.setTurnPhase(stream, TurnPhaseFailed)
-			terminalErr = service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation)
+			terminalErr = service.closeStreamWithProviderError(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, usage, providerErr, !hadToolInvocation, accumulatedReasoningOrigin)
 		} else {
-			if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+			if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
 				terminalErr = service.failStream(stream, "unknown", fmt.Errorf("flush failed provider output: %w", err))
 			} else {
 				service.setTurnPhase(stream, TurnPhaseFailed)
@@ -1079,7 +1383,26 @@ func (service *Service) handleProviderDoneEvent(stream *ActiveStream, payload *s
 		service.recordModelCallFinal(stream, businessOutcome)
 		return terminalErr
 	}
-	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, accumulatedText, accumulatedReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation); err != nil {
+	if fuse, reason := continuationShouldFusePartial(stream, payload); fuse {
+		service.logStreamContinuationEvent(stream, "stream_continuation_fused", map[string]any{
+			"model_call_id": strings.TrimSpace(modelCallID),
+			"reason":        reason,
+		})
+		flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)
+		flushReasoning := continuationFlushText(continuationIndex, continuationMismatch, accumulatedReasoning, continuationRemainderReasoning)
+		if err := service.flushFailedProviderOutput(stream, conversationID, turnSeq, requestID, modelCallID, providerPass, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
+			return service.failStreamIfNonTerminal(stream, "unknown", err)
+		}
+		if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "partial", usage, reason, false); err != nil {
+			return service.failStreamIfNonTerminal(stream, "usage_persistence_error", err)
+		}
+		service.recordModelCallFinal(stream, "partial")
+		service.setTurnPhase(stream, TurnPhaseFailed)
+		return service.failStream(stream, "provider_error", errors.New(reason))
+	}
+	flushText := continuationFlushText(continuationIndex, continuationMismatch, accumulatedText, continuationRemainderText)
+	flushReasoning := continuationFlushText(continuationIndex, continuationMismatch, accumulatedReasoning, continuationRemainderReasoning)
+	if err := service.flushAssistantText(stream, conversationID, turnSeq, requestID, flushText, flushReasoning, accumulatedReasoningSignature, accumulatedReasoningSignatureSource, accumulatedReasoningItemID, accumulatedReasoningStatus, accumulatedReasoningSummary, !hadToolInvocation, accumulatedReasoningOrigin); err != nil {
 		return service.failStreamIfNonTerminal(stream, "unknown", err)
 	}
 	if err := service.recordTurnUsageSnapshot(stream, conversationID, turnSeq, requestID, modelCallID, "completed", usage, "", false); err != nil {
@@ -1288,8 +1611,9 @@ func (service *Service) scheduleStreamTimer(stream *ActiveStream, key string, de
 	if stream.TimerTokens == nil {
 		stream.TimerTokens = make(map[string]uint64)
 	}
-	stream.TimerTokens[key]++
-	token := stream.TimerTokens[key]
+	stream.NextTimerToken++
+	token := stream.NextTimerToken
+	stream.TimerTokens[key] = token
 	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 

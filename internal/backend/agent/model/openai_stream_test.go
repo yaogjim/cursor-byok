@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestOpenAIResponsesRequestsReasoningSummary(t *testing.T) {
@@ -202,6 +206,183 @@ func TestOpenAIChatCompletionsIgnoresBlankFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatCompletionsTerminalStateMatrix(t *testing.T) {
+	tests := []struct {
+		name             string
+		finishReasonJSON string
+		withTool         bool
+		wantFinishReason string
+		wantCompleted    int
+	}{
+		{name: "normal stop", finishReasonJSON: `"stop"`, wantFinishReason: "stop"},
+		{name: "explicit tool calls", finishReasonJSON: `"tool_calls"`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+		{name: "observed tools outrank stop", finishReasonJSON: `"stop"`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+		{name: "content filter rejects observed tools", finishReasonJSON: `"content_filter"`, withTool: true, wantFinishReason: "content_filter"},
+		{name: "length rejects incomplete observed tools", finishReasonJSON: `"length"`, withTool: true, wantFinishReason: "length"},
+		{name: "blank finish reason falls back to stop", finishReasonJSON: `""`, wantFinishReason: "stop"},
+		{name: "missing finish reason falls back to stop", wantFinishReason: "stop"},
+		{name: "blank finish reason with tools falls back to tool calls", finishReasonJSON: `""`, withTool: true, wantFinishReason: "tool_calls", wantCompleted: 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				delta := `{"content":"done"}`
+				if test.withTool {
+					delta = `{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"Ls","arguments":"{}"}}]}`
+				}
+				finishField := ""
+				if test.finishReasonJSON != "" {
+					finishField = `,"finish_reason":` + test.finishReasonJSON
+				}
+				_, _ = fmt.Fprintf(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":%s%s}]}\n\n", delta, finishField)
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, test.wantCompleted)
+			assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+
+			finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+			if finished == nil {
+				t.Fatalf("turn finished event missing: %#v", events)
+			}
+			if finished.FinishReason != test.wantFinishReason {
+				t.Fatalf("finish reason = %q, want %q; events=%#v", finished.FinishReason, test.wantFinishReason, events)
+			}
+			if events[len(events)-1].Kind != ModelEventKindTurnFinished {
+				t.Fatalf("last event kind = %q, want %q; events=%#v", events[len(events)-1].Kind, ModelEventKindTurnFinished, events)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatCompletionsNormalizesEmptyToolArguments(t *testing.T) {
+	tests := []struct {
+		name              string
+		argumentsFragment string
+		finishSeparately  bool
+	}{
+		{name: "empty string", argumentsFragment: `,"arguments":""`},
+		{name: "whitespace", argumentsFragment: `,"arguments":"   "`},
+		{name: "missing field"},
+		{name: "zero argument delta before finish", argumentsFragment: `,"arguments":""`, finishSeparately: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("Content-Type", "text/event-stream")
+				finish := `,"finish_reason":"tool_calls"`
+				if test.finishSeparately {
+					finish = `,"finish_reason":""`
+				}
+				_, _ = fmt.Fprintf(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"Ls\"%s}}]}%s}]}\n\n", test.argumentsFragment, finish)
+				if test.finishSeparately {
+					_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n")
+				}
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+			completed := firstOpenAIEventForTest(events, ModelEventKindToolLikeCompleted)
+			if completed == nil || completed.ToolInvocation == nil {
+				t.Fatalf("completed tool missing: %#v", events)
+			}
+			if got := string(completed.ToolInvocation.ArgsJSON); got != `{}` {
+				t.Fatalf("tool args = %q, want {}", got)
+			}
+		})
+	}
+}
+
+func TestOpenAIChatCompletionsScopesReusedProviderToolCallIDByModelCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"/tmp/a\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	streamCallID := func(modelCallID string) string {
+		t.Helper()
+		events := make([]ModelEvent, 0, 2)
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID:       "request-1",
+			RunID:           "run-1",
+			ModelCallID:     modelCallID,
+			BaseURL:         server.URL,
+			APIKey:          "test-key",
+			ProviderModelID: "gpt-test",
+			OpenAIEndpoint:  "/v1/chat/completions",
+			Messages:        []Message{{Role: "user", Content: "read it"}},
+			MaxTokens:       128,
+		}, func(event ModelEvent) error {
+			events = append(events, event)
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("stream %q failed: %v", modelCallID, err)
+		}
+		completed := firstOpenAIEventForTest(events, ModelEventKindToolLikeCompleted)
+		if completed == nil || completed.ToolInvocation == nil {
+			t.Fatalf("stream %q missing completed tool: %#v", modelCallID, events)
+		}
+		return completed.ToolInvocation.CallID
+	}
+
+	first := streamCallID("model-call-1")
+	second := streamCallID("model-call-2")
+	if first == "" || second == "" {
+		t.Fatalf("namespaced call IDs must be non-empty: first=%q second=%q", first, second)
+	}
+	if first == second {
+		t.Fatalf("provider call ID was reused across model calls: %q", first)
+	}
+	if first != streamCallID("model-call-1") {
+		t.Fatalf("tool call namespace is not stable within one model call: %q", first)
+	}
+}
+
+func TestOpenAIChatCompletionsSparseUsageDoesNotEraseReportedCacheCount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,\"prompt_tokens_details\":{\"cached_tokens\":900}}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[],\"usage\":{\"prompt_tokens\":1200,\"completion_tokens\":30}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+	if finished == nil {
+		t.Fatalf("turn finished event missing: %#v", events)
+	}
+	if !finished.UsagePresent || !finished.CacheReadPresent {
+		t.Fatalf("usage presence lost: %#v", finished)
+	}
+	if finished.InputTokens != 300 || finished.CacheReadTokens != 900 || finished.OutputTokens != 30 {
+		t.Fatalf("usage = input:%d cache-read:%d output:%d, want 300/900/30", finished.InputTokens, finished.CacheReadTokens, finished.OutputTokens)
+	}
+}
+
 func TestOpenAIChatCompletionsScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
 	payload := "data: {\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"Ls\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":\"\"}]}\n\n"
 	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload, errors.New("connection reset"))}
@@ -222,6 +403,44 @@ func TestOpenAIResponsesScannerErrorDoesNotCompleteResidualTool(t *testing.T) {
 	assertOpenAIStreamTruncated(t, err, "connection reset")
 	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 0)
 	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
+func TestOpenAIResponsesCompletedIgnoresTrailingUnexpectedEOF(t *testing.T) {
+	payload := strings.Join([]string{
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Ls","arguments":"{\"path\":\".\"}","status":"completed"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp-1","model":"gpt-test","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"Ls","arguments":"{\"path\":\".\"}","status":"completed"}]}}`,
+		"",
+	}, "\n\n")
+	adapter := &OpenAIAdapter{client: newOpenAIStreamErrorClient(t, payload+"\n", io.ErrUnexpectedEOF)}
+	events, err := collectOpenAIStreamEvents(t, adapter, "/v1/responses")
+	if err != nil {
+		t.Fatalf("completed response failed on trailing unexpected EOF: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+}
+
+func TestOpenAIResponsesCompletedReturnsBeforeBodyCloses(t *testing.T) {
+	payload := `data: {"type":"response.completed","response":{"id":"resp-1","model":"gpt-test","status":"completed","output_text":"done"}}` + "\n\n"
+	reader := newBlockingAfterReader(payload)
+	adapter := &OpenAIAdapter{client: &http.Client{Transport: streamBodyRoundTripper{body: reader}}}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := collectOpenAIStreamEvents(t, adapter, "/v1/responses")
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("completed response failed before body close: %v", err)
+		}
+	case <-time.After(time.Second):
+		_ = reader.Close()
+		<-result
+		t.Fatal("completed response waited for the provider body to close")
+	}
 }
 
 func TestOpenAIChatCompletionsEOFWithoutFinishMarker(t *testing.T) {
@@ -287,6 +506,47 @@ func TestOpenAIResponsesNormalCompletionStillSucceeds(t *testing.T) {
 	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
 }
 
+func TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	assertOpenAIEventKindCount(t, events, ModelEventKindTextDelta, 1)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 1)
+
+	finished := firstOpenAIEventForTest(events, ModelEventKindTurnFinished)
+	if finished == nil {
+		t.Fatalf("turn finished event missing: %#v", events)
+	}
+	if finished.FinishReason != "stop" {
+		t.Fatalf("finish reason = %q, want stop", finished.FinishReason)
+	}
+}
+
+func TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"Ls\",\"arguments\":\"\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"output_index\":0,\"delta\":\"{\\\"path\\\":\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	events, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/responses")
+	assertOpenAIStreamTruncated(t, err, "missing completion marker")
+	assertOpenAIEventKindCount(t, events, ModelEventKindToolLikeCompleted, 0)
+	assertOpenAIEventKindCount(t, events, ModelEventKindTurnFinished, 0)
+}
+
 func collectOpenAIStreamEvents(t *testing.T, adapter *OpenAIAdapter, endpoint string) ([]ModelEvent, error) {
 	t.Helper()
 	return collectOpenAIStreamEventsWithServer(t, adapter, "https://example.test", endpoint)
@@ -347,6 +607,47 @@ func (reader *errorAfterReader) Read(p []byte) (int, error) {
 
 func (reader *errorAfterReader) Close() error { return nil }
 
+type streamBodyRoundTripper struct {
+	body io.ReadCloser
+}
+
+func (transport streamBodyRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       transport.body,
+		Request:    request,
+	}, nil
+}
+
+type blockingAfterReader struct {
+	data      []byte
+	release   chan struct{}
+	closeOnce sync.Once
+}
+
+func newBlockingAfterReader(payload string) *blockingAfterReader {
+	return &blockingAfterReader{
+		data:    []byte(payload),
+		release: make(chan struct{}),
+	}
+}
+
+func (reader *blockingAfterReader) Read(p []byte) (int, error) {
+	if len(reader.data) > 0 {
+		n := copy(p, reader.data)
+		reader.data = reader.data[n:]
+		return n, nil
+	}
+	<-reader.release
+	return 0, io.EOF
+}
+
+func (reader *blockingAfterReader) Close() error {
+	reader.closeOnce.Do(func() { close(reader.release) })
+	return nil
+}
+
 func assertOpenAIStreamTruncated(t *testing.T, err error, wantSubstring string) {
 	t.Helper()
 	if err == nil {
@@ -403,6 +704,25 @@ func TestOpenAIChatPreEventEOFRetriesAndDeadlineDoesNot(t *testing.T) {
 			t.Fatalf("err=%v hits=%d, want nil/2", err, hits)
 		}
 	})
+	t.Run("stops after one zero-byte retry", func(t *testing.T) {
+		hits := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			hits++
+			writer.Header().Set("Content-Type", "text/event-stream")
+		}))
+		defer server.Close()
+		diagnostics := &StreamDiagnostics{}
+		adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID: "request-1", ModelCallID: "model-call-1", BaseURL: server.URL, APIKey: "test-key",
+			ProviderModelID: "gpt-test", Messages: []Message{{Role: "user", Content: "hello"}}, MaxTokens: 128,
+			StreamDiagnostics: diagnostics,
+		}, func(ModelEvent) error { return nil })
+		assertOpenAIStreamTruncated(t, err, "")
+		if hits != 2 || diagnostics.Snapshot().StreamRecoveryAttempts != 1 {
+			t.Fatalf("hits=%d diagnostics=%#v, want 2 requests/1 recovery", hits, diagnostics.Snapshot())
+		}
+	})
 	t.Run("deadline does not retry", func(t *testing.T) {
 		hits := 0
 		ctx, cancel := context.WithCancel(context.Background())
@@ -429,5 +749,523 @@ func TestOpenAIHalfFrameDoesNotRetryOrConcatResponses(t *testing.T) {
 	assertOpenAIStreamTruncated(t, err, "missing completion marker")
 	if hits != 1 {
 		t.Fatalf("hits=%d, want 1", hits)
+	}
+}
+
+type rewriteHostRoundTripper struct {
+	target    *url.URL
+	byHost    map[string]*url.URL
+	onRequest func(*http.Request)
+}
+
+func (rt rewriteHostRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if rt.onRequest != nil {
+		rt.onRequest(req)
+	}
+	clone := req.Clone(req.Context())
+	target := rt.target
+	if host := strings.ToLower(clone.URL.Hostname()); rt.byHost != nil {
+		if mapped, ok := rt.byHost[host]; ok {
+			target = mapped
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("no rewrite target for host %q", clone.URL.Host)
+	}
+	clone.URL.Scheme = target.Scheme
+	clone.URL.Host = target.Host
+	clone.Host = target.Host
+	clone.RequestURI = ""
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func chatgptLoopbackClient(t *testing.T, server *httptest.Server) *http.Client {
+	t.Helper()
+	target, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Transport: rewriteHostRoundTripper{target: target}}
+}
+
+func TestIsChatGPTCodexHost(t *testing.T) {
+	if !isChatGPTCodexHost("https://chatgpt.com/backend-api/codex/responses") {
+		t.Fatal("chatgpt.com host should match")
+	}
+	if isChatGPTCodexHost("https://api.openai.com/v1/responses") {
+		t.Fatal("api.openai.com must not match")
+	}
+}
+
+func TestFilterCodexResponsesBodyWhitelist(t *testing.T) {
+	body := map[string]any{
+		"model":                "gpt-5.6-luna",
+		"input":                []any{map[string]any{"role": "user", "content": "hi"}},
+		"instructions":         "",
+		"stream":               true,
+		"include":              []any{"reasoning.encrypted_content"},
+		"tools":                []any{},
+		"reasoning":            map[string]any{"effort": "high", "summary": "auto"},
+		"max_output_tokens":    128000,
+		"prompt_cache_key":     "cursor-byok",
+		"service_tier":         "fast",
+		"previous_response_id": "resp_prev",
+	}
+	req := StreamRequest{CredentialSource: "codex"}
+	filterCodexResponsesBody(body, req, "https://chatgpt.com/backend-api/codex/responses")
+	if body["store"] != false {
+		t.Fatalf("store = %#v, want false", body["store"])
+	}
+	if _, ok := body["max_output_tokens"]; ok {
+		t.Fatal("max_output_tokens should be dropped")
+	}
+	if _, ok := body["prompt_cache_key"]; ok {
+		t.Fatal("prompt_cache_key should be dropped")
+	}
+	if _, ok := body["service_tier"]; ok {
+		t.Fatal("service_tier should be dropped")
+	}
+	if _, ok := body["previous_response_id"]; ok {
+		t.Fatal("managed Codex previous_response_id should be dropped")
+	}
+	for _, key := range []string{"model", "input", "instructions", "stream", "include", "tools", "reasoning", "store"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("missing allowed key %s", key)
+		}
+	}
+
+	platform := map[string]any{
+		"model":                "gpt-5.4",
+		"max_output_tokens":    4096,
+		"prompt_cache_key":     "cursor-byok",
+		"previous_response_id": "resp_static",
+	}
+	filterCodexResponsesBody(platform, StreamRequest{CredentialSource: "static"}, "https://api.openai.com/v1/responses")
+	if platform["max_output_tokens"] != 4096 {
+		t.Fatalf("static openai body changed: %#v", platform)
+	}
+	if platform["previous_response_id"] != "resp_static" {
+		t.Fatalf("static openai previous_response_id changed: %#v", platform)
+	}
+	if _, ok := platform["store"]; ok {
+		t.Fatalf("static openai body should not gain store: %#v", platform)
+	}
+}
+
+func TestManagedCodexReservedHeadersOverrideCustomValues(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamReq := StreamRequest{
+		CredentialSource: "codex",
+		ChatGPTAccountID: "account-real",
+		CodexAffinity: CodexAffinity{
+			SessionID:       "session-real",
+			ThreadID:        "thread-real",
+			ClientRequestID: "request-real",
+		},
+		CustomHeadersEnabled: true,
+		CustomHeadersJSON:    `{"Authorization":"Bearer attacker","originator":"attacker","ChatGPT-Account-Id":"account-attacker","session-id":"session-attacker","thread-id":"thread-attacker","x-client-request-id":"request-attacker"}`,
+	}
+	if err := ApplyCustomHeaders(req, streamReq.CustomHeadersEnabled, streamReq.CustomHeadersJSON); err != nil {
+		t.Fatal(err)
+	}
+	applyManagedCodexReservedHeaders(req, streamReq, req.URL.String(), "token-real")
+	if req.Header.Get("Authorization") != "Bearer token-real" || req.Header.Get("originator") != "codex_cli_rs" || req.Header.Get("ChatGPT-Account-Id") != "account-real" {
+		t.Fatalf("managed identity headers were overridden: %#v", req.Header)
+	}
+	if req.Header.Get("session-id") != "session-real" || req.Header.Get("thread-id") != "thread-real" || req.Header.Get("x-client-request-id") != "request-real" {
+		t.Fatalf("managed affinity headers were overridden: %#v", req.Header)
+	}
+}
+
+func TestOpenAIManagedCodexResponsesHeadersAndWhitelist(t *testing.T) {
+	var (
+		gotUA, gotOriginator, gotAccountID, gotAuthorization string
+		gotSessionID, gotThreadID, gotClientRequestID        string
+		requestBody                                          map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotUA = request.Header.Get("User-Agent")
+		gotOriginator = request.Header.Get("originator")
+		gotAccountID = request.Header.Get("ChatGPT-Account-Id")
+		gotAuthorization = request.Header.Get("Authorization")
+		gotSessionID = request.Header.Get("session-id")
+		gotThreadID = request.Header.Get("thread-id")
+		gotClientRequestID = request.Header.Get("x-client-request-id")
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: chatgptLoopbackClient(t, server)}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:        "request-1",
+		RunID:            "run-1",
+		ModelCallID:      "model-call-1",
+		BaseURL:          "https://chatgpt.com/backend-api/codex/responses",
+		APIKey:           "codex-token",
+		CredentialSource: "codex",
+		ChatGPTAccountID: "acct-9",
+		CodexAffinity: CodexAffinity{
+			PromptCacheKey:  "derived-prompt-key",
+			SessionID:       "derived-session",
+			ThreadID:        "derived-thread",
+			ClientRequestID: "derived-request",
+		},
+		ProviderModelID:          "gpt-5.6",
+		OpenAIEndpoint:           "/v1/responses",
+		OpenAIExtraParamsEnabled: true,
+		OpenAIExtraParamsJSON:    `{"max_output_tokens":128000,"prompt_cache_key":"cursor-byok","service_tier":"fast"}`,
+		Messages:                 []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:                128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if gotOriginator != "codex_cli_rs" {
+		t.Fatalf("originator = %q", gotOriginator)
+	}
+	if gotAccountID != "acct-9" {
+		t.Fatalf("ChatGPT-Account-Id = %q", gotAccountID)
+	}
+	if gotAuthorization != "Bearer codex-token" {
+		t.Fatalf("Authorization = %q", gotAuthorization)
+	}
+	if gotSessionID != "derived-session" || gotThreadID != "derived-thread" || gotClientRequestID != "derived-request" {
+		t.Fatalf("affinity headers = (%q, %q, %q)", gotSessionID, gotThreadID, gotClientRequestID)
+	}
+	if gotUA == ClaudeCodeUserAgent {
+		t.Fatal("managed Codex Responses must not send Claude UA")
+	}
+	if requestBody["store"] != false {
+		t.Fatalf("store = %#v, want false", requestBody["store"])
+	}
+	if requestBody["prompt_cache_key"] != "derived-prompt-key" {
+		t.Fatalf("prompt_cache_key = %#v", requestBody["prompt_cache_key"])
+	}
+	for _, key := range []string{"max_output_tokens", "service_tier"} {
+		if _, ok := requestBody[key]; ok {
+			t.Fatalf("%s should be stripped from Codex Responses: %#v", key, requestBody[key])
+		}
+	}
+}
+
+func TestOpenAIStaticResponsesKeepsClaudeUAAndExtraParams(t *testing.T) {
+	var (
+		gotUA, gotOriginator, gotAccountID string
+		requestBody                        map[string]any
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotUA = request.Header.Get("User-Agent")
+		gotOriginator = request.Header.Get("originator")
+		gotAccountID = request.Header.Get("ChatGPT-Account-Id")
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	adapter := &OpenAIAdapter{client: server.Client()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:                "request-1",
+		RunID:                    "run-1",
+		ModelCallID:              "model-call-1",
+		BaseURL:                  server.URL,
+		APIKey:                   "static-key",
+		CredentialSource:         "static",
+		ProviderModelID:          "gpt-5.6",
+		OpenAIEndpoint:           "/v1/responses",
+		OpenAIExtraParamsEnabled: true,
+		OpenAIExtraParamsJSON:    `{"service_tier":"fast"}`,
+		Messages:                 []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:                128,
+	}, func(ModelEvent) error { return nil })
+	if err != nil {
+		t.Fatalf("stream failed: %v", err)
+	}
+	if gotUA != ClaudeCodeUserAgent {
+		t.Fatalf("User-Agent = %q, want Claude UA", gotUA)
+	}
+	if gotOriginator != "" {
+		t.Fatalf("static path must not send originator, got %q", gotOriginator)
+	}
+	if gotAccountID != "" {
+		t.Fatalf("static path must not send ChatGPT-Account-Id, got %q", gotAccountID)
+	}
+	if requestBody["service_tier"] != "fast" {
+		t.Fatalf("static extra params dropped: %#v", requestBody)
+	}
+}
+
+func runOpenAIResponsesFixture(t *testing.T, body string) (error, StreamDiagnosticsSnapshot) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, body)
+	}))
+	defer server.Close()
+	diagnostics := &StreamDiagnostics{}
+	adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+	err := adapter.Stream(context.Background(), StreamRequest{
+		RequestID:         "fixture-request",
+		RunID:             "fixture-run",
+		ModelCallID:       "fixture-call",
+		BaseURL:           server.URL,
+		APIKey:            "test-key",
+		ProviderModelID:   "gpt-test",
+		OpenAIEndpoint:    "/v1/responses",
+		Messages:          []Message{{Role: "user", Content: "hello"}},
+		MaxTokens:         128,
+		StreamDiagnostics: diagnostics,
+	}, func(ModelEvent) error { return nil })
+	return err, diagnostics.Snapshot()
+}
+
+func TestOpenAIResponsesCompletedEventWithoutDoneSucceeds(t *testing.T) {
+	err, snapshot := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.completed\",\"sequence_number\":9,\"response\":{\"id\":\"resp-1\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+	if err != nil {
+		t.Fatalf("completed event followed by EOF failed: %v", err)
+	}
+	if snapshot.LastSSEEventType != "response.completed" || snapshot.LastSSESequence != 9 || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("terminal diagnostics = %#v", snapshot)
+	}
+}
+
+func TestOpenAIResponsesCRLFAndMultilineData(t *testing.T) {
+	body := "data: {\"type\":\"response.completed\",\r\ndata: \"response\":{\"id\":\"resp-2\",\"status\":\"completed\",\"output_text\":\"done\"}}\r\n\r\n"
+	if err, snapshot := runOpenAIResponsesFixture(t, body); err != nil {
+		t.Fatalf("CRLF multiline event failed: %v diagnostics=%#v", err, snapshot)
+	}
+}
+
+func TestOpenAIResponsesExplicitTerminalStatusesAreNotTransportErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		event  string
+		status string
+	}{
+		{name: "failed", event: `{"type":"response.failed","response":{"id":"resp-f","status":"failed","error":{"message":"upstream rejected"}}}`, status: "failed"},
+		{name: "cancelled", event: `{"type":"response.cancelled","response":{"id":"resp-c","status":"cancelled"}}`, status: "cancelled"},
+		{name: "incomplete", event: `{"type":"response.incomplete","response":{"id":"resp-i","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`, status: "incomplete"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err, snapshot := runOpenAIResponsesFixture(t, "data: "+test.event+"\n\n")
+			var terminal *ProviderTerminalStatusError
+			if !errors.As(err, &terminal) || terminal.Status != test.status {
+				t.Fatalf("err=%v terminal=%#v", err, terminal)
+			}
+			if ClassifyProviderError(err) != ProviderErrorTerminal || snapshot.CloseCause != StreamCloseCauseProviderTerminal {
+				t.Fatalf("classification=%q diagnostics=%#v", ClassifyProviderError(err), snapshot)
+			}
+		})
+	}
+}
+
+func TestOpenAIHTTP200OverflowCodeIsContextOverflow(t *testing.T) {
+	err, _ := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp-overflow\",\"status\":\"failed\",\"error\":{\"code\":\"context_length_exceeded\",\"message\":\"too many tokens\"}}}\n\n")
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "context_length_exceeded" {
+		t.Fatalf("err=%v terminal=%#v", err, terminal)
+	}
+	if !IsContextOverflowError(err) {
+		t.Fatal("HTTP 200 overflow code was not classified as context overflow")
+	}
+	if ClassifyProviderError(err) != ProviderErrorTerminal {
+		t.Fatalf("category = %q, want provider_terminal", ClassifyProviderError(err))
+	}
+}
+
+func TestOpenAIChatOverflowCodeIsContextOverflowAndDoesNotRetry(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"error\":{\"code\":\"model_context_window_exceeded\",\"message\":\"prompt is too long\"}}\n\n")
+	}))
+	defer server.Close()
+	adapter := &OpenAIAdapter{client: server.Client(), retry: instantRetry()}
+	_, err := collectOpenAIStreamEventsWithServer(t, adapter, server.URL, "/v1/chat/completions")
+	var terminal *ProviderTerminalStatusError
+	if !errors.As(err, &terminal) || terminal.Code != "model_context_window_exceeded" {
+		t.Fatalf("err=%v terminal=%#v", err, terminal)
+	}
+	if !IsContextOverflowError(err) || hits != 1 {
+		t.Fatalf("overflow classification=%v hits=%d", IsContextOverflowError(err), hits)
+	}
+	if isFallbackEligibleError(err) || IsRetryableZeroEventStreamError(err) {
+		t.Fatal("chat overflow must not change retry/fallback")
+	}
+}
+
+func TestOpenAIResponsesUnknownTerminalLikeEventStillTruncates(t *testing.T) {
+	err, snapshot := runOpenAIResponsesFixture(t, "data: {\"type\":\"response.future_terminal\",\"response\":{\"id\":\"resp-u\",\"status\":\"completed\"}}\n\n")
+	var truncated *StreamTruncatedError
+	if !errors.As(err, &truncated) {
+		t.Fatalf("err=%v, want truncated", err)
+	}
+	if snapshot.LastSSEEventType != "response.future_terminal" || snapshot.LastResponseStatus != "completed" {
+		t.Fatalf("diagnostics=%#v", snapshot)
+	}
+}
+
+func TestOpenAIStreamRejectsOversizedEncodedRequestBody(t *testing.T) {
+	hits := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		hits++
+		return nil, errors.New("http must not be attempted")
+	})}
+	override := map[string]any{"pad": strings.Repeat("x", maxEncodedRequestBodyBytes)}
+	for _, endpoint := range []string{"/v1/chat/completions", "/v1/responses"} {
+		hits = 0
+		adapter := &OpenAIAdapter{client: client, retry: instantRetry()}
+		safety := &FallbackSafetyInfo{}
+		err := adapter.Stream(context.Background(), StreamRequest{
+			RequestID:           "request-1",
+			RunID:               "run-1",
+			ModelCallID:         "model-call-1",
+			BaseURL:             "https://example.test",
+			APIKey:              "test-key",
+			ProviderModelID:     "gpt-test",
+			OpenAIEndpoint:      endpoint,
+			RequestBodyOverride: override,
+			MaxTokens:           128,
+			FallbackSafety:      safety,
+		}, func(ModelEvent) error { return nil })
+		assertRequestBuildLimitError(t, err, hits)
+		if !safety.Snapshot().RequestBuildFailed {
+			t.Fatal("MarkRequestBuildFailed was not called")
+		}
+	}
+}
+
+func TestOpenAIEnforcedOutputLimitSendsExplicitBudget(t *testing.T) {
+	outputLimitFields := []string{"max_tokens", "max_completion_tokens", "max_output_tokens"}
+	tests := []struct {
+		name       string
+		modelID    string
+		endpoint   string
+		maxTokens  int
+		enforce    bool
+		extraParam string
+		// wantField 为空表示请求体不得出现任何输出额度字段。
+		wantField string
+	}{
+		{
+			name: "enforced_gpt_chat_4096", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_completion_tokens",
+		},
+		{
+			name: "enforced_gpt_chat_retry_8192", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 8192, enforce: true, wantField: "max_completion_tokens",
+		},
+		{
+			name: "enforced_non_gpt_chat", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_tokens",
+		},
+		{
+			name: "enforced_gpt_responses", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 4096, enforce: true, wantField: "max_output_tokens",
+		},
+		{
+			name: "enforced_gpt_chat_extra_params_cannot_override", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 8192, enforce: true, wantField: "max_completion_tokens",
+			extraParam: `{"max_tokens":99999,"max_completion_tokens":99999,"max_output_tokens":99999}`,
+		},
+		{
+			name: "enforced_non_gpt_chat_extra_params_cannot_override", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 4096, enforce: true, wantField: "max_tokens",
+			extraParam: `{"max_tokens":99999,"max_completion_tokens":99999}`,
+		},
+		{
+			name: "enforced_responses_extra_params_cannot_override", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 4096, enforce: true, wantField: "max_output_tokens",
+			extraParam: `{"max_output_tokens":99999,"max_tokens":99999}`,
+		},
+		{
+			name: "normal_gpt_chat_keeps_omission", modelID: "gpt-5.6", endpoint: "/v1/chat/completions",
+			maxTokens: 128,
+		},
+		{
+			name: "normal_non_gpt_chat_keeps_max_tokens", modelID: "deepseek-chat", endpoint: "/v1/chat/completions",
+			maxTokens: 128, wantField: "max_tokens",
+		},
+		{
+			name: "normal_gpt_responses_keeps_omission", modelID: "gpt-5.6", endpoint: "/v1/responses",
+			maxTokens: 128,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requestBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+					http.Error(writer, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writer.Header().Set("Content-Type", "text/event-stream")
+				if test.endpoint == "/v1/responses" {
+					_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"model\":\"gpt-5.6\",\"status\":\"completed\",\"output_text\":\"done\"}}\n\n")
+				} else {
+					_, _ = fmt.Fprint(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n")
+				}
+				_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := &OpenAIAdapter{client: server.Client()}
+			err := adapter.Stream(context.Background(), StreamRequest{
+				RequestID:                "request-1",
+				RunID:                    "run-1",
+				ModelCallID:              "model-call-1",
+				BaseURL:                  server.URL,
+				APIKey:                   "test-key",
+				ProviderModelID:          test.modelID,
+				OpenAIEndpoint:           test.endpoint,
+				OpenAIExtraParamsEnabled: test.extraParam != "",
+				OpenAIExtraParamsJSON:    test.extraParam,
+				Messages:                 []Message{{Role: "user", Content: "hello"}},
+				MaxTokens:                test.maxTokens,
+				EnforceOutputLimit:       test.enforce,
+			}, func(ModelEvent) error { return nil })
+			if err != nil {
+				t.Fatalf("stream failed: %v", err)
+			}
+
+			if test.wantField == "" {
+				for _, field := range outputLimitFields {
+					if value, ok := requestBody[field]; ok {
+						t.Fatalf("%s must stay omitted for normal call, got %#v", field, value)
+					}
+				}
+				return
+			}
+			value, ok := requestBody[test.wantField]
+			if !ok {
+				t.Fatalf("missing %s in request body: %#v", test.wantField, requestBody)
+			}
+			if got, ok := value.(float64); !ok || int(got) != test.maxTokens {
+				t.Fatalf("%s = %#v, want %d", test.wantField, value, test.maxTokens)
+			}
+			for _, field := range outputLimitFields {
+				if field == test.wantField {
+					continue
+				}
+				if value, ok := requestBody[field]; ok {
+					t.Fatalf("%s must not be sent alongside %s: %#v", field, test.wantField, value)
+				}
+			}
+		})
 	}
 }

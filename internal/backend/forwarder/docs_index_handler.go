@@ -15,6 +15,9 @@ func (service *Service) AvailableDocs(_ context.Context, req *connect.Request[ai
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	if err := service.reconcileDirtyRuleProjection(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 	records, err := store.List("", 0)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -34,6 +37,9 @@ func (service *Service) AvailableDocs(_ context.Context, req *connect.Request[ai
 func (service *Service) DocumentationQuery(_ context.Context, req *connect.Request[aiserverv1.DocumentationQueryRequest]) (*connect.Response[aiserverv1.DocumentationQueryResponse], error) {
 	store, err := service.requireDocsIndexStore()
 	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if err := service.reconcileDirtyRuleProjection(); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	identifier := strings.TrimSpace(req.Msg.GetDocIdentifier())
@@ -63,6 +69,9 @@ func (service *Service) DocumentationQuery(_ context.Context, req *connect.Reque
 func (service *Service) FetchRelevantKnowledgeForConversation(_ context.Context, req *connect.Request[aiserverv1.FetchRelevantKnowledgeForConversationRequest]) (*connect.Response[aiserverv1.FetchRelevantKnowledgeForConversationResponse], error) {
 	store, err := service.requireDocsIndexStore()
 	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if err := service.reconcileDirtyRuleProjection(); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	gitOrigin := strings.TrimSpace(req.Msg.GetGitOrigin())

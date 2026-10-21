@@ -15,10 +15,20 @@ type Recorder struct {
 	root       string
 	settings   Settings
 	writer     *sessionWriter
+	diag       *diagnosticSink
 	projectKey []byte
 	humanSink  HumanSink
 	queue      chan Capture
 	done       chan struct{}
+	// reserve is the number of queue slots kept for WARN/ERROR captures when
+	// diagnostics are enabled; ordinary captures are admitted only below
+	// cap(queue)-reserve. It is max(1, QueueSize/8), clamped to QueueSize, and 0
+	// in ModeOff so off mode keeps the previous shared-queue behavior.
+	reserve int
+	// diagQueueDropped counts WARN/ERROR captures rejected at queue admission,
+	// as opposed to diagnostic sink write failures. DiagnosticDropped reports
+	// the sum of both.
+	diagQueueDropped atomic.Uint64
 
 	mu        sync.RWMutex
 	closed    bool
@@ -33,28 +43,59 @@ func NewRecorder(root string, settings Settings) (*Recorder, error) {
 }
 
 func NewRecorderWithHumanSink(root string, settings Settings, humanSink HumanSink) (*Recorder, error) {
+	normalized := normalizeSettings(settings)
+	return newRecorderWithBudget(root, normalized, humanSink, newLogBudget(root, normalized))
+}
+
+func newRecorderWithBudget(root string, settings Settings, humanSink HumanSink, budget *logBudget) (*Recorder, error) {
 	settings = normalizeSettings(settings)
 	projectKey, err := loadOrCreateProjectKey(root)
 	if err != nil {
 		return nil, err
 	}
-	writer, err := openSession(root, settings)
+	writer, err := openSession(root, settings, budget)
 	if err != nil {
 		return nil, err
+	}
+	var diag *diagnosticSink
+	if settings.Mode != ModeOff {
+		reserve := budget.diagnosticMaxBytes()
+		diag, err = openDiagnosticSink(root, budget, time.Duration(settings.RetentionDays)*24*time.Hour, reserve)
+		if err != nil {
+			diag = &diagnosticSink{budget: budget}
+			diag.markUnavailable("diagnostic_unavailable")
+		}
+	}
+	diagnosticStatus := diag.status()
+	reserve := 0
+	if settings.Mode != ModeOff {
+		reserve = settings.QueueSize / 8
+		if reserve < 1 {
+			reserve = 1
+		}
+		if reserve > settings.QueueSize {
+			reserve = settings.QueueSize
+		}
 	}
 	recorder := &Recorder{
 		root:       root,
 		settings:   settings,
 		writer:     writer,
+		diag:       diag,
 		projectKey: projectKey,
 		humanSink:  humanSink,
 		queue:      make(chan Capture, settings.QueueSize),
 		done:       make(chan struct{}),
+		reserve:    reserve,
 		status: Status{
-			Enabled:     true,
-			Mode:        settings.Mode,
-			SessionID:   writer.sessionID,
-			SessionPath: writer.dir,
+			Enabled:             true,
+			Mode:                settings.Mode,
+			SessionID:           writer.sessionID,
+			SessionPath:         writer.dir,
+			DiagnosticEnabled:   diagnosticStatus.enabled,
+			DiagnosticDegraded:  diagnosticStatus.degraded,
+			DiagnosticDropped:   diagnosticStatus.dropped,
+			DiagnosticLastError: diagnosticStatus.lastErr,
 		},
 	}
 	go recorder.run()
@@ -99,23 +140,36 @@ func (recorder *Recorder) Record(ctx context.Context, capture Capture) (accepted
 		capture.Payload = &payloadCopy
 	}
 
-	recorder.mu.RLock()
+	// Admission is serialized on the same mutex that guards closed/Enabled and
+	// the queue close, so checking len and then sending cannot race a concurrent
+	// close or another producer. A WARN/ERROR capture may use the slots reserved
+	// for diagnostics; an ordinary capture is capped at QueueSize-reserve so it
+	// can never consume the reserve.
+	recorder.mu.Lock()
 	if recorder.closed || !recorder.status.Enabled {
-		recorder.mu.RUnlock()
-		return false
-	}
-	select {
-	case recorder.queue <- capture:
-		recorder.mu.RUnlock()
-		return true
-	default:
-		recorder.mu.RUnlock()
-		dropped := recorder.dropped.Add(1)
-		recorder.mu.Lock()
-		recorder.setDroppedLocked(dropped)
 		recorder.mu.Unlock()
 		return false
 	}
+	diagnostic := isDiagnosticEvent(capture.Event)
+	limit := cap(recorder.queue)
+	if !diagnostic {
+		limit -= recorder.reserve
+	}
+	if len(recorder.queue) < limit {
+		select {
+		case recorder.queue <- capture:
+			recorder.mu.Unlock()
+			return true
+		default:
+		}
+	}
+	dropped := recorder.dropped.Add(1)
+	recorder.setDroppedLocked(dropped)
+	if diagnostic && recorder.diag != nil {
+		recorder.markDiagnosticQueueDroppedLocked()
+	}
+	recorder.mu.Unlock()
+	return false
 }
 
 func (recorder *Recorder) RecordEvent(ctx context.Context, event Event) bool {
@@ -127,8 +181,18 @@ func (recorder *Recorder) Status() Status {
 		return Status{}
 	}
 	recorder.mu.RLock()
-	defer recorder.mu.RUnlock()
-	return recorder.status
+	status := recorder.status
+	recorder.mu.RUnlock()
+	if recorder.writer != nil {
+		if manifestErr := recorder.writer.manifestError(); manifestErr != "" {
+			if status.LastError == "" {
+				status.LastError = manifestErr
+			} else {
+				status.LastError = status.LastError + "; " + manifestErr
+			}
+		}
+	}
+	return status
 }
 
 func (recorder *Recorder) Close() error {
@@ -143,6 +207,18 @@ func (recorder *Recorder) Close() error {
 		recorder.mu.Unlock()
 	})
 	<-recorder.done
+	if recorder.diag != nil {
+		diagErr := recorder.diag.close()
+		diagStatus := recorder.diag.status()
+		recorder.mu.Lock()
+		recorder.mergeDiagnosticStatusLocked(diagStatus)
+		recorder.mu.Unlock()
+		if diagErr != nil {
+			recorder.mu.Lock()
+			recorder.closeErr = errors.Join(recorder.closeErr, diagErr)
+			recorder.mu.Unlock()
+		}
+	}
 	recorder.mu.RLock()
 	defer recorder.mu.RUnlock()
 	return recorder.closeErr
@@ -186,6 +262,11 @@ func (recorder *Recorder) writeCapture(sequence uint64, capture Capture) uint64 
 	}
 	event.DroppedEvents = recorder.dropped.Load()
 
+	// Identity (sequence/app_session_id/timestamp) is fixed before any sink
+	// receives the event, and diagnostics is attempted independently of the
+	// trace write.
+	recorder.writeDiagnostic(event)
+
 	var payloadError string
 	if capture.Payload != nil && !recorder.Status().PayloadDegraded {
 		payloadRef, err := recorder.writer.appendPayload(*capture.Payload, event.Timestamp)
@@ -204,7 +285,7 @@ func (recorder *Recorder) writeCapture(sequence uint64, capture Capture) uint64 
 		if errors.Is(err, errSessionQuotaExceeded) {
 			category = "event_quota_exceeded"
 		}
-		recorder.setFatal(category)
+		recorder.setTraceDegraded(category)
 		return sequence
 	}
 	recorder.writer.updateDropped(event.DroppedEvents)
@@ -233,11 +314,67 @@ func (recorder *Recorder) writeCapture(sequence uint64, capture Capture) uint64 
 			ErrorCategory:       payloadError,
 			DroppedEvents:       recorder.dropped.Load(),
 		}
+		recorder.writeDiagnostic(degradedEvent)
 		if err := recorder.writer.appendEvent(degradedEvent); err != nil {
-			recorder.setFatal("event_write_failed")
+			recorder.setTraceDegraded("event_write_failed")
 		}
 	}
 	return sequence
+}
+
+// writeDiagnostic projects WARN/ERROR events into the diagnostics partition
+// before the trace write. Diagnostics failures are recorded independently and
+// never disable capture or the caller.
+func (recorder *Recorder) writeDiagnostic(event Event) {
+	if recorder == nil || recorder.diag == nil {
+		return
+	}
+	recorder.diag.write(event)
+	status := recorder.diag.status()
+	recorder.mu.Lock()
+	recorder.mergeDiagnosticStatusLocked(status)
+	recorder.mu.Unlock()
+}
+
+// isDiagnosticEvent reports whether a normalized event is persisted to the
+// diagnostics partition (WARN/ERROR severity). Severity is always projected by
+// normalizeEventSemantics before admission, so this matches the sink filter.
+func isDiagnosticEvent(event Event) bool {
+	switch strings.ToLower(strings.TrimSpace(event.Severity)) {
+	case SeverityWarning, SeverityError:
+		return true
+	default:
+		return false
+	}
+}
+
+// markDiagnosticQueueDroppedLocked records a WARN/ERROR rejected at queue
+// admission. Callers must hold recorder.mu. DiagnosticDropped is published as
+// the sink drop count plus this queue-drop count, so incrementing the published
+// counter in step keeps that sum exact: a queue rejection does not change the
+// sink count.
+func (recorder *Recorder) markDiagnosticQueueDroppedLocked() {
+	recorder.diagQueueDropped.Add(1)
+	recorder.status.DiagnosticDegraded = true
+	recorder.status.DiagnosticDropped++
+	recorder.status.DiagnosticLastError = "diagnostic_queue_full"
+}
+
+// mergeDiagnosticStatusLocked publishes the sink status together with queue
+// admission losses. DiagnosticDropped is the sum of sink drops and queue
+// rejections, and a queue rejection keeps DiagnosticDegraded/LastError visible
+// so a later successful sink write or Close cannot erase the loss. Callers must
+// hold recorder.mu.
+func (recorder *Recorder) mergeDiagnosticStatusLocked(sink diagnosticStatus) {
+	queueDropped := recorder.diagQueueDropped.Load()
+	recorder.status.DiagnosticEnabled = sink.enabled
+	recorder.status.DiagnosticDegraded = sink.degraded || queueDropped > 0
+	recorder.status.DiagnosticDropped = sink.dropped + queueDropped
+	if queueDropped > 0 {
+		recorder.status.DiagnosticLastError = "diagnostic_queue_full"
+		return
+	}
+	recorder.status.DiagnosticLastError = sink.lastErr
 }
 
 func (recorder *Recorder) setPayloadDegraded(category string) {
@@ -253,6 +390,18 @@ func (recorder *Recorder) setFatal(category string) {
 	recorder.mu.Lock()
 	recorder.status.Enabled = false
 	recorder.status.LastError = strings.TrimSpace(category)
+	recorder.mu.Unlock()
+	recorder.writer.markDegraded(recorder.dropped.Load(), category)
+}
+
+// setTraceDegraded records a trace-sink failure without disabling capture, so
+// the diagnostics sink can keep persisting WARN/ERROR events on its own budget.
+func (recorder *Recorder) setTraceDegraded(category string) {
+	recorder.mu.Lock()
+	recorder.status.LastError = strings.TrimSpace(category)
+	if category == "event_quota_exceeded" || category == "payload_quota_exceeded" {
+		recorder.status.QuotaBlocked = true
+	}
 	recorder.mu.Unlock()
 	recorder.writer.markDegraded(recorder.dropped.Load(), category)
 }

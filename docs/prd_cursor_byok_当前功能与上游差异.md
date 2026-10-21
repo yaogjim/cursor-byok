@@ -1,5 +1,19 @@
 # Cursor BYOK 当前功能与上游差异 PRD
 
+> 最新 `gateway` 快照（2026-09-09）：以 `4e4f2f1` 为基底移植 `gateway-duo@18ef0e2` 的双渠道能力，代码与隔离验证已完成，尚未提交/发布，真实 Cursor 验收待完成（`verified-partial`）。下方 `noad`/发布 SHA 及 §2–§16 保留为对应日期的历史记录，不代表当前 gateway 工作区或运行中实例。
+
+## gateway-duo 功能移植现状（2026-09-09）
+
+- **当前能力**：保留已有 Cursor 官方身份；官方与本地目录共存，桌面/CLI 显示字段追加 `[官方]`/`[BYOK]`，模型 ID 不变。纯本地目录同样标来源。
+- **调用规则**：本地渠道 ID 优先；持官方身份的其余模型（含自动选择）交官方；纯本地身份沿用现有本地解析/默认。后续消息保持请求级渠道，配置重建不丢失路由存储；两渠道失败不自动互换。
+- **相对来源的适配**：保留 gateway 的唯一旧渠道 ID、变体、空模型/auto 本地默认、订阅和 provider fallback；保留 CLI 无秘密占位 `cursor-byok-local`。OAuth 只模拟已知本地占位 refresh，其余请求保持官方身份透传，local/upstream 两种模式均接线。没有照搬来源的版本元数据或清空 CLI Credentials 的行为。
+- **验证边界**：Host→模拟 provider/官方的目录、Agent、OAuth 契约及 internal 全量、五包 race、相关 vet 已通过；真实 Cursor 登录、桌面/CLI 来源显示、官方与 Auto 对话、真实 token 刷新尚未验收。未更新运行中程序，当前源码能力不能当作已安装实例能力。
+- **追踪**：产品规则见工作决策基线 §10.17；设计见系统架构 §18「gateway-duo 合并」D1–D4；执行、修复及命令证据见 `task/todo.md` 和 `docs/process.md` 的 `gateway-duo` 记录。
+
+历史 §16 将「官方模型/BYOK 切换」笼统判断为已等价；应按本节区分本地 provider/订阅多渠道能力与真实 Cursor 官方身份、目录、对话共存，不能用前者证明后者已经接线或实机通过。本次仅用目录来源后缀实现可辨识显示，不增加管理 UI、自定义分组或新开关。
+
+## 历史 noad 同步元数据
+
 - **文档类型**：功能现状与版本差异 PRD
 - **适用项目**：Cursor BYOK 本地分支 `noad`
 - **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
@@ -10,6 +24,7 @@
 - **原始上游核对基线**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`；最终 `git fetch upstream --prune --no-tags` 已通过，远端仍为此 SHA
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
 - **当前工作树**：`0.0.49` 已在隔离 worktree 语义合入并完成可执行门禁；用户已确认创建本地 merge commit 并推进 `noad`；**仍未 push**
+- **最新上游审阅**：已核对正式版 `v0.1.5@b807608bf3622ea08fdde9ace5840701a3d039a8` 与最新 `upstream/main@9120b90be7b3aa3e0a81fb4d056f1ad905fec23f`；同步本地 `main` 因真实冲突安全中止，未创建提交、未 push、未改 `gateway`
 - **状态**：即将在 `sync/main-305b108-into-noad-20260820-004943` 创建本地 merge commit，并把本地 `noad` 推进到该提交；**仍未 push**；运行时未验证边界仍成立
 
 ## 1. 文档职责与证据口径
@@ -110,6 +125,7 @@
 - relay、官方直连、本地实现、no-op 和禁用之间的逐 RPC 功能影响。
 - Repository/Docs/Upload 改为诚实失败或完整持久化后的 Cursor UI/状态机影响。
 - 客户端体验治理的网络零请求、旧配置迁移、窗口首屏和发布资源实机验收。
+- v5 四页导航、`/access` 接入中心、系统主题、持久小时 usage 桶、Cursor 应用启动/有界重启，以及 Codex/Claude Code 真实授权。
 - schema v2 的项目/轮次/能力语义采集、独立分析 GUI、多维检索、调查案例、AI 调查包和修复后复验闭环。
 - 客户端“日志分析工具”按钮对独立安装应用的跨平台检测、启动与未安装引导。
 
@@ -514,3 +530,138 @@ MERGE_MSG 记录的 **8 个文本冲突**：
 - 非阻塞残余测试风险：缺少 `IsConnected` 精确路由测试；缺少 `ForceBackgroundShell` × replay trim 交叉测试。
 - 未用 `-tags gui` 专项编译 `tools/log-analyzer/cmd/log-analyzer-gui`。
 - 用户已确认创建本地 merge commit 并推进 `noad`。本记录仍不宣称已 push；运行时未验证边界仍成立。
+
+## 15. v5 四页控制面（已批准 Design，未实现）
+
+- **工作包**：`ui-v5-shell-20260826`
+- **决策来源**：已批准计划「v5 界面重构复审后的完整实施计划」；原型 [`docs/cursor-assistant-v5.html`](cursor-assistant-v5.html)
+- **权威冻结**：工作决策基线 §7.5 / §10.14；系统 Design §4.2 / §10.2 / §14.16
+- **状态**：阶段 0 文档已冻结；**代码未开始**。不得写成已实现、已验证或已交付。
+
+### 15.1 与当前已落地能力的关系
+
+- 当前控制面仍是五页同层导航（`/`、`/cursor`、`/gateway`、`/models`、`/settings`）与 daily `GetHomeMetricsReport`（`7d`/`30d`/`all`）。该实现见双集成工作包，Wails 视觉仍未做。
+- v5 将主导航改为总览 / 接入 / 模型 / 设置，并把 Cursor、Gateway 收进 `/access?client=...`。这是新产品 IA，不是对五页实现的事后描述。
+- section 保存、Gateway token 红线、18080/18090 隔离和「不用 `recent_events` 冒充完整热力图」继续有效，并扩展为：小时曲线也不得从 `recent_events` 推断。
+
+### 15.2 已冻结、尚未落地的合同
+
+| 能力 | 冻结口径 | 当前代码 |
+| --- | --- | --- |
+| 四页 IA | 顶部标签：总览 `/`、接入 `/access`、模型 `/models`、设置 `/settings` | 仍为五页侧栏 |
+| 旧路由 | `/cursor`→`/access?client=cursor`，`/gateway`→`/access?client=gateway`；`/config`、`/model-config` 保持 | 仅后两项重定向已落地 |
+| 脏状态 | 按 client/scope 检查；接入标签脏点为 OR；禁止总保存 | 按整页 dirty |
+| 计数 | 接入数、模型数来自真实状态 | 原型「3 / 14」不得进入产品 |
+| 模型导入导出 | 文案必须标明完整配置，不是仅模型文件 | 现有能力是完整配置；文案未按 v5 改写 |
+| 主题 | `light` / `dark` / `system`，默认 `light` | 仅 `light` / `dark` |
+| 小时统计 | 持久 `usage.json` 小时桶；`24h` 用小时，`30d`/`all` 用日桶 | 仅 daily；无小时字段 |
+| Cursor 重启/打开 | 无 `RestartProxy` 则不显示重启；打开应用必须有平台失败语义 | 无有界重启、无 LaunchCursor 合同 |
+| Codex/Claude | 生产空态/`unsupported`；fixture 仅测试/DEV；真实授权另过 Design Gate | 无账号中心；原型 example.com 账号禁止进生产 |
+
+### 15.3 明确不能宣称
+
+- 未改前端/后端源码，未跑 Go/前端门禁，未做 Wails 视觉。
+- 原型 HTML 不是产品实现。
+- Codex HTTP `/v1/responses` 已存在，不等于 Codex 订阅账号授权中心已实现。
+- 本记录不改变 ACP 工作包的 blocked 状态。
+
+## 16. 上游 `v0.1.5` 深度审阅（2026-08-30）
+
+### 16.1 基线与同步结果
+
+- 此前审阅基线为 `76003a907a559dc385fea5d8b96c8e02f928a89f`；正式版 `v0.1.5` 为 `b807608bf3622ea08fdde9ace5840701a3d039a8`；最新 `upstream/main` 为 `9120b90be7b3aa3e0a81fb4d056f1ad905fec23f`。
+- `76003a9..b807608` 的主增量是 Provider 流空闲超时、Deno 插件框架、Codex/Grok 内置插件、Rule 本地镜像与离线日志、模型分组及版本元数据。`b807608..9120b90` 只删除废弃的 `server_backup/**`，没有新增核心运行时能力。
+- 本地 `main@305b108e8cb44f68c15672809fc579acc65a9835` 与 `upstream/main@9120b90` 均不是对方祖先，共同祖先为 `564f2bdcaec790863aca86403cedbfc77191bd43`，因此不能 fast-forward。
+- 已在隔离 worktree 尝试显式 `--no-ff` 合并。冲突包括 `.gitignore` 内容冲突、多处“本地修改但上游删除”、`cursor-proxy-debugger` 目录迁移，以及 `internal/backend/agent/model/openai.go`、`frontend/src/components/ModelEditor.vue`、`frontend/src/state/appState.js` 等跨架构文件。按 Runbook 执行 `git merge --abort`，没有自动裁决。
+- 中止后本地 `main` 仍为 `305b108`，`gateway` 仍为 `534ffc02e37fd3420286c7e060240355f7a06d64`；功能源码无残留改动，无 `MERGE_HEAD`，未创建提交，未 push；当前工作树只包含本审阅的三份项目文档更新。若以后要求推进 `main`，需要单独批准人工冲突裁决，不能把本次审阅写成同步成功。
+
+### 16.2 能力对比与移植结论
+
+| 功能簇 | 上游 `v0.1.5` | 当前 `gateway` | 结论 |
+| --- | --- | --- | --- |
+| 普通 OpenAI 缓存 | 请求携带稳定 cache key | 已按 `ConversationID` 为 GPT 请求生成 `prompt_cache_key`，Responses 与 Chat Completions 都覆盖 | 已等价；不重复移植 |
+| Anthropic 缓存 | Provider 侧通用协议支持 | 已有 system、tools、稳定历史 frontier 与 `cache_control` 断点，并记录 cache read/write token | 当前更细；不回退 |
+| managed Codex 缓存亲和 | 同一个 `cacheKey` 写入 `prompt_cache_key`、`session-id`、`thread-id`、`x-client-request-id` | 生成普通 OpenAI cache key 后，会在 managed Codex 白名单中删除；请求头只保留 `originator` 与 `ChatGPT-Account-Id` | **P1 独立移植** |
+| `previous_response_id` | 插件请求采用完整输入与 `store=false` | managed Codex 因无法验证 Response ID 所属账号而 fail-closed 删除；static OpenAI 保留 | 保持当前安全边界，不随缓存改动放宽 |
+| Provider 流空闲超时 | 统一事件消费看门狗和 typed timeout | 已有 typed `stream_idle_timeout`、OpenAI/Anthropic 统一 watchdog、观测、retry/fallback 抑制及测试 | 已等价或更强 |
+| Rule 基础能力 | CRUD、本地 Markdown 镜像、Prompt 接入 | 已有 `KnowledgeBaseAdd/List/Update/Remove`、按内容哈希去重与非 Debug 会话 Prompt 注入 | 基础能力已具备 |
+| Rule 离线/云同步 | upstream-first，失败写本地 journal，恢复后回放；完整列表写穿本地镜像 | 仅本地规则，没有 journal、镜像、冲突与恢复状态机 | 先 P0 加固，再 P1 设计移植 |
+| 官方模型 / BYOK 切换 | 统一模型目录与新 transport | 已有显式路由、静态凭据、managed Codex/Grok、多渠道与无隐式 fallback 边界 | 已等价或更强 |
+| 官方/BYOK 子代理 | 统一 conversation runtime 可选择模型 | 已有父子模型传播、独立子代理状态和安全恢复基础 | 不重写主链路 |
+| Codex/Grok | 以内置插件提供 OAuth、模型与额度 | 已有 Go 原生设备授权、导入、多账号、刷新、用量、配额与安全轮换 | 已等价或更强 |
+| 模型分组 | `group_name` 持久化并用于模型选择器 badge | 当前 UI 已有 provider 筛选，但官方/BYOK 展示分组仍可更清晰 | P1/P2 仅移植展示语义 |
+| 通用插件 | Deno worker、manifest、资源、安装、状态、协议 SDK 与管理 UI | 当前 Go/Wails 没有对应运行时；Codex/Grok 已原生实现 | 拒绝整体移植 |
+
+### 16.3 最小可移植单元
+
+#### P0：先加固现有 Rule 持久化
+
+当前 Rule 文件存储有以下已核实边界，不能在此基础上直接叠加云同步：
+
+1. 规则目录与文件以 `0755/0644` 创建，规则正文可能对同机其他账号可读；应收紧为应用私有目录和 `0600` 文件，并验证旧文件权限迁移。
+2. 写入使用固定 `<id>.md.tmp` 后直接 rename；应改为同目录唯一临时文件、写入后同步并原子替换，同时清理失败残留。
+3. 扫描和读取会跟随 `.md` 符号链接；应拒绝 symlink、非普通文件和逃逸出规则根目录的目标，更新与删除也必须复核最终路径。
+4. 没有显式单文件/总量上限；应加入有界读取和写入，避免规则正文无界进入内存及 system prompt。
+5. Rule CRUD 与 docs index 更新当前是两个独立写操作，后者失败只记日志；需先明确“Rule 为事实源、索引可重建”的恢复合同和测试，不能把部分成功误报成完整同步成功。
+
+P0 验收至少覆盖：权限、symlink、路径逃逸、并发写、崩溃残留、原子替换、损坏文件隔离、容量上限、CRUD 与索引恢复。该项是后续 Rule 离线日志和云同步的前置条件，不代表当前 Rule 功能不可用。
+
+#### P1：managed Codex 缓存亲和
+
+- 从当前稳定 `ConversationID` 派生不含 token、账号 ID 或 Prompt 的 cache affinity key；同一会话和同一已解析账号内保持稳定。
+- 仅在 `credentialSource=codex` 且目标为 `chatgpt.com` 的 managed Codex 路径写入 `prompt_cache_key`、`session-id`、`thread-id` 与 `x-client-request-id`；static OpenAI、Grok 和其他兼容端点不受影响。
+- 账号轮换后必须重新绑定账号隔离范围，避免把一个账号签发的缓存亲和信息跨账号沿用。日志只允许记录是否设置和短哈希，不记录完整键。
+- 继续剥离 `previous_response_id`；缓存亲和键不能作为 Response ID 账号归属证明，也不能改变 `store=false`。
+- 单元测试覆盖正常构造与 `RequestBodyOverride`、managed/static 分流、账号轮换、空会话、header/body 同源、敏感信息扫描；集成测试用 fake upstream 核对请求，不使用真实 token。
+- 上线前后以 `cached_tokens` / cache read token 比例、首 token 延迟、总延迟和错误率做同负载对照。没有这些数据前，只能宣称“补齐亲和合同”，不能宣称命中率或性能提升幅度。
+
+#### P1：Rule 离线日志与本地镜像语义
+
+- P0 完成后，再设计本地事实源、离线 journal、远端镜像、临时 ID 提升、回放幂等、冲突处理、损坏恢复和完整列表覆盖条件。
+- 云同步会把 Rule 正文发送到 Cursor 官方控制面，必须是可见的显式 opt-in，默认保持本地；UI 必须说明外发目标、数据类型、断开后的本地保留与删除语义。
+- 不直接复制上游 `upstream-first` 行为。当前项目坚持无隐式外发和无隐式 fallback，离线可用不能成为自动上传 Rule 正文的授权。
+- 需要补跨来源去重：本地共享 Rule 与 IDE 请求已经携带的规则按规范化内容去重，避免同一规则重复占用 Prompt 前缀。
+
+#### P1/P2：模型展示分组
+
+只移植展示合同：在模型选择器和模型管理页明确区分官方模型、静态 BYOK、Codex 订阅与 Grok 订阅，并允许可选自定义分组名。路由、凭据、模型 ID、fallback 与子代理选择继续使用现有事实源，不引入上游 Rust 模型目录。
+
+### 16.4 拒绝、暂缓与无需重复移植
+
+- **拒绝整体移植 Deno 插件框架**：本次上游相关核心范围新增约 9,344 行，耦合 Rust/Tauri、Deno worker、插件安装/状态/协议/资源和 UI。当前 Codex/Grok 用例已由 Go 原生实现，引入第二运行时的收益不足以覆盖供应链、沙箱、升级和发布成本。
+- **暂缓 conversation runtime 整体迁移**：上游替换当前 run 时取消旧 run、结束时按 run ID 条件释放的行为值得作为测试参考，但其完整生命周期、队列与内存上限没有足够 benchmark 证明，不以架构语言差异推导性能优势。
+- **无需重复移植**：官方/BYOK 切换、双向子代理模型使用、普通 OpenAI/Anthropic prompt cache、Provider 流空闲超时、Codex/Grok 授权主链路、订阅额度和账号轮换。
+- **纯删除不移植**：`b807608..9120b90` 只删除 `server_backup/**`，与当前 Go `gateway` 无对应运行时能力。
+
+### 16.5 证据强度与未验证宣传
+
+| 结论 | 证据等级 |
+| --- | --- |
+| 上游存在 Codex 四项同源缓存亲和标识、Rule journal/镜像、模型分组和 Provider 空闲超时 | 源码与测试支持 |
+| 当前 `gateway` 的普通 GPT cache key、Anthropic cache frontier、Rule CRUD/去重/Prompt 注入、Codex/Grok 多账号链路和 typed 空闲超时 | 当前源码与既有回归支持 |
+| `gateway` 缺 managed Codex `prompt_cache_key` 与三个亲和 header | 当前源码与专项测试直接支持 |
+| 上游“几乎不占内存”“性能极大提升”“40 轮约 99% 缓存命中”等幅度结论 | **未验证**；未发现可复现 benchmark、同负载基线或完整指标 |
+| 移植亲和合同后一定提高命中率或降低成本 | **待本地 A/B 验证**；不能由字段存在直接推出收益幅度 |
+
+### 16.6 当前实施状态（2026-08-30）
+
+- Rule P0 已完成：私有权限、symlink/非普通文件拒绝、原子且有界持久化、Rule/docs index 来源隔离、损坏恢复与 post-rename 提交语义已通过定向、race、vet 和 Windows 交叉构建验证。Windows 实机 ACL/reparse-point 行为仍属于最终发布门禁。
+- managed Codex affinity 基础阶段已完成：稳定账号身份、独立私密安装密钥、HMAC 域分离、Router 重试重派生、精确 ChatGPT Responses 注入和 `control | prompt_key | full` profile 已接线；`previous_response_id` 仍删除，static/Grok 不受影响。
+- fake upstream、缓存观测和同负载 A/B 尚未完成，因此当前只能宣称“亲和合同已接线”，不能宣称缓存命中率、成本或延迟收益。
+- Rule journal、remote snapshot 与手动 opt-in 同步尚未实现；默认仍为纯本地零上传。
+
+本轮只完成同步尝试、差异审阅和文档决策，不向 `gateway` 写入功能代码。后续 P0/P1 必须拆成独立工作包实施、测试和验收。收尾验证确认 `git diff --check` 通过、改动范围仅为本 PRD、`task/todo.md` 与 `docs/process.md`，且 `gateway`、`main` 引用未移动、无 `MERGE_HEAD`。
+
+## 17. 官方/BYOK 混用兼容需求（REQ-MIXED-CHANNEL-001）
+
+本节记录用户已确认的需求，不代表实现完成。面向在同一 Cursor 会话中切换官方与自有模型，或分别为主任务和子任务选择两种渠道的用户。纯渠道对话保持既有行为；混用不能以丢失历史、参数或重复执行工具为代价。
+
+- **REQ-MIXED-HISTORY-001**：官方回合后首次选择 BYOK，恢复客户端已有上下文；同会话 BYOK → 官方 → BYOK 时，自动同步可可靠对齐的新增历史，每项只进入模型上下文一次。历史工具调用仅作上下文，不重新执行。
+- **REQ-MIXED-CONFLICT-001**：无法可靠对齐时采用 preserve-and-stop，即保留原记录、明确提示并停止本次请求。不自动分支、不强制覆盖、不静默删减后继续。用户主动编辑/重跑的既有回退行为与同步冲突区分处理。
+- **REQ-MIXED-CHECKPOINT-001**：BYOK 生成供客户端恢复的检查点必须满足原生读取语义，覆盖角色、顺序、内容块及工具调用/结果关联；保留旧历史可读性，不批量迁移存量会话。读取缺少必要历史必须停止；已成功回合遇检查点写入超时的既有降级规则保持。
+- **REQ-MIXED-SUBAGENT-001**：主子任务各自的模型选择与身份相互独立，受支持的显式参数不得静默丢弃；结果只回流一次。用户在阶段 0 进一步确认保留完整参数目标，继续只读设计、验证替代方案，不以拒绝子任务替代修复。独立 Max Mode 与恢复时改模只有核实完整客户端提交路径后才可声明支持；替代方案若需扩目录、新关联机制或正文改写，先说明最小改动和影响并确认。不能将参数修复宣称为混用卡住的全部根因。
+- **REQ-MIXED-BOUNDARY-001**：以现有后端、协议、存储完成最小可回退改动；不新增依赖、通用框架、配置页、迁移脚本或范围外兼容，不修改 Cursor 安装文件，不自动部署、重启、升级版本、commit 或 push，不读取真实凭据和会话正文作样本。
+
+验收场景：官方完成两轮后切 BYOK；BYOK 完成回合后经模拟官方新增两轮再切回；四种主子渠道组合分别核对模型选择、最终参数与结果回流；缺失内容、损坏、取消、超时、重复到达和历史冲突时原历史仍可读。代码/合成协议验收与真实官方端到端验收分开记录，用户当前无法实机测试不作为代码诊断与修复的前置条件。
+
+专项设计与限制见系统 Design §19 `DESIGN-MIXED-CHANNEL-COMPAT-001`；检查点写出按 §19.3c C0-W1 独立数据域、确认及读能力限定回滚合同推进，其他未知只阻塞对应切片，不代表完整检查点或混用功能已交付。实施顺序见 `.cursor/plans/官方_byok_混用改进_0ab94bd0.plan.md`，执行状态以 `task/todo.md` 为准。

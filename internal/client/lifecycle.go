@@ -7,11 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"cursor/internal/cursor"
+	"cursor/internal/backend"
 	"cursor/internal/logger"
 	"cursor/internal/mitm"
 	"cursor/internal/netproxy"
-	localruntime "cursor/internal/runtime"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -32,7 +31,7 @@ type ProxyState struct {
 	ProxyRunning bool `json:"proxyRunning"`
 	// CursorSettingsApplied 表示宿主代理设置是否已注入。
 	CursorSettingsApplied bool `json:"cursorSettingsApplied"`
-	// NetProxySource 表示当前出站网络代理来源：system/env/direct。
+	// NetProxySource 表示当前出站网络代理来源：custom/system/env/direct。
 	NetProxySource string `json:"netProxySource"`
 	// NetProxyActive 表示当前出站网络代理是否启用。
 	NetProxyActive bool `json:"netProxyActive"`
@@ -40,6 +39,8 @@ type ProxyState struct {
 	NetProxyUsingSystem bool `json:"netProxyUsingSystem"`
 	// NetProxyUsingEnv 表示当前出站网络代理是否来自环境变量。
 	NetProxyUsingEnv bool `json:"netProxyUsingEnv"`
+	// NetProxyUsingCustom 表示当前出站网络代理是否来自已保存的自定义代理。
+	NetProxyUsingCustom bool `json:"netProxyUsingCustom"`
 	// NetProxyHTTP 表示当前 HTTP 代理地址，已移除凭据。
 	NetProxyHTTP string `json:"netProxyHttp"`
 	// NetProxyHTTPS 表示当前 HTTPS 代理地址，已移除凭据。
@@ -48,83 +49,21 @@ type ProxyState struct {
 	NetProxyPACIgnored bool `json:"netProxyPacIgnored"`
 	// NetProxyDescription 表示当前出站网络代理摘要，已移除凭据。
 	NetProxyDescription string `json:"netProxyDescription"`
+	// GatewayEnabled 表示配置中的 Chat Gateway 开关。
+	GatewayEnabled bool `json:"gatewayEnabled"`
+	// GatewayListenAddr 表示 Chat Gateway 实际监听地址。
+	GatewayListenAddr string `json:"gatewayListenAddr"`
+	// GatewayRunning 表示 Chat Gateway 是否已启动。
+	GatewayRunning bool `json:"gatewayRunning"`
+	// GatewayLastError 表示独立的 Gateway 错误，不影响 Cursor 启停结果。
+	GatewayLastError string `json:"gatewayLastError"`
 	// LastError 表示当前声明中的 LastError。
 	LastError string `json:"lastError"`
 }
 
 // StartProxy 用于处理与 StartProxy 相关的逻辑。
 func (s *ProxyService) StartProxy() (ProxyState, error) {
-	s.lifecycleMu.Lock()
-	defer s.lifecycleMu.Unlock()
-	logger.Infof("start service requested config_path=%s logs_root=%s", s.configPath, s.logsRoot)
-	fail := func(step string, err error) (ProxyState, error) {
-		logger.Errorf("start service failed step=%s err=%v", step, err)
-		s.setLastError(err)
-		s.emitState()
-		return s.GetState(), err
-	}
-	cfg, err := s.LoadUserConfig()
-	if err != nil {
-		return fail("load_user_config", err)
-	}
-	if err := s.ensureBackendHost(); err != nil {
-		return fail("ensure_backend_host", err)
-	}
-	if !s.backendHost.IsRunning() {
-		logger.Infof("starting embedded backend listen_addr=%s", s.backendHost.ListenAddr())
-		if err := s.backendHost.Start(); err != nil {
-			return fail("start_backend", err)
-		}
-	} else {
-		logger.Infof("embedded backend already running listen_addr=%s", s.backendHost.ListenAddr())
-	}
-	healthCtx, healthCancel := context.WithTimeout(context.Background(), backendReadyTimeout)
-	defer healthCancel()
-	if err := s.waitForBackend(healthCtx); err != nil {
-		return fail("wait_backend_ready", err)
-	}
-	logger.Infof("embedded backend ready listen_addr=%s", s.backendHost.ListenAddr())
-	if err := s.ensureProxy(cfg); err != nil {
-		return fail("ensure_proxy", err)
-	}
-
-	// 启动时注入账号信息
-	if err := cursor.InjectCursorUserInfo(localruntime.InjectAccountEmail, localruntime.InjectAuthToken); err != nil {
-		logger.Errorf("injectCursorUserInfo failed: %v", err)
-		// 不阻断启动，仅记录日志
-	}
-
-	if s.proxy != nil && !s.proxy.IsRunning() {
-		logger.Infof("starting mitm proxy listen_addr=%s", s.proxy.Snapshot().ListenAddr)
-		if err := s.proxy.Start(); err != nil {
-			return fail("start_mitm_proxy", err)
-		}
-	}
-
-	if err := s.ApplyCursorSettings(); err != nil {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stopCancel()
-		if s.proxy != nil {
-			_ = s.proxy.Stop(stopCtx)
-		}
-		_ = s.backendHost.Stop(stopCtx)
-		startErr := fmt.Errorf("服务已启动，但注入 Cursor 配置失败: %w", err)
-		logger.Errorf("start service failed step=apply_cursor_settings err=%v", startErr)
-		s.setLastError(startErr)
-		s.emitState()
-		return s.GetState(), startErr
-	}
-
-	s.setLastError(nil)
-	s.emitState()
-	state := s.GetState()
-	logger.Infof(
-		"start service completed backend_listen_addr=%s proxy_listen_addr=%s cursor_settings_applied=%t",
-		state.BackendListenAddr,
-		state.ProxyListenAddr,
-		state.CursorSettingsApplied,
-	)
-	return state, nil
+	return s.startProxy(false)
 }
 
 // StopProxy 用于处理与 StopProxy 相关的逻辑。
@@ -152,7 +91,12 @@ func (s *ProxyService) StopProxy() (ProxyState, error) {
 	}
 	if s.backendHost != nil {
 		logger.Infof("stopping embedded backend listen_addr=%s", s.backendHost.ListenAddr())
-		if err := s.backendHost.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		stopBackendCtx, stopBackendCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopBackendCancel()
+		if err := s.backendHost.StopWithCause(stopBackendCtx, backend.ShutdownCause{
+			Reason:    backend.ShutdownReasonServiceStop,
+			Initiator: backend.ShutdownInitiatorStopProxy,
+		}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			return fail("stop_backend", err)
 		}
 	}
@@ -178,6 +122,7 @@ func (s *ProxyService) GetState() ProxyState {
 	s.mu.RLock()
 	lastError := s.lastError
 	cursorSettingsApplied := s.cursorSettingsApplied
+	gatewayLastError := s.gatewayLastError
 	s.mu.RUnlock()
 	backendListenAddr := ""
 	backendRunning := false
@@ -185,6 +130,7 @@ func (s *ProxyService) GetState() ProxyState {
 		backendListenAddr = s.backendHost.ListenAddr()
 		backendRunning = s.backendHost.IsRunning()
 	}
+	gatewayListenAddr, gatewayRunning, gatewayRuntimeError := s.snapshotGateway()
 	netProxy := netproxy.CurrentStatus()
 	return ProxyState{
 		ListenAddr:            proxySnap.ListenAddr,
@@ -198,10 +144,15 @@ func (s *ProxyService) GetState() ProxyState {
 		NetProxyActive:        netProxy.Active,
 		NetProxyUsingSystem:   netProxy.UsingSystemProxy,
 		NetProxyUsingEnv:      netProxy.UsingEnvProxy,
+		NetProxyUsingCustom:   netProxy.UsingCustomProxy,
 		NetProxyHTTP:          netProxy.HTTPProxy,
 		NetProxyHTTPS:         netProxy.HTTPSProxy,
 		NetProxyPACIgnored:    netProxy.PACIgnored,
 		NetProxyDescription:   netProxy.Description,
+		GatewayEnabled:        s.currentGatewayEnabled(),
+		GatewayListenAddr:     gatewayListenAddr,
+		GatewayRunning:        gatewayRunning,
+		GatewayLastError:      gatewayStateError(gatewayLastError, gatewayRuntimeError),
 		LastError:             lastError,
 	}
 }
@@ -240,38 +191,68 @@ func (s *ProxyService) setLastError(err error) {
 // emitState 用于处理与 emitState 相关的逻辑。
 func (s *ProxyService) emitState() {
 	app := application.Get()
-	if app == nil {
+	if app == nil && s.emitProxyStateFn == nil {
 		return
 	}
 	state := s.GetState()
-	if state.Running {
-		state.LastError = ""
+	if s.emitProxyStateFn != nil {
+		s.emitProxyStateFn(state)
+		return
 	}
 	app.Event.Emit("proxy:state", state)
 }
 
 // ShutdownForQuit 用于处理与 ShutdownForQuit 相关的逻辑。
 func (s *ProxyService) ShutdownForQuit() {
+	s.ShutdownForQuitFrom(backend.ShutdownInitiatorOnShutdown)
+}
+
+// ShutdownForQuitFrom 以指定 initiator 执行进程退出清理；托盘退出与 OnShutdown 共用同一条幂等路径。
+func (s *ProxyService) ShutdownForQuitFrom(initiator string) {
+	if s == nil {
+		return
+	}
+	s.shutdownOnce.Do(func() {
+		s.doShutdownForQuit(initiator)
+	})
+}
+
+func (s *ProxyService) doShutdownForQuit(initiator string) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if strings.TrimSpace(initiator) == "" {
+		initiator = backend.ShutdownInitiatorOnShutdown
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var finalErr error
 
+	if s.gatewayConfigUnsubscribe != nil {
+		s.gatewayConfigUnsubscribe()
+		s.gatewayConfigUnsubscribe = nil
+	}
+	s.stopGatewayBestEffort()
 	if s.proxy != nil {
-		if err := s.proxy.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := s.proxy.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			finalErr = err
 		}
 	}
-	if err := s.ClearCursorSettings(); err != nil {
-		finalErr = errors.Join(finalErr, err)
-	}
 	if s.backendHost != nil {
-		if err := s.backendHost.Stop(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		backendCtx, backendCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.backendHost.StopWithCause(backendCtx, backend.ShutdownCause{
+			Reason:    backend.ShutdownReasonAppQuit,
+			Initiator: initiator,
+		}); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			finalErr = errors.Join(finalErr, err)
 		}
+		backendCancel()
 		if err := s.backendHost.CloseObservability(); err != nil {
 			finalErr = errors.Join(finalErr, err)
 		}
 	}
+	// App quit pauses services but preserves Cursor's applied settings and CA
+	// environment for the next start. Explicit StopProxy remains the disconnect
+	// action and clears settings only after this instance has acquired ownership.
 	if s.cursorAccount != nil {
 		s.cursorAccount.Shutdown()
 	}

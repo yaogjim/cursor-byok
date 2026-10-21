@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,12 +15,12 @@ func recordLLMRequestArtifact(req StreamRequest, provider string, model string, 
 	if req.Observer == nil {
 		return
 	}
-	artifactCallID := req.ModelCallID + req.FallbackArtifactSuffix
+	artifactCallID, channelIndex := fallbackArtifactIdentity(req)
 	bodyBytes, _ := json.Marshal(body)
-	path, err := req.Observer.RecordLLMRequest(req.RequestID, req.RunID, artifactCallID, map[string]any{
+	payload := map[string]any{
 		"request_id":                     req.RequestID,
 		"run_id":                         req.RunID,
-		"model_call_id":                  artifactCallID,
+		"model_call_id":                  strings.TrimSpace(req.ModelCallID),
 		"provider":                       strings.TrimSpace(provider),
 		"openai_endpoint":                strings.TrimSpace(req.OpenAIEndpoint),
 		"model":                          firstNonEmptyString(model, req.ModelID),
@@ -35,10 +36,33 @@ func recordLLMRequestArtifact(req StreamRequest, provider string, model string, 
 		"stable_message_count":           req.StableMessageCount,
 		"tools_summary":                  summarizeTools(req.Tools),
 		"messages_summary":               summarizeMessages(req.Messages),
-	})
+	}
+	if artifactCallID != strings.TrimSpace(req.ModelCallID) {
+		payload["artifact_model_call_id"] = artifactCallID
+		payload["fallback_channel_index"] = channelIndex
+	}
+	path, err := req.Observer.RecordLLMRequest(req.RequestID, req.RunID, artifactCallID, payload)
 	if err == nil && req.ArtifactPaths != nil {
 		req.ArtifactPaths.RequestPath = path
 	}
+}
+
+func fallbackArtifactIdentity(req StreamRequest) (artifactCallID string, channelIndex int) {
+	canonical := strings.TrimSpace(req.ModelCallID)
+	suffix := strings.TrimSpace(req.FallbackArtifactSuffix)
+	if suffix == "" {
+		return canonical, 0
+	}
+	artifactCallID = canonical + suffix
+	indexText := strings.TrimPrefix(suffix, "_fb")
+	if indexText == suffix {
+		return artifactCallID, 0
+	}
+	index, err := strconv.Atoi(indexText)
+	if err != nil || index < 0 {
+		return artifactCallID, 0
+	}
+	return artifactCallID, index
 }
 
 // buildLLMSummaryPayload 生成 LLM 调用摘要工件内容。

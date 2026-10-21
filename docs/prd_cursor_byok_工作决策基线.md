@@ -5,7 +5,7 @@
 - **本地决策基线**：`noad@e9b6d701d63f3cc315676afffaddc3128c7db7cc`
 - **原始仓库**：<https://github.com/leookun/cursor-byok>
 - **原始主线基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
-- **记录范围**：截至客户端体验治理代码提交；运行时窗口和网络零请求验收仍按功能差异 PRD 与上游同步说明执行
+- **记录范围**：截至 v5 四页控制面阶段 0 合同；当前已落地实现仍为五页双集成导航。运行时窗口、Wails 视觉点击和网络零请求验收仍按功能差异 PRD 与上游同步说明执行
 - **状态**：决策基线；不等同于全部决策已经实现
 
 ## 1. 文档职责
@@ -22,6 +22,8 @@
 
 - [`Cursor BYOK 功能可用、隐私与稳定性验证路线图`](../.cursor/plans/cursor_byok_功能可用、隐私与稳定性验证路线图_22a7548b.plan.md)
 - [`客户端体验治理`](../.cursor/plans/客户端体验治理_64db96aa.plan.md)
+- [`双集成导航与数据概览改造计划`](../.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md)
+- v5 四页控制面：已批准计划「v5 界面重构复审后的完整实施计划」；交互原型 [`cursor-assistant-v5.html`](cursor-assistant-v5.html) 不是可迁移的产品代码，权威冻结见 §10.14
 
 ## 2. 产品目标
 
@@ -149,6 +151,19 @@ observability:
 
 分析器不配置模型、不调用 AI、不修改仓库、不运行外部命令。日志、payload、Markdown 和导入结果都视为不可信数据，不能触发工具、命令、网络请求或代码修改。默认调查包不得包含 full payload、凭据、Prompt、源码/diff、完整路径、UUID 或完整 URL；敏感附件必须逐项确认并在 manifest 中列明。
 
+### 5.5 日志增强与异常独立保留（2026-09-10）
+
+用户已确认并实施本轮日志增强：补齐诊断内容、消费端读取/展示缺口，明确严重级别，并在现有总额度内独立保留异常证据；后续再根据增强日志决定恢复点、客户端证书和上游稳定性的实际修复。GLM thinking 兼容性继续暂缓。
+
+- **LOG-ENH-1 内容与消费**：一次异常应能说明发生阶段、影响、已采取的恢复动作和最终结果；安全诊断字段贯通采集、应用摘要、离线查询/展示和受限导出，不因下游白名单再次无声丢失。不采集真实凭据、正文、blob key 数组或真实 payload 作为诊断字段。
+- **LOG-ENH-2 分级与关联**：仍将继续恢复且 `status=retrying` 的 attempt 记为 WARN，最终失败/不完整保持 ERROR；正常取消不计为业务失败。生产者稳定身份固定为 `(app_session_id, sequence)`，分析器只合并该身份完全一致的 trace/diagnostics 副本；旧事件缺身份时不猜测去重，真实冲突明确报错。
+- **LOG-ENH-3 保留与预算**：异常独立保留本轮实现（`diagnostic-retention-scope=implement`）；异常日志纳入现有总额度（`diagnostic-quota=inside`），不增加总磁盘预算。设总额为 B，异常预留 `D=floor(B/8)`，普通日志使用 `B-D`；异常期限继承现有 `retentionDays`，容量或期限先达到即轮转最旧受管异常分片，不承诺一定保留满期限。
+- **LOG-ENH-4 失败可见**：普通分区先回收过期受管日志，再回收 closed/full trace，然后回收 closed/basic trace 与旧 app 分片合并成的时间序单一档（按时间排序，时间相同以路径为稳定次序）；正在使用的 trace/app 分片、未知或损坏 manifest、归属不明文件不擅自删除。仍无法腾出空间时停止超额日志写入并在状态页报告队列、trace/payload、app 或 diagnostics 的降级，业务请求继续。
+
+典型验收场景：一次上游尝试失败后重试成功，应显示该尝试 WARN 及同一调用的成功终态，而不是多次业务失败；普通日志轮转后，仍可从 `logs/diagnostics/diagnostics-*.jsonl` 查看独立异常副本。checkpoint 只记录投递、ACK、timeout、cancel、unknown/unmatched 等安全元数据；`FetchUpstream` 记录实际经过的构造、请求、读取或大小限制阶段，不据耗时或后续请求成功推断原请求恢复。
+
+本轮设计已批准并完成代码与隔离自动化验证，交付状态为 `verified-partial`：尚未部署、重启真实实例或用新日志重新验证现场 checkpoint、证书与上游故障。不得据此实施 GLM 适配、扩大重试/fallback、修改 checkpoint 完成语义或证书信任/代理路由；§5.1–5.4 的隐私与客户端/独立分析器边界继续有效。设计与实现见系统架构 §14.4 的 `DESIGN-LOG-ENHANCEMENT-20260910`，活动任务与验证记录分别见 `task/todo.md`、`docs/process.md`。
+
 ## 6. 功能语义决策
 
 ### 6.1 业务成功与兼容成功分离
@@ -190,10 +205,11 @@ updates:
 
 ### 7.1 主题
 
-- 默认主题为 `light`。
-- 保留 `dark`。
+- 默认主题为 `light`。当前已交付枚举为 `light` / `dark`。
+- v5 已批准把枚举扩展为 `light` / `dark` / `system`；默认仍为 `light`。缺失、空值或未知值规范化为 `light`。配置只持久化枚举，不把运行时解析结果写回 YAML。
+- `system` 在运行时通过 OS/`matchMedia` 解析为浅色或深色；系统主题变化必须同步前端 token 与 Wails 原生窗口背景，避免启动闪黑。
 - 使用语义化 CSS token，不继续扩散主题无关的暗色硬编码。
-- 原生窗口背景与前端首屏保持一致，避免启动闪黑。
+- `system` 主题尚未实现，不得写成当前能力。
 
 ### 7.2 广告
 
@@ -215,10 +231,28 @@ updates:
 - `mandatory` 只能改变提示，不能跳过下载或安装确认。
 - 资源必须是当前项目 GitHub Release 的 HTTPS 地址，必须有 SHA-256，限制包体大小，并在取消、错误和退出时清理临时包。
 
+### 7.4 双集成主导航（当前已落地）
+
+当前已落地实现仍采用五页同层导航，页面标题使用完整名称，侧栏可用短名。Cursor 与 Gateway 是并列集成，不是父子模块。完整已交付合同见 §10.13。已批准但未实现的下一代产品 IA 见 §7.5 / §10.14，不得把四页导航写成已交付。
+
+| 页面标题 | 侧栏短名 | 路由 |
+| --- | --- | --- |
+| 数据概览 | 概览 | `/` |
+| Cursor 集成 | Cursor | `/cursor` |
+| 网关集成 | 网关 | `/gateway` |
+| 上游模型 | 模型 | `/models` |
+| 系统设置 | 设置 | `/settings` |
+
+### 7.5 v5 四页主导航（已批准，未实现）
+
+下一代主窗口改为顶部四页：总览 `/`、接入 `/access`、模型 `/models`、设置 `/settings`。`接入`是统一容器，Cursor、Gateway 与未来 Codex/Claude Code 仍是独立配置作用域，不是把 Gateway 做成产品根节点，也不是把 Cursor 降为 Gateway 子项。完整合同见 §10.14。
+
 ## 8. 非目标与待决策事项
 
 当前不承诺：
 
+- 已完成 v5 四页 UI、小时 usage 桶、系统主题或 Cursor 应用启动/有界重启。
+- 已完成 Codex/Claude Code 真实授权、凭据存储、配置同步或生产账号中心。
 - 纯本地或离线实现 Tab、FileSync、Repository、Docs、Git 全部能力。
 - 已完成 Cursor token 的 Hobby/付费权限、额度、过期和刷新矩阵。
 - 已完成用户 token 的 Keychain、刷新、身份隔离和双模式实现。
@@ -334,36 +368,40 @@ providerFallback:
   primaryChannelID: ""         # 主渠道 ID
   candidateChannelIDs: []      # 有序候选列表，显式配置
   maxHttpAttempts: 5           # 全链共享 HTTP 尝试预算；允许 2–9
-  maxWaitSeconds: 8            # 全链共享退避等待预算（秒）；允许 1–30
+  maxWaitSeconds: 8            # 仅累计实际退避 sleep，不是调用墙钟；允许 1–30
+  maxAttemptsPerChannel: 2     # 单渠道 HTTP 尝试；允许 1–3
+  connectTimeoutSeconds: 30    # 建连；允许 5–120
+  firstEventTimeoutSeconds: 600 # 首个有效事件；允许 60–1800
+  streamIdleTimeoutSeconds: 240 # 流空闲；允许 30–900
+  callTimeoutSeconds: 7200     # 整次逻辑调用；允许 900–21600
 ```
 
-- 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds`；合法非零值必须原样保存、导入导出和回显。
-- 保存入口对非零越界值严格报错；运行时解析再做 `2–9 / 1–30` 防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
-- 单渠道 HTTP attempt 上限固定为 3，不开放 UI 配置。启用 fallback 时采用“保证渠道覆盖，再用剩余预算重试”：先为当前请求下每个后续兼容渠道预留 1 次 attempt，当前渠道最多使用 `min(chain_remaining_attempts - reserved_attempts, 3)`；当预算不足以覆盖全部渠道时按配置顺序各执行 1 次，预算耗尽后的链尾不发送 HTTP。典型分配为：3 渠道/5 attempts → `3+1+1`，5 渠道/5 attempts → `1+1+1+1+1`，5 渠道/9 attempts → `3+3+1+1+1`。
-- 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道 4 秒默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
-- fallback 禁用时保留预算字段但不生效，运行路径继续使用单渠道 P0 合同。
-- 每条显式 fallback 链最多包含 5 个物理渠道：1 个主渠道与 1–4 个有序候选。渠道上限与 HTTP attempt 预算彼此独立；默认 5 attempts 可保证 5 个兼容渠道各获得 1 次机会。若显式配置的 attempt 预算小于渠道数，则按配置顺序覆盖到预算耗尽，未获得预留的链尾不发送 HTTP；运行时不得突破共享预算。
+- 旧配置缺失字段或字段为 0 时规范化为 `5 attempts / 8 seconds / 每渠道 2 / 建连 30s / 首事件 600s / 空闲 240s / 整呼 7200s`；合法非零值必须原样保存、导入导出和回显。根级 `providerStreamIdleTimeout` 删除，不保留双路径；重新保存后只写模型级结构。
+- 保存入口对非零越界值严格报错；运行时解析再做防御性 clamp，避免绕过保存入口的旧文件或手工修改造成失控预算。
+- 单渠道 HTTP attempt 默认 2（范围 1–3）。启用 fallback 时采用“保证渠道覆盖，再用剩余预算重试”：先为当前请求下每个后续兼容渠道预留 1 次 attempt，当前渠道最多使用 `min(chain_remaining_attempts - reserved_attempts, maxAttemptsPerChannel)`；当预算不足以覆盖全部渠道时按配置顺序各执行 1 次，预算耗尽后的链尾不发送 HTTP。典型分配为：3 渠道/5 attempts → `2+2+1`，5 渠道/5 attempts → `1+1+1+1+1`，5 渠道/9 attempts → `2+2+2+2+1`。
+- 全链 attempt 与退避等待预算按同一 `model_call_id` 共享，切换渠道时不重置。`maxWaitSeconds` 只累计实际退避 sleep，不计算模型推理、首 Token 等待、渠道执行或容量等待，不得用作请求墙钟 deadline。fallback budget 存在时，链剩余 wait 包括 0 都直接覆盖单渠道默认值；0 表示禁止再 sleep。`Retry-After` 超过剩余预算时不等待、不做零延迟同渠道重试，只在错误类别和安全窗口仍允许时切换渠道。
+- fallback 禁用时仍注入同一套 RecoverySettings 与四阶段活性；单渠道计划不切换，但不走旧的无设置 Router 路径。
+- 每条显式 fallback 链最多包含 5 个物理渠道：1 个主渠道与 1–4 个有序候选。渠道上限与 HTTP attempt 预算彼此独立。若显式配置的 attempt 预算小于渠道数，则按配置顺序覆盖到预算耗尽，未获得预留的链尾不发送 HTTP；运行时不得突破共享预算。
+- 候选必须同一 adapter 类型和 endpoint family；不允许 OpenAI/Anthropic 跨协议混排。熔断、按供应商拆网络、partial-output continuation 均不实施。
 - 模型配置的“测试全部”只测试物理 adapter，静默跳过逻辑 alias；单独点击逻辑 alias 的测试仍提示其虚拟 endpoint 不可直接测试，整链必须通过实际运行验证。
 
-**允许切换的错误类别**（首 model event 前安全窗口，且无副作用）：
+**允许同渠道重试、并在安全窗口内切换的错误类别**（零原始响应字节、零模型事件、零副作用，且父 context 未取消）：
 
-- transport 错误（DNS/TCP/TLS）
-- HTTP 429
-- 部分 5xx（502/503/504）
-- 2xx 后首 model event 前的 transport EOF / stream 截断
-- 零原始字节的 stream EOF / decode error
+- HTTP 500/502/503/504/524：当前渠道最多 2 次，仍失败且安全则切换
+- 可恢复 transport、TLS handshake EOF
+- 网关生成的建连/首事件超时
+- HTTP 429：优先遵守可容纳于剩余 wait 预算的 `Retry-After`，否则跳过等待并安全切换
+- 零原始字节的 stream EOF / unexpected EOF / reset
 
-**禁止切换：**
+**禁止切换、快速失败：**
 
-- `context.Cancel` / deadline exceeded
-- HTTP 400/401/403/404
-- 请求构建错误 / 模型参数错误
-- 任意原始响应字节已到达
-- 任意 model event 已到达
-- `partial_tool_seen / completed_tool_seen / tool_dispatched = true`
-- `checkpoint_committed = true`
-- `downstream_published = true`
-- `RequestBodyOverride` 跨 Provider
+- HTTP 401：只走现有凭据刷新/明确认证失效后的账号轮换
+- HTTP 403、其他 4xx、529
+- 父 context 取消 / deadline
+- 证书校验失败、永久 DNS
+- 请求构建/配置、协议解析、provider terminal
+- 流空闲超时、整次调用超时
+- 任意原始响应字节、模型事件、partial tool call 或副作用已出现
 
 **跨 Provider 兼容门禁**（fallback 到不同 Provider 时执行）：
 
@@ -425,3 +463,314 @@ Prompt 只经 stdin 传入，不进入 argv。journal 只允许保存编排 ID�
 - 上游组身份只在进程内以 SHA-256 表示；API Key、Base URL 和组 hash 均不得进入日志、错误、事件或持久配置。槽覆盖一次物理渠道的完整 Stream，包含同渠道 HTTP retry；切换候选前释放旧槽。
 - 有限容量下每个物理渠道最多等待固定 2 秒，不保证 FIFO。容量等待不消费真实 HTTP attempt，也不计入 Provider fallback 的 retry/backoff 等待预算。超时返回 typed `capacity_unavailable`；只有在零 HTTP、零原始响应字节、零 model event、零副作用窗口内才可切到不同上游组，同组候选直接跳过。父 context 取消立即返回原始取消错误并禁止 fallback。
 - 默认 `0` 保持历史无限并发行为。删除字段或设为 `0` 即回滚容量能力；当前真实 `grok-HA` 配置按用户决定不设置非零限制，因此本合同的实现与受控测试不能表述为当前在线环境已经启用容量保护。
+
+### 10.10 Multi-Client Chat Gateway 最小合同
+
+本节冻结独立 Chat Gateway 的阶段 0/1 合同。ACP、Responses、工具调用和独立生命周期不在本阶段范围。
+
+**不变量**
+
+- Cursor IDE/CLI 继续独占 `127.0.0.1:18080` / `127.0.0.1:18090` 以及现有 Connect/Protobuf、MITM、history 和工具桥。Gateway 使用独立 `http.Server`，默认 `127.0.0.1:18091`，不注册到 Cursor Host mux。
+- Gateway 默认关闭，只允许 loopback + Bearer。Gateway 启停或失败不得阻止 Cursor 启动、停止或恢复设置：Cursor 启动成功后再启动 Gateway；Gateway 启动失败只记录独立错误；Gateway 停止失败不能阻止 MITM、Cursor 设置和 Backend 清理。
+- 外部请求不得写 `lastAgentModelHash`，不得暴露 Provider API Key/Base URL，不得调用 Cursor 工具桥。
+- Gateway 与 Cursor 共用同一 config manager 和现有 `DefaultProviderGateway` / Router / fallback / retry / 包级容量 limiter。禁止复制第二套 Router 或 limiter。
+- 公开模型别名只经 `gateway.publicModels[{id,targetAdapterID}]` 显式映射解析，不回落到 Provider `modelID` 或 16 位内部 hash。目标 adapter 变化后显示映射失效并要求重选，不自动迁移。
+
+**模型启停与默认公开（2026-09-24，已确认的产品要求；实施设计待确认）**
+
+- 模型列表中每个已配置模型可启用或停用；旧配置及新建模型默认启用。停用后该模型在 Cursor 等已有调用入口及共享入口均不可使用，不能只在界面隐藏；重新启用后恢复可用。模型启停与共享入口是否公开是两个独立控制。
+- 共享入口的公开模型列表默认包含全部已启用模型；默认公开名称为模型列表的名称。用户可单独修改公开名称或取消公开；仅取消公开不影响模型经其他入口使用。停用模型不得继续公开或被旧公开名称调用。
+- 默认公开名称重复、或与既有自定义公开名称冲突时，仅冲突项自动添加稳定区分后缀；其他模型保持原名。模型名称中的空白、已配置模型数超过当前映射上限时如何保持“全部默认公开”，由实施设计闭合，不以静默漏列代替。
+
+**配置、token 与权限**
+
+- 最小字段：`gateway.enabled`、`gateway.listenAddr`、后端生成的 `gateway.token`、`gateway.publicModels`。不含 ACP 字段和逐协议权限。
+- 普通配置保存必须保留 token；默认导出剥离 token 后的再导入，在导入文档未带 token 时 overlay 现有 token，避免无意识轮换。导入 YAML 若显式含 token 则全量替换。token 不进入普通 JSON/Wails 投影、默认导出、`localStorage` 或日志。只通过显式复制/轮换接口读取。
+- `config.yaml` 与写入用临时文件权限为 `0600`。首次写入 Gateway schema 前创建同权限 `.bak-pre-gateway` 备份。旧版本二进制再次保存会丢弃未知的 `gateway` 字段，这是明确的降级边界。
+
+**阶段 1 协议**
+
+- `GET /v1/models` 与最小 `POST /v1/chat/completions`：纯文本 messages、`stream=false` 聚合、`stream=true` SSE、usage、取消和 OpenAI 风格错误。
+- 请求含 tools、多模态 content 或 reasoning 扩展时返回明确 4xx。阶段 2 之前 Gateway 不执行工具。
+
+**回滚**
+
+- 关闭 `gateway.enabled` 即停止独立入口，不影响 Cursor 18080/18090。删除 `gateway` 块并恢复备份可回到旧 schema；旧版本保存会丢字段，需先保留 `.bak-pre-gateway`。
+
+**验收与证据边界**
+
+- 自动门禁：401/404、模型列表无敏感字段、流与非流文本、取消、fallback 前置失败、外部请求不写 hash、config 权限/备份/token 红线、根模块相关 test/race/vet、前端投影/build、`git diff --check`；`proto/`、`internal/mitm/`、`internal/certs/` 无非预期变化。
+- 真实门禁：OpenAI SDK 或 Cherry Studio 完成一轮聊天，以及 Cursor 全量回归。自动化不能替代真实客户端 smoke；本机不得扰动运行中的 18080/18090。
+- Cursor 承重 characterization 只覆盖：18090 `/healthz`、Bidi/RunSSE procedure 注册、Cursor 模型哈希投影、`/v1/traces`，以及现有 fallback/capacity 测试合同。不为全部 Cursor mock 路由制作大规模 golden。
+
+### 10.11 Chat 工具调用与 OpenCode 合同
+
+本节冻结阶段 2 的 OpenAI-compatible Chat 工具合同；阶段 1 的文本能力与安全边界继续有效。
+
+- 入站支持 OpenAI `tools[].function`、`tool_choice` 缺省或 `auto`、`parallel_tool_calls` 布尔值、assistant `tool_calls[]`、`role=tool`、`tool_call_id` 和多工具 ID。旧 `functions/function_call`、多模态和 reasoning 扩展仍返回明确 4xx。
+- Gateway 将工具描述原样交给现有 Provider Gateway；assistant 工具调用和 tool result 投影到现有 `Message.ToolCalls` / `ToolCallID`。Gateway 不执行工具、不调用 Cursor 工具桥、不写 `lastAgentModelHash`。
+- Provider 的完成工具事件按原 `CallID`、工具名和完整参数 JSON 对外返回；不得重新生成调用 ID。Anthropic `finish_reason=tool_use` 对外规范化为 OpenAI `tool_calls`。
+- 非流响应在 `message.tool_calls` 返回完整调用并以 `finish_reason=tool_calls` 结束。SSE 以可累加的 `delta.tool_calls` 返回完整调用，随后唯一终态与 `[DONE]`；通用工具允许在 Provider 收口后一次性发送完整参数，不要求 Gateway 伪造参数增量。
+- 任意 ModelEvent 产生后禁止跨渠道切换；HTTP SSE 已写出后发生错误只能在当前流内发送错误终态，禁止拼接其他 Provider 输出。
+- 真实验收使用本机 OpenCode `1.2.25` 自定义 Provider，由 OpenCode 执行 read/shell/edit；自动 fixture 不能替代真实客户端。共享容量验收必须证明 Cursor 与 Gateway 命中同一物理上游时共用进程级限制。
+- 回滚仅恢复阶段 1 对工具字段的 4xx；不得回退文本 Chat、token、公开别名、配置权限或 Cursor 隔离合同。
+
+### 10.12 Responses API 与 Codex 合同
+
+- 本阶段以本机 Codex `0.144.4` 的 HTTP SSE 行为为准，新增 `POST /v1/responses`；自定义 Provider 的 `base_url` 指向 Gateway `/v1`，`wire_api` 固定为 `responses`。
+- 入站支持 `model`、`instructions`、`input` 中的文本 message、`function_call`、`function_call_output`、function tools、`tool_choice=auto`、`parallel_tool_calls`、reasoning item 回放、`store=false` 和 `stream=true`。
+- `store=true`、WebSocket、`previous_response_id`、hosted/custom/freeform tools、图片、压缩请求体及无法安全投影的 typed item 明确 4xx；Codex `namespace`、`web_search` 与 `tool_search` 描述仅作为客户端本地能力跳过，不能展平或由 Gateway 执行；不提前实现服务端状态或任意 Provider 私有事件。
+- SSE 至少输出 `response.created`、文本 `response.output_text.delta`、完整工具 `response.output_item.done`、失败事件和唯一 `response.completed`。Codex 必须依靠 `response.completed` 收口，不以 `[DONE]` 代替业务终态。
+- function call/output 的 `call_id` 原样回放；reasoning 的 encrypted content 只有能保持 Provider 身份和 fallback 兼容性时才转发，否则明确拒绝，不跨不兼容渠道降级。
+- Gateway 不执行工具、不写 Cursor 当前模型；Codex 自行执行 shell/patch。真实验收使用隔离 `CODEX_HOME`、自定义 Provider 和 read-only/write 两轮任务，不读取用户登录凭据。
+- 回滚只移除 `/v1/responses`；Chat、模型别名、token、容量和 Cursor 路径保持。
+
+### 10.13 双集成导航与数据概览合同
+
+本节冻结已批准计划 `.cursor/plans/双集成导航与数据概览改造计划_2622a26e.plan.md` 的产品结构、保存边界和概览报告接口。它补充 §7 客户端体验与 §10.10–§10.12 Gateway 合同，不改变 Cursor 18080/18090、MITM、工具桥或 Gateway 协议能力。五页 IA 是当前已落地实现；下一代四页 IA、小时桶和系统主题以 §10.14 为准，且尚未实现。section 保存、Gateway 运行隔离和 daily 报告在 v5 落地前继续有效。
+
+**产品结构**
+
+- 五个页面同属主窗口，不再把模型配置做成独立窗口：数据概览 `/`、Cursor 集成 `/cursor`、网关集成 `/gateway`、上游模型 `/models`、系统设置 `/settings`。
+- 侧栏短名固定为「概览 / Cursor / 网关 / 模型 / 设置」；页面标题使用完整名称。
+- Cursor 与 Gateway 是同层集成：都是本工具接入外部客户端或开发工具的并列入口。禁止把 Gateway 做成产品根节点，也禁止把 Cursor 降为 Gateway 子项。
+- 旧路由兼容：`/config` 重定向到 `/settings`，`/model-config` 重定向到 `/models`。
+- 主窗口默认 `1100×720`，最小 `980×640`。底部版本、代理状态、教程、作者和语言入口是主窗口全局元素。
+- 概览页只读展示 Cursor / Gateway 运行状态，不再复制「启用 Gateway」开关。
+
+**Gateway 保存范围**
+
+- 网关集成页保存只合并 `gateway.enabled`、`gateway.listenAddr`、`gateway.publicModels`。
+- token 不由本页草稿提交；存储层在锁内读取最新配置后保留磁盘 token，启用时按现有规则生成。
+- 对应入口为 `SaveGatewayConfig`。同层还有 `SaveCursorConfig`（routing、Cursor 监听/超时）、`SaveModelAdapters`（只合并 `modelAdapters` 并重校验 Gateway 映射）、`SaveSystemSettings`（observability、appearance、advertising、updates）。
+- 所有 section 保存都在存储锁内读最新配置、合并本页字段、校验、原子写入并返回最新投影；不把 token 放入普通 JSON/Wails 返回。
+- `gatewayEnabled` 是配置意图，`gatewayRunning` 是运行时事实，`dirty` 是前端本页草稿。启动/停止只使用已保存配置；本页 dirty 时必须提示「请先保存本页」，不得静默提交其他页草稿。
+
+**Gateway 运行隔离**
+
+- Gateway 继续使用独立 `http.Server` 与独立生命周期，默认 `127.0.0.1:18091`。
+- 启动 Gateway 不启动 Cursor MITM，不改变 `127.0.0.1:18080` / `127.0.0.1:18090`，不注入 Cursor 设置，不写 `lastAgentModelHash`。
+- Gateway 启停失败只进入独立 Gateway 错误；不得阻止 Cursor 启动、停止或恢复设置。
+- 复制 token 必须区分「尚未生成」「复制被 WebView 拒绝」「复制成功」；失败不得显示成功。token 明文不写入页面常驻状态、配置投影或日志。
+
+**数据概览 daily 报告接口**
+
+- 概览趋势与日历热力图的权威接口是 Wails `MetricsService.GetHomeMetricsReport(range)`。
+- 首期 `range` 只接受 `7d`、`30d`、`all`；未知值归一为 `all`。计划中的「近 1 小时 / 今日 / 自定义」尚未成为已交付合同。
+- 返回体至少包含：`range`、`timezone`（当前固定 `UTC`）、按该范围聚合的 `summary`（`providerCallsTotal`、`turnsTotal`、有效/异常轮次、Token、缓存命中率）、以及 `daily[]`。
+- `daily[]` 只来自已持久化的 `usage.json` 日桶；禁止用仅保留约 500 条的 `recent_events` 冒充完整热力图。首期不做小时级热力图。
+- 无按日数据时 KPI 可为零并显示「暂无按日数据」；读取失败必须在页面显式展示错误和重试，不得只把 `error` 传给组件而不渲染。
+- `providerCallsTotal` 与 `turnsTotal` 不得互相映射。重置统计只清零 usage 聚合，不删除会话历史。
+
+**验收与证据边界**
+
+- 自动门禁属于实现与回归范围：section 保存互不覆盖、token 保留、Gateway 独立启停、`GetHomeMetricsReport` 范围过滤、前端投影/build。
+- Wails 手工视觉验收（五页导航、窗口尺寸、复制 token、启用但未运行、趋势范围、窄窗口布局）是独立证据；未实际点击前不得标为已完成。
+- 回滚导航与 section 保存不得恢复「保存一页覆盖另一页」的整文件用户配置提交；关闭 `gateway.enabled` 仍只停止独立入口。
+
+### 10.14 v5 四页控制面合同
+
+本节冻结已批准的 v5 产品 IA 与实施前必须闭合的技术合同。原型 [`cursor-assistant-v5.html`](cursor-assistant-v5.html) 只提供交互与视觉参考，禁止把其静态 JavaScript、示例账号、固定计数、静态 SVG 或正弦热力图迁入产品。本节是决策，不是已实现声明；实现状态见功能差异 PRD 与 `task/todo.md` 的 `ui-v5-shell-20260826`。它补充 §7.5 与 §10.13：section 保存、Gateway 运行隔离、token 红线和 Cursor 18080/18090 隔离继续有效。
+
+**产品结构**
+
+- 四个顶级页面同属主窗口，顶部标签栏替代五页侧栏：总览 `/`、接入 `/access`、模型 `/models`、系统设置 `/settings`。
+- `接入`是统一 master-detail 容器。查询参数 `client=gateway|cursor|codex|claude` 表示当前详情；缺省或未知 `client` 归一为已支持客户端（当前为 `gateway` 或 `cursor`，不得静默当成已授权的 Codex/Claude）。
+- Cursor 与 Gateway 仍是同层集成：都是接入外部客户端或开发工具的并列入口。禁止把 Gateway 做成产品根节点，禁止把 Cursor 降为 Gateway 子项，也禁止用一个总保存接口覆盖全部接入配置。
+- 旧路由兼容：`/cursor` → `/access?client=cursor`，`/gateway` → `/access?client=gateway`，`/config` → `/settings`，`/model-config` → `/models`。
+- 主窗口默认 `1100×720`，最小 `980×640`。验收重点是 `980–1100px` 压缩布局；原型 760px 断点不是主要验收条件。底部版本、代理状态、教程、作者和语言入口仍是主窗口全局元素。
+- 接入标签与模型标签的计数必须由真实状态计算：接入数为当前实际已接入/已启用且受支持的客户端；模型数为真实适配器数量。禁止使用原型固定的「3 已接入」或「14」。
+
+**作用域脏状态与保存**
+
+- 路由守卫按路由解析配置作用域：`/access?client=cursor` → `cursor`，`/access?client=gateway` → `gateway`，`/models` → `models`，`/settings` 内已接通面板 → `settings`（或更细的基本设置/日志子 scope，但不得跨接入客户端合并）。离开页面或在接入中心内部切换 `client` 时，必须逐一检查这些 scope。
+- 接入标签脏点是 `cursor` / `gateway` 以及未来已支持客户端 scope 的并集（OR）。保存仍只能提交单个 scope：继续使用 `SaveCursorConfig` / `SaveGatewayConfig` / `SaveModelAdapters` / `SaveSystemSettings`。禁止新增覆盖全部配置的总保存接口。
+- 语言立即生效并写入本机 locale，不进入待保存的 settings snapshot，因此不会出现「界面已切换但仍显示未保存」。
+- 启停只使用已保存配置；当前 scope dirty 时必须提示先保存，不得静默提交其他 scope 草稿。
+
+**模型导入导出与全部测试（2026-09-08 用户确认）**
+
+- 模型页“导入”只读取 YAML 的 `modelAdapters`（兼容现有完整配置导出），合并当前模型草稿；允许服务运行中选择文件，点击保存后仅写模型作用域，不覆盖系统设置。文件取消或解析/合并失败保留原草稿。
+- 先匹配渠道身份，再按去除首尾空格后的唯一同名模型更新；原有位置与未命中模型保留，新模型追加。重名无法唯一匹配时明确报错，不任意覆盖；沿用现有渠道 ID 与 fallback/Gateway 引用处理。
+- 原完整配置导入后端合同保留；导出仍是完整配置，继续明确说明包含 API Key 并默认剥离 Gateway token。本次不新增文件格式或配置恢复页面。
+- “清除全部”替换为“全部测试”：测试当前全部模型草稿的快照，忽略搜索/提供商筛选，不自动保存；仅测试物理渠道，逻辑 alias 跳过。沿用并发 10、单项超时和结果展示；停止仅停止后续调度，等待在途测试完成或超时。
+- 不得因原型列出 Google、DeepSeek、xAI、通义或 Moonshot 而自动扩展 backend provider 类型。
+
+**主题**
+
+- `appearance.theme` 允许 `light` / `dark` / `system`；默认与缺失值仍为 `light`。见 §7.1。
+- 主题/广告/更新保存仍走 settings scope；`system` 解析失败时前端与窗口背景回退到 `light`，不写盘为 `light` 除非用户显式选择。
+
+**使用统计：持久小时桶**
+
+- v5 总览 `24h` 返回 UTC 小时桶；`30d` 与 `all` 返回 UTC 日桶。52 周活跃度只使用权威日桶。
+- 每份报告必须包含：`range`、`granularity`（`hour` 或 `day`）、UTC 时间范围、`dataVersion`/`generatedAt`、桶数组和同一版本的 `summary`。摘要、趋势和热力图必须使用同一 `dataVersion`。
+- 小时数据必须来自 `usage.json` 中持久化的小时聚合字段，在 provider/turn 终态写入时累加。**禁止**从最多约 500 条的 `recent_events` 推断、补造或滚动冒充 `24h` 曲线。
+- 旧 `usage.json` 无小时字段时保持可读；`24h` 必须显式返回数据不足/空桶，不得用日桶或随机/正弦数据填小时。新写入开始积累小时桶后才显示真实 `24h`。
+- 小时桶至少保留最近 48 个完整 UTC 小时，以满足 24h 窗口与日界；更旧小时桶可在写入时修剪。日桶仍是 `30d`/`all`/52 周的长期事实源。
+- Token 与缓存命中率不得挤在无语义的单坐标轴；采用 Token 主轴加百分比副轴，或拆成两个可读轨道。重置只清零 usage 聚合（含 daily 与 hourly），不删除会话 history。
+- 已交付的 `7d`/`30d`/`all` 日报告在小时展示关闭或回滚时必须继续可用。未知 `range` 仍归一为 `all`。
+
+**Cursor 启动与重启**
+
+- **退出保留接入（2026-09-08 用户确认）**：正常退出 BYOK 只暂停服务，保留已应用的 Cursor 代理设置及附加 CA 环境；重开时配置未实质变化，不再次要求确认或重启 Cursor。用户接受 BYOK 退出期间 Cursor 仍指向停止的本地代理、请求可能失败。需要断开时，在 BYOK 成功启动并接管设置后点击「停止服务」，再退出；新进程尚未接管的旧实例配置不越权清理。
+- 首次接入或设置实际变化时，仍须保存工作并明确确认后正常重启 Cursor；本次不引入永久重启授权，也不跳过配置变更检查。
+
+- Cursor 的「重启」不得由页面无保护地串行 `StopProxy` → `StartProxy`。实施时优先增加后端有界 `RestartProxy`：停止、释放、启动、失败恢复和状态事件必须是一个可观测操作。若该合同未获批准，v5 **只保留启动/停止，不显示重启按钮**。
+- 「打开 Cursor」必须是平台适配的启动动作。启动失败、应用未发现和权限拒绝都返回明确错误，并提供进入 Cursor 配置的回退；不能把路由跳转、打开接入页或刷新状态当作启动成功。
+- 任何启动/重启/打开动作都不得在无维护窗口时替换运行中的 `127.0.0.1:18080` / `127.0.0.1:18090` 唯一实例。Gateway 启停继续只影响 `127.0.0.1:18091`。
+
+**Codex / Claude Code**
+
+- 采用订阅账号中心语义，但真实授权、续期、断开、配置同步、凭据存储和客户端协议必须另过 Design Gate，不在 v5 UI 阶段 0–5 进入生产。
+- 可先定义稳定的前端 `ClientIntegration` 只读/命令接口（状态、账号列表、授权、续期、断开、配置同步、测试接入）。fixture **只允许**出现在测试代码或显式开发入口（构建变量、独立 DEV 模块或测试替身）。
+- 生产构建不得注册 fixture adapter、不得包含示例账号（含 `example.com`）、不得返回有效授权状态。生产面板必须是空态或 `unsupported`，点击不调用真实授权 backend。
+- fixture 只验证页面状态机，不能作为真实协议、凭据、配置同步或运行能力的证据。缺少真实客户端时交付最高为 `verified-partial`。
+
+**分层出站代理（2026-09-08 用户确认）**
+
+- 网络页只启用代理配置：模型自定义代理 > BYOK 全局自定义代理 > 现有环境变量/OS 自动代理 > 直连。两个自定义开关默认关闭，关闭表示继承；全局关闭时仍允许模型独立启用。
+- 全局影响 BYOK 进程全部对外请求（模型、测试、模型列表、账号授权、网页工具、更新、上游透传），本机内部通信保持直连。不修改 OS 代理或其他应用/独立服务进程代理。
+- 自定义使用单个 HTTP/HTTPS/SOCKS5 URL，可含标准认证；关闭保留输入。启用后不叠加默认代理，连接失败不偷偷回退默认代理或直连；原有模型 fallback 语义保持，各实际候选使用自己的代理。
+- 成功保存后新请求生效，在途流不强制中断；旧配置无需迁移，代理改动后的旧测试结果提示需重测。仅校验启用 URL 的基本格式与协议，不增加保存前联网检查、审批或白名单。
+- **订阅账号状态（2026-09-08 缺陷修复范围）**：当前激活账号须明确标记并显示名称；选中状态与授权/配额可用状态分别展示。刷新失败后允许重试并保留错误提示，不能将网络错误当作账号授权失效；备用且可用账号允许激活，不改变既有账号轮换规则。
+- **模型代理覆盖**：模型独立代理须同时用于该模型的凭据刷新、模型列表与推理测试，不依赖全局/系统代理。接入页独立授权与用量刷新仍遵循全局网络配置，不从任一模型隐式选取代理。
+- 本次不支持 PAC 脚本执行，不新增强制直连模式。完整技术合同见系统架构 §14.19。
+
+**明确保持「计划中」、点击无副作用**
+
+- 网络与请求中的全局超时、跳过 SSL、Task 恢复，以及开机自启、最小化到托盘、立即清空全部日志、重置所有设置：保持原有状态；禁用操作不得调用 backend。
+- 现有「清理日志」仍只删除 `manifest.status == closed` 的采集 session，范围不变。
+
+**验收与回滚**
+
+- 阶段 0 只批准文档合同。在对应阶段代码、测试和 Wails 证据完成前，不得把四页 UI、小时报告、系统主题、打开 Cursor 或 Codex/Claude 授权标为已实现。
+- 回滚导航可恢复五页路由而不回滚 section 保存；小时展示关闭时退回已有日报告，不回滚已成功迁移的 usage 小时字段；关闭 Codex/Claude feature gate 后显示 `unsupported`，不影响 Cursor、Gateway、模型和设置。
+
+### 10.15 中断恢复、自动续写与错误传播合同
+
+本节冻结已批准计划 `.cursor/plans/interrupt_recovery_hardening_330c266b.plan.md`（用户 2026-08-27 确认执行并批准当前计划）。它**补充** §6.2、§10.5 与系统 Design `DESIGN-PROVIDER-DISCONNECT-001` / `DESIGN-P1-SUBAGENT-FALLBACK-001`，**不删除、不改写**既有已批准 P0/P1 合同。实现状态见 `task/todo.md` 的 `interrupt-recovery-error-propagation-20260827`；本节是决策，不是已实现声明。
+
+与既有合同的关系：
+
+- §6.2 第 3、5 条的 **post-output replay gate** 继续有效：一旦原 attempt 已有 raw byte、模型事件、文本/思考、工具进度、下游输出或 checkpoint，不得把原请求当作普通 retry/fallback 重放，也不得把新 HTTP 请求伪装成原流续传。
+- §10.5 的 fallback 默认关闭、共享预算、HTTP 500 同渠道最多 2 次后可安全切换、529 及其他未列入 allowlist 的状态码语义由预算化恢复合同覆盖。本节只**精确增加 HTTP 524** 的零输出窗口资格。
+- 自动续写（`automatic-continuation`）是新的独立机制，不是 P0 同 `model_call_id` 重试，也不是 P1 同 `model_call_id` 的渠道 fallback。
+- 不调查外部源站耗时；不新增未经批准的 `RestartProxy`；不改变 SCM/FSSync 对 Cursor 的 HTTP 响应语义；不修改 `proto/`、证书、MITM CONNECT/whitelist 或 18080/18090 端口。
+
+#### 10.15.1 HTTP 524 的零输出 retry/fallback 资格
+
+HTTP 524（超时网关/源站无响应类 5xx）**仅在同时满足**以下条件时，允许进入与 §10.5 相同的同渠道 retry 与 provider fallback 窗口：
+
+1. 零 raw byte；
+2. 零模型事件；
+3. 零工具进度（含 `partial_tool_seen` / `completed_tool_seen` / `tool_dispatched` / `partial_tool_count` / `partial_not_dispatched`）；
+4. 零 checkpoint（`checkpoint_committed=false`）；
+5. context 未取消、未超过 deadline。
+
+不满足任一项时必须抑制 retry/fallback，并记录稳定的 `retry_suppressed_reason` / fallback suppression reason。post-output replay gate 对 524 与对 502/503/504 相同，不得因 524 放宽。
+
+既有语义保持不变：
+
+- HTTP 500：同渠道最多 2 次，安全窗口内可切换到下一候选。
+- HTTP 529：不得因本次 524 工作被扩大为 retry 或 fallback；观测分类可继续属于 `server_5xx`，但动作 allowlist 不包含 529。
+- 429、502、503、504、transport、零字节 pre-event EOF/decode 的既有资格不变。
+
+观测与动作必须一致：`retryable` / `IsRetryable` / `retry_reason` / 实际 retry 或 fallback 动作 / suppression reason 描述同一决策。禁止把 typed HTTP 524 降级为 `transport` 或 `not_recorded` 后再“看起来像可重试”。
+
+#### 10.15.2 automatic-continuation 与普通 replay 的边界
+
+自动续写是**同一 turn** 下的新 `model_call_id` / 新 provider pass，用来从已持久化断点继续生成文本/思考。它不是原 attempt 的透明重放，也不是 SSE 断点续传。
+
+初始允许自动续写的流必须**同时**满足：
+
+- 已有文本和/或思考；
+- 无任何工具进度；
+- 无潜在副作用；
+- 无 pending external/user interaction；
+- 无已提交 checkpoint；
+- 无客户端取消 / deadline；
+- 不是 subagent child；
+- 不是 Gateway Chat / Responses 路径。
+
+含 `partial_tool_count > 0` 或 `partial_not_dispatched` 的流必须 **partial fail-closed**：保留已产生内容，父 model call 记为 `partial`，禁止自动续写，禁止把未完整工具提升为 completed 或再次派发。
+
+产品默认与预算：
+
+- 默认 `disabled`；旧配置缺省关闭，无磁盘迁移。
+- 每 turn 最多 1 次；禁止 continuation 嵌套。
+- 父子 usage、trace、checkpoint 与 audit 独立可关联、可计费、不可重复计入。
+- 必须做预算、无进展和重叠检测：无新增有效字节、再次截断、预算/总时限耗尽或前缀无法对齐时，熔断并明确降级为 `partial`。
+- 只有 turn 最终失败时才向 Cursor 发送 RunSSE terminal；父 pass 的 partial 不是整轮 terminal。
+
+启用门禁：完成故障注入和真实 Cursor 同一 RunSSE 多 assistant 段兼容验收前，不得把默认值改为开启。回滚方式是关闭开关；回滚不得放松 post-output replay gate。
+
+#### 10.15.3 provider 错误到 RunSSE/Connect terminal 的跨层合同
+
+用户可见终态、内部观测和真实动作必须使用同一套错误身份：
+
+- typed HTTP 状态（含 524/500/529/429/502/503/504）必须作为 HTTP 状态保留到 terminal / `model_call_final` / 分析事件；不得降级为 `transport` 或 `not_recorded`。
+- `IsRetryable`（含 RunSSE `ErrorDetails.IsRetryable` 与内部 `retryable`）必须与真实 retry/fallback/continuation 决策一致：不会再试则为 false，仍可能按合同再试才为 true。
+- Request ID / `model_call_id` / attempt 可关联，供日志检索和 Cursor 展示；不得泄漏 Authorization、Cookie、API key、完整 query、请求体或未经清洗的 provider 正文。
+- HTTP 200 **header completion** 与 stream/body **completion** 是两件事实：响应头 2xx 只证明 transport/HTTP 头成功，不能单独证明协议完成或业务成功。
+
+#### 10.15.4 诊断字段、生命周期与预期噪声
+
+每个 provider attempt 必须能回答：何时收到头、何时首/末字节、何时 body 结束、因何关闭、partial 停在哪一边界。provider / model / attempt 使用 canonical 身份，不得靠错误文本猜测。
+
+`bidi.raw` 的 `decode_error` 只表示真实解码失败；stale append、忽略的重复帧或非解码失败不得标成 `decode_error`。应用日志必须保留可检索 correlation（至少 `trace_id`、`request_id`、`model_call_id`、attempt），且继续遵守 §5 脱敏边界。
+
+生命周期：
+
+- observability session rotation 不取消在途 provider 请求；只有真正的观测存储设置变更才轮换 recorder。路由/模型 fingerprint 只作为事件 metadata。
+- 应用退出：先停止接收新请求，最多 5 秒 drain，超时后按 shutdown cause 显式取消剩余 provider 请求并记录原因。普通配置保存和 session rotation 不走这条取消路径。
+- 不新增未经批准的 restart 命令。
+
+日志严重性分四层，不得互相替代：
+
+1. **连接级预期噪声**：client TLS / unknown CA / handshake mismatch；SCM 404、FSSync 404 保持原 HTTP 行为，只分类、采样、聚合。
+2. **请求失败**：未知通用路径、非预期 4xx/5xx。
+3. **provider turn 失败**：真实模型调用失败、timeout、upstream TLS、5xx 中的真实错误。
+4. **进程生命周期**：启动、drain、shutdown cancel、空档。
+
+checkpoint blob / FSSync skip 是 `degraded`，不是 turn 失败；turn 仍可成功。真实 5xx、timeout、upstream TLS 保持 ERROR，不得采样掉。
+
+#### 10.15.5 验收与回滚
+
+- 自动门禁：524 零输出可 retry/fallback、输出后/工具后/checkpoint 后/取消后抑制、500/529 不回归；continuation 默认关闭、安全门 fail-closed、父子独立计费与去重；typed HTTP 状态不降级；`IsRetryable` 与动作一致；相关 package 的 test/race/vet 与 `git diff --check`。
+- 不得把默认开启 continuation、真实 Cursor 多段 assistant 兼容或源站性能改善写成已交付，除非有对应运行证据。
+- 切片可独立回滚：还原 524 allowlist、关闭 continuation、回退诊断字段或严重性投影，均不得放松 post-output replay gate，也不得改写 §10.5 / P0 / P1 既有合同。
+
+### 10.16 只读 Task 重调度决策
+
+首版新增顶层正式配置：
+
+```yaml
+subagentReschedule:
+  enabled: false
+```
+
+- 默认关闭；旧配置缺失等同 `enabled: false`，无需磁盘迁移。该字段仅作为未来兼容合同保留；当前生产运行时不消费它，也不接线自动重调度。
+- Settings 只显示禁用占位，前端投影和保存固定写入 `false`，防止用户开启无效能力。
+- 只允许 readonly Task；总计最多 3 attempts（首次 + 最多两次重启），该边界固定，不开放参数。
+- 每个后续 attempt 都是新 child relaunch，不是原 child 原地 resume，也不复用 `resume_agent_id`。
+- Backend 重启不会自动恢复或重派 child；未终结 run 仍转为 `awaiting_client_resume`。
+- 启用可能产生额外模型调用与费用，Settings 必须完整展示上述边界。
+
+恢复决策必须区分四个独立状态机：Provider HTTP retry 只处理单次模型调用的 HTTP attempts；stream continuation 只处理已有文本后的新模型调用续写；`resume_agent_id` 只表示 Cursor 显式恢复既有 agent；Task relaunch 才创建新的 child attempt。四者不得共享计数、混用身份或用其中一个名称包装另一个动作。
+
+只有 typed evidence 能稳定关联 parent tool call、subagent run、child/agent identity、attempt 与终态，且证明 Task 为 readonly、前一 child 已结束、无 mutation/tool side effect 时，才允许重启。真实 fixture 核查已确认当前生产链没有稳定 typed failure producer，也没有可消费该关联并安全决策 relaunch 的 consumer；现有零散字段或错误文本不能替代该合同。因此当前状态是 `blocked`：关联不稳定、证据缺失或冲突时一律 fail closed，配置保持默认关闭且运行时不接线。
+
+`attempts.json` 是该逻辑 Task 的 attempt ledger 与回滚边界：关闭开关后停止创建新 attempt，但保留既有 ledger、run/result 和 parent history 供审计；回滚不得删除已完成 child、重写结果或把未终结 run 自动重派。真实 Cursor 的 readonly Task relaunch、取消、断连和 resume fixture 仍是完成证据缺口，在补齐前不得把运行时重调度写成已解决或默认启用。
+
+### 10.17 gateway-duo 合并：Cursor 官方与 BYOK 共存
+
+用户已于本次讨论确认并授权实施：本地渠道 ID 优先；有官方身份时，其余模型与自动选择交给官方；纯本地身份保留现有本地解析与默认行为。官方身份只说明入站持有非本地占位令牌，实际有效期/模型权限/额度由 Cursor 官方决定，不新增登录预检。
+
+- 明确选择本地配置（包括静态 API Key、Codex/Grok 订阅、备用渠道逻辑模型和思考变体）继续由当前 gateway 调用配置服务商；明确选择官方模型用 Cursor 身份回源，不借用本地 provider 凭据。官方/BYOK 失败互不自动切换，现有本地备用渠道不变。
+- 官方身份下 auto/fast/default 和空初始运行请求交给官方；纯本地身份沿用首个本地配置作为默认，provider 原始 ID 仅唯一匹配时使用，未知或歧义报错。后续消息按原请求渠道继续，不能因没有模型字段重新选默认。
+- 官方目录与本地目录合并，显示名追加 `[官方]` 或 `[BYOK]`，桌面、CLI、默认模型详情和变体保持来源一致；不改模型 ID、磁盘配置名、历史或调用参数。相同显示名可以并列。
+- 纯本地返回本地目录/默认；官方目录失败仍保留可明确选择的本地条目，但不把本地模型推荐成官方默认，官方默认请求失败不悄悄走本地。
+- 启动时保留已有非空 Cursor 身份整组字段，仅缺失时注入本地身份。存量占位身份需正常登录才获得官方能力，不自动删除身份，不承诺恢复过去被覆盖的 token。真实 OAuth 刷新透传，只有本地占位刷新使用模拟响应。
+- 保留现有 CLI、订阅、代理、恢复、生命周期和非聊天服务；来源标识仅改目录显示，不新增管理 UI、统计、账号系统、配置开关或 Tab 双模式。本次不升级版本、不发布、不提交。
+- 验收：身份×模型选路、官方/BYOK 同名区分、默认/错误行为、目录至实际调用、请求流顺序/取消、认证保留/刷新和 CLI 占位契约；自动验证与真实 Cursor 登录/显示/对话证据分开记录。具体设计见系统架构 §18，执行证据见活动任务与过程记录。

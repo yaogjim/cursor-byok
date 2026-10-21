@@ -4,20 +4,31 @@ import { fileURLToPath } from "node:url";
 import {
   buildClientPreferencesFromState,
   buildObservabilityConfigFromState,
+  buildSubagentRescheduleConfigFromState,
+  DEFAULT_SUBAGENT_RESCHEDULE,
   DEFAULT_PROVIDER_FALLBACK,
+  DEFAULT_OUTBOUND_PROXY,
+  describeOutboundProxyInheritance,
   formatFallbackBudgetInput,
   isLogicalRoutingAdapter,
   LOGICAL_ROUTING_RUNTIME_VERIFY_HINT,
+  mergeImportedModelAdapters,
   normalizeClientPreferences,
   normalizeObservabilityConfig,
+  normalizeOutboundProxy,
+  normalizeSubagentRescheduleConfig,
   normalizeProviderFallback,
+  outboundProxyHashFields,
   parseFallbackBudgetInput,
   prepareModelAdaptersForPersist,
   providerFallbackBudgetFieldError,
   PROVIDER_FALLBACK_LIMITS,
+  resolveEffectiveOutboundProxy,
+  channelEndpointFamily,
+  isFallbackChannelCompatible,
   selectAdaptersForEndpointTest,
   shouldTestModelAdapterEndpoint,
-  stripDerivedModelAdapterIDs,
+  validateOutboundProxy,
   validateProviderFallbackAdapters,
   validateProviderFallbackBudget,
   DEFAULT_MAX_CONCURRENT_REQUESTS,
@@ -27,7 +38,28 @@ import {
   normalizeMaxConcurrentRequests,
   validateMaxConcurrentRequests,
   validateUpstreamCapacityAdapters,
+  normalizeGatewayConfig,
+  DEFAULT_GATEWAY_CONFIG,
+  resolveEffectiveTheme,
+  normalizeModelAdapterEnabled,
+  isModelAdapterEnabled,
+  isGatewayPublicModelPublished,
+  normalizeGatewayPublicModel,
+  defaultGatewayPublicModelName,
+  stableGatewayPublicModelSuffix,
+  listGatewayPublicModelRows,
+  buildGatewayPublicModelOverrides,
+  collapseGatewayPublicModelsForPersist,
+  countPublishedGatewayModels,
+  gatewayPublicModelInvalid,
+  MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH,
 } from "../src/state/configProjection.js";
+import {
+  applyModelAdapterTypeChange,
+  applyOpenAIImageGenerationConstraint,
+  isOpenAIImageGenerationCompatible,
+  normalizeOpenAIImageGenerationEnabled,
+} from "../src/state/modelAdapterTypeChange.js";
 
 function assertEqual(actual, expected, label) {
   const left = JSON.stringify(actual);
@@ -67,6 +99,25 @@ const expectedDefaults = {
 };
 assertEqual(defaults, expectedDefaults, "preference defaults mismatch");
 
+const systemProjected = buildClientPreferencesFromState({
+  appearanceTheme: " SYSTEM ",
+  advertisingEnabled: false,
+  updateCheckOnStartup: false,
+});
+assertEqual(systemProjected.appearance.theme, "system", "state projection must persist system theme");
+
+const systemNormalized = normalizeClientPreferences({
+  appearance: { theme: "system" },
+});
+assertEqual(systemNormalized.appearance.theme, "system", "normalize must keep system theme");
+
+assertEqual(resolveEffectiveTheme("light", true), "light", "explicit light ignores OS dark");
+assertEqual(resolveEffectiveTheme("dark", false), "dark", "explicit dark ignores OS light");
+assertEqual(resolveEffectiveTheme("system", true), "dark", "system follows OS dark");
+assertEqual(resolveEffectiveTheme("system", false), "light", "system follows OS light");
+assertEqual(resolveEffectiveTheme("unsupported", true), "light", "invalid theme resolves to default light");
+assertEqual(resolveEffectiveTheme("", true), "light", "empty theme resolves to default light");
+
 const legacyFull = normalizeObservabilityConfig(undefined, true);
 if (legacyFull.mode !== "full") {
   throw new Error(`legacy log=true mode mismatch: ${JSON.stringify(legacyFull)}`);
@@ -101,12 +152,49 @@ const expectedProjectedObservability = {
 };
 assertEqual(projectedObservability, expectedProjectedObservability, "observability projection mismatch");
 
+assertEqual(DEFAULT_SUBAGENT_RESCHEDULE, { enabled: false }, "subagent reschedule default");
+assertEqual(
+  normalizeSubagentRescheduleConfig(undefined),
+  { enabled: false },
+  "old config without subagentReschedule must stay disabled",
+);
+assertEqual(
+  normalizeSubagentRescheduleConfig({ enabled: true }),
+  { enabled: false },
+  "blocked frontend projection must ignore future enabled config",
+);
+assertEqual(
+  buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true }),
+  { enabled: false },
+  "blocked UI save must never enable subagent reschedule",
+);
+assertEqual(
+  Object.keys(buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true })),
+  ["enabled"],
+  "subagent reschedule must not expose first-release parameters",
+);
+assertEqual(
+  buildSubagentRescheduleConfigFromState({ subagentRescheduleEnabled: true }).enabled,
+  false,
+  "subagent reschedule persist projection must stay disabled",
+);
+
 // ── providerFallback 归一化 / 预算合同 ──
 
 assertEqual(DEFAULT_PROVIDER_FALLBACK.maxHttpAttempts, 5, "default maxHttpAttempts");
 assertEqual(DEFAULT_PROVIDER_FALLBACK.maxWaitSeconds, 8, "default maxWaitSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.maxAttemptsPerChannel, 2, "default maxAttemptsPerChannel");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.connectTimeoutSeconds, 30, "default connectTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.firstEventTimeoutSeconds, 600, "default firstEventTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.streamIdleTimeoutSeconds, 240, "default streamIdleTimeoutSeconds");
+assertEqual(DEFAULT_PROVIDER_FALLBACK.callTimeoutSeconds, 7200, "default callTimeoutSeconds");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxHttpAttempts, { min: 2, max: 9 }, "attempt limits");
 assertEqual(PROVIDER_FALLBACK_LIMITS.maxWaitSeconds, { min: 1, max: 30 }, "wait limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.maxAttemptsPerChannel, { min: 1, max: 3 }, "per-channel attempt limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.connectTimeoutSeconds, { min: 5, max: 120 }, "connect timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.firstEventTimeoutSeconds, { min: 60, max: 1800 }, "first event timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.streamIdleTimeoutSeconds, { min: 30, max: 900 }, "stream idle timeout limits");
+assertEqual(PROVIDER_FALLBACK_LIMITS.callTimeoutSeconds, { min: 900, max: 21600 }, "call timeout limits");
 assertEqual(MAX_PROVIDER_FALLBACK_CANDIDATES, 4, "fallback chain allows 1 primary + 4 candidates");
 
 const fbOff = normalizeProviderFallback(null);
@@ -115,6 +203,11 @@ assertEqual(fbOff.primaryChannelID, "", "null fallback primary");
 assertEqual(fbOff.candidateChannelIDs, [], "null fallback candidates");
 assertEqual(fbOff.maxHttpAttempts, 5, "null fallback attempts default");
 assertEqual(fbOff.maxWaitSeconds, 8, "null fallback wait default");
+assertEqual(fbOff.maxAttemptsPerChannel, 2, "null fallback per-channel default");
+assertEqual(fbOff.connectTimeoutSeconds, 30, "null fallback connect default");
+assertEqual(fbOff.firstEventTimeoutSeconds, 600, "null fallback first-event default");
+assertEqual(fbOff.streamIdleTimeoutSeconds, 240, "null fallback stream-idle default");
+assertEqual(fbOff.callTimeoutSeconds, 7200, "null fallback call default");
 
 const fbDisabled = normalizeProviderFallback({
   enabled: false,
@@ -139,6 +232,11 @@ assertEqual(fbEnabled.primaryChannelID, "ch-primary", "primary trim");
 assertEqual(fbEnabled.candidateChannelIDs, ["ch-cand1", "ch-cand2"], "empty candidates filtered");
 assertEqual(fbEnabled.maxHttpAttempts, 5, "missing attempts default 5");
 assertEqual(fbEnabled.maxWaitSeconds, 8, "missing wait default 8");
+assertEqual(fbEnabled.maxAttemptsPerChannel, 2, "missing per-channel default 2");
+assertEqual(fbEnabled.connectTimeoutSeconds, 30, "missing connect default 30");
+assertEqual(fbEnabled.firstEventTimeoutSeconds, 600, "missing first-event default 600");
+assertEqual(fbEnabled.streamIdleTimeoutSeconds, 240, "missing stream-idle default 240");
+assertEqual(fbEnabled.callTimeoutSeconds, 7200, "missing call default 7200");
 
 const fbZeroBudget = normalizeProviderFallback({
   enabled: true,
@@ -149,6 +247,11 @@ const fbZeroBudget = normalizeProviderFallback({
 });
 assertEqual(fbZeroBudget.maxHttpAttempts, 5, "zero attempts default 5");
 assertEqual(fbZeroBudget.maxWaitSeconds, 8, "zero wait default 8");
+assertEqual(fbZeroBudget.maxAttemptsPerChannel, 2, "zero per-channel default 2");
+assertEqual(fbZeroBudget.connectTimeoutSeconds, 30, "zero connect default 30");
+assertEqual(fbZeroBudget.firstEventTimeoutSeconds, 600, "zero first-event default 600");
+assertEqual(fbZeroBudget.streamIdleTimeoutSeconds, 240, "zero stream-idle default 240");
+assertEqual(fbZeroBudget.callTimeoutSeconds, 7200, "zero call default 7200");
 
 const fbLegalBounds = normalizeProviderFallback({
   enabled: true,
@@ -166,9 +269,19 @@ const fbLegalMax = normalizeProviderFallback({
   candidateChannelIDs: ["ch-b"],
   maxHttpAttempts: 9,
   maxWaitSeconds: 30,
+  maxAttemptsPerChannel: 3,
+  connectTimeoutSeconds: 120,
+  firstEventTimeoutSeconds: 1800,
+  streamIdleTimeoutSeconds: 900,
+  callTimeoutSeconds: 21600,
 });
 assertEqual(fbLegalMax.maxHttpAttempts, 9, "legal max attempts preserved");
 assertEqual(fbLegalMax.maxWaitSeconds, 30, "legal max wait preserved");
+assertEqual(fbLegalMax.maxAttemptsPerChannel, 3, "legal max per-channel preserved");
+assertEqual(fbLegalMax.connectTimeoutSeconds, 120, "legal max connect preserved");
+assertEqual(fbLegalMax.firstEventTimeoutSeconds, 1800, "legal max first-event preserved");
+assertEqual(fbLegalMax.streamIdleTimeoutSeconds, 900, "legal max stream-idle preserved");
+assertEqual(fbLegalMax.callTimeoutSeconds, 21600, "legal max call preserved");
 
 const fbOutOfRange = normalizeProviderFallback({
   enabled: true,
@@ -179,6 +292,16 @@ const fbOutOfRange = normalizeProviderFallback({
 });
 assertEqual(fbOutOfRange.maxHttpAttempts, 1, "out-of-range attempts must not clamp");
 assertEqual(fbOutOfRange.maxWaitSeconds, 31, "out-of-range wait must not clamp");
+assertEqual(
+  normalizeProviderFallback({ maxAttemptsPerChannel: 4 }).maxAttemptsPerChannel,
+  4,
+  "out-of-range per-channel must not clamp",
+);
+assertEqual(
+  normalizeProviderFallback({ firstEventTimeoutSeconds: 8 }).firstEventTimeoutSeconds,
+  8,
+  "out-of-range first-event must not clamp",
+);
 assert(
   Boolean(validateProviderFallbackBudget(fbOutOfRange)),
   "out-of-range budget must error instead of clamp",
@@ -216,10 +339,20 @@ const fbSnake = normalizeProviderFallback({
   candidateChannelIDs: ["ch-a"],
   max_http_attempts: 4,
   max_wait_seconds: 20,
+  max_attempts_per_channel: 3,
+  connect_timeout_seconds: 15,
+  first_event_timeout_seconds: 900,
+  stream_idle_timeout_seconds: 120,
+  call_timeout_seconds: 1800,
 });
 assertEqual(fbSnake.primaryChannelID, "ch-snake", "snake_case primary");
 assertEqual(fbSnake.maxHttpAttempts, 4, "snake_case attempts");
 assertEqual(fbSnake.maxWaitSeconds, 20, "snake_case wait");
+assertEqual(fbSnake.maxAttemptsPerChannel, 3, "snake_case per-channel");
+assertEqual(fbSnake.connectTimeoutSeconds, 15, "snake_case connect");
+assertEqual(fbSnake.firstEventTimeoutSeconds, 900, "snake_case first-event");
+assertEqual(fbSnake.streamIdleTimeoutSeconds, 120, "snake_case stream-idle");
+assertEqual(fbSnake.callTimeoutSeconds, 1800, "snake_case call");
 
 const fbBad = normalizeProviderFallback("not-an-object");
 assertEqual(fbBad.enabled, false, "non-object disabled");
@@ -305,11 +438,22 @@ assertEqual(
 );
 assertEqual(
   providerFallbackBudgetFieldError("maxWaitSeconds", 31),
-  "全链最大等待秒数必须为 1–30 的整数",
+  "全链最大退避等待秒数必须为 1–30 的整数",
   "wait 31 inline error",
 );
+assertEqual(
+  providerFallbackBudgetFieldError("maxAttemptsPerChannel", 4),
+  "单渠道最大尝试次数必须为 1–3 的整数",
+  "per-channel 4 inline error",
+);
+assertEqual(
+  providerFallbackBudgetFieldError("firstEventTimeoutSeconds", 8),
+  "首事件超时秒数必须为 60–1800 的整数",
+  "first-event 8 inline error",
+);
+assertEqual(providerFallbackBudgetFieldError("connectTimeoutSeconds", 0), "", "defaulted connect has no inline error");
 
-// ── 使用 backend 已返回的完整 adapter id 校验，然后序列化剥 id ──
+// ── 使用 backend 已返回的完整 adapter id 校验并作为保存身份提示 ──
 
 function physicalAdapter(id, name, url) {
   return {
@@ -383,19 +527,13 @@ assert(legalPersist.ok, `legal fallback save should succeed: ${legalPersist.erro
 assertEqual(legalPersist.adaptersWithIds[0].id, idA, "backend id A must be kept");
 assertEqual(legalPersist.adaptersWithIds[1].id, idB, "backend id B must be kept");
 assertEqual(legalPersist.adaptersWithIds[2].id, idLogical, "backend logical id must be kept");
-assert(
-  legalPersist.payloadAdapters.every((item) => !Object.prototype.hasOwnProperty.call(item, "id")),
-  `persist payload must strip id: ${JSON.stringify(legalPersist.payloadAdapters)}`,
-);
+assertEqual(legalPersist.payloadAdapters[0].id, idA, "persist payload keeps backend id A as identity hint");
+assertEqual(legalPersist.payloadAdapters[1].id, idB, "persist payload keeps backend id B as identity hint");
+assertEqual(legalPersist.payloadAdapters[2].id, idLogical, "persist payload keeps logical id as identity hint");
 assertEqual(
   legalPersist.payloadAdapters[2].providerFallback,
   logicalAdapter.providerFallback,
   "legal fallback fields survive persist",
-);
-assertEqual(
-  stripDerivedModelAdapterIDs(legalPersist.adaptersWithIds).every((item) => !("id" in item)),
-  true,
-  "stripDerivedModelAdapterIDs removes id",
 );
 
 const nestedPrimary = prepareModelAdaptersForPersist(
@@ -520,6 +658,11 @@ assertEqual(disabledEcho.payloadAdapters[0].providerFallback.primaryChannelID, i
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.candidateChannelIDs, [idB], "disabled echo candidates");
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxHttpAttempts, 7, "disabled echo attempts");
 assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxWaitSeconds, 12, "disabled echo wait");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.maxAttemptsPerChannel, 2, "disabled echo per-channel default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.connectTimeoutSeconds, 30, "disabled echo connect default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.firstEventTimeoutSeconds, 600, "disabled echo first-event default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.streamIdleTimeoutSeconds, 240, "disabled echo stream-idle default");
+assertEqual(disabledEcho.payloadAdapters[0].providerFallback.callTimeoutSeconds, 7200, "disabled echo call default");
 
 const outOfRangePersist = prepareModelAdaptersForPersist(
   [{
@@ -575,6 +718,111 @@ assert(
   `disabled out-of-range wait must still be rejected: ${disabledWaitOutOfRange.error}`,
 );
 
+const recoveryBudgetPersist = persistPayloadRoundtrip([
+  adapterA,
+  adapterB,
+  {
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB],
+      maxHttpAttempts: 6,
+      maxWaitSeconds: 12,
+      maxAttemptsPerChannel: 2,
+      connectTimeoutSeconds: 45,
+      firstEventTimeoutSeconds: 600,
+      streamIdleTimeoutSeconds: 240,
+      callTimeoutSeconds: 7200,
+    }),
+  },
+]);
+assert(recoveryBudgetPersist.ok, `recovery budget persist should succeed: ${recoveryBudgetPersist.error}`);
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.maxAttemptsPerChannel, 2, "persist maxAttemptsPerChannel");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.connectTimeoutSeconds, 45, "persist connectTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.firstEventTimeoutSeconds, 600, "persist firstEventTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.streamIdleTimeoutSeconds, 240, "persist streamIdleTimeoutSeconds");
+assertEqual(recoveryBudgetPersist.reloaded[2].providerFallback.callTimeoutSeconds, 7200, "persist callTimeoutSeconds");
+assertEqual(
+  recoveryBudgetPersist.second.adaptersWithIds[2].providerFallback,
+  recoveryBudgetPersist.reloaded[2].providerFallback,
+  "recovery budget second persist keeps fields",
+);
+
+const firstEventTooLowPersist = prepareModelAdaptersForPersist(
+  [{
+    ...logicalAdapter,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [idB],
+      firstEventTimeoutSeconds: 8,
+    }),
+  }, adapterA, adapterB],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !firstEventTooLowPersist.ok && /60–1800/.test(firstEventTooLowPersist.error),
+  `first-event 8s must be rejected: ${firstEventTooLowPersist.error}`,
+);
+
+const anthropicPhysical = {
+  ...physicalAdapter("backend-anthropic", "Claude", "https://api.anthropic.com"),
+  type: "anthropic",
+  modelID: "claude-3",
+};
+const openaiResponsesPhysical = {
+  ...physicalAdapter("backend-openai-responses", "GPT Responses", "https://api.openai.com/v1"),
+  openAIEndpoint: "/v1/responses",
+};
+assertEqual(channelEndpointFamily(adapterA), "openai:chat/completions", "chat completions family");
+assertEqual(channelEndpointFamily(openaiResponsesPhysical), "openai:responses", "responses family");
+assertEqual(channelEndpointFamily(anthropicPhysical), "anthropic:messages", "anthropic family");
+assertEqual(
+  channelEndpointFamily({ type: "openai", baseURL: "https://example.com/v1/responses", openAIEndpoint: "/custom" }),
+  "openai:responses",
+  "baseURL /responses wins over custom endpoint",
+);
+assertEqual(isFallbackChannelCompatible(adapterA, adapterB), true, "same openai chat family is compatible");
+assertEqual(isFallbackChannelCompatible(adapterA, openaiResponsesPhysical), false, "chat vs responses is incompatible");
+assertEqual(isFallbackChannelCompatible(adapterA, anthropicPhysical), false, "openai vs anthropic is incompatible");
+
+const crossProtocolPersist = prepareModelAdaptersForPersist(
+  [adapterA, anthropicPhysical, {
+    ...logicalAdapter,
+    type: "openai",
+    openAIEndpoint: "/v1/chat/completions",
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [anthropicPhysical.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !crossProtocolPersist.ok && /相同的适配器类型和协议端点/.test(crossProtocolPersist.error),
+  `openai/anthropic mix must be rejected: ${crossProtocolPersist.error}`,
+);
+
+const crossEndpointPersist = prepareModelAdaptersForPersist(
+  [adapterA, openaiResponsesPhysical, {
+    ...logicalAdapter,
+    type: "openai",
+    openAIEndpoint: "/v1/chat/completions",
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: idA,
+      candidateChannelIDs: [openaiResponsesPhysical.id],
+    }),
+  }],
+  validateProviderFallbackAdapters,
+);
+assert(
+  !crossEndpointPersist.ok && /相同的适配器类型和协议端点/.test(crossEndpointPersist.error),
+  `chat vs responses mix must be rejected: ${crossEndpointPersist.error}`,
+);
+
 const enabledRoundtrip = persistPayloadRoundtrip([adapterA, adapterB, logicalAdapter]);
 assert(enabledRoundtrip.ok, `enabled payload roundtrip should succeed: ${enabledRoundtrip.error}`);
 assertEqual(enabledRoundtrip.reloaded[0].id, idA, "enabled roundtrip keeps :443 backend id");
@@ -587,9 +835,10 @@ assertEqual(
   logicalAdapter.providerFallback,
   "enabled roundtrip keeps fallback chain and budget",
 );
-assert(
-  enabledRoundtrip.payload.modelAdapters.every((item) => !Object.prototype.hasOwnProperty.call(item, "id")),
-  "roundtrip persist payload must not include id",
+assertEqual(
+  enabledRoundtrip.payload.modelAdapters.map((item) => item.id),
+  [idA, idB, idLogical],
+  "roundtrip persist payload keeps backend ids as identity hints",
 );
 
 const disabledRoundtripAdapters = [
@@ -809,6 +1058,279 @@ const outOfRangeCapacityPersist = persistCapacityRoundtrip([
 ]);
 assert(!outOfRangeCapacityPersist.ok, "out-of-range capacity must fail persist");
 
+{
+  assertEqual(normalizeOutboundProxy(undefined), { ...DEFAULT_OUTBOUND_PROXY }, "missing outboundProxy defaults off");
+  assertEqual(
+    normalizeOutboundProxy({ enabled: "true", url: "  socks5://127.0.0.1:1080  " }),
+    { enabled: true, url: "socks5://127.0.0.1:1080" },
+    "outboundProxy trims url and accepts truthy enabled",
+  );
+  assertEqual(validateOutboundProxy({ enabled: false, url: "not-a-url" }), "", "disabled outboundProxy skips url check");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "" }), "自定义代理 URL 不能为空", "enabled outboundProxy requires url");
+  assert(validateOutboundProxy({ enabled: true, url: "ftp://proxy.example" }).includes("http、https 或 socks5"), "enabled outboundProxy rejects unknown protocol");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "http://user:pass@127.0.0.1:7890" }), "", "enabled http proxy with auth is valid");
+  assertEqual(validateOutboundProxy({ enabled: true, url: "socks5://127.0.0.1:1080" }), "", "enabled socks5 proxy is valid");
+  assert(
+    !validateOutboundProxy({ enabled: true, url: "http://user:secret@127.0.0.1:7890" }).includes("secret"),
+    "proxy validation must not echo credential url",
+  );
+
+  const modelCustom = resolveEffectiveOutboundProxy(
+    { enabled: true, url: "http://model.example:1" },
+    { enabled: true, url: "http://global.example:2" },
+  );
+  assertEqual(modelCustom, { enabled: true, url: "http://model.example:1" }, "model custom proxy wins over saved global");
+
+  const inherited = resolveEffectiveOutboundProxy(
+    { enabled: false, url: "http://model-unused.example:1" },
+    { enabled: true, url: "http://global.example:2" },
+  );
+  assertEqual(inherited, { enabled: true, url: "http://global.example:2" }, "disabled model inherits saved global");
+
+  const disabled = resolveEffectiveOutboundProxy(
+    { enabled: false, url: "http://model-unused.example:1" },
+    { enabled: false, url: "http://global-unused.example:2" },
+  );
+  assertEqual(disabled, { enabled: false, url: "" }, "disabled proxy excludes url from effective value");
+
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: false, url: "http://user:secret@127.0.0.1:9" },
+      { enabled: false, url: "http://global-secret:9" },
+    ),
+    ["false", ""],
+    "hash fields use FormatBool and drop disabled urls",
+  );
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: false, url: "http://unused" },
+      { enabled: true, url: "socks5://127.0.0.1:1080" },
+    ),
+    ["true", "socks5://127.0.0.1:1080"],
+    "inherited enabled global url is hashed",
+  );
+  {
+    const modelDraft = { enabled: false, url: "http://draft-unused.example" };
+    const latestSavedRoot = { enabled: true, url: "http://latest-saved-root.example" };
+    assertEqual(
+      outboundProxyHashFields(modelDraft, latestSavedRoot),
+      ["true", "http://latest-saved-root.example"],
+      "hash uses latest saved root even when the model draft is unchanged",
+    );
+    assertEqual(
+      modelDraft,
+      { enabled: false, url: "http://draft-unused.example" },
+      "draft proxy stays untouched while hash reads the latest saved root",
+    );
+  }
+  assertEqual(
+    outboundProxyHashFields(
+      { enabled: true, url: "http://model.example" },
+      { enabled: true, url: "http://changed-global.example" },
+    ),
+    ["true", "http://model.example"],
+    "custom model hash ignores saved global change",
+  );
+  assertEqual(
+    describeOutboundProxyInheritance({ enabled: false }, { enabled: true, url: "http://user:secret@host" }),
+    "当前继承已保存的全局自定义代理",
+    "inheritance copy must not include credential url",
+  );
+}
+
+{
+  function identityKey(adapter) {
+    return `${adapter.baseURL}|${adapter.modelID}|${adapter.apiKey}|${adapter.displayName}|${adapter.openAIEndpoint || ""}`;
+  }
+  const current = [
+    { id: "keep-a", sort: 1, displayName: "Alpha", baseURL: "https://a.example", modelID: "m1", apiKey: "k1" },
+    { id: "keep-b", sort: 2, displayName: "Beta", baseURL: "https://b.example", modelID: "m2", apiKey: "k2" },
+    { id: "keep-c", sort: 3, displayName: "Gamma", baseURL: "https://c.example", modelID: "m3", apiKey: "k3" },
+  ];
+  const byIdentity = mergeImportedModelAdapters(current, [
+    { displayName: "Alpha", baseURL: "https://a.example", modelID: "m1", apiKey: "k1", tooltipData: "updated-note" },
+    { displayName: "Delta", baseURL: "https://d.example", modelID: "m4", apiKey: "k4" },
+  ], { identityKey });
+  assert(byIdentity.ok, `identity merge should succeed: ${byIdentity.error}`);
+  assertEqual(byIdentity.updated, 1, "identity match updates one item");
+  assertEqual(byIdentity.added, 1, "unmatched import is appended");
+  assertEqual(byIdentity.adapters.map((item) => item.id), ["keep-a", "keep-b", "keep-c", ""], "unmatched current items keep order; new item has empty id");
+  assertEqual(byIdentity.adapters[3].sort, 0, "appended import is marked to stay at the end");
+  assertEqual(byIdentity.adapters[0].tooltipData, "updated-note", "identity match updates in place");
+  assertEqual(byIdentity.adapters[1].displayName, "Beta", "unmatched current item is preserved");
+
+  const byName = mergeImportedModelAdapters(current, [
+    { displayName: " Beta ", baseURL: "https://b-new.example", modelID: "m2-new", apiKey: "k2-new" },
+  ], { identityKey });
+  assert(byName.ok, `unique name merge should succeed: ${byName.error}`);
+  assertEqual(byName.updated, 1, "unique trimmed name updates one item");
+  assertEqual(byName.adapters[1].id, "keep-b", "name match keeps current id");
+  assertEqual(byName.adapters[1].baseURL, "https://b-new.example", "name match replaces adapter fields");
+
+  const duplicateNames = [
+    { id: "one", displayName: "Same", baseURL: "https://one.example", modelID: "m1", apiKey: "k1" },
+    { id: "two", displayName: "Same", baseURL: "https://two.example", modelID: "m2", apiKey: "k2" },
+  ];
+  const ambiguous = mergeImportedModelAdapters(duplicateNames, [
+    { displayName: "Same", baseURL: "https://other.example", modelID: "m9", apiKey: "k9" },
+  ], { identityKey });
+  assert(!ambiguous.ok, "ambiguous displayName must fail atomically");
+  assert(ambiguous.error.includes("无法唯一匹配"), "ambiguous name error is explicit");
+  assertEqual(ambiguous.adapters, [], "failed merge does not return partial adapters");
+
+  const currentPrimary = {
+    ...physicalAdapter("keep-primary", "Primary", "https://old.example/v1"),
+    sort: 1,
+    apiKey: "old-key",
+    modelID: "gpt-old",
+  };
+  const currentCandidate = {
+    ...physicalAdapter("keep-candidate", "OldCandidate", "https://old-cand.example/v1"),
+    sort: 2,
+    apiKey: "old-cand-key",
+    modelID: "gpt-old-cand",
+  };
+  const currentAlias = {
+    ...physicalAdapter("keep-alias", "CurrentAlias", "https://alias.example/v1"),
+    sort: 3,
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "keep-primary",
+      candidateChannelIDs: ["keep-candidate"],
+    }),
+  };
+  const importedPrimary = {
+    ...physicalAdapter("incoming-primary", "Primary", "https://new.example/v1"),
+    apiKey: "new-key",
+    modelID: "gpt-new",
+  };
+  const importedNewCandidate = {
+    ...physicalAdapter("incoming-new-candidate", "NewCandidate", "https://new-cand.example/v1"),
+    apiKey: "new-cand-key",
+    modelID: "gpt-new-cand",
+  };
+  const importedAlias = {
+    ...physicalAdapter("incoming-alias", "ImportedAlias", "https://imported-alias.example/v1"),
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "incoming-primary",
+      candidateChannelIDs: ["incoming-new-candidate"],
+    }),
+  };
+  const completeImport = mergeImportedModelAdapters(
+    [currentPrimary, currentCandidate, currentAlias],
+    [importedPrimary, importedNewCandidate, importedAlias],
+    { identityKey },
+  );
+  assert(completeImport.ok, `complete physical+logical import should succeed: ${completeImport.error}`);
+  assertEqual(completeImport.updated, 1, "same-name primary is updated in place");
+  assertEqual(completeImport.added, 2, "new physical candidate and imported alias are appended");
+  assertEqual(
+    completeImport.adapters.map((item) => item.id),
+    ["keep-primary", "keep-candidate", "keep-alias", "incoming-new-candidate", "incoming-alias"],
+    "same-name update keeps current ID; new items keep imported IDs used by alias refs",
+  );
+  assertEqual(completeImport.adapters[0].baseURL, "https://new.example/v1", "same-name update replaces identity fields");
+  assertEqual(completeImport.adapters[0].apiKey, "new-key", "same-name update replaces api key");
+  assertEqual(
+    completeImport.adapters[2].providerFallback.primaryChannelID,
+    "keep-primary",
+    "unmatched current alias refs stay on current IDs",
+  );
+  assertEqual(
+    completeImport.adapters[2].providerFallback.candidateChannelIDs,
+    ["keep-candidate"],
+    "unmatched current alias candidates stay on current IDs",
+  );
+  assertEqual(
+    completeImport.adapters[4].providerFallback.primaryChannelID,
+    "keep-primary",
+    "imported alias primary remaps incoming ID onto the preserved current ID",
+  );
+  assertEqual(
+    completeImport.adapters[4].providerFallback.candidateChannelIDs,
+    ["incoming-new-candidate"],
+    "imported alias candidate keeps the appended physical ID",
+  );
+  assert(
+    completeImport.adapters.some((item) => item.id === "keep-primary"),
+    "Gateway identity is preserved because the current primary ID remains in the draft",
+  );
+  assertEqual(
+    validateProviderFallbackAdapters(completeImport.adapters),
+    "",
+    "merged draft must validate before save",
+  );
+  const completePersist = prepareModelAdaptersForPersist(
+    completeImport.adapters,
+    validateProviderFallbackAdapters,
+  );
+  assert(completePersist.ok, `save chain must remain resolvable: ${completePersist.error}`);
+  assertEqual(
+    completePersist.payloadAdapters[4].providerFallback.primaryChannelID,
+    "keep-primary",
+    "persist payload keeps remapped fallback primary",
+  );
+  assertEqual(
+    completePersist.payloadAdapters[4].providerFallback.candidateChannelIDs,
+    ["incoming-new-candidate"],
+    "persist payload keeps remapped fallback candidate",
+  );
+
+  const identityPrimary = {
+    ...physicalAdapter("keep-ident", "Ident", "https://ident.example/v1"),
+    sort: 1,
+  };
+  const importedIdentPrimary = physicalAdapter("incoming-ident", "Ident", "https://ident.example/v1");
+  const importedIdentCandidate = physicalAdapter("incoming-ident-cand", "IdentCand", "https://ident-cand.example/v1");
+  const importedIdentAlias = {
+    ...physicalAdapter("incoming-ident-alias", "IdentAlias", "https://ident-alias.example/v1"),
+    providerFallback: normalizeProviderFallback({
+      enabled: true,
+      primaryChannelID: "incoming-ident",
+      candidateChannelIDs: ["incoming-ident-cand"],
+    }),
+  };
+  const identityImport = mergeImportedModelAdapters(
+    [identityPrimary],
+    [importedIdentPrimary, importedIdentCandidate, importedIdentAlias],
+    { identityKey },
+  );
+  assert(identityImport.ok, `identity-matched physical+logical import should succeed: ${identityImport.error}`);
+  assertEqual(identityImport.updated, 1, "identity match updates the current physical channel");
+  assertEqual(identityImport.added, 2, "identity import appends unmatched candidate and alias");
+  assertEqual(
+    identityImport.adapters.map((item) => item.id),
+    ["keep-ident", "incoming-ident-cand", "incoming-ident-alias"],
+    "identity match keeps current ID; added candidate and alias keep incoming IDs",
+  );
+  assertEqual(
+    identityImport.adapters[2].providerFallback.primaryChannelID,
+    "keep-ident",
+    "imported alias remaps identity-matched incoming ID onto the current draft ID",
+  );
+  assertEqual(
+    identityImport.adapters[2].providerFallback.candidateChannelIDs,
+    ["incoming-ident-cand"],
+    "imported alias keeps the appended physical candidate ID",
+  );
+  assertEqual(
+    validateProviderFallbackAdapters(identityImport.adapters),
+    "",
+    "identity-matched import must validate before save",
+  );
+  const identityPersist = prepareModelAdaptersForPersist(
+    identityImport.adapters,
+    validateProviderFallbackAdapters,
+  );
+  assert(identityPersist.ok, `identity-matched save chain must remain resolvable: ${identityPersist.error}`);
+  assertEqual(
+    identityPersist.payloadAdapters[2].providerFallback.primaryChannelID,
+    "keep-ident",
+    "identity-matched persist payload keeps remapped fallback primary",
+  );
+}
+
 function extractSourceFunction(source, name) {
   const marker = `function ${name}`;
   const start = source.indexOf(marker);
@@ -837,11 +1359,16 @@ function extractSourceFunction(source, name) {
 const frontendSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const projectionSource = readFileSync(path.join(frontendSrc, "state/configProjection.js"), "utf8");
 const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"), "utf8");
+const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapterTypeChange.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
+const adapterModalSource = readFileSync(path.join(frontendSrc, "components/ModelAdapterModal.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
+const configTransferSource = readFileSync(path.join(frontendSrc, "composables/useConfigTransfer.js"), "utf8");
+const settingsRescheduleSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
 const selectSource = readFileSync(path.join(frontendSrc, "components/ui/Select.vue"), "utf8");
 
 assert(projectionSource.endsWith("\n"), "configProjection.js must end with a trailing newline");
+assert(configTransferSource.endsWith("\n"), "useConfigTransfer.js must end with a trailing newline");
 assert(
   !/sha256Hex|SHA256_K|buildModelAdapterChannelID|withDerivedModelAdapterIDs/.test(projectionSource),
   "configProjection must not recompute channel IDs",
@@ -876,16 +1403,348 @@ assert(
     && !projectionSource.includes("upstreamCapacityGroupKey"),
   "frontend must not persist derived capacity group keys",
 );
-assert(editorSource.includes("isLogicalRoutingAdapter(a)"), "fallback channel selectors must exclude logical aliases");
+assert(
+  appStateSource.includes("subagentReschedule: buildSubagentRescheduleConfigFromState(source)")
+    && appStateSource.includes("subagentRescheduleEnabled: cachedConfig.subagentReschedule.enabled")
+    && appStateSource.includes("appState.subagentRescheduleEnabled = normalized.subagentReschedule.enabled"),
+  "appState must load, project, and apply subagentReschedule.enabled",
+);
+assert(
+  settingsRescheduleSource.includes("等待 Cursor 提供可稳定关联的 typed failure fixture")
+    && settingsRescheduleSource.includes("当前配置不触发自动重调度")
+    && settingsRescheduleSource.includes(":enabled=\"false\"")
+    && /description="等待 Cursor[^"]+"[\s\S]*:enabled="false"[\s\S]*disabled/.test(settingsRescheduleSource)
+    && settingsRescheduleSource.includes("只读 Task")
+    && settingsRescheduleSource.includes("总计最多 3 次尝试")
+    && settingsRescheduleSource.includes("新 child 不是原地 resume")
+    && settingsRescheduleSource.includes("Backend 重启后不自动恢复")
+    && settingsRescheduleSource.includes("可能增加模型费用"),
+  "Settings must remain disabled and explain the typed fixture blocker",
+);
+assert(editorSource.includes("applyModelAdapterTypeChange"), "ModelEditor must use the shared type-change helper");
+assert(
+  !/draft\.modelID\s*=\s*["']["']/.test(extractSourceFunction(editorSource, "handleModelTypeChange")),
+  "switching model type must not clear modelID",
+);
+assert(
+  editorSource.includes("currentModelIDOptions"),
+  "ModelEditor must keep the current model identifier in the combobox options",
+);
+const refreshModelListFn = extractSourceFunction(editorSource, "refreshModelList");
+assert(refreshModelListFn.includes("credentialSource"), "ModelEditor discovery must send credentialSource");
+assert(
+  refreshModelListFn.includes("isManagedCredentialSource(credentialSource)"),
+  "ModelEditor managed discovery must not require apiKey",
+);
+assert(
+  editorSource.includes("draft.credentialSource")
+    && editorSource.includes("[draft.type, draft.baseURL, draft.apiKey, draft.credentialSource"),
+  "ModelEditor must refetch models when credentialSource changes",
+);
+assert(
+  editorSource.includes("isManagedCredentialSource(draft.credentialSource) || hasKey")
+    || editorSource.includes("isManagedCredentialSource(draft.credentialSource) || String(draft.apiKey || \"\").trim()"),
+  "ModelEditor canFetchModels must allow managed sources without apiKey",
+);
+assert(
+  editorSource.includes('v-if="!isManagedCredential"'),
+  "ModelEditor must hide apiKey input for managed credential sources",
+);
+assert(
+  refreshModelListFn.includes("=== \"codex\"")
+    && refreshModelListFn.includes("isCodex"),
+  "ModelEditor Codex discovery must not require baseURL",
+);
+const fetchAvailableFn = extractSourceFunction(appStateSource, "fetchAvailableModelIDs");
+assert(fetchAvailableFn.includes("credentialSource"), "fetchAvailableModelIDs must pass credentialSource");
+assert(
+  fetchAvailableFn.includes("isManagedCredentialSource(credentialSource) ? \"\" : asString(source.apiKey)"),
+  "fetchAvailableModelIDs must strip apiKey for managed sources",
+);
+assert(
+  appStateSource.includes("isManagedCredentialSource(normalizedCredentialSource) ? \"\" : asString(raw.apiKey || raw.key)"),
+  "normalizeModelAdapter must strip managed apiKey before TestModelAdapter",
+);
+assert(
+  appStateSource.includes("normalizedCredentialSource === \"codex\"")
+    && appStateSource.includes("normalizedBaseURL = CODEX_SUBSCRIPTION_BASE_URL")
+    && appStateSource.includes("effectiveOpenAIEndpoint = OPENAI_ENDPOINT_RESPONSES"),
+  "normalizeModelAdapter must pin Codex subscriptions to the official Responses endpoint",
+);
+assert(
+  appStateSource.includes("normalizedCredentialSource === \"grok\"")
+    && appStateSource.includes("normalizedBaseURL = GROK_SUBSCRIPTION_BASE_URL")
+    && appStateSource.includes("effectiveOpenAIEndpoint = OPENAI_ENDPOINT_CHAT_COMPLETIONS"),
+  "normalizeModelAdapter must pin Grok subscriptions to the official chat completions endpoint",
+);
+assert(
+  editorSource.includes(':disabled="isManagedCredential"'),
+  "ModelEditor must prevent managed subscription endpoints from being edited",
+);
+const startModelAdapterTestFn = extractSourceFunction(appStateSource, "startModelAdapterTest");
+assert(
+  startModelAdapterTestFn.includes("testModelAdapter(normalized)"),
+  "TestModelAdapter must send normalized adapter including credentialSource",
+);
+assert(
+  startModelAdapterTestFn.includes("recordLocalModelAdapterTestFailure"),
+  "frontend prevalidation failures must record a visible per-model result",
+);
+assert(
+  !startModelAdapterTestFn.includes("Promise.reject(new Error(validationError))"),
+  "frontend prevalidation must not abort the caller with an unrecorded rejection",
+);
+const typeChangeHelper = extractSourceFunction(typeChangeSource, "applyModelAdapterTypeChange");
+assert(
+  typeChangeHelper.includes("draft.type = nextType")
+    && !/modelID\s*=/.test(typeChangeHelper),
+  "type change helper must keep the current model identifier",
+);
+assert(
+  appStateSource.includes("export {")
+    && appStateSource.includes("applyModelAdapterTypeChange"),
+  "appState must re-export applyModelAdapterTypeChange",
+);
+
+function modelIdentifierError(adapters) {
+  for (const [index, adapter] of adapters.entries()) {
+    if (!String(adapter?.modelID || "").trim()) {
+      return `模型 ${index + 1} 的模型标识不能为空`;
+    }
+  }
+  return "";
+}
+
+{
+  const draft = {
+    type: "openai",
+    modelID: "cc",
+    openAIEndpoint: "/v1/chat/completions",
+    anthropicThinkingEffort: "",
+  };
+  applyModelAdapterTypeChange(draft, "anthropic");
+  assertEqual(draft.type, "anthropic", "type switch to anthropic");
+  assertEqual(draft.modelID, "cc", "type switch keeps modelID");
+  assertEqual(draft.anthropicThinkingEffort, "xhigh", "type switch fills anthropic thinking default");
+  assertEqual(modelIdentifierError([draft]), "", "kept modelID must pass the user-facing identifier check");
+}
+
+{
+  const cleared = { type: "openai", modelID: "" };
+  assertEqual(
+    modelIdentifierError([cleared]),
+    "模型 1 的模型标识不能为空",
+    "empty modelID reproduces the user save error after type switch",
+  );
+}
+
+{
+  const draft = {
+    type: "anthropic",
+    modelID: "gpt-5.5",
+    openAIEndpoint: "",
+    anthropicThinkingEffort: "high",
+  };
+  applyModelAdapterTypeChange(draft, "openai");
+  assertEqual(draft.type, "openai", "type switch to openai");
+  assertEqual(draft.modelID, "gpt-5.5", "openai switch keeps modelID");
+  assertEqual(draft.openAIEndpoint, "/v1/chat/completions", "openai switch fills missing endpoint");
+}
+
+assertEqual(
+  normalizeOpenAIImageGenerationEnabled({}),
+  false,
+  "native media generation defaults off",
+);
+assertEqual(
+  normalizeOpenAIImageGenerationEnabled({
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/chat/completions",
+  }),
+  false,
+  "empty openai chat completions draft keeps native media generation off",
+);
+
+{
+  const source = {
+    type: "openai",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  assertEqual(isOpenAIImageGenerationCompatible(source), true, "compatible openai responses static");
+  assertEqual(normalizeOpenAIImageGenerationEnabled(source), true, "enabled compatible round trip");
+  assertEqual(
+    applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+    true,
+    "constraint preserves compatible enabled flag",
+  );
+}
+
+{
+  const invalid = [
+    ["anthropic", {
+      type: "anthropic",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["chat completions", {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/v1/chat/completions",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["custom endpoint", {
+      type: "openai",
+      credentialSource: "static",
+      openAIEndpoint: "/custom",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["codex credential", {
+      type: "openai",
+      credentialSource: "codex",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+    ["grok credential", {
+      type: "openai",
+      credentialSource: "grok",
+      openAIEndpoint: "/v1/responses",
+      openAIImageGenerationEnabled: true,
+    }],
+  ];
+  for (const [label, source] of invalid) {
+    assertEqual(isOpenAIImageGenerationCompatible(source), false, `${label} is incompatible`);
+    assertEqual(normalizeOpenAIImageGenerationEnabled(source), false, `${label} normalizes off`);
+    assertEqual(
+      applyOpenAIImageGenerationConstraint({ ...source }).openAIImageGenerationEnabled,
+      false,
+      `${label} constraint clears enabled flag`,
+    );
+  }
+}
+
+{
+  const draft = {
+    type: "openai",
+    modelID: "gpt-5.5",
+    credentialSource: "static",
+    openAIEndpoint: "/v1/responses",
+    openAIImageGenerationEnabled: true,
+  };
+  applyModelAdapterTypeChange(draft, "anthropic");
+  assertEqual(draft.openAIImageGenerationEnabled, false, "type switch to anthropic clears native media generation");
+}
+
+assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("openAIImageGenerationEnabled: false"),
+  "empty draft defaults openAIImageGenerationEnabled off",
+);
+assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("outboundProxy: normalizeOutboundProxy()"),
+  "empty draft defaults outboundProxy off",
+);
+assert(
+  appStateSource.includes("const openAIImageGenerationEnabled = normalizeOpenAIImageGenerationEnabled("),
+  "normalizeModelAdapter projects openAIImageGenerationEnabled",
+);
+assert(
+  extractSourceFunction(appStateSource, "serializeConfigPayload").includes("...adapter"),
+  "save/config projection keeps normalized adapter fields including openAIImageGenerationEnabled",
+);
+assert(
+  appStateSource.includes("if (adapter.openAIImageGenerationEnabled && !isOpenAIImageGenerationCompatible(adapter))"),
+  "validateModelAdapters rejects incompatible native media generation",
+);
+assert(
+  extractSourceFunction(appStateSource, "buildModelAdapterTestRequestHash").includes("openAIImageGenerationEnabled"),
+  "test identity hash preserves openAIImageGenerationEnabled",
+);
+assert(
+  extractSourceFunction(appStateSource, "buildModelAdapterTestRequestHash").includes("outboundProxyHashFields(adapter.outboundProxy, savedOutboundProxy.value)"),
+  "test identity hash appends effective saved-global outbound proxy fields",
+);
+assert(
+  appStateSource.includes("const savedOutboundProxy = ref("),
+  "saved outbound proxy is reactive so editor inheritance and stale hashes update when only the persisted global changes",
+);
+assert(
+  extractSourceFunction(appStateSource, "getSavedOutboundProxy").includes("savedOutboundProxy.value"),
+  "editor inheritance reads the reactive saved global proxy",
+);
+{
+  const applyIdx = appStateSource.indexOf("function applyConfigToState");
+  const rememberIdx = appStateSource.indexOf("rememberSavedOutboundProxy(normalized.outboundProxy)", applyIdx);
+  const modelOnlyIdx = appStateSource.indexOf("if (modelAdaptersOnly)", rememberIdx);
+  const preserveIdx = appStateSource.indexOf("applyConfigSectionSnapshot(scope, preserved[scope])", applyIdx);
+  assert(applyIdx >= 0 && rememberIdx > applyIdx, "applyConfigToState always remembers the persisted global proxy");
+  assert(
+    rememberIdx < modelOnlyIdx,
+    "persisted global proxy is remembered before models-only early return",
+  );
+  assert(
+    rememberIdx < preserveIdx,
+    "persisted global proxy is remembered before dirty settings draft restoration",
+  );
+  assert(
+    preserveIdx >= 0,
+    "dirty settings draft remains untouched after external config/reload",
+  );
+}
+assert(
+  extractSourceFunction(appStateSource, "captureConfigSectionSnapshot").includes("rememberSavedOutboundProxy"),
+  "initial settings snapshot still seeds the saved outbound proxy",
+);
+assert(
+  extractSourceFunction(appStateSource, "duplicateModelAdapterAt").includes("...source"),
+  "copy path preserves normalized adapter fields including openAIImageGenerationEnabled",
+);
+assert(
+  editorSource.includes("OpenAI Responses 原生媒体生成")
+    && editorSource.includes("applyOpenAIImageGenerationConstraint")
+    && editorSource.includes(":disabled=\"!canEnableOpenAIImageGeneration\""),
+  "ModelEditor exposes native media generation and disables incompatible adapters",
+);
+assert(
+  adapterModalSource.includes("OpenAI Responses 原生媒体生成")
+    && adapterModalSource.includes("applyOpenAIImageGenerationConstraint")
+    && adapterModalSource.includes(":disabled=\"!canEnableOpenAIImageGeneration\""),
+  "ModelAdapterModal exposes native media generation and disables incompatible adapters",
+);
+assert(
+  editorSource.includes("仅兼容的上游应开启")
+    && adapterModalSource.includes("仅兼容的上游应开启"),
+  "both editors explain that only compatible upstreams should enable native media generation",
+);
+
 assert(editorSource.includes("formatFallbackBudgetInput"), "ModelEditor getter must hide NaN via helper");
 assert(editorSource.includes("parseFallbackBudgetInput"), "ModelEditor setter must parse via helper");
 assert(editorSource.includes("逻辑路由（建议仅子代理）"), "ModelEditor must mark logical routing");
 assert(editorSource.includes("全链最大 HTTP 尝试次数（默认 5）"), "ModelEditor attempts field");
-assert(editorSource.includes("全链最大等待秒数（默认 8）"), "ModelEditor wait field");
-assert(editorSource.includes("min(剩余预算, 3)"), "help text must mention min(remaining, 3)");
+assert(editorSource.includes("全链最大退避等待秒数（默认 8）"), "ModelEditor wait field");
+assert(editorSource.includes("单渠道最大尝试次数（默认 2）"), "ModelEditor per-channel attempts field");
+assert(editorSource.includes("建连超时秒数（默认 30）"), "ModelEditor connect timeout field");
+assert(editorSource.includes("首事件超时秒数（默认 600）"), "ModelEditor first-event timeout field");
+assert(editorSource.includes("流空闲超时秒数（默认 240）"), "ModelEditor stream idle timeout field");
+assert(editorSource.includes("整次调用超时秒数（默认 7200）"), "ModelEditor call timeout field");
 assert(editorSource.includes("自身不会向虚拟 endpoint 发请求"), "help text must say alias sends no request");
-assert(editorSource.includes("已有输出后不切换") || editorSource.includes("一旦已有输出则禁止切换"), "help text must forbid switch after output");
-assert(editorSource.includes("费用") && editorSource.includes("隐私") && editorSource.includes("工具兼容"), "help text must mention cost/privacy/compat risk");
+assert(
+  editorSource.includes("5xx 等失败先在当前渠道再试一次")
+    && (editorSource.includes("side effect") || editorSource.includes("side effect 后不再切换")),
+  "help text must retry current channel then refuse switch after bytes/event/side effect",
+);
+assert(
+  editorSource.includes("600") && editorSource.includes("8 秒"),
+  "help text must say 600s first-token is not the 8s wait budget",
+);
+assert(editorSource.includes("isFallbackChannelCompatible"), "candidate dropdown must filter by type and endpoint family");
+assert(editorSource.includes("fallbackChannelOptionLabel"), "channel options must show displayName/provider/modelID");
+assert(editorSource.includes("第 ${priority} 优先") || editorSource.includes("第 1 优先"), "channel UI must show priority");
+assert(!editorSource.includes("isCrossProviderFallback"), "cross-protocol mix must not remain a warning-only path");
+assert(!appStateSource.includes("providerStreamIdleTimeout"), "appState must drop root providerStreamIdleTimeout");
+assert(!projectionSource.includes("providerStreamIdleTimeout"), "configProjection must not project root providerStreamIdleTimeout");
 assert(editorSource.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT"), "save/test must hint runtime verification");
 assert(editorSource.includes("shouldTestModelAdapterEndpoint"), "save-and-test must skip logical alias HTTP");
 assert(editorSource.includes("上游并发上限"), "ModelEditor must show upstream concurrency limit");
@@ -910,8 +1769,37 @@ assert(
 const batchTestHandler = extractSourceFunction(modelConfigSource, "handleTestAllModelAdapters");
 assert(batchTestHandler.includes("selectAdaptersForEndpointTest"), "batch test must use the shared endpoint-test plan");
 assert(
+  batchTestHandler.includes("appState.modelAdapters.slice()"),
+  "batch test must snapshot all current model drafts",
+);
+assert(
+  !batchTestHandler.includes("filteredAdapters"),
+  "batch test must ignore search/provider filters",
+);
+assert(
+  !batchTestHandler.includes(".cancel(") && !batchTestHandler.includes("batch-stop"),
+  "batch stop must not claim in-flight tests were cancelled",
+);
+assert(
+  extractSourceFunction(modelConfigSource, "stopBatchTesting").includes("Promise.allSettled(Array.from(batchActiveCalls))"),
+  "batch stop waits for in-flight tests",
+);
+assert(
   !batchTestHandler.includes("LOGICAL_ROUTING_RUNTIME_VERIFY_HINT") && !batchTestHandler.includes("skippedLogical"),
-  "batch test must silently skip logical aliases without a hint popup",
+  "mixed batch still silently skips logical aliases without a hint popup",
+);
+assert(
+  batchTestHandler.includes("adapters.length === 0") && batchTestHandler.includes("testAllUnavailableText"),
+  "all-logical/empty batch test must show a no-testable status",
+);
+assert(
+  batchTestHandler.includes("message(testAllUnavailableText.value)"),
+  "all-logical batch test must toast instead of silently returning",
+);
+assert(modelConfigSource.includes("hasTestableModelAdapters"), "test-all disables when nothing is testable");
+assert(
+  modelConfigSource.includes("当前没有可测试的物理渠道"),
+  "test-all explains why logical aliases are not tested",
 );
 assert(
   projectionSource.includes("MAX_PROVIDER_FALLBACK_CANDIDATES")
@@ -932,5 +1820,644 @@ assert(
     || /<ul\b[^>]*data-select-list[\s\S]*?:style="listStyle"[\s\S]*?overflow-y-auto/.test(selectSource),
   "Select maxHeight must land on the overflowing ul, not the clipped outer shell",
 );
+
+const gateway = normalizeGatewayConfig({
+  enabled: true,
+  listenAddr: "127.0.0.1:18091",
+  token: "leaked-secret-token",
+  tokenConfigured: true,
+  publicModels: [{ id: "public-a", targetAdapterID: "adapter-a" }],
+});
+assertEqual(
+  gateway,
+  {
+    enabled: true,
+    listenAddr: "127.0.0.1:18091",
+    tokenConfigured: true,
+    publicModels: [{ id: "public-a", targetAdapterID: "adapter-a" }],
+  },
+  "gateway projection must drop token",
+);
+assert(!Object.prototype.hasOwnProperty.call(gateway, "token"), "normalized gateway must not have token");
+assertEqual(normalizeGatewayConfig(undefined), { ...DEFAULT_GATEWAY_CONFIG, publicModels: [] }, "gateway defaults");
+
+assertEqual(normalizeModelAdapterEnabled(undefined), true, "missing adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(null), true, "null adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(""), true, "empty adapter enabled defaults true");
+assertEqual(normalizeModelAdapterEnabled(false), false, "explicit false stays disabled");
+assertEqual(normalizeModelAdapterEnabled(true), true, "explicit true stays enabled");
+assertEqual(isModelAdapterEnabled({}), true, "adapter without enabled is on");
+assertEqual(isModelAdapterEnabled({ enabled: false }), false, "adapter explicit false is off");
+assertEqual(isGatewayPublicModelPublished({ id: "grok", targetAdapterID: "a" }), true, "old custom id defaults published");
+assertEqual(isGatewayPublicModelPublished({ id: "", targetAdapterID: "a", published: false }), false, "published false is unpublished");
+assertEqual(
+  normalizeGatewayPublicModel({ id: "  my grok  ", targetAdapterID: " adapter-a " }),
+  { id: "my grok", targetAdapterID: "adapter-a" },
+  "public name keeps internal spaces and omits published when true",
+);
+assertEqual(
+  normalizeGatewayConfig({
+    publicModels: [
+      { id: "", targetAdapterID: "adapter-a", published: false },
+      { id: "custom", targetAdapterID: "adapter-b" },
+    ],
+  }).publicModels,
+  [
+    { id: "", targetAdapterID: "adapter-a", published: false },
+    { id: "custom", targetAdapterID: "adapter-b" },
+  ],
+  "unpublished empty id is kept and old custom mapping stays published",
+);
+{
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    id: `model-${index}`,
+    targetAdapterID: `adapter-${index}`,
+  }));
+  assertEqual(
+    normalizeGatewayConfig({ publicModels: many }).publicModels.length,
+    40,
+    "publicModels must not silently cap at 32",
+  );
+}
+assertEqual(MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH, 128, "public name max length is 128");
+assert(
+  gatewayPublicModelInvalid({ id: `${"n".repeat(129)}`, targetAdapterID: "a" }),
+  "public name over 128 is invalid",
+);
+assert(
+  !gatewayPublicModelInvalid({ id: "", targetAdapterID: "a", published: false }),
+  "unpublished empty id is valid",
+);
+assert(
+  gatewayPublicModelInvalid({ id: "", targetAdapterID: "a" }),
+  "published empty id is invalid",
+);
+
+{
+  const adapters = [
+    { id: "aaaaaa111111", displayName: "GPT", enabled: true },
+    { id: "bbbbbb222222", displayName: "GPT", enabled: true },
+    { id: "cccccc333333", displayName: "Other", enabled: true },
+    { id: "dddddd444444", displayName: "Off", enabled: false },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, []);
+  assertEqual(rows.map((row) => row.adapterID), ["aaaaaa111111", "bbbbbb222222", "cccccc333333"], "gateway list is enabled models only");
+  assertEqual(rows[2].publicID, "Other", "unconflicted default keeps displayName");
+  assertEqual(rows[2].effectiveID, "Other", "unconflicted default effective id is unchanged");
+  assertEqual(rows[0].effectiveID, "GPT-aaaa", "first conflicting default uses adapter id prefix");
+  assertEqual(rows[1].effectiveID, "GPT-bbbb", "second conflicting default uses its own adapter id prefix");
+  assertEqual(rows[0].publicID, "GPT", "editor still shows default name before suffix");
+  assertEqual(collapseGatewayPublicModelsForPersist(adapters, []), [], "default public names are not persisted as overrides");
+  assertEqual(countPublishedGatewayModels(adapters, []), 3, "published count includes default public models");
+}
+
+{
+  const adapters = [
+    { id: "a1111111", displayName: "GPT", enabled: true },
+    { id: "b2222222", displayName: "GPT", enabled: true },
+    { id: "c3333333", displayName: "GPT-a111", enabled: true },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, []);
+  assertEqual(rows.map((row) => row.effectiveID), ["GPT-a1111", "GPT-b222", "GPT-a111"], "suffix must not steal another model's unconflicted default name");
+}
+
+{
+  const adapters = [
+    { id: "ad-keep", displayName: "Grok", enabled: true },
+    { id: "ad-hidden", displayName: "Hidden", enabled: true },
+    { id: "ad-new", displayName: "New", enabled: true },
+  ];
+  const stored = [
+    { id: "grok", targetAdapterID: "ad-keep" },
+    { id: "", targetAdapterID: "ad-hidden", published: false },
+  ];
+  const rows = listGatewayPublicModelRows(adapters, stored);
+  assertEqual(rows.find((row) => row.adapterID === "ad-keep").publicID, "grok", "existing custom name is shown");
+  assertEqual(rows.find((row) => row.adapterID === "ad-hidden").published, false, "unpublished stays off");
+  assertEqual(rows.find((row) => row.adapterID === "ad-new").publicID, "New", "new enabled model defaults to displayName");
+  assertEqual(
+    collapseGatewayPublicModelsForPersist(adapters, stored),
+    stored,
+    "save keeps custom mapping and unpublished override, and does not add default New",
+  );
+  const republished = rows.map((row) => (
+    row.adapterID === "ad-hidden" ? { ...row, published: true, publicID: "Hidden", hasCustom: false } : { ...row }
+  ));
+  assertEqual(
+    buildGatewayPublicModelOverrides(adapters, stored, republished),
+    [{ id: "grok", targetAdapterID: "ad-keep" }],
+    "republishing default must drop unpublished override and not resurrect a mapping",
+  );
+  const renamed = rows.map((row) => (
+    row.adapterID === "ad-new" ? { ...row, publicID: "my grok" } : { ...row }
+  ));
+  assertEqual(
+    buildGatewayPublicModelOverrides(adapters, stored, renamed),
+    [
+      { id: "grok", targetAdapterID: "ad-keep" },
+      { id: "", targetAdapterID: "ad-hidden", published: false },
+      { id: "my grok", targetAdapterID: "ad-new" },
+    ],
+    "custom public name with internal space is submitted as override",
+  );
+}
+
+{
+  const adapters = [
+    { id: "same-name", displayName: "GPT", enabled: true },
+    { id: "other-gpt", displayName: "GPT", enabled: true },
+  ];
+  const stored = [{ id: "GPT", targetAdapterID: "same-name" }];
+  const rows = listGatewayPublicModelRows(adapters, stored);
+  assertEqual(rows[0].effectiveID, "GPT", "existing custom mapping keeps its id");
+  assert(rows[1].effectiveID !== "GPT", "default that collides with custom id gets a suffix");
+  assertEqual(
+    collapseGatewayPublicModelsForPersist(adapters, stored),
+    stored,
+    "existing same-as-displayName mapping is not deleted",
+  );
+}
+
+assertEqual(defaultGatewayPublicModelName({ displayName: "  foo  bar  " }), "foo  bar", "default public name keeps internal spaces");
+
+assert(!appStateSource.includes("appState.gatewayToken "), "appState must not keep gateway token");
+assert(appStateSource.includes("tokenConfigured"), "appState must project tokenConfigured only");
+assert(!appStateSource.includes("token: normalized.gateway.token"), "serializeConfigPayload must not write gateway token");
+assert(!appStateSource.includes("gatewayToken:"), "localStorage cache must not include gatewayToken");
+const gatewayCardSource = readFileSync(path.join(frontendSrc, "components/GatewayCard.vue"), "utf8");
+const isWindowsSource = readFileSync(path.join(frontendSrc, "utils/isWindows.js"), "utf8");
+assert(gatewayCardSource.includes("copyGatewayToken"), "GatewayCard must copy via explicit API");
+assert(gatewayCardSource.includes("rotateGatewayToken"), "GatewayCard must rotate via explicit API");
+assert(gatewayCardSource.includes('import { Clipboard } from "@wailsio/runtime"'), "GatewayCard must use the native Wails clipboard");
+assert(gatewayCardSource.includes("await Clipboard.SetText(text)"), "GatewayCard clipboard writes must await the native API");
+assert(!gatewayCardSource.includes("copy-text-to-clipboard"), "GatewayCard must not use DOM clipboard fallbacks");
+assert(gatewayCardSource.includes("handleGatewayTest"), "GatewayCard must expose a Gateway availability test");
+assert(gatewayCardSource.includes("await handleGatewayTest()"), "Gateway start must automatically test availability");
+assert(
+  gatewayCardSource.includes(":variant=\"gatewayStartDisabled ? 'default' : 'primary'\""),
+  "Gateway start must use the primary color only while clickable",
+);
+assert(gatewayCardSource.includes("极简使用"), "GatewayCard must include minimal usage instructions");
+assert(!gatewayCardSource.includes("appState.gatewayToken ="), "GatewayCard must not store token in appState");
+assert(gatewayCardSource.includes("listGatewayPublicModelRows"), "GatewayCard lists enabled models");
+assert(gatewayCardSource.includes("buildGatewayPublicModelOverrides"), "GatewayCard writes override-only publicModels");
+assert(!gatewayCardSource.includes("添加映射"), "GatewayCard no longer adds explicit mappings");
+assert(!gatewayCardSource.includes("公开模型最多 32 个"), "GatewayCard must not keep the 32 mapping cap");
+assert(modelConfigSource.includes("setAdapterEnabled"), "model list has an enable switch");
+assert(editorSource.includes("启用模型"), "model editor has an enable switch");
+assert(
+  extractSourceFunction(appStateSource, "createEmptyModelAdapter").includes("enabled: true"),
+  "new adapters default to enabled",
+);
+assert(
+  appStateSource.includes("enabled: normalizeModelAdapterEnabled(raw.enabled)"),
+  "normalizeModelAdapter treats missing enabled as true",
+);
+assert(
+  appStateSource.includes("collapseGatewayPublicModelsForPersist"),
+  "gateway save collapses to overrides",
+);
+assert(
+  !appStateSource.includes("GATEWAY_PUBLIC_MODEL_ADAPTER_ERROR"),
+  "model save must not be blocked by leftover public mappings",
+);
+assert(
+  extractSourceFunction(appStateSource, "snapshotGatewaySection").includes("normalizeGatewayPublicModel"),
+  "gateway dirty snapshot keeps published overrides",
+);
+assert(
+  !projectionSource.includes("MAX_GATEWAY_PUBLIC_MODELS"),
+  "frontend projection must not keep the 32 public model cap",
+);
+assert(isWindowsSource.includes("try {") && isWindowsSource.includes("catch {"), "standalone Vite previews must survive missing Wails platform detection");
+const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
+assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
+assert(
+  configViewSource.includes("diagnosticDegraded") && configViewSource.includes("diagnosticDropped"),
+  "Config page must surface diagnostics retention degradation",
+);
+assert(
+  configViewSource.includes("quotaBlocked"),
+  "Config page must surface quota-blocked log capture",
+);
+assert(
+  configViewSource.includes("appLogDegraded") && configViewSource.includes("appLogDropped"),
+  "Config page must surface application log degradation",
+);
+
+const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
+assert(clientApiSource.includes("TestGateway"), "client API must expose Gateway availability testing");
+assert(appStateSource.includes("testGatewayService"), "appState must call the Gateway availability API");
+const fetchModelsApiFn = extractSourceFunction(clientApiSource, "fetchModelAdapterModels");
+assert(fetchModelsApiFn.includes("credentialSource"), "clientApi FetchModelAdapterModels must send credentialSource");
+assert(
+  fetchModelsApiFn.includes("managed ? \"\" : source.apiKey"),
+  "clientApi must not send apiKey for managed credential sources",
+);
+assert(fetchModelsApiFn.includes("outboundProxy"), "clientApi FetchModelAdapterModels must send outboundProxy");
+const routerSource = readFileSync(path.join(frontendSrc, "router/index.js"), "utf8");
+assert(appStateSource.includes('"/models": "models"'), "models route must map to models section");
+assert(appStateSource.includes("snapshotModelsSection"), "models section must have a dirty snapshot");
+assert(appStateSource.includes("modelsEditorDraftDirty"), "editor draft must participate in models dirty");
+assert(!appStateSource.includes("unresolvedGatewayPublicModelsError"), "model save must not be blocked by leftover public mappings");
+const includeCacheWriteSaver = extractSourceFunction(appStateSource, "saveIncludeCacheWriteInHitRate");
+assert(includeCacheWriteSaver.includes("saveHomeMetrics"), "cache hit-rate toggle must use section save");
+assert(!includeCacheWriteSaver.includes("persistConfigPayload"), "cache hit-rate toggle must not full-save user config");
+assert(clientApiSource.includes("SaveHomeMetrics"), "client API must expose SaveHomeMetrics");
+assert(modelConfigSource.includes("configSectionStatusText(\"models\")"), "models page must show section status");
+assert(modelConfigSource.includes("persistScopedUserConfig(\"models\")"), "models page must save its own section");
+assert(modelConfigSource.includes("handleSavePage"), "models page must offer save-this-page");
+const sortHandler = extractSourceFunction(modelConfigSource, "handleModelSort");
+assert(!sortHandler.includes("saveModelAdapterOrder"), "model sort must stay a page draft until save");
+assert(routerSource.includes("isConfigSectionDirty"), "router must confirm leaving dirty config pages");
+assert(editorSource.includes("setModelsEditorDraftDirty"), "ModelEditor must report unsaved draft dirty");
+
+const accessSource = readFileSync(path.join(frontendSrc, "router/access.js"), "utf8");
+const accessViewSource = readFileSync(path.join(frontendSrc, "views/AccessView.vue"), "utf8");
+const unsupportedSource = readFileSync(path.join(frontendSrc, "views/UnsupportedClientPanel.vue"), "utf8");
+const subscriptionAuthSource = readFileSync(path.join(frontendSrc, "components/SubscriptionAuthPanel.vue"), "utf8");
+const globalStyleSource = readFileSync(path.join(frontendSrc, "style/global.css"), "utf8");
+const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
+assert(
+  settingsSource.includes("appLogDegraded") && settingsSource.includes("appLogDropped"),
+  "Settings page must surface application log degradation",
+);
+const layoutSource = readFileSync(path.join(frontendSrc, "layouts/MainLayout.vue"), "utf8");
+const catalogSource = readFileSync(path.join(frontendSrc, "state/modelCatalog.js"), "utf8");
+
+const {
+  parseAccessClient,
+  accessClientConfigScope,
+  accessLeaveConfigScopes,
+  canonicalizeAccessRoute,
+  isAccessTabDirty,
+  sameAccessNavigation,
+  ACCESS_CLIENTS,
+  ACCESS_CONFIG_SCOPES,
+  ACCESS_PATH,
+  DEFAULT_ACCESS_CLIENT,
+} = await import("../src/router/access.js");
+const { filterModelAdapters, modelProviderTabs } = await import("../src/state/modelCatalog.js");
+
+assertEqual(ACCESS_CLIENTS, ["gateway", "cursor", "codex", "grok", "anthropic"], "access client order");
+assertEqual(parseAccessClient(""), DEFAULT_ACCESS_CLIENT, "empty access client defaults to gateway");
+assertEqual(parseAccessClient("CURSOR"), "cursor", "access client is case-insensitive");
+assertEqual(parseAccessClient("GROK"), "grok", "grok access client is case-insensitive");
+assertEqual(parseAccessClient("claude"), "anthropic", "legacy claude route maps to anthropic");
+assertEqual(parseAccessClient("nope"), "gateway", "unknown access client falls back to gateway");
+assertEqual(parseAccessClient(["cursor", "gateway"]), "cursor", "array query uses the first client");
+assertEqual(accessClientConfigScope("cursor"), "cursor", "cursor access maps to cursor section");
+assertEqual(accessClientConfigScope("gateway"), "gateway", "gateway access maps to gateway section");
+assertEqual(accessClientConfigScope("codex"), "", "codex has no config section");
+assertEqual(accessClientConfigScope("grok"), "", "grok has no config section");
+assertEqual(accessClientConfigScope("anthropic"), "", "anthropic has no config section");
+assertEqual(accessClientConfigScope(["cursor"]), "cursor", "array cursor query maps to cursor section");
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  ["cursor"],
+  "switching access clients checks the current client scope",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "codex" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  [],
+  "codex has no draft scope during in-access switches",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "anthropic" } },
+    { path: "/models" },
+  ),
+  [...ACCESS_CONFIG_SCOPES],
+  "leaving access from anthropic checks cursor and gateway together",
+);
+assertEqual(
+  accessLeaveConfigScopes(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/settings" },
+  ),
+  [...ACCESS_CONFIG_SCOPES],
+  "leaving access to another top-level route checks both config scopes",
+);
+assert(isAccessTabDirty({ cursor: true, gateway: false }), "access tab dirty is OR of cursor");
+assert(isAccessTabDirty({ cursor: false, gateway: true }), "access tab dirty is OR of gateway");
+assert(!isAccessTabDirty({ cursor: false, gateway: false }), "access tab clean when both clean");
+assert(
+  sameAccessNavigation(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  "same access client is the same navigation",
+);
+assert(
+  !sameAccessNavigation(
+    { path: "/access", query: { client: "cursor" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  "switching access client is a new navigation",
+);
+assert(
+  sameAccessNavigation(
+    { path: "/access", query: { client: "nope" } },
+    { path: "/access", query: { client: "gateway" } },
+  ),
+  "unknown client is the same navigation as gateway",
+);
+assert(
+  !sameAccessNavigation(
+    { path: "/access", query: { client: "nope" } },
+    { path: "/access", query: { client: "cursor" } },
+  ),
+  "unknown client leaving cursor is a new navigation",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: "cursor" } }),
+  null,
+  "canonical cursor query is left alone",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: "nope" } })?.query.client,
+  DEFAULT_ACCESS_CLIENT,
+  "unknown client canonicalizes to gateway",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: ACCESS_PATH, query: { client: ["cursor", "gateway"] } })?.query.client,
+  "cursor",
+  "array query canonicalizes to the first known client",
+);
+assertEqual(
+  canonicalizeAccessRoute({ path: "/cursor", query: { client: "nope" } }),
+  null,
+  "canonicalize ignores non-access paths",
+);
+
+assert(routerSource.includes('path: "/cursor"'), "old /cursor route remains as redirect");
+assert(routerSource.includes('path: "/gateway"'), "old /gateway route remains as redirect");
+assert(routerSource.includes("accessRouteLocation(\"cursor\")"), "old /cursor redirects into access cursor");
+assert(routerSource.includes("accessRouteLocation(\"gateway\")"), "old /gateway redirects into access gateway");
+assert(routerSource.includes("canonicalizeAccessRoute"), "router canonicalizes access query before dirty guard");
+assert(routerSource.includes("accessLeaveConfigScopes"), "access dirty guard uses explicit leave scopes");
+assert(routerSource.includes("leaveConfigScopes"), "router discards the scopes it actually checked");
+assert(routerSource.includes("discardConfigSectionDraft(scope)"), "confirmed leave discards each checked scope");
+assert(appStateSource.includes("accessClientConfigScope"), "appState maps /access query to section");
+assert(appStateSource.includes("isAccessTabDirty"), "appState exposes access tab OR dirty");
+assert(layoutSource.includes("configSectionDirty.access"), "shell access tab uses OR dirty");
+assert(layoutSource.includes("app-tabbar"), "shell uses v5 top tab bar");
+assert(layoutSource.includes("--wails-draggable: drag"), "shell keeps Wails drag region");
+assert(layoutSource.includes("--wails-draggable: no-drag"), "tab controls remain no-drag");
+assert(!layoutSource.includes("h-[40px] w-screen"), "tab bar must not be covered by a 40px drag overlay");
+assert(!layoutSource.includes("z-[9999]"), "leftover full-width drag overlay z-index must be gone");
+assert(layoutSource.includes("Window.Minimise"), "shell keeps Windows minimize");
+assert(layoutSource.includes("checkForAppUpdates"), "shell keeps update check");
+assert(layoutSource.includes("LocaleSelect"), "shell keeps locale select");
+assert(layoutSource.includes("proxyBadgeText"), "shell keeps proxy badge");
+assert(layoutSource.includes("lastAccessClient"), "access nav remembers last client");
+assert(layoutSource.includes("accessRouteLocation"), "access nav always includes client query");
+assert(layoutSource.includes("gatewayRunning"), "access badge counts running gateway");
+assert(!layoutSource.includes("gatewayEnabled"), "access badge must not count merely enabled gateway");
+
+assert(accessViewSource.includes("GatewayCard"), "AccessView reuses GatewayCard");
+assert(accessViewSource.includes("CursorView"), "AccessView reuses Cursor features");
+assert(accessViewSource.includes("UnsupportedClientPanel"), "AccessView keeps the Anthropic placeholder panel");
+assert(accessViewSource.includes("SubscriptionAuthPanel"), "AccessView renders provider auth inside client panes");
+assert(
+  accessViewSource.includes("activeClient === 'codex' || activeClient === 'grok'")
+    && accessViewSource.includes(':provider="activeClient"'),
+  "Codex and Grok must each render their own subscription auth pane",
+);
+assert(!accessViewSource.includes("<SubscriptionAuthPanel />"), "subscription auth must not remain as a mixed global region");
+assert(subscriptionAuthSource.includes("Codex 接入"), "Codex pane keeps the requested integration heading");
+assert(subscriptionAuthSource.includes("Grok 接入"), "Grok pane has its own integration heading");
+assert(!subscriptionAuthSource.includes("panelSubtitle"), "subscription pane must omit the redundant integration subtitle");
+assert(
+  globalStyleSource.includes(".subscription-account-head {\n  display: flex;\n  align-items: baseline;"),
+  "subscription account count and description must share the title row",
+);
+const subscriptionFooterStart = subscriptionAuthSource.indexOf('<div class="subscription-account-footer">');
+const subscriptionFooterEnd = subscriptionAuthSource.indexOf("</Card>", subscriptionFooterStart);
+const subscriptionFooterSource = subscriptionAuthSource.slice(subscriptionFooterStart, subscriptionFooterEnd);
+assert(subscriptionFooterStart >= 0 && subscriptionFooterEnd > subscriptionFooterStart, "subscription pane must keep its account footer");
+assert(!subscriptionFooterSource.includes("导入 auth.json"), "account footer must not duplicate auth.json import");
+assert(!subscriptionFooterSource.includes("导入 sub2api"), "account footer must not duplicate sub2api import");
+assert(!subscriptionFooterSource.includes("设备码授权"), "account footer must not duplicate device authorization");
+assert(subscriptionAuthSource.includes("导入 auth.json"), "Codex auth.json import stays in the Codex pane");
+assert(subscriptionAuthSource.includes("设备码授权"), "Codex and Grok panes expose device authorization");
+assert(subscriptionAuthSource.includes("listSubscriptionAccounts(provider)"), "Codex and Grok panes must both load account lists");
+assert(subscriptionAuthSource.includes('v-for="account in accounts"'), "subscription panes must render managed account lists");
+assert(subscriptionAuthSource.includes("refreshSubscriptionAccountUsage"), "Codex accounts must support account-specific usage refresh");
+assert(subscriptionAuthSource.includes("导入 sub2api"), "Codex and Grok panes must expose sub2api import");
+assert(subscriptionAuthSource.includes("sub2apiSelected"), "sub2api import must let users select accounts");
+assert(subscriptionAuthSource.includes("resetSub2APIImport();"), "successful sub2api import must close and reset the selection modal while busy");
+const sub2apiImportHandler = extractSourceFunction(subscriptionAuthSource, "handleImportSub2API");
+assert(sub2apiImportHandler.includes("resetSub2APIImport();"), "sub2api success path must reset the modal directly");
+assert(!sub2apiImportHandler.includes("closeSub2APIImport();"), "sub2api success path must not use the busy-guarded manual close handler");
+assert(subscriptionAuthSource.includes('class="subscription-account-list"'), "managed account list must use its scroll container class");
+assert(subscriptionAuthSource.includes("已按当前接入类型过滤"), "sub2api selection must explain provider filtering");
+assert(subscriptionAuthSource.includes("subscriptionAccountHeadline"), "subscription pane uses shared active/state headlines");
+assert(subscriptionAuthSource.includes("subscriptionAccountActions"), "subscription pane uses shared row action state");
+assert(subscriptionAuthSource.includes("generation !== loadGeneration || props.provider !== provider"), "stale account loads must not overwrite a newer provider");
+assert(!subscriptionAuthSource.includes("account.state === 'auth_required'"), "refresh must not be disabled just because state is auth_required");
+assert(!subscriptionAuthSource.includes("account.active || account.state !== 'ready'"), "activate must not use a disabled button as the current-account indicator");
+assert(clientApiSource.includes("RefreshSubscriptionAccountUsage"), "client API must expose account-specific usage refresh");
+assert(clientApiSource.includes("PreviewSub2APIImport"), "client API must expose provider-filtered sub2api preview");
+assert(clientApiSource.includes("ImportSub2APIAccounts"), "client API must expose selected sub2api import");
+assert(accessViewSource.includes('v-if="activeClient === \'gateway\'"'), "AccessView remounts client panes with v-if");
+assert(!accessViewSource.includes("keep-alive"), "AccessView must not keep-alive client panes");
+assert(accessViewSource.includes("is-embedded-pane"), "cursor pane uses nested overflow layout");
+assert(!accessViewSource.includes('aria-current="page"'), "client list buttons must not use page current");
+assert(accessViewSource.includes("icon-[bxl--openai]"), "Codex uses the OpenAI brand icon");
+assert(accessViewSource.includes("icon-[simple-icons--x]"), "Grok uses the xAI/X brand icon");
+assert(accessViewSource.includes("icon-[logos--claude-icon]"), "Anthropic uses the Claude brand icon");
+assert(accessViewSource.includes("is-codex"), "Codex icon keeps its brand class");
+assert(accessViewSource.includes("is-grok"), "Grok icon keeps its brand class");
+assert(accessViewSource.includes("is-anthropic"), "Anthropic icon keeps its brand class");
+const accessLiteralSource = accessViewSource + unsupportedSource + subscriptionAuthSource;
+assert(!/example\.(com|org)/.test(accessLiteralSource), "access UI must not ship sample accounts");
+assert(!/developer@|team@|personal@|work@/.test(accessLiteralSource), "access UI must not ship sample emails");
+assert(!/\beyJ[A-Za-z0-9_-]{8,}\./.test(accessLiteralSource), "access UI must not ship JWT literals");
+assert(!/\bsk-(?:ant-|proj-)?[A-Za-z0-9]{12,}/.test(accessLiteralSource), "access UI must not ship sample API key literals");
+assert(unsupportedSource.includes("添加授权"), "codex/claude keep the screenshot add-auth action");
+assert(unsupportedSource.includes("暂无授权账号"), "codex/claude use empty account state");
+assert(!unsupportedSource.includes("@click"), "codex/claude auth actions stay unwired");
+const unsupportedButtons = [...unsupportedSource.matchAll(/<Button\b([^>]*)>/g)].map((match) => match[1]);
+assert(unsupportedButtons.length > 0, "codex/claude keep screenshot action buttons");
+assert(
+  unsupportedButtons.every((attrs) => /\bdisabled\b/.test(attrs)),
+  "codex/claude auth/sync/save buttons stay disabled",
+);
+assert(settingsSource.includes("基本设置") && settingsSource.includes("会话与日志") && settingsSource.includes("网络与请求") && settingsSource.includes("数据与恢复"), "settings has four segmented panels");
+assert(settingsSource.includes("inert"), "planned settings controls must be inert");
+assert(settingsSource.includes("开机自启动"), "settings shows planned autostart as inert");
+assert(settingsSource.includes('role="group"'), "settings segmented control uses group semantics");
+assert(!settingsSource.includes('role="tablist"'), "settings must not expose incomplete tabs");
+assert(settingsSource.includes("LocaleSelect"), "language remains immediate LocaleSelect");
+assert(appStateSource.includes('value: "system"'), "theme options include system");
+assert(appStateSource.includes("prefers-color-scheme"), "system theme resolves through matchMedia");
+assert(appStateSource.includes("effectiveAppearanceTheme"), "frontend tracks resolved theme separately from persisted enum");
+const homeTrendChartSource = readFileSync(path.join(frontendSrc, "components/charts/HomeTrendChart.vue"), "utf8");
+assert(homeTrendChartSource.includes("effectiveAppearanceTheme"), "trend chart redraws when resolved theme changes");
+assert(!settingsSource.includes("不能端到端保存 system"), "settings no longer treats system as planned-only");
+assert(settingsSource.includes("persistScopedUserConfig(\"settings\")"), "settings still saves its own section");
+assert(settingsSource.includes("自定义出站代理"), "settings exposes global outbound proxy");
+assert(settingsSource.includes("appState.outboundProxy.enabled"), "settings proxy toggle binds outboundProxy");
+assert(settingsSource.includes("appState.outboundProxy.url"), "settings proxy url binds outboundProxy");
+assert(!settingsSource.includes("HTTP 代理"), "settings must replace the planned HTTP proxy placeholder");
+assert(editorSource.includes("自定义出站代理"), "ModelEditor exposes per-model outbound proxy");
+assert(editorSource.includes("draft.outboundProxy.enabled"), "ModelEditor proxy toggle binds model outboundProxy");
+assert(editorSource.includes("describeOutboundProxyInheritance"), "ModelEditor shows proxy inheritance without credential urls");
+assert(appStateSource.includes("outboundProxy: source.outboundProxy"), "settings save payload includes outboundProxy");
+assert(extractSourceFunction(appStateSource, "snapshotSettingsSection").includes("outboundProxy"), "settings dirty snapshot includes outboundProxy");
+assert(extractSourceFunction(appStateSource, "persistScopedConfig").includes("validateOutboundProxy"), "settings save validates enabled proxy url");
+assert(clientApiSource.includes("ReadModelAdaptersForImport"), "client API exposes model-only import");
+assert(appStateSource.includes("applyImportedModelAdapters"), "import merge is applied to the models draft");
+{
+  const importModelAdaptersFn = extractSourceFunction(configTransferSource, "importModelAdapters");
+  const importConfigFn = extractSourceFunction(configTransferSource, "importConfig");
+  const busyIdx = importModelAdaptersFn.indexOf("beginImport()");
+  const dialogIdx = importModelAdaptersFn.indexOf("Dialogs.OpenFile");
+  assert(busyIdx >= 0 && busyIdx < dialogIdx, "model import sets busy at handler entry before the file dialog");
+  assert(importModelAdaptersFn.includes("finally"), "model import resets busy after cancel or failure");
+  assert(
+    !importModelAdaptersFn.includes("showModal") && !importModelAdaptersFn.includes("合并模型配置"),
+    "reversible draft import must not add an extra confirmation gate",
+  );
+  assert(configTransferSource.includes("appState.configSaving"), "import guards an in-flight config save");
+  assert(importConfigFn.includes("beginImport()"), "full-config import uses the same busy guard");
+  assert(modelConfigSource.includes("configTransferBusy"), "models page disables import while transfer is busy");
+}
+assert(
+  extractSourceFunction(appStateSource, "applyProxyState").includes("netProxyUsingCustom"),
+  "proxy state projects custom outbound source from GetState",
+);
+assert(modelConfigSource.includes("filterModelAdapters"), "models page uses shared search/provider filter");
+assert(modelConfigSource.includes("layoutMode"), "models page has list/grid toggle");
+assert(modelConfigSource.includes("handleDuplicateModelAdapter"), "list/grid keep duplicate");
+assert(modelConfigSource.includes("handleDeleteModelAdapter"), "list/grid keep delete");
+assert(modelConfigSource.includes("showModal"), "model delete asks for confirmation");
+assert(modelConfigSource.includes("handleImportModelAdapters"), "models import merges model drafts only");
+assert(modelConfigSource.includes("handleExportConfig"), "models export semantics remain");
+assert(modelConfigSource.includes("导入模型配置"), "models import button names model-only transfer");
+assert(modelConfigSource.includes("导出完整配置"), "models export button names full-config transfer");
+function extractNamedButtonInner(source, title) {
+  const match = source.match(new RegExp(`<Button[\\s\\S]*?title="${title}"[\\s\\S]*?>([\\s\\S]*?)</Button>`));
+  return match ? match[1] : "";
+}
+assert(!extractNamedButtonInner(modelConfigSource, "导入模型配置").includes("icon-["), "models import button has no icon");
+assert(!extractNamedButtonInner(modelConfigSource, "导出完整配置").includes("icon-["), "models export button has no icon");
+assert(modelConfigSource.includes("全部测试"), "models page replaces clear-all with test-all");
+assert(!modelConfigSource.includes("清除全部"), "models page must not keep clear-all");
+assert(!modelConfigSource.includes("handleClearAllModelAdapters"), "models page must not keep clear-all handler");
+assert(modelConfigSource.includes("handleTestAllModelAdapters"), "models page wires test-all");
+const deleteModelFn = extractSourceFunction(appStateSource, "deleteModelAdapterAt");
+const duplicateModelFn = extractSourceFunction(appStateSource, "duplicateModelAdapterAt");
+const deleteHandler = extractSourceFunction(modelConfigSource, "handleDeleteModelAdapter");
+assert(!deleteModelFn.includes("persistConfigPayload"), "model delete stays a page draft until save");
+assert(deleteModelFn.includes("appState.modelAdapters"), "model delete mutates the draft list");
+assert(!duplicateModelFn.includes("persistConfigPayload"), "model duplicate stays a page draft until save");
+assert(duplicateModelFn.includes("appState.modelAdapters"), "model duplicate mutates the draft list");
+assert(deleteHandler.includes("showModal"), "delete handler confirms before mutating");
+assert(catalogSource.includes("adapterSearchText"), "model catalog search is a pure helper");
+
+const catalogAdapters = [
+  { type: "openai", displayName: "gpt", modelID: "gpt-5", baseURL: "https://api.openai.com", openAIEndpoint: "/v1/responses" },
+  { type: "anthropic", displayName: "claude", modelID: "claude-3", baseURL: "https://api.anthropic.com" },
+];
+assertEqual(filterModelAdapters(catalogAdapters, { type: "openai" }).map((item) => item.modelID), ["gpt-5"], "provider filter keeps openai");
+assertEqual(filterModelAdapters(catalogAdapters, { query: "claude-3" }).map((item) => item.modelID), ["claude-3"], "search matches upstream id");
+assertEqual(filterModelAdapters(catalogAdapters, { query: "/v1/responses" }).map((item) => item.modelID), ["gpt-5"], "search matches endpoint");
+assertEqual(
+  modelProviderTabs(catalogAdapters).map((tab) => [tab.value, tab.count]),
+  [
+    ["all", 2],
+    ["openai", 1],
+    ["anthropic", 1],
+    ["google", 0],
+    ["deepseek", 0],
+    ["xai", 0],
+    ["qwen", 0],
+    ["moonshot", 0],
+    ["tencent", 0],
+  ],
+  "provider tabs keep the full catalog and count real adapters",
+);
+
+const cursorViewSource = readFileSync(path.join(frontendSrc, "views/CursorView.vue"), "utf8");
+assert(cursorViewSource.includes("embedded"), "CursorView supports nested access layout");
+assert(cursorViewSource.includes("p-0"), "nested CursorView strips page padding");
+const startServiceFn = extractSourceFunction(appStateSource, "startService");
+const confirmCursorRestartFn = extractSourceFunction(appStateSource, "confirmCursorRestartOnce");
+assert(confirmCursorRestartFn.includes("showModal"), "startService confirms Cursor restart once via existing modal");
+assert(startServiceFn.includes("confirmCursorRestartOnce"), "startService uses one restart confirmation helper");
+assert(startServiceFn.includes("inspectCursorProxyStart"), "startService inspects restart need before StartProxy");
+assert(startServiceFn.includes("startProxyAfterRestartConfirm"), "confirmed restart uses StartProxyAfterRestartConfirm");
+assert(startServiceFn.includes("serviceBusy"), "startService keeps busy during inspect/confirm/start");
+assert(!startServiceFn.includes("stopProxyService"), "startService must not fake restart via StopProxy");
+assert(clientApiSource.includes("InspectCursorProxyStart"), "client API exposes inspect");
+assert(clientApiSource.includes("StartProxyAfterRestartConfirm"), "client API exposes confirmed StartProxy");
+const handleProxyStateFn = extractSourceFunction(appStateSource, "handleProxyStateEvent");
+assert(!handleProxyStateFn.includes("startService"), "proxy:state must not auto-start");
+assert(!handleProxyStateFn.includes("confirmCursorRestartOnce"), "auto-start lastError must not popup");
+const handleProxyStartRequestedFn = extractSourceFunction(appStateSource, "handleProxyStartRequestedEvent");
+assert(handleProxyStartRequestedFn.includes("startService"), "tray event uses startService inspect/confirm");
+assert(handleProxyStartRequestedFn.includes("shouldHandleProxyStartRequested"), "tray event listens only main window");
+assert(appStateSource.includes("PROXY_START_REQUESTED_EVENT"), "frontend listens for tray start event");
+assert(appStateSource.includes("Events.On(PROXY_START_REQUESTED_EVENT"), "tray start uses existing Events plumbing");
+assert(!handleProxyStartRequestedFn.includes("ApplicationStarted"), "startup must not trigger tray popup");
+const shouldHandleStartRequestedFn = extractSourceFunction(appStateSource, "shouldHandleProxyStartRequested");
+assert(shouldHandleStartRequestedFn.includes("MAIN_WINDOW_NAME"), "main-window filter uses named main window");
+assert(cursorViewSource.includes("result.partial"), "CursorView surfaces partial Cursor launch success");
+const homeViewSource = readFileSync(path.join(frontendSrc, "views/Home.vue"), "utf8");
+assert(homeViewSource.includes("result.partial"), "Home surfaces partial Cursor launch success");
+assert(homeViewSource.includes("result.cancelled"), "Home does not treat restart refusal as start failure");
+
+const localeDir = path.join(frontendSrc, "i18n/locales");
+const zhMessages = JSON.parse(readFileSync(path.join(localeDir, "zh-CN.json"), "utf8"));
+const requiredLocaleSources = new Set([
+  "主导航",
+  "总览",
+  "接入",
+  "接入中心",
+  "{0} 已接入",
+  "Cursor 助手",
+  "刷新运行状态",
+  "共享入口",
+  "接入方式",
+  "基本设置",
+  "会话与日志",
+  "网络与请求",
+  "数据与恢复",
+  "设置分组",
+  "开机自启动",
+  "跟随系统",
+  "删除模型配置",
+  "确定删除「{0}」吗？删除后需要保存本页才会写入配置。",
+  "Codex 接入",
+  "Grok 接入",
+  "Anthropic 接入",
+  "静态 API key",
+  "ChatGPT / Codex 订阅",
+  "Grok 订阅",
+  "导入 auth.json",
+  "设备码授权",
+  "凭据来源",
+  "重启 Cursor",
+  "保存工作后重启 Cursor，以应用代理配置。",
+  "重启",
+  "已取消，保持当前设置与运行状态",
+]);
+const zhBySource = new Map(Object.entries(zhMessages).map(([id, source]) => [source, id]));
+for (const source of requiredLocaleSources) {
+  const id = zhBySource.get(source);
+  assert(id, `zh-CN must contain source ${source}`);
+  for (const locale of ["zh-CN", "en-US", "ja-JP", "ru-RU"]) {
+    const messages = JSON.parse(readFileSync(path.join(localeDir, `${locale}.json`), "utf8"));
+    assert(String(messages[id] || "").trim(), `${locale} must translate ${source}`);
+  }
+}
 
 console.log("config projection tests passed");

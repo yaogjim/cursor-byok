@@ -68,6 +68,23 @@ func TestSanitizeMetadataTextRemovesCredentialsAndQueries(t *testing.T) {
 	}
 }
 
+func TestSanitizeMetadataTextRedactsUnlabeledAPIKeysAndJWT(t *testing.T) {
+	const jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	input := "rejected sk-unlabeled-secret sk-proj-unlabeled-secret sk-ant-unlabeled-secret " + jwt
+	output := SanitizeMetadataText(input)
+	for _, secret := range []string{"sk-unlabeled-secret", "sk-proj-unlabeled-secret", "sk-ant-unlabeled-secret", jwt} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("sanitized metadata retained %q: %s", secret, output)
+		}
+	}
+	if !strings.Contains(output, "rejected") {
+		t.Fatalf("sanitized metadata dropped surrounding text: %s", output)
+	}
+	if strings.Count(output, redactedMetadataValue) < 4 {
+		t.Fatalf("expected unlabeled secrets redacted: %s", output)
+	}
+}
+
 func TestRecordSanitizesErrorMessage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
 	observer, err := New(Options{FilePath: path})

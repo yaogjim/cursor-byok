@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"cursor-log-analyzer/internal/load"
@@ -123,10 +124,13 @@ func TestWorkspaceFinalizesHighCardinalityTraceWithPagedScratch(t *testing.T) {
 func TestWorkspaceDiagnosesSemanticStateAndTraceIntegrity(t *testing.T) {
 	ctx := context.Background()
 	input := t.TempDir()
+	// The duplicate sequence 3 pair carries distinct app_session_id values: same-
+	// identity duplicates now fold or conflict at load time, so this fixture keeps
+	// sequence_duplicate reachable through the file-level sequence finding.
 	writeFile(t, filepath.Join(input, "events.jsonl"), []byte(
 		`{"schema_version":2,"timestamp":"2026-03-14T00:00:00Z","sequence":1,"app_session_id":"semantic","trace_id":"trace-semantic","span_id":"child","parent_span_id":"missing-parent","layer":"forwarder","event":"turn_started","capability":"agent","operation":"agent.turn","semantic_outcome":"started","implementation_state":"implemented","severity":"info"}`+"\n"+
 			`{"schema_version":2,"timestamp":"2026-03-14T00:00:01Z","sequence":3,"app_session_id":"semantic","trace_id":"trace-semantic","layer":"forwarder","event":"tool_call_dispatch","capability":"tool","operation":"tool.execute","semantic_outcome":"started","implementation_state":"implemented","severity":"info","tool_call_id":"tool-1"}`+"\n"+
-			`{"schema_version":2,"timestamp":"2026-03-14T00:00:02Z","sequence":3,"app_session_id":"semantic","trace_id":"trace-semantic","layer":"forwarder","event":"tool_call_canceled","capability":"tool","operation":"tool.execute","semantic_outcome":"canceled","implementation_state":"implemented","severity":"info","tool_call_id":"tool-1"}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:02Z","sequence":3,"app_session_id":"semantic-other","trace_id":"trace-semantic","layer":"forwarder","event":"tool_call_canceled","capability":"tool","operation":"tool.execute","semantic_outcome":"canceled","implementation_state":"implemented","severity":"info","tool_call_id":"tool-1"}`+"\n"+
 			`{"schema_version":2,"timestamp":"2026-03-14T00:00:03Z","sequence":2,"app_session_id":"semantic","trace_id":"trace-semantic","layer":"forwarder","event":"tool_call_result","capability":"tool","operation":"tool.execute","semantic_outcome":"succeeded","implementation_state":"implemented","severity":"info","tool_call_id":"tool-1","response_bytes":12}`+"\n"+
 			`{"schema_version":2,"timestamp":"2026-03-14T00:00:04Z","sequence":4,"app_session_id":"semantic","trace_id":"trace-semantic","layer":"forwarder","event":"repository_call","capability":"repository","operation":"repository.index","status":"success","semantic_outcome":"compat_only","implementation_state":"compat","severity":"warning"}`+"\n"+
 			`{"schema_version":2,"timestamp":"2026-03-14T00:00:05Z","sequence":5,"app_session_id":"semantic","trace_id":"trace-semantic","layer":"provider","event":"llm_summary","capability":"provider","operation":"provider.stream","semantic_outcome":"succeeded","implementation_state":"implemented","severity":"info"}`+"\n"+
@@ -240,5 +244,135 @@ func writeFile(t *testing.T, path string, payload []byte) {
 	}
 	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceAggregatesExpectedNoiseWithoutRequestError(t *testing.T) {
+	ctx := context.Background()
+	input := t.TempDir()
+	writeFile(t, filepath.Join(input, "events.jsonl"), []byte(
+		`{"schema_version":2,"timestamp":"2026-03-14T00:00:00Z","sequence":1,"app_session_id":"noise","trace_id":"trace-filesync-1","layer":"mitm","event":"backend_forward_finished","capability":"filesync","operation":"filesync.request","direction":"proxy_internal","route":"/aiserver.v1.FileSyncService/UnknownOp","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"warning","error_category":"client_error","fields":{"status_code":404,"traffic_class":"filesync","path":"/aiserver.v1.FileSyncService/UnknownOp"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:01Z","sequence":2,"app_session_id":"noise","trace_id":"trace-filesync-2","layer":"mitm","event":"backend_forward_finished","capability":"filesync","operation":"filesync.request","direction":"proxy_internal","route":"/aiserver.v1.FileSyncService/UnknownOp","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"warning","error_category":"client_error","fields":{"status_code":404,"traffic_class":"filesync","path":"/aiserver.v1.FileSyncService/UnknownOp"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:02Z","sequence":3,"app_session_id":"noise","trace_id":"trace-scm","layer":"mitm","event":"backend_forward_finished","capability":"git","operation":"git.request","direction":"proxy_internal","route":"/aiserver.v1.AiService/WriteGitCommitMessage","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"warning","error_category":"client_error","fields":{"status_code":404,"path":"/aiserver.v1.AiService/WriteGitCommitMessage"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:03Z","sequence":4,"app_session_id":"noise","trace_id":"trace-tls","layer":"mitm","event":"tls_handshake_failed","capability":"unknown","operation":"mitm.tls_handshake","direction":"cursor_to_proxy","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"warning","error_category":"client_unknown_ca","fields":{"host":"api2.cursor.sh","tls_role":"server","source":"goproxy_client_handshake"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:04Z","sequence":5,"app_session_id":"noise","trace_id":"trace-5xx","layer":"mitm","event":"backend_forward_finished","capability":"unknown","operation":"transport.forward","direction":"proxy_internal","route":"/aiserver.v1.BidiService/BidiAppend","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"error","error_category":"server_error","fields":{"status_code":502,"traffic_class":"llm_relay"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:05Z","sequence":6,"app_session_id":"noise","trace_id":"trace-provider","layer":"provider","event":"llm_summary","capability":"provider","operation":"provider.stream","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"error","error_category":"provider_error"}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:05.5Z","sequence":8,"app_session_id":"noise","trace_id":"trace-provider-masked","layer":"provider","event":"llm_summary","capability":"filesync","operation":"filesync.request","status":"error","semantic_outcome":"failed","implementation_state":"implemented","severity":"warning","error_category":"provider_error","fields":{"status_code":404,"path":"/aiserver.v1.FileSyncService/UnknownOp"}}`+"\n"+
+			`{"schema_version":2,"timestamp":"2026-03-14T00:00:06Z","sequence":7,"app_session_id":"noise","trace_id":"trace-filesync-backend","layer":"backend","event":"request_finished","capability":"filesync","operation":"filesync.request","direction":"proxy_to_cursor","route":"file_sync","status":"error","implementation_state":"implemented","severity":"warning","error_category":"client_error","fields":{"status_code":404,"path":"/aiserver.v1.FileSyncService/UnknownOp"}}`+"\n",
+	))
+
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := load.IntoWorkspace(ctx, ws, workspace.DatasetCurrent, []string{input}, load.Options{}); err != nil {
+		t.Fatalf("load noise input: %v", err)
+	}
+	if _, err := Workspace(ctx, ws, false); err != nil {
+		t.Fatalf("Workspace() noise diagnostics error = %v", err)
+	}
+	currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	requestErrorTraces := map[string]bool{}
+	expectedNoise := map[string]workspace.FindingRecord{}
+	if err := ws.ForEachFinding(ctx, currentID, func(finding workspace.FindingRecord) error {
+		switch finding.Code {
+		case "request_error":
+			requestErrorTraces[finding.TraceKey] = true
+		case "expected_noise":
+			expectedNoise[finding.TraceKey] = finding
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("ForEachFinding() error = %v", err)
+	}
+	for _, trace := range []string{"trace-filesync-1", "trace-filesync-2", "trace-filesync-backend", "trace-scm", "trace-tls"} {
+		if requestErrorTraces[trace] {
+			t.Fatalf("expected noise still produced request_error for %s: %#v", trace, requestErrorTraces)
+		}
+	}
+	if !requestErrorTraces["trace-5xx"] || !requestErrorTraces["trace-provider"] || !requestErrorTraces["trace-provider-masked"] {
+		t.Fatalf("real failures missing request_error: %#v", requestErrorTraces)
+	}
+	filesync := expectedNoise["filesync:filesync.request:error"]
+	if filesync.Count != 3 || filesync.Severity != "warning" {
+		t.Fatalf("filesync aggregate = %+v", filesync)
+	}
+	if _, ok := expectedNoise["git:git.request:error"]; !ok {
+		t.Fatalf("scm aggregate missing: %#v", expectedNoise)
+	}
+	if _, ok := expectedNoise["unknown:mitm.tls_handshake:error"]; !ok {
+		t.Fatalf("tls aggregate missing: %#v", expectedNoise)
+	}
+}
+
+func TestRetryingAttemptDoesNotEmitRequestErrorButFinalFailureDoes(t *testing.T) {
+	ctx := context.Background()
+	retrying := `{"schema_version":2,"timestamp":"2026-09-10T00:00:00Z","sequence":1,"app_session_id":"retry-session","trace_id":"trace-retry","layer":"provider","event":"provider_response","capability":"provider","operation":"provider.stream","status":"retrying","severity":"warning","error_category":"server_5xx","semantic_outcome":"degraded","implementation_state":"implemented"}`
+	succeededFinal := `{"schema_version":2,"timestamp":"2026-09-10T00:00:01Z","sequence":2,"app_session_id":"retry-session","trace_id":"trace-retry","layer":"provider","event":"model_call_final","capability":"provider","operation":"provider.stream","status":"completed","severity":"info","semantic_outcome":"succeeded","implementation_state":"implemented"}`
+	failedFinal := `{"schema_version":2,"timestamp":"2026-09-10T00:00:01Z","sequence":2,"app_session_id":"retry-session","trace_id":"trace-retry","layer":"provider","event":"model_call_final","capability":"provider","operation":"provider.stream","status":"error","severity":"error","error_category":"server_5xx","semantic_outcome":"failed","implementation_state":"implemented"}`
+
+	cases := []struct {
+		name        string
+		finalEvent  string
+		wantRequest bool
+	}{
+		{name: "retrying then succeeded", finalEvent: succeededFinal, wantRequest: false},
+		{name: "retrying then failed", finalEvent: failedFinal, wantRequest: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			input := t.TempDir()
+			writeFile(t, filepath.Join(input, "events.jsonl"), []byte(strings.Join([]string{retrying, test.finalEvent}, "\n")+"\n"))
+
+			ws := openWorkspace(t)
+			defer ws.CloseAndRemove()
+			if err := load.IntoWorkspace(ctx, ws, workspace.DatasetCurrent, []string{input}, load.Options{}); err != nil {
+				t.Fatalf("load input: %v", err)
+			}
+			if _, err := Workspace(ctx, ws, false); err != nil {
+				t.Fatalf("Workspace() error = %v", err)
+			}
+			currentID := mustDatasetID(t, ws, workspace.DatasetCurrent)
+			codes := make(map[string]string)
+			if err := ws.ForEachFinding(ctx, currentID, func(finding workspace.FindingRecord) error {
+				if _, ok := codes[finding.Code]; !ok {
+					codes[finding.Code] = finding.Severity
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("ForEachFinding() error = %v", err)
+			}
+			_, hasRequestError := codes["request_error"]
+			if hasRequestError != test.wantRequest {
+				t.Fatalf("request_error present = %v, want %v (findings=%#v)", hasRequestError, test.wantRequest, codes)
+			}
+			if severity, ok := codes["semantic_outcome_gap"]; !ok || severity != "warning" {
+				t.Fatalf("retrying attempt must keep the degraded semantic warning: %#v", codes)
+			}
+		})
+	}
+}
+
+func TestExpectedNoiseDoesNotSwallowProviderFailure(t *testing.T) {
+	event := workspace.EventRecord{
+		Capability:     "filesync",
+		Operation:      "filesync.request",
+		Status:         "error",
+		ErrorCategory:  "provider_error",
+		SafeFieldsJSON: `{"status_code":404,"path":"/aiserver.v1.FileSyncService/UnknownOp"}`,
+	}
+	if isExpectedNoise(event) {
+		t.Fatal("provider_error must not be classified as expected noise")
+	}
+	if !shouldEmitRequestError(event) {
+		t.Fatal("provider_error must still emit request_error")
+	}
+	filesync404 := workspace.EventRecord{
+		Capability:     "filesync",
+		Operation:      "filesync.request",
+		Status:         "error",
+		ErrorCategory:  "client_error",
+		SafeFieldsJSON: `{"status_code":404,"path":"/aiserver.v1.FileSyncService/UnknownOp"}`,
+	}
+	if !isExpectedNoise(filesync404) || shouldEmitRequestError(filesync404) {
+		t.Fatal("filesync 404 should stay expected noise without request_error")
 	}
 }

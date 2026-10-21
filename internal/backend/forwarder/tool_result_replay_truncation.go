@@ -4,25 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
+
+	runtimecore "cursor/internal/backend/agent/core"
+	"cursor/internal/backend/agent/toolresult"
 )
 
 const (
-	projectedReplayKiB = 1024
-
-	projectedReadReplayLimit       = 64 * projectedReplayKiB
-	projectedShellReplayLimit      = 128 * projectedReplayKiB
-	projectedShellStreamLimit      = 16 * projectedReplayKiB
-	projectedShellInterleavedLimit = 32 * projectedReplayKiB
-	projectedGrepReplayLimit       = 32 * projectedReplayKiB
-	projectedEditReplayLimit       = 32 * projectedReplayKiB
-	projectedPatchEditReplayLimit  = 4 * projectedReplayKiB
-	projectedWebFetchReplayLimit   = 32 * projectedReplayKiB
-	projectedWebSearchReplayLimit  = 16 * projectedReplayKiB
-	projectedMcpReplayLimit        = 32 * projectedReplayKiB
+	projectedReadReplayLimit       = toolresult.ReadContentBytes
+	projectedShellReplayLimit      = toolresult.ShellReplayPayloadBytes
+	projectedShellStreamLimit      = toolresult.ShellStreamBytes
+	projectedShellInterleavedLimit = toolresult.ShellInterleavedBytes
+	projectedGrepReplayLimit       = toolresult.GrepContentBytes
+	projectedEditReplayLimit       = toolresult.EditReplayBytes
+	projectedPatchEditReplayLimit  = toolresult.PatchEditReplayBytes
+	projectedWebFetchReplayLimit   = toolresult.WebFetchMarkdownBytes
+	projectedWebSearchReplayLimit  = toolresult.WebSearchPayloadBytes
+	projectedMcpReplayLimit        = toolresult.MCPResourcesBytes
 )
 
 func limitProjectedToolResultReplay(toolName string, content string, resultText string, fromStoredToolCall bool, historical bool) string {
+	toolName = runtimecore.CanonicalToolName(strings.TrimSpace(toolName))
 	if compacted, ok := compactProjectedGenerateImageResultReplay(toolName, content, resultText); ok {
 		return compacted
 	}
@@ -62,28 +63,7 @@ func limitProjectedToolResultReplay(toolName string, content string, resultText 
 }
 
 func projectedToolReplayLimit(toolName string) (int, bool) {
-	switch strings.TrimSpace(toolName) {
-	case "GenerateImage":
-		return projectedWebSearchReplayLimit, true
-	case "Read":
-		return projectedReadReplayLimit, true
-	case "Shell":
-		return projectedShellReplayLimit, true
-	case "Grep":
-		return projectedGrepReplayLimit, true
-	case "PatchEdit", "PatchEditLines", "PatchEditSpan":
-		return projectedPatchEditReplayLimit, true
-	case "Edit", "Write":
-		return projectedEditReplayLimit, true
-	case "WebFetch":
-		return projectedWebFetchReplayLimit, true
-	case "WebSearch":
-		return projectedWebSearchReplayLimit, true
-	case "CallMcpTool", "FetchMcpResource", "ListMcpResources":
-		return projectedMcpReplayLimit, true
-	default:
-		return 0, false
-	}
+	return toolresult.PayloadBytes(toolName, toolresult.PurposeReplay)
 }
 
 func compactProjectedGenerateImageResultReplay(toolName string, content string, resultText string) (string, bool) {
@@ -101,7 +81,8 @@ func compactProjectedGenerateImageResultReplay(toolName string, content string, 
 	var payload any
 	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
 		if fallback == "" {
-			return truncateProjectedReplayText("GenerateImage", trimmed, projectedWebSearchReplayLimit), true
+			limit, _ := toolresult.PayloadBytes("GenerateImage", toolresult.PurposeReplay)
+			return truncateProjectedReplayText("GenerateImage", trimmed, limit), true
 		}
 		return fallback, true
 	}
@@ -125,6 +106,9 @@ func compactGenerateImagePayload(value any) bool {
 			if text, ok := child.(string); ok {
 				switch key {
 				case "image_data", "imageData":
+					if strings.Contains(text, "base64 image data omitted from replay") {
+						continue
+					}
 					item[key] = fmt.Sprintf("[base64 image data omitted from replay; bytes=%d]", len(strings.TrimSpace(text)))
 					changed = true
 					continue
@@ -145,16 +129,15 @@ func compactGenerateImagePayload(value any) bool {
 }
 
 func patchEditReplayLimit(toolName string) int {
-	switch strings.TrimSpace(toolName) {
-	case "PatchEdit", "PatchEditLines", "PatchEditSpan":
-		return projectedPatchEditReplayLimit
-	default:
-		return projectedEditReplayLimit
+	limit, ok := toolresult.PayloadBytes(toolName, toolresult.PurposeReplay)
+	if ok {
+		return limit
 	}
+	return projectedEditReplayLimit
 }
 
 func compactProjectedShellToolResultReplay(toolName string, content string) (string, bool) {
-	if strings.TrimSpace(toolName) != "Shell" {
+	if runtimecore.CanonicalToolName(strings.TrimSpace(toolName)) != "Shell" {
 		return "", false
 	}
 	trimmed := strings.TrimSpace(content)
@@ -312,83 +295,12 @@ func truncateProjectedReplayText(toolName string, text string, limit int) string
 	if limit <= 0 || len(text) <= limit {
 		return strings.TrimSpace(text)
 	}
-	original := len(text)
-	notice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, limit, original)
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateProjectedUTF8(text, limit)
-		}
-		kept := truncateProjectedUTF8(text, keep)
-		nextNotice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; showing %d of %d bytes]", toolName, limit, len(kept), original)
-		output := strings.TrimRight(kept, "\n") + nextNotice
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
+	return toolresult.TruncateTail(toolName, text, limit)
 }
 
 func truncateProjectedReplayTextMiddle(toolName string, text string, limit int) string {
 	if limit <= 0 {
 		return ""
 	}
-	if len(text) <= limit {
-		return text
-	}
-	original := len(text)
-	notice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; omitted middle; showing %d of %d bytes]\n\n", toolName, limit, limit, original)
-	for {
-		keep := limit - len(notice)
-		if keep <= 0 {
-			return truncateProjectedUTF8(text, limit)
-		}
-		headLimit := keep / 2
-		tailLimit := keep - headLimit
-		head := truncateProjectedUTF8(text, headLimit)
-		tail := truncateProjectedUTF8Suffix(text, tailLimit)
-		kept := len(head) + len(tail)
-		nextNotice := fmt.Sprintf("\n\n[truncated: %s result exceeded %d bytes; omitted middle; showing %d of %d bytes]\n\n", toolName, limit, kept, original)
-		output := head + nextNotice + tail
-		if len(output) <= limit || nextNotice == notice {
-			return output
-		}
-		notice = nextNotice
-	}
-}
-
-func truncateProjectedUTF8(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	if limit > len(text) {
-		limit = len(text)
-	}
-	truncated := text[:limit]
-	for !utf8.ValidString(truncated) && len(truncated) > 0 {
-		truncated = truncated[:len(truncated)-1]
-	}
-	return truncated
-}
-
-func truncateProjectedUTF8Suffix(text string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(text) <= limit {
-		return text
-	}
-	start := len(text) - limit
-	if start < 0 {
-		start = 0
-	}
-	suffix := text[start:]
-	for !utf8.ValidString(suffix) && start < len(text) {
-		start++
-		suffix = text[start:]
-	}
-	return suffix
+	return toolresult.TruncateMiddle(toolName, text, limit)
 }

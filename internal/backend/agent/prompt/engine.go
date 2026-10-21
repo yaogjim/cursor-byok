@@ -13,6 +13,7 @@ import (
 
 	"cursor/gen/agentv1"
 	runtimecore "cursor/internal/backend/agent/core"
+	modeladapter "cursor/internal/backend/agent/model"
 	promptassets "cursor/prompt"
 )
 
@@ -38,6 +39,8 @@ type Message struct {
 	OpenAIResponsesReasoningStatus string `json:"openai_responses_reasoning_status,omitempty"`
 	// OpenAIResponsesReasoningSummary 保存 Responses reasoning output item 的原始 summary。
 	OpenAIResponsesReasoningSummary json.RawMessage `json:"openai_responses_reasoning_summary,omitempty"`
+	// ReasoningOrigin 保存 opaque reasoning / Responses item 元数据的最小来源身份。
+	ReasoningOrigin modeladapter.ReasoningOrigin `json:"reasoning_origin,omitempty"`
 	// ToolCalls 表示 assistant 消息中的函数调用。
 	ToolCalls []ToolCallDescriptor `json:"tool_calls,omitempty"`
 	// ToolCallID 表示 tool role 关联的调用 id。

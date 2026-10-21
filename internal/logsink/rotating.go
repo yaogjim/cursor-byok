@@ -28,13 +28,14 @@ type WriteResult struct {
 }
 
 type RotatingFile struct {
-	mu       sync.Mutex
-	dir      string
-	config   RotationConfig
-	file     *os.File
-	path     string
-	size     int64
-	sequence uint64
+	mu        sync.Mutex
+	dir       string
+	config    RotationConfig
+	file      *os.File
+	path      string
+	size      int64
+	sequence  uint64
+	protected map[string]struct{}
 }
 
 func NewRotatingFile(dir string, config RotationConfig) *RotatingFile {
@@ -100,7 +101,52 @@ func (writer *RotatingFile) Close() error {
 	return writer.closeLocked()
 }
 
+// CurrentPath returns the path of the active shard, or an empty string before
+// the first append. Callers use it to register the shard they still have open.
+func (writer *RotatingFile) CurrentPath() string {
+	if writer == nil {
+		return ""
+	}
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	return writer.path
+}
+
+// SetProtectedPaths installs shard paths that the next cleanup must keep even
+// when they are the oldest reclaimable candidates. It lets writers that share a
+// directory (for example overlapping diagnostics sinks during a reconfigure)
+// avoid deleting a shard another writer still has open. Passing nil clears the
+// protection.
+func (writer *RotatingFile) SetProtectedPaths(paths map[string]struct{}) {
+	if writer == nil {
+		return
+	}
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	writer.protected = paths
+}
+
+func (writer *RotatingFile) isProtectedLocked(path string) bool {
+	if len(writer.protected) == 0 {
+		return false
+	}
+	_, ok := writer.protected[filepath.Clean(path)]
+	return ok
+}
+
 func (writer *RotatingFile) ensureWritableLocked(incomingBytes int64) error {
+	now := writer.config.Now().UTC()
+	if writer.file != nil && writer.config.MaxAge > 0 {
+		info, err := writer.file.Stat()
+		if err != nil {
+			return fmt.Errorf("stat rotating log file: %w", err)
+		}
+		if now.Sub(info.ModTime()) > writer.config.MaxAge {
+			if err := writer.closeLocked(); err != nil {
+				return err
+			}
+		}
+	}
 	if writer.file != nil && writer.size > 0 && writer.size+incomingBytes > writer.config.MaxBytes {
 		if err := writer.closeLocked(); err != nil {
 			return err
@@ -115,7 +161,6 @@ func (writer *RotatingFile) ensureWritableLocked(incomingBytes int64) error {
 	if err := os.Chmod(writer.dir, 0o700); err != nil {
 		return fmt.Errorf("secure rotating log directory: %w", err)
 	}
-	now := writer.config.Now().UTC()
 	var file *os.File
 	var path string
 	var err error
@@ -175,7 +220,10 @@ func (writer *RotatingFile) cleanupLocked(now time.Time, reservedBytes int64) er
 	}
 	files := make([]retainedFile, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !writer.managesFile(entry.Name()) {
+		// Only regular files are managed shards. Directories, symlinks and
+		// other special entries that happen to match the prefix are left alone
+		// so cleanup never follows or removes a link/special file.
+		if !entry.Type().IsRegular() || !writer.managesFile(entry.Name()) {
 			continue
 		}
 		info, infoErr := entry.Info()
@@ -205,6 +253,9 @@ func (writer *RotatingFile) cleanupLocked(now time.Time, reservedBytes int64) er
 	remaining := len(files)
 	for _, file := range files {
 		if file.path == writer.path {
+			continue
+		}
+		if writer.isProtectedLocked(file.path) {
 			continue
 		}
 		expired := writer.config.MaxAge > 0 && now.Sub(file.modTime) > writer.config.MaxAge

@@ -88,6 +88,41 @@ func (manager *Manager) SaveUserConfig(ctx context.Context, cfg Config) (Config,
 	})
 }
 
+func (manager *Manager) SaveGatewayConfig(ctx context.Context, gateway GatewayConfig) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveGatewayConfig(ctx, gateway)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveModelAdapters(ctx context.Context, adapters []ModelAdapterConfig) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveModelAdapters(ctx, adapters)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveCursorConfig(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveCursorConfig(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveSystemSettings(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveSystemSettings(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
+func (manager *Manager) SaveHomeMetrics(ctx context.Context, cfg Config) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		saved, err := manager.store.SaveHomeMetrics(ctx, cfg)
+		return saved, err == nil, err
+	})
+}
+
 func (manager *Manager) LastAgentModelHash() string {
 	if manager == nil {
 		return ""
@@ -100,6 +135,12 @@ func (manager *Manager) SaveLastAgentModelHash(ctx context.Context, value string
 		return manager.store.SaveLastAgentModelHash(ctx, value)
 	})
 	return err
+}
+
+func (manager *Manager) SaveGatewayToken(ctx context.Context, value string) (Config, error) {
+	return manager.commitStoreWrite(true, func() (Config, bool, error) {
+		return manager.store.SaveGatewayToken(ctx, value)
+	})
 }
 
 func (manager *Manager) commitStoreWrite(notify bool, write func() (Config, bool, error)) (Config, error) {
@@ -125,13 +166,29 @@ func (manager *Manager) commitStoreWrite(notify bool, write func() (Config, bool
 	return cfg, nil
 }
 
-func (manager *Manager) ProviderStreamIdleTimeout(ctx context.Context) time.Duration {
-	if manager == nil {
-		return time.Duration(DefaultProviderStreamIdleTimeoutSeconds) * time.Second
+func (manager *Manager) StreamContinuationSettings(ctx context.Context) (enabled bool, maxPerTurn int, deadline time.Duration, overlapChars int) {
+	cfg := StreamContinuationConfig{}
+	if manager != nil {
+		manager.reloadIfChanged(ctx)
+		cfg = manager.currentConfig().StreamContinuation
 	}
-	manager.reloadIfChanged(ctx)
-	seconds := normalizeProviderStreamIdleTimeout(manager.currentConfig().ProviderStreamIdleTimeout)
-	return time.Duration(seconds) * time.Second
+	normalized := normalizeStreamContinuationConfig(cfg)
+	maxPerTurn = normalized.MaxPerTurn
+	if maxPerTurn <= 0 {
+		maxPerTurn = DefaultStreamContinuationMaxPerTurn
+	}
+	if maxPerTurn > MaxStreamContinuationMaxPerTurn {
+		maxPerTurn = MaxStreamContinuationMaxPerTurn
+	}
+	deadlineSeconds := normalized.TotalDeadlineSeconds
+	if deadlineSeconds <= 0 {
+		deadlineSeconds = DefaultStreamContinuationDeadlineSeconds
+	}
+	overlapChars = normalized.OverlapWindowChars
+	if overlapChars <= 0 {
+		overlapChars = DefaultStreamContinuationOverlapWindowChars
+	}
+	return normalized.Enabled, maxPerTurn, time.Duration(deadlineSeconds) * time.Second, overlapChars
 }
 
 func (manager *Manager) Observability(ctx context.Context) ObservabilityConfig {
@@ -173,34 +230,37 @@ func (manager *Manager) LegacyRuntimeSnapshot(_ context.Context) (legacyruntime.
 	adapters := make([]legacyruntime.ModelAdapterConfig, 0, len(cfg.ModelAdapters))
 	for _, item := range cfg.ModelAdapters {
 		adapters = append(adapters, legacyruntime.ModelAdapterConfig{
-			ID:                          item.ID,
-			Sort:                        item.Sort,
-			DisplayName:                 item.DisplayName,
-			Type:                        item.Type,
-			BaseURL:                     item.BaseURL,
-			APIKey:                      item.APIKey,
-			TooltipData:                 item.TooltipData,
-			ModelID:                     item.ModelID,
-			ReasoningEffort:             item.ReasoningEffort,
-			OpenAIEndpoint:              item.OpenAIEndpoint,
-			OpenAIExtraParamsEnabled:    item.OpenAIExtraParamsEnabled,
-			OpenAIExtraParamsJSON:       item.OpenAIExtraParamsJSON,
-			CustomHeadersEnabled:        item.CustomHeadersEnabled,
-			CustomHeadersJSON:           item.CustomHeadersJSON,
-			AnthropicExtraParamsEnabled: item.AnthropicExtraParamsEnabled,
-			AnthropicExtraParamsJSON:    item.AnthropicExtraParamsJSON,
-			ContextWindowTokens:         item.ContextWindowTokens,
-			MaxCompletionTokens:         item.MaxCompletionTokens,
-			AnthropicMaxTokens:          item.AnthropicMaxTokens,
-			AnthropicThinkingEffort:     item.AnthropicThinkingEffort,
-			ThinkingBudgetTokens:        item.ThinkingBudgetTokens,
-			MaxConcurrentRequests:       item.MaxConcurrentRequests,
+			ID:                           item.ID,
+			Sort:                         item.Sort,
+			DisplayName:                  item.DisplayName,
+			Disabled:                     !ModelAdapterEnabled(item),
+			Type:                         item.Type,
+			BaseURL:                      item.BaseURL,
+			APIKey:                       item.APIKey,
+			CredentialSource:             item.CredentialSource,
+			TooltipData:                  item.TooltipData,
+			ModelID:                      item.ModelID,
+			ReasoningEffort:              item.ReasoningEffort,
+			OpenAIEndpoint:               item.OpenAIEndpoint,
+			OpenAIExtraParamsEnabled:     item.OpenAIExtraParamsEnabled,
+			OpenAIExtraParamsJSON:        item.OpenAIExtraParamsJSON,
+			OpenAIImageGenerationEnabled: item.OpenAIImageGenerationEnabled,
+			CustomHeadersEnabled:         item.CustomHeadersEnabled,
+			CustomHeadersJSON:            item.CustomHeadersJSON,
+			AnthropicExtraParamsEnabled:  item.AnthropicExtraParamsEnabled,
+			AnthropicExtraParamsJSON:     item.AnthropicExtraParamsJSON,
+			ContextWindowTokens:          item.ContextWindowTokens,
+			MaxCompletionTokens:          item.MaxCompletionTokens,
+			AnthropicMaxTokens:           item.AnthropicMaxTokens,
+			AnthropicThinkingEffort:      item.AnthropicThinkingEffort,
+			ThinkingBudgetTokens:         item.ThinkingBudgetTokens,
+			MaxConcurrentRequests:        item.MaxConcurrentRequests,
+			OutboundProxy:                item.OutboundProxy,
 		})
 	}
 	return legacyruntime.RuntimeConfigSnapshot{
-		ObservabilityLogEnabled:   isFullObservabilityMode(cfg.Observability.Mode),
-		ProviderStreamIdleTimeout: cfg.ProviderStreamIdleTimeout,
-		ModelAdapters:             adapters,
+		ObservabilityLogEnabled: isFullObservabilityMode(cfg.Observability.Mode),
+		ModelAdapters:           adapters,
 	}, nil
 }
 

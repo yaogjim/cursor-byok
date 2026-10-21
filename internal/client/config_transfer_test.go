@@ -250,6 +250,245 @@ func TestImportUserConfigRejectsOversizedFile(t *testing.T) {
 	}
 }
 
+func TestReadModelAdaptersForImportExtractsModelsWithoutSaving(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	current := serverconfig.DefaultConfig()
+	current.Observability = serverconfig.ObservabilityConfig{
+		Mode:          serverconfig.ObservabilityModeFull,
+		RetentionDays: serverconfig.DefaultObservabilityRetentionDays,
+		MaxDiskMB:     serverconfig.DefaultObservabilityMaxDiskMB,
+	}
+	current.Appearance.Theme = "dark"
+	current.ModelAdapters = []serverconfig.ModelAdapterConfig{{
+		DisplayName: "已有模型",
+		Type:        "openai",
+		BaseURL:     "https://live.example/v1",
+		APIKey:      "live-secret",
+		TooltipData: "live",
+		ModelID:     "live-model",
+	}}
+	if err := service.SaveUserConfig(current); err != nil {
+		t.Fatalf("SaveUserConfig() error = %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "exported.yaml")
+	content := strings.Join([]string{
+		"observability:",
+		"  mode: off",
+		"appearance:",
+		"  theme: light",
+		"unknownRootField: ignored",
+		"modelAdapters:",
+		"  - displayName: 导入模型",
+		"    type: openai",
+		"    baseURL: https://import.example/v1",
+		"    apiKey: import-secret",
+		"    tooltipData: imported",
+		"    modelID: import-model",
+		"    reasoningEffort: medium",
+		"    openAIEndpoint: /v1/responses",
+		"    outboundProxy:",
+		"      enabled: true",
+		"      url: socks5://127.0.0.1:1080",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := service.ReadModelAdaptersForImport(path)
+	if err != nil {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ReadModelAdaptersForImport() len = %d, want 1", len(got))
+	}
+	if got[0].DisplayName != "导入模型" || got[0].APIKey != "import-secret" || got[0].ModelID != "import-model" {
+		t.Fatalf("imported adapters = %#v", got)
+	}
+	if !got[0].OutboundProxy.Enabled || got[0].OutboundProxy.URL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("imported outboundProxy = %#v", got[0].OutboundProxy)
+	}
+
+	persisted, err := service.LoadUserConfig()
+	if err != nil {
+		t.Fatalf("LoadUserConfig() error = %v", err)
+	}
+	if persisted.Observability.Mode != serverconfig.ObservabilityModeFull {
+		t.Fatalf("observability.mode = %q, want full", persisted.Observability.Mode)
+	}
+	if persisted.Appearance.Theme != "dark" {
+		t.Fatalf("appearance.theme = %q, want dark", persisted.Appearance.Theme)
+	}
+	if len(persisted.ModelAdapters) != 1 || persisted.ModelAdapters[0].DisplayName != "已有模型" {
+		t.Fatalf("persisted adapters = %#v", persisted.ModelAdapters)
+	}
+}
+
+func TestReadModelAdaptersForImportAllowsRunningService(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	path := filepath.Join(t.TempDir(), "models.yaml")
+	if err := os.WriteFile(path, []byte("backendListenAddr: '127.0.0.1:1'\nmodelAdapters: []\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := service.ReadModelAdaptersForImport(path); err != nil {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v", err)
+	}
+}
+
+func TestReadModelAdaptersForImportMissingModelAdaptersReturnsEmpty(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	path := filepath.Join(t.TempDir(), "settings-only.yaml")
+	if err := os.WriteFile(path, []byte("appearance:\n  theme: dark\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := service.ReadModelAdaptersForImport(path)
+	if err != nil {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("ReadModelAdaptersForImport() = %#v, want empty slice", got)
+	}
+}
+
+func TestReadModelAdaptersForImportRejectsMultipleDocuments(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	path := filepath.Join(t.TempDir(), "multiple.yaml")
+	content := "modelAdapters: []\n---\nmodelAdapters: []\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := service.ReadModelAdaptersForImport(path); err == nil || !strings.Contains(err.Error(), "单个 YAML 文档") {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v, want multiple document error", err)
+	}
+}
+
+func TestReadModelAdaptersForImportRejectsOversizedFile(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	path := filepath.Join(t.TempDir(), "oversized.yaml")
+	content := make([]byte, maxConfigTransferFileSize+1)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := service.ReadModelAdaptersForImport(path); err == nil || !strings.Contains(err.Error(), "不能超过") {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v, want size limit error", err)
+	}
+}
+
+func TestReadModelAdaptersForImportDoesNotRequireKnownRootFields(t *testing.T) {
+	raw := []byte("legacySetting: true\nmodelAdapters:\n  - displayName: only-models\n    type: anthropic\n    baseURL: https://anthropic.example\n    apiKey: secret\n    tooltipData: note\n    modelID: claude\n")
+	got, err := decodeImportedModelAdapters(raw)
+	if err != nil {
+		t.Fatalf("decodeImportedModelAdapters() error = %v", err)
+	}
+	if len(got) != 1 || got[0].DisplayName != "only-models" || got[0].Type != "anthropic" {
+		t.Fatalf("decodeImportedModelAdapters() = %#v", got)
+	}
+}
+
+func TestReadModelAdaptersForImportRestoresCanonicalIDsFromExportedYAML(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	want := configTransferPhysicalAliasCollection(t)
+	cfg := serverconfig.DefaultConfig()
+	cfg.ModelAdapters = want
+	if err := service.SaveUserConfig(cfg); err != nil {
+		t.Fatalf("SaveUserConfig() error = %v", err)
+	}
+	persisted, err := service.LoadUserConfig()
+	if err != nil {
+		t.Fatalf("LoadUserConfig() error = %v", err)
+	}
+	if len(persisted.ModelAdapters) != len(want) {
+		t.Fatalf("persisted adapters len = %d, want %d", len(persisted.ModelAdapters), len(want))
+	}
+
+	exportPath, err := service.ExportUserConfig(filepath.Join(t.TempDir(), "physical-alias.yaml"))
+	if err != nil {
+		t.Fatalf("ExportUserConfig() error = %v", err)
+	}
+	exported, err := os.ReadFile(exportPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var exportedDocument importedModelAdaptersDocument
+	if err := yaml.Unmarshal(exported, &exportedDocument); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	if len(exportedDocument.ModelAdapters) != len(want) {
+		t.Fatalf("exported adapters len = %d, want %d", len(exportedDocument.ModelAdapters), len(want))
+	}
+	for i, row := range exportedDocument.ModelAdapters {
+		if row.ID != "" {
+			t.Fatalf("exported YAML included adapter[%d] ID %q", i, row.ID)
+		}
+	}
+
+	got, err := service.ReadModelAdaptersForImport(exportPath)
+	if err != nil {
+		t.Fatalf("ReadModelAdaptersForImport() error = %v", err)
+	}
+	if len(got) != len(persisted.ModelAdapters) {
+		t.Fatalf("ReadModelAdaptersForImport() len = %d, want %d", len(got), len(persisted.ModelAdapters))
+	}
+	for i := range persisted.ModelAdapters {
+		if got[i].ID != persisted.ModelAdapters[i].ID {
+			t.Fatalf("imported adapter[%d].ID = %q, want %q", i, got[i].ID, persisted.ModelAdapters[i].ID)
+		}
+	}
+	alias := persisted.ModelAdapters[0]
+	importedAlias := got[0]
+	if !importedAlias.ProviderFallback.Enabled {
+		t.Fatal("imported alias lost providerFallback.enabled")
+	}
+	if importedAlias.ProviderFallback.PrimaryChannelID != alias.ProviderFallback.PrimaryChannelID {
+		t.Fatalf("imported primaryChannelID = %q, want %q", importedAlias.ProviderFallback.PrimaryChannelID, alias.ProviderFallback.PrimaryChannelID)
+	}
+	if len(importedAlias.ProviderFallback.CandidateChannelIDs) != 1 || importedAlias.ProviderFallback.CandidateChannelIDs[0] != alias.ProviderFallback.CandidateChannelIDs[0] {
+		t.Fatalf("imported candidateChannelIDs = %#v, want %#v", importedAlias.ProviderFallback.CandidateChannelIDs, alias.ProviderFallback.CandidateChannelIDs)
+	}
+	if importedAlias.ProviderFallback.PrimaryChannelID != persisted.ModelAdapters[1].ID {
+		t.Fatalf("primaryChannelID = %q, want physical ID %q", importedAlias.ProviderFallback.PrimaryChannelID, persisted.ModelAdapters[1].ID)
+	}
+	if importedAlias.ProviderFallback.CandidateChannelIDs[0] != persisted.ModelAdapters[2].ID {
+		t.Fatalf("candidateChannelID = %q, want physical ID %q", importedAlias.ProviderFallback.CandidateChannelIDs[0], persisted.ModelAdapters[2].ID)
+	}
+	if !importedAlias.OutboundProxy.Enabled || importedAlias.OutboundProxy.URL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("imported outboundProxy = %#v", importedAlias.OutboundProxy)
+	}
+}
+
+func TestReadModelAdaptersForImportAcceptsPartialAliasReferencingExistingChannels(t *testing.T) {
+	collection := configTransferPhysicalAliasCollection(t)
+	alias := collection[0]
+	if _, err := serverconfig.NormalizeModelAdapterConfigs([]serverconfig.ModelAdapterConfig{alias}); err == nil {
+		t.Fatal("NormalizeModelAdapterConfigs should reject alias without the candidate set")
+	}
+
+	payload, err := yaml.Marshal(serverconfig.Config{ModelAdapters: []serverconfig.ModelAdapterConfig{alias}})
+	if err != nil {
+		t.Fatalf("yaml.Marshal() error = %v", err)
+	}
+	got, err := decodeImportedModelAdapters(payload)
+	if err != nil {
+		t.Fatalf("decodeImportedModelAdapters() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("decodeImportedModelAdapters() len = %d, want 1", len(got))
+	}
+	if got[0].ID != alias.ID {
+		t.Fatalf("partial alias ID = %q, want canonical %q", got[0].ID, alias.ID)
+	}
+	if !got[0].ProviderFallback.Enabled || got[0].ProviderFallback.PrimaryChannelID != alias.ProviderFallback.PrimaryChannelID {
+		t.Fatalf("partial alias fallback = %+v, want %+v", got[0].ProviderFallback, alias.ProviderFallback)
+	}
+	if len(got[0].ProviderFallback.CandidateChannelIDs) != 1 || got[0].ProviderFallback.CandidateChannelIDs[0] != alias.ProviderFallback.CandidateChannelIDs[0] {
+		t.Fatalf("partial alias candidates = %#v, want %#v", got[0].ProviderFallback.CandidateChannelIDs, alias.ProviderFallback.CandidateChannelIDs)
+	}
+	if !got[0].OutboundProxy.Enabled || got[0].OutboundProxy.URL != alias.OutboundProxy.URL {
+		t.Fatalf("partial alias outboundProxy = %#v", got[0].OutboundProxy)
+	}
+}
+
 func TestDecodeImportedUserConfigNormalizesValues(t *testing.T) {
 	raw := []byte("backendListenAddr: ' 127.0.0.1:12345 '\nproxyListenAddr: '127.0.0.1:12346'\nmodelAdapters: []\n")
 	got, err := decodeImportedUserConfig(raw)
@@ -293,6 +532,56 @@ func newConfigTransferTestService(t *testing.T) *ProxyService {
 	return &ProxyService{
 		store: serverconfig.NewStore(filepath.Join(root, "config.yaml"), filepath.Join(root, "logs")),
 	}
+}
+
+func configTransferPhysicalAliasCollection(t *testing.T) []serverconfig.ModelAdapterConfig {
+	t.Helper()
+	physicalA := serverconfig.ModelAdapterConfig{
+		DisplayName:     "physical-a",
+		Type:            "openai",
+		BaseURL:         "https://api-a.example.com/v1",
+		APIKey:          "secret-a",
+		TooltipData:     "physical-a",
+		ModelID:         "model-a",
+		ReasoningEffort: "medium",
+		OpenAIEndpoint:  "/v1/responses",
+	}
+	physicalA.OutboundProxy.Enabled = true
+	physicalA.OutboundProxy.URL = "socks5://127.0.0.1:1080"
+	physicalB := serverconfig.ModelAdapterConfig{
+		DisplayName:     "physical-b",
+		Type:            "openai",
+		BaseURL:         "https://api-b.example.com/v1",
+		APIKey:          "secret-b",
+		TooltipData:     "physical-b",
+		ModelID:         "model-b",
+		ReasoningEffort: "medium",
+		OpenAIEndpoint:  "/v1/responses",
+	}
+	physicalC := serverconfig.ModelAdapterConfig{
+		DisplayName:     "physical-c",
+		Type:            "openai",
+		BaseURL:         "https://api-c.example.com/v1",
+		APIKey:          "secret-c",
+		TooltipData:     "physical-c",
+		ModelID:         "model-c",
+		ReasoningEffort: "medium",
+		OpenAIEndpoint:  "/v1/responses",
+	}
+	ids, err := serverconfig.NormalizeModelAdapterConfigs([]serverconfig.ModelAdapterConfig{physicalA, physicalB, physicalC})
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterConfigs() error = %v", err)
+	}
+	physicalA.ProviderFallback = serverconfig.ProviderFallbackConfig{
+		Enabled:             true,
+		PrimaryChannelID:    ids[1].ID,
+		CandidateChannelIDs: []string{ids[2].ID},
+	}
+	normalized, err := serverconfig.NormalizeModelAdapterConfigs([]serverconfig.ModelAdapterConfig{physicalA, physicalB, physicalC})
+	if err != nil {
+		t.Fatalf("NormalizeModelAdapterConfigs(alias collection) error = %v", err)
+	}
+	return normalized
 }
 
 func configTransferTestBoolPtr(value bool) *bool {

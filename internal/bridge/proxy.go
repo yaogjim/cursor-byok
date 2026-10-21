@@ -5,12 +5,16 @@ import (
 	"cursor/internal/certs"
 	"cursor/internal/client"
 	"cursor/internal/mitm"
+	"cursor/internal/subscriptionauth"
 	"runtime"
 )
 
 // Public DTOs remain in package main for Wails service compatibility.
 // ProxyState 定义了当前模块中的 ProxyState 类型。
 type ProxyState = client.ProxyState
+
+// CursorProxyStartInspection 定义 StartProxy 重启确认预检结果。
+type CursorProxyStartInspection = client.CursorProxyStartInspection
 
 // UserConfig 定义了当前模块中的 UserConfig 类型。
 type UserConfig = client.UserConfig
@@ -30,8 +34,22 @@ type ModelAdapterModelsRequest = client.ModelAdapterModelsRequest
 // ModelAdapterModelsResult 定义模型列表查询结果。
 type ModelAdapterModelsResult = client.ModelAdapterModelsResult
 
+// GatewayTestResult 定义本机 Gateway 可用性检查结果。
+type GatewayTestResult = client.GatewayTestResult
+
 // CursorAccountStatus 是可安全展示给桌面前端的独立 Cursor 账号状态。
 type CursorAccountStatus = client.CursorAccountStatus
+
+type SubscriptionAccountStatus = subscriptionauth.AccountStatus
+type SubscriptionUsageSnapshot = subscriptionauth.UsageSnapshot
+type Sub2APIImportPreview = subscriptionauth.Sub2APIImportPreview
+type Sub2APIImportRequest = subscriptionauth.Sub2APIImportRequest
+type Sub2APIImportResult = subscriptionauth.Sub2APIImportResult
+type GrokDeviceCode = subscriptionauth.GrokDeviceCode
+type GrokPollInput = subscriptionauth.GrokPollInput
+type CodexDeviceCode = subscriptionauth.CodexDeviceCode
+type CodexPollInput = subscriptionauth.CodexPollInput
+type SubscriptionPollResult = subscriptionauth.PollResult
 
 // LicenseActionRequest 定义了当前模块中的 LicenseActionRequest 类型。
 type LicenseActionRequest = client.LicenseActionRequest
@@ -76,9 +94,29 @@ func (s *ProxyService) StartProxy() (ProxyState, error) {
 	return s.core.StartProxy()
 }
 
+// InspectCursorProxyStart 只读检查是否需要一次 Cursor 重启确认。
+func (s *ProxyService) InspectCursorProxyStart() (CursorProxyStartInspection, error) {
+	return s.core.InspectCursorProxyStart()
+}
+
+// StartProxyAfterRestartConfirm 在用户确认后继续 StartProxy 并正常重启 Cursor。
+func (s *ProxyService) StartProxyAfterRestartConfirm() (ProxyState, error) {
+	return s.core.StartProxyAfterRestartConfirm()
+}
+
 // StopProxy 用于处理与 StopProxy 相关的逻辑。
 func (s *ProxyService) StopProxy() (ProxyState, error) {
 	return s.core.StopProxy()
+}
+
+// StartGateway 只启动独立模型 Gateway，不启动 Cursor backend 或 MITM。
+func (s *ProxyService) StartGateway() (ProxyState, error) {
+	return s.core.StartGateway()
+}
+
+// StopGateway 只停止独立模型 Gateway。
+func (s *ProxyService) StopGateway() (ProxyState, error) {
+	return s.core.StopGateway()
 }
 
 // GetState 用于处理与 GetState 相关的逻辑。
@@ -96,9 +134,13 @@ func (s *ProxyService) SetBaseURL(baseURL string) (ProxyState, error) {
 	return s.core.SetBaseURL(baseURL)
 }
 
-// LoadUserConfig 用于处理与 LoadUserConfig 相关的逻辑。
+// LoadUserConfig 返回给前端的配置不含 Gateway token 明文。
 func (s *ProxyService) LoadUserConfig() (UserConfig, error) {
-	return s.core.LoadUserConfig()
+	cfg, err := s.core.LoadUserConfig()
+	if err != nil {
+		return cfg, err
+	}
+	return serverconfig.RedactGatewayTokenForUI(cfg), nil
 }
 
 // SaveUserConfig 用于处理与 SaveUserConfig 相关的逻辑。
@@ -106,14 +148,47 @@ func (s *ProxyService) SaveUserConfig(cfg UserConfig) error {
 	return s.core.SaveUserConfig(cfg)
 }
 
-// ExportUserConfig 将当前完整配置导出为 YAML 文件。
+// SaveGatewayConfig 只保存 Gateway 配置块，避免覆盖其他页面草稿。
+func (s *ProxyService) SaveGatewayConfig(cfg UserConfig) error {
+	return s.core.SaveGatewayConfig(cfg)
+}
+
+// SaveModelAdapters 只保存上游模型配置块。
+func (s *ProxyService) SaveModelAdapters(cfg UserConfig) error {
+	return s.core.SaveModelAdapters(cfg)
+}
+
+// SaveCursorConfig 只保存 Cursor 集成配置块。
+func (s *ProxyService) SaveCursorConfig(cfg UserConfig) error {
+	return s.core.SaveCursorConfig(cfg)
+}
+
+// SaveSystemSettings 只保存系统设置配置块。
+func (s *ProxyService) SaveSystemSettings(cfg UserConfig) error {
+	return s.core.SaveSystemSettings(cfg)
+}
+
+// SaveHomeMetrics 只保存首页统计口径。
+func (s *ProxyService) SaveHomeMetrics(cfg UserConfig) error {
+	return s.core.SaveHomeMetrics(cfg)
+}
+
 func (s *ProxyService) ExportUserConfig(path string) (string, error) {
 	return s.core.ExportUserConfig(path)
 }
 
 // ImportUserConfig 从 YAML 文件校验并替换当前完整配置。
 func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
-	return s.core.ImportUserConfig(path)
+	cfg, err := s.core.ImportUserConfig(path)
+	if err != nil {
+		return cfg, err
+	}
+	return serverconfig.RedactGatewayTokenForUI(cfg), nil
+}
+
+// ReadModelAdaptersForImport 只读取 YAML 中的 modelAdapters，不写盘、不停服务。
+func (s *ProxyService) ReadModelAdaptersForImport(path string) ([]ModelAdapterConfig, error) {
+	return s.core.ReadModelAdaptersForImport(path)
 }
 
 // GetCursorAccountStatus 返回 cursor-byok 独立 Cursor 账号的脱敏状态。
@@ -129,6 +204,62 @@ func (s *ProxyService) StartCursorAccountLogin() (CursorAccountStatus, error) {
 // DisconnectCursorAccount 只断开 cursor-byok 自己的账号。
 func (s *ProxyService) DisconnectCursorAccount() (CursorAccountStatus, error) {
 	return s.core.DisconnectCursorAccount()
+}
+
+func (s *ProxyService) GetCodexAuthStatus() SubscriptionAccountStatus {
+	return s.core.GetCodexAuthStatus()
+}
+
+func (s *ProxyService) ImportCodexAuth(path string) (SubscriptionAccountStatus, error) {
+	return s.core.ImportCodexAuth(path)
+}
+
+func (s *ProxyService) ClearCodexAuth() (SubscriptionAccountStatus, error) {
+	return s.core.ClearCodexAuth()
+}
+
+func (s *ProxyService) StartCodexDeviceAuth() (CodexDeviceCode, error) {
+	return s.core.StartCodexDeviceAuth()
+}
+
+func (s *ProxyService) PollCodexDeviceAuth(input CodexPollInput) (SubscriptionPollResult, error) {
+	return s.core.PollCodexDeviceAuth(input)
+}
+
+func (s *ProxyService) StartGrokDeviceAuth() (GrokDeviceCode, error) {
+	return s.core.StartGrokDeviceAuth()
+}
+
+func (s *ProxyService) PollGrokDeviceAuth(input GrokPollInput) (SubscriptionPollResult, error) {
+	return s.core.PollGrokDeviceAuth(input)
+}
+
+func (s *ProxyService) ListSubscriptionAccounts(provider string) ([]SubscriptionAccountStatus, error) {
+	return s.core.ListSubscriptionAccounts(provider)
+}
+
+func (s *ProxyService) ActivateSubscriptionAccount(accountID string) (SubscriptionAccountStatus, error) {
+	return s.core.ActivateSubscriptionAccount(accountID)
+}
+
+func (s *ProxyService) DeleteSubscriptionAccount(accountID string) error {
+	return s.core.DeleteSubscriptionAccount(accountID)
+}
+
+func (s *ProxyService) RefreshSubscriptionUsage(provider string) (SubscriptionUsageSnapshot, error) {
+	return s.core.RefreshSubscriptionUsage(provider)
+}
+
+func (s *ProxyService) RefreshSubscriptionAccountUsage(provider string, accountID string) (SubscriptionUsageSnapshot, error) {
+	return s.core.RefreshSubscriptionAccountUsage(provider, accountID)
+}
+
+func (s *ProxyService) PreviewSub2APIImport(path string, provider string) (Sub2APIImportPreview, error) {
+	return s.core.PreviewSub2APIImport(path, provider)
+}
+
+func (s *ProxyService) ImportSub2APIAccounts(request Sub2APIImportRequest) (Sub2APIImportResult, error) {
+	return s.core.ImportSub2APIAccounts(request)
 }
 
 // TestModelAdapter 用于处理与 TestModelAdapter 相关的逻辑。
@@ -192,6 +323,26 @@ func (s *ProxyService) ClearCursorSettings() error {
 // ShutdownForQuit 用于处理与 ShutdownForQuit 相关的逻辑。
 func (s *ProxyService) ShutdownForQuit() {
 	s.core.ShutdownForQuit()
+}
+
+// ShutdownForQuitFrom 以指定 initiator 执行进程退出清理。
+func (s *ProxyService) ShutdownForQuitFrom(initiator string) {
+	s.core.ShutdownForQuitFrom(initiator)
+}
+
+// CopyGatewayToken 仅通过显式复制接口返回 Gateway token。
+func (s *ProxyService) CopyGatewayToken() (string, error) {
+	return s.core.CopyGatewayToken()
+}
+
+// TestGateway 通过真实的本机 HTTP 请求验证 Gateway 监听、鉴权与模型列表接口。
+func (s *ProxyService) TestGateway() (GatewayTestResult, error) {
+	return s.core.TestGateway()
+}
+
+// RotateGatewayToken 轮换 Gateway token，并只把新 token 返回给这次调用。
+func (s *ProxyService) RotateGatewayToken() (string, error) {
+	return s.core.RotateGatewayToken()
 }
 
 // IsWindows 用于处理与 IsWindows 相关的逻辑。

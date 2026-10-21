@@ -42,6 +42,36 @@ func turnDiagnosticFieldKeys() []string {
 	}
 }
 
+func streamDiagnosticFieldKeys() []string {
+	return []string{
+		"header_at",
+		"first_byte_at",
+		"last_byte_at",
+		"body_end_at",
+		"last_effective_content_at",
+		"first_effective_content_at",
+		"close_cause",
+		"partial_boundary",
+		"transport_outcome",
+		"http_protocol",
+		"content_encoding",
+		"auto_decompressed",
+		"content_length",
+		"connection_observed",
+		"connection_reused",
+		"connection_was_idle",
+		"raw_byte_count",
+		"last_error_type",
+		"last_sse_event_type",
+		"last_sse_event_id_hash",
+		"last_sse_sequence",
+		"last_response_status",
+		"stream_recovery_attempts",
+		"provider_error_summary",
+		"provider_error_summary_type",
+	}
+}
+
 func stableReasoningHash(texts []string) string {
 	sum := sha256.New()
 	wrote := false

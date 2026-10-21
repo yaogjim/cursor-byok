@@ -132,10 +132,100 @@ func providerObservabilityFields(auditEvent audit.Event) map[string]any {
 	if message := strings.TrimSpace(auditEvent.ErrorMessage); message != "" {
 		fields["error_message"] = observabilityErrorMessage(message)
 	}
+	appendFailureObservabilityFields(fields, auditEvent)
 	if len(fields) == 0 {
 		return nil
 	}
 	return fields
+}
+
+func appendFailureObservabilityFields(fields map[string]any, auditEvent audit.Event) {
+	decision := strings.TrimSpace(auditEvent.RetryDecision)
+	if auditEvent.Status <= 0 && strings.TrimSpace(auditEvent.ErrorCategory) == "" && decision == "" {
+		return
+	}
+	failure := ProviderFailure{Category: strings.TrimSpace(auditEvent.ErrorCategory), Status: auditEvent.Status}
+	if auditEvent.Status > 0 {
+		failure = classifyHTTPStatusFailure(auditEvent.Status)
+	} else {
+		failure.Cause = failureCauseFromCategory(failure.Category, auditEvent.ErrorMessage)
+		failure.Phase = failurePhaseFromCategory(failure.Category)
+	}
+	if failure.Category != "" {
+		fields["failure_category"] = failure.Category
+	}
+	if failure.Cause != "" {
+		fields["failure_cause"] = failure.Cause
+	}
+	if failure.Phase != "" {
+		fields["failure_phase"] = failure.Phase
+	}
+	if failure.Status > 0 {
+		fields["failure_status"] = failure.Status
+	}
+	if decision != "" {
+		fields["recovery_action"] = recoveryActionFromDecision(decision)
+	}
+}
+
+func failureCauseFromCategory(category, message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "certificate") || strings.Contains(lower, "unknown authority") || strings.Contains(lower, "x509"):
+		return FailureCauseTLSVerify
+	case strings.Contains(lower, "tls") && strings.Contains(lower, "handshake") && (strings.Contains(lower, "eof") || strings.Contains(lower, "unexpected")):
+		return FailureCauseTLSHandshakeEOF
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "nxdomain"):
+		return FailureCauseDNSPermanent
+	case strings.Contains(lower, LivenessPhaseConnect+" timeout"):
+		return FailureCauseConnectTimeout
+	case strings.Contains(lower, LivenessPhaseFirstEvent+" timeout"):
+		return FailureCauseFirstEventTimeout
+	}
+	switch category {
+	case ProviderErrorRequestBuild:
+		return FailureCauseRequestBuild
+	case ProviderErrorContextCanceled:
+		return FailureCauseContextCanceled
+	case ProviderErrorStreamIdleTimeout:
+		return FailureCauseStreamIdleTimeout
+	case ProviderErrorTerminal:
+		return FailureCauseProviderTerminal
+	case ProviderErrorStreamDecode:
+		return FailureCauseProtocolDecode
+	case ProviderErrorTransport:
+		return FailureCauseTransport
+	default:
+		return category
+	}
+}
+
+func failurePhaseFromCategory(category string) string {
+	switch category {
+	case ProviderErrorStreamIdleTimeout:
+		return LivenessPhaseIdle
+	case ProviderErrorStreamDecode, ProviderErrorTerminal:
+		return LivenessPhaseStream
+	case ProviderErrorContextCanceled:
+		return LivenessPhaseCall
+	case ProviderErrorRequestBuild, ProviderErrorRateLimited, ProviderErrorServer5xx, ProviderErrorStatus4xx:
+		return LivenessPhaseHTTP
+	default:
+		return LivenessPhaseTransport
+	}
+}
+
+func recoveryActionFromDecision(decision string) string {
+	switch decision {
+	case retryDecisionRetry, retryDecisionStreamPreEventEOF:
+		return RecoveryActionRetrySame
+	case retryDecisionSuccess, retryDecisionSuccessAfterRetry:
+		return RecoveryActionSuccess
+	case retryDecisionNoRetryWaitBudget:
+		return RecoveryActionSwitch
+	default:
+		return RecoveryActionFailFast
+	}
 }
 
 func observabilityErrorMessage(message string) string {

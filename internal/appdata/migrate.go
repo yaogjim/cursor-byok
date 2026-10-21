@@ -1,31 +1,25 @@
 package appdata
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+)
+
+const (
+	maxLegacyConfigBytes = 2 << 20
+	maxLegacyRuleBytes   = 128 << 10
 )
 
 func ensureAssistantHome() error {
 	migrateLegacyAssistantHome()
-	if err := os.MkdirAll(RootDir(), 0o755); err != nil {
-		return fmt.Errorf("create assistant home: %w", err)
-	}
-	if err := os.MkdirAll(DataRootPath(), 0o755); err != nil {
-		return fmt.Errorf("create data root: %w", err)
-	}
-	if err := os.MkdirAll(HistoryRootPath(), 0o755); err != nil {
-		return fmt.Errorf("create history root: %w", err)
-	}
-	if err := os.MkdirAll(RulesRootPath(), 0o755); err != nil {
-		return fmt.Errorf("create rules root: %w", err)
-	}
-	if err := os.MkdirAll(LogsRootPath(), 0o700); err != nil {
-		return fmt.Errorf("create logs root: %w", err)
-	}
-	if err := os.Chmod(LogsRootPath(), 0o700); err != nil {
-		return fmt.Errorf("secure logs root: %w", err)
+	for _, path := range PrivateDirPaths() {
+		if err := ensurePrivateDir(path); err != nil {
+			return fmt.Errorf("secure assistant directory: %w", err)
+		}
 	}
 	return nil
 }
@@ -36,51 +30,111 @@ func EnsureAssistantHome() error {
 
 func migrateLegacyAssistantHome() {
 	legacyRoot := legacyRootDir()
-	copyLegacyFile(filepath.Join(legacyRoot, "config.yaml"), filepath.Join(RootDir(), "config.yaml"))
-	copyLegacyRules(filepath.Join(legacyRoot, "rules"), RulesRootPath())
-	_ = os.RemoveAll(legacyRoot)
+	configOK := copyLegacyFile(filepath.Join(legacyRoot, "config.yaml"), filepath.Join(RootDir(), "config.yaml"), maxLegacyConfigBytes)
+	rulesOK := copyLegacyRules(filepath.Join(legacyRoot, "rules"), RulesRootPath())
+	if configOK && rulesOK {
+		_ = os.RemoveAll(legacyRoot)
+	}
 }
 
-func copyLegacyRules(sourceRoot string, targetRoot string) {
-	_ = filepath.Walk(sourceRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil {
-			return nil
+func copyLegacyRules(sourceRoot string, targetRoot string) bool {
+	info, err := os.Lstat(sourceRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	entries, err := os.ReadDir(sourceRoot)
+	if err != nil {
+		return false
+	}
+	complete := true
+	for _, entry := range entries {
+		name := entry.Name()
+		if !canonicalLegacyChildName(name) {
+			complete = false
+			continue
 		}
-		rel, err := filepath.Rel(sourceRoot, path)
-		if err != nil {
-			return nil
+		sourcePath := filepath.Join(sourceRoot, name)
+		child, err := os.Lstat(sourcePath)
+		if err != nil || !child.Mode().IsRegular() {
+			complete = false
+			continue
 		}
-		targetPath := filepath.Join(targetRoot, rel)
-		if info.IsDir() {
-			_ = os.MkdirAll(targetPath, info.Mode().Perm())
-			return nil
+		if !copyLegacyFile(sourcePath, filepath.Join(targetRoot, name), maxLegacyRuleBytes) {
+			complete = false
 		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		copyLegacyFile(path, targetPath)
-		return nil
-	})
+	}
+	return complete
 }
 
-func copyLegacyFile(sourcePath string, targetPath string) {
+func canonicalLegacyChildName(name string) bool {
+	if name == "" || name == "." || name == ".." || filepath.Base(name) != name {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`)
+}
+
+func copyLegacyFile(sourcePath string, targetPath string, maxBytes int64) bool {
+	info, err := os.Lstat(sourcePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
+		return false
+	}
+	if targetInfo, err := os.Lstat(targetPath); err == nil {
+		if !targetInfo.Mode().IsRegular() {
+			return false
+		}
+		return ensurePrivateFile(targetPath) == nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
 	sourceFile, err := os.Open(sourcePath)
 	if err != nil {
-		return
+		return false
 	}
 	defer sourceFile.Close()
 
-	info, err := sourceFile.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return
+	if err := ensurePrivateDir(filepath.Dir(targetPath)); err != nil {
+		return false
 	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return
-	}
-	targetFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	targetFile, err := os.CreateTemp(filepath.Dir(targetPath), ".migrate-*.tmp")
 	if err != nil {
-		return
+		return false
 	}
-	defer targetFile.Close()
-	_, _ = io.Copy(targetFile, sourceFile)
+	tempPath := targetFile.Name()
+	complete := false
+	defer func() {
+		if !complete {
+			_ = targetFile.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := targetFile.Chmod(0o600); err != nil {
+		return false
+	}
+	if err := ensurePrivateFile(tempPath); err != nil {
+		return false
+	}
+	written, err := io.Copy(targetFile, io.LimitReader(sourceFile, maxBytes+1))
+	if err != nil || written > maxBytes {
+		return false
+	}
+	if err := targetFile.Sync(); err != nil {
+		return false
+	}
+	if err := targetFile.Close(); err != nil {
+		return false
+	}
+	if err := os.Rename(tempPath, targetPath); err != nil {
+		return false
+	}
+	if err := syncPrivateDir(filepath.Dir(targetPath)); err != nil {
+		return false
+	}
+	complete = true
+	return true
 }

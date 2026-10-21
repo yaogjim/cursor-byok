@@ -29,6 +29,7 @@ const (
 	compactionReserveFloorTokens     = 8192
 	compactionSummaryMaxChars        = 12000
 	compactionSummaryOutputMaxTokens = 4096
+	compactionSummaryRetryMaxTokens  = 8192
 	compactionTurnSnippetMaxChars    = 900
 
 	autoCompactionPreservedToolResultLimitBytes = 16 * 1024
@@ -60,6 +61,11 @@ type compactionPlan struct {
 	CurrentRequestID          string
 	CurrentUserText           string
 	PreserveCurrentTurnInputs bool
+	HomologousPrefixFrozen    bool
+	FrozenPrefixStart         int
+	FrozenPrefixEnd           int
+	FrozenPrefixEntries       []HistoryEntry
+	NativeArchiveSource       *compactionNativeArchiveSource
 }
 
 type compactedTurnSummary struct {
@@ -125,7 +131,7 @@ func (service *Service) buildManualCompactionPlan(stream *ActiveStream, conversa
 		ContextTokens:             contextTokens,
 		ContextWindowSize:         contextWindowSize,
 		ContextUsagePercent:       usagePercent,
-		ReserveTokens:             compactionAutoReserveTokens,
+		ReserveTokens:             compactionReserveTokens(contextWindowSize),
 		MessageCount:              clampInt64ToInt32(int64(len(compiled.Messages))),
 		IsFirstCompaction:         len(compactionSummaryTexts(conversation)) == 0,
 		ExistingSummary:           existingConversationSummaryText(conversation),
@@ -139,6 +145,10 @@ func (service *Service) buildManualCompactionPlan(stream *ActiveStream, conversa
 }
 
 func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversation *ConversationFile, compiled CompiledConversation) (*compactionPlan, error) {
+	return service.buildAutoCompactionPlanWithForce(stream, conversation, compiled, false)
+}
+
+func (service *Service) buildAutoCompactionPlanWithForce(stream *ActiveStream, conversation *ConversationFile, compiled CompiledConversation, force bool) (*compactionPlan, error) {
 	if stream == nil || conversation == nil {
 		return nil, nil
 	}
@@ -147,14 +157,18 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 		return nil, nil
 	}
 	estimatedCompiledTokens := estimateCompiledPromptTokens(compiled)
-	reserveTokens := service.resolveCompactionReserveTokens(stream.ModelID)
-	if reserveTokens <= 0 {
-		reserveTokens = conversation.AutoCompactionReserveTokens
+	reserveTokens := compactionReserveTokens(contextWindowSize)
+	budgetTokens := compactionBudgetTokens(contextWindowSize)
+	if budgetTokens <= 0 {
+		return nil, compactionTerminalError{
+			code: compactionOverflowTerminalCode,
+			message: fmt.Sprintf(
+				"context window leaves no compaction budget (window=%d reserve=%d)",
+				contextWindowSize,
+				reserveTokens,
+			),
+		}
 	}
-	if reserveTokens <= 0 {
-		reserveTokens = compactionAutoReserveTokens
-	}
-	budgetTokens := contextWindowSize - reserveTokens
 	preflightExceeded := estimatedCompiledTokens > 0 && estimatedCompiledTokens > budgetTokens
 	contextTokens := maxPositiveInt64(
 		conversation.AutoCompactionPromptTokens,
@@ -162,7 +176,7 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 		int64(conversation.TokenDetailsUsedTokens),
 	)
 	pendingExceeded := conversation.AutoCompactionPending && contextTokens > 0 && contextTokens > budgetTokens
-	if !pendingExceeded && !preflightExceeded {
+	if !force && !pendingExceeded && !preflightExceeded {
 		return nil, nil
 	}
 	usagePercent := 0.0
@@ -187,7 +201,7 @@ func (service *Service) buildAutoCompactionPlan(stream *ActiveStream, conversati
 	if err != nil {
 		return nil, err
 	}
-	if plan == nil && preflightExceeded {
+	if plan == nil && (preflightExceeded || force) {
 		return nil, compactionTerminalError{
 			code: compactionOverflowTerminalCode,
 			message: fmt.Sprintf(
@@ -231,12 +245,18 @@ func conversationHasLocalCarryForwardState(conversation *ConversationFile) bool 
 }
 
 func (service *Service) buildLegacyCompactionPlan(base *compactionPlan, conversation *ConversationFile, _ bool, _ int64) (*compactionPlan, error) {
+	return service.finalizeProductionCompactionPlan(service.buildLegacyCompactionPlanBase(base, conversation), conversation)
+}
+
+func (service *Service) buildLegacyCompactionPlanBase(base *compactionPlan, conversation *ConversationFile) *compactionPlan {
 	if conversation == nil || base == nil {
-		return nil, nil
+		return nil
 	}
 	candidates := buildContextCompactionCandidates(replayablePromptProjectionEntries(conversation.Entries), base.CurrentTurnSeq, base.CurrentRequestID)
+	plan := cloneCompactionPlanBase(base)
+	plan.RequestSource = compactionRequestSourcePromptAsset
 	if len(candidates) == 0 {
-		return nil, nil
+		return &plan
 	}
 	compactedTurns := make([]compactedTurnSummary, 0, len(candidates))
 	messagesToCompact := int32(0)
@@ -244,25 +264,20 @@ func (service *Service) buildLegacyCompactionPlan(base *compactionPlan, conversa
 		compactedTurns = append(compactedTurns, candidate.Summary)
 		messagesToCompact += candidate.ReplayCount
 	}
-	plan := cloneCompactionPlanBase(base)
-	plan.RequestSource = compactionRequestSourcePromptAsset
 	plan.MessagesToCompact = messagesToCompact
 	plan.CompactTurnCount = clampInt64ToInt32(int64(len(candidates)))
 	plan.CompactedTurns = compactedTurns
-	return &plan, nil
+	return &plan
 }
 
 func (service *Service) buildAutoCompactionPlanFromHistory(base *compactionPlan, conversation *ConversationFile) (*compactionPlan, error) {
 	if conversation == nil || base == nil {
 		return nil, nil
 	}
-	legacyPlan, err := service.buildLegacyCompactionPlan(base, conversation, false, 0)
-	if err != nil {
-		return nil, err
-	}
+	legacyPlan := service.buildLegacyCompactionPlanBase(base, conversation)
 	currentCandidate, hasCurrentCandidate := buildCurrentTurnCompactionCandidate(replayablePromptProjectionEntries(conversation.Entries), base.CurrentTurnSeq, base.CurrentRequestID)
 	if !hasCurrentCandidate {
-		return legacyPlan, nil
+		return service.finalizeProductionCompactionPlan(legacyPlan, conversation)
 	}
 	if legacyPlan == nil {
 		plan := cloneCompactionPlanBase(base)
@@ -270,13 +285,26 @@ func (service *Service) buildAutoCompactionPlanFromHistory(base *compactionPlan,
 		plan.MessagesToCompact = currentCandidate.ReplayCount
 		plan.CompactTurnCount = 1
 		plan.CompactedTurns = []compactedTurnSummary{currentCandidate.Summary}
-		return &plan, nil
+		return service.finalizeProductionCompactionPlan(&plan, conversation)
 	}
 	legacyPlan.RequestSource = compactionRequestSourceCurrentTurn
 	legacyPlan.MessagesToCompact += currentCandidate.ReplayCount
 	legacyPlan.CompactTurnCount++
 	legacyPlan.CompactedTurns = append(legacyPlan.CompactedTurns, currentCandidate.Summary)
-	return legacyPlan, nil
+	return service.finalizeProductionCompactionPlan(legacyPlan, conversation)
+}
+
+func (service *Service) finalizeProductionCompactionPlan(plan *compactionPlan, conversation *ConversationFile) (*compactionPlan, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	if err := freezeHomologousCompactionPlan(plan, conversation); err != nil {
+		return nil, err
+	}
+	if len(plan.CompactedTurns) == 0 && plan.MessagesToCompact == 0 {
+		return nil, nil
+	}
+	return plan, nil
 }
 
 func (service *Service) beginPendingCompaction(stream *ActiveStream, plan *compactionPlan) error {
@@ -369,18 +397,12 @@ func (service *Service) runPendingCompaction(stream *ActiveStream, token uint64,
 		return
 	}
 	summaryText, err := service.generateCompactionSummary(ctx, stream, plan, modelCallID)
-	if err == nil {
-		if trimmed := strings.TrimSpace(summaryText); trimmed != "" {
-			summaryText = trimmed
-		} else {
-			summaryText = buildFallbackCompactionSummary(plan)
-		}
-	}
+	summaryText, err = resolveCompactionSummaryResult(plan, summaryText, err)
 	if postErr := service.postStreamCommandWait(stream, streamCommand{
 		Kind: streamCommandCompactionEvent,
 		Compaction: &streamCompactionEvent{
 			Token:       token,
-			Plan:        plan,
+			Plan:        clonePendingCompaction(plan),
 			SummaryText: strings.TrimSpace(summaryText),
 			Err:         err,
 		},
@@ -640,6 +662,9 @@ func applyCompactionToConversation(conversation *ConversationFile, plan *Pending
 	if conversation == nil || plan == nil {
 		return nil
 	}
+	if err := verifyFrozenCompactionSource(conversation, plan); err != nil {
+		return err
+	}
 	compactionEntries, err := buildCompactedContextEntries(conversation, plan, summaryText)
 	if err != nil {
 		return err
@@ -671,7 +696,7 @@ func buildCompactedContextEntries(conversation *ConversationFile, plan *PendingC
 }
 
 func newCompactionSummaryEntry(plan *PendingCompaction, summaryText string) HistoryEntry {
-	payload, _ := json.Marshal(compactionSummaryEntryPayload{
+	payload := compactionSummaryEntryPayload{
 		Summary:                   strings.TrimSpace(summaryText),
 		Trigger:                   strings.TrimSpace(plan.Trigger),
 		CurrentTurnSeq:            plan.CurrentTurnSeq,
@@ -679,13 +704,19 @@ func newCompactionSummaryEntry(plan *PendingCompaction, summaryText string) Hist
 		CompactTurnCount:          plan.CompactTurnCount,
 		MessagesToCompact:         plan.MessagesToCompact,
 		PreserveCurrentTurnInputs: plan.PreserveCurrentTurnInputs,
-	})
+	}
+	if plan != nil && plan.NativeArchiveSource != nil {
+		if encoded, err := json.Marshal(plan.NativeArchiveSource); err == nil {
+			payload.NativeArchiveSource = encoded
+		}
+	}
+	encoded, _ := json.Marshal(payload)
 	return HistoryEntry{
 		TurnSeq:   plan.CurrentTurnSeq,
 		RequestID: strings.TrimSpace(plan.CurrentRequestID),
 		Role:      "system",
 		Kind:      "compacted_summary",
-		Payload:   payload,
+		Payload:   encoded,
 	}
 }
 
@@ -806,7 +837,7 @@ func validateCompactionCandidateBudget(compiled CompiledConversation, plan *Pend
 	if plan == nil {
 		return nil
 	}
-	budgetTokens := plan.ContextWindowSize - plan.ReserveTokens
+	budgetTokens := compactionBudgetTokens(plan.ContextWindowSize)
 	estimatedTokens := estimateCompiledPromptTokens(compiled)
 	if budgetTokens > 0 && estimatedTokens <= budgetTokens {
 		return nil
@@ -843,6 +874,25 @@ func (service *Service) resolveCompactionReserveTokens(modelID string) int64 {
 	_ = service
 	_ = modelID
 	return compactionAutoReserveTokens
+}
+
+func compactionReserveTokens(windowSize int64) int64 {
+	if windowSize <= 0 {
+		return compactionAutoReserveTokens
+	}
+	proportional := windowSize / 10
+	if proportional < compactionAutoReserveTokens {
+		return compactionAutoReserveTokens
+	}
+	return proportional
+}
+
+func compactionBudgetTokens(windowSize int64) int64 {
+	budget := windowSize - compactionReserveTokens(windowSize)
+	if budget < 0 {
+		return 0
+	}
+	return budget
 }
 
 func parseManualCompactionRequest(userMessage *agentv1.UserMessage) (string, bool) {
@@ -954,6 +1004,11 @@ func newPendingCompaction(plan *compactionPlan) *PendingCompaction {
 		CurrentRequestID:          plan.CurrentRequestID,
 		CurrentUserText:           plan.CurrentUserText,
 		PreserveCurrentTurnInputs: plan.PreserveCurrentTurnInputs,
+		HomologousPrefixFrozen:    plan.HomologousPrefixFrozen,
+		FrozenPrefixStart:         plan.FrozenPrefixStart,
+		FrozenPrefixEnd:           plan.FrozenPrefixEnd,
+		FrozenPrefixEntries:       cloneFrozenHistoryEntries(plan.FrozenPrefixEntries),
+		NativeArchiveSource:       cloneNativeArchiveSource(plan.NativeArchiveSource),
 	}
 }
 
@@ -983,6 +1038,11 @@ func clonePendingCompaction(plan *PendingCompaction) *PendingCompaction {
 		HookMessage:               plan.HookMessage,
 		SummaryModelCallID:        plan.SummaryModelCallID,
 		StartedAt:                 plan.StartedAt,
+		HomologousPrefixFrozen:    plan.HomologousPrefixFrozen,
+		FrozenPrefixStart:         plan.FrozenPrefixStart,
+		FrozenPrefixEnd:           plan.FrozenPrefixEnd,
+		FrozenPrefixEntries:       cloneFrozenHistoryEntries(plan.FrozenPrefixEntries),
+		NativeArchiveSource:       cloneNativeArchiveSource(plan.NativeArchiveSource),
 	}
 }
 
@@ -1008,7 +1068,334 @@ func cloneCompactionPlanBase(base *compactionPlan) compactionPlan {
 		CurrentRequestID:          base.CurrentRequestID,
 		CurrentUserText:           base.CurrentUserText,
 		PreserveCurrentTurnInputs: base.PreserveCurrentTurnInputs,
+		HomologousPrefixFrozen:    base.HomologousPrefixFrozen,
+		FrozenPrefixStart:         base.FrozenPrefixStart,
+		FrozenPrefixEnd:           base.FrozenPrefixEnd,
+		FrozenPrefixEntries:       cloneFrozenHistoryEntries(base.FrozenPrefixEntries),
+		NativeArchiveSource:       cloneNativeArchiveSource(base.NativeArchiveSource),
 	}
+}
+
+func cloneNativeArchiveSource(source *compactionNativeArchiveSource) *compactionNativeArchiveSource {
+	if source == nil {
+		return nil
+	}
+	cloned := *source
+	return &cloned
+}
+
+func cloneFrozenHistoryEntries(entries []HistoryEntry) []HistoryEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	cloned := make([]HistoryEntry, len(entries))
+	for index, entry := range entries {
+		cloned[index] = entry
+		if len(entry.Payload) > 0 {
+			cloned[index].Payload = append(json.RawMessage(nil), entry.Payload...)
+		}
+	}
+	return cloned
+}
+
+func freezeHomologousCompactionPlan(plan *compactionPlan, conversation *ConversationFile) error {
+	if plan == nil || conversation == nil {
+		return nil
+	}
+	start, end, err := homologousCompactionPrefixBounds(conversation.Entries, plan)
+	if err != nil {
+		return err
+	}
+	plan.HomologousPrefixFrozen = true
+	plan.FrozenPrefixStart = start
+	plan.FrozenPrefixEnd = end
+	plan.FrozenPrefixEntries = cloneFrozenHistoryEntries(conversation.Entries[start:end])
+	plan.CompactedTurns = compactedTurnsFromCanonicalPrefix(conversation.Entries, start, end)
+	plan.CompactTurnCount = clampInt64ToInt32(int64(len(plan.CompactedTurns)))
+	plan.MessagesToCompact = ordinaryPromptCountInPrefix(conversation.Entries, start, end)
+	plan.NativeArchiveSource = nil
+	coreMessages, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, start, end)
+	if err != nil {
+		return nil
+	}
+	oldSummaryCount := uint32(0)
+	if strings.TrimSpace(plan.ExistingSummary) != "" {
+		oldSummaryCount = 1
+	}
+	actual := oldSummaryCount + uint32(len(coreMessages))
+	plan.NativeArchiveSource = &compactionNativeArchiveSource{
+		PrefixStart:    start,
+		PrefixEnd:      end,
+		CandidateCount: actual,
+		ActualCount:    actual,
+		WindowTail:     0,
+	}
+	return nil
+}
+
+func homologousCompactionPrefixBounds(entries []HistoryEntry, plan *compactionPlan) (int, int, error) {
+	if plan == nil {
+		return 0, 0, fmt.Errorf("compaction prefix missing plan")
+	}
+	compactionIndex := len(entries)
+	preserved := map[int]struct{}{}
+	if plan.PreserveCurrentTurnInputs {
+		latestToolCallID := latestCompletedToolCallIDForTurn(entries, plan.CurrentTurnSeq, plan.CurrentRequestID)
+		preserved = autoCompactionPreservedEntryIndexes(entries, plan.CurrentTurnSeq, plan.CurrentRequestID, latestToolCallID)
+	}
+	thisTail := continuousTailStartIndex(entries, compactionIndex, preserved)
+	prevTail := 0
+	latestSummary := latestCompactionSummaryIndex(entries)
+	if latestSummary >= 0 {
+		payload, err := decodeCompactionSummaryPayload(entries[latestSummary].Payload)
+		if err != nil {
+			return 0, 0, err
+		}
+		source, err := parseNativeArchiveSource(payload.NativeArchiveSource)
+		if err != nil {
+			return 0, 0, err
+		}
+		if source != nil {
+			prevTail = source.PrefixEnd
+		} else {
+			preservedPrev := map[int]struct{}{}
+			if payload.PreserveCurrentTurnInputs {
+				prefix := entries[:latestSummary]
+				latestToolCallID := latestCompletedToolCallIDForTurn(prefix, payload.CurrentTurnSeq, payload.CurrentRequestID)
+				preservedPrev = autoCompactionPreservedEntryIndexes(prefix, payload.CurrentTurnSeq, payload.CurrentRequestID, latestToolCallID)
+			}
+			prevTail = continuousTailStartIndex(entries, latestSummary, preservedPrev)
+		}
+	}
+	if thisTail < prevTail {
+		return 0, 0, fmt.Errorf("compaction prefix inverted")
+	}
+	if err := ensureCompactionPrefixClosed(entries, prevTail, thisTail); err != nil {
+		return 0, 0, err
+	}
+	return prevTail, thisTail, nil
+}
+
+func latestCompactionSummaryIndex(entries []HistoryEntry) int {
+	for index := len(entries) - 1; index >= 0; index-- {
+		if isCompactionSummaryKind(entries[index].Kind) {
+			return index
+		}
+	}
+	return -1
+}
+
+func compactedTurnsFromCanonicalPrefix(entries []HistoryEntry, start, end int) []compactedTurnSummary {
+	if start < 0 || end > len(entries) || start >= end {
+		return nil
+	}
+	dropped := canceledReplayDroppedIndexes(entries)
+	turnOrder := make([]int64, 0)
+	grouped := make(map[int64][]HistoryEntry)
+	for index := start; index < end; index++ {
+		if _, skip := dropped[index]; skip {
+			continue
+		}
+		entry := entries[index]
+		if isCompactionSummaryKind(entry.Kind) || !isOrdinaryPromptReplayEntryKind(entry.Kind) {
+			continue
+		}
+		if _, ok := grouped[entry.TurnSeq]; !ok {
+			turnOrder = append(turnOrder, entry.TurnSeq)
+		}
+		grouped[entry.TurnSeq] = append(grouped[entry.TurnSeq], entry)
+	}
+	turns := make([]compactedTurnSummary, 0, len(turnOrder))
+	for _, turnSeq := range turnOrder {
+		if candidate, ok := buildContextTurnCompactionCandidate(grouped[turnSeq]); ok {
+			turns = append(turns, candidate.Summary)
+		}
+	}
+	return turns
+}
+
+func ordinaryPromptCountInPrefix(entries []HistoryEntry, start, end int) int32 {
+	dropped := canceledReplayDroppedIndexes(entries)
+	count := int32(0)
+	for index := start; index < end; index++ {
+		if _, skip := dropped[index]; skip {
+			continue
+		}
+		if isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
+			count++
+		}
+	}
+	return count
+}
+
+func ensureCompactionPrefixClosed(entries []HistoryEntry, start, end int) error {
+	if start < 0 || end > len(entries) || start > end {
+		return fmt.Errorf("compaction prefix out of range")
+	}
+	if err := ensureCompactionToolBoundaryClosed(entries, start); err != nil {
+		return err
+	}
+	if err := ensureCompactionToolBoundaryClosed(entries, end); err != nil {
+		return err
+	}
+	if start < len(entries) {
+		if aligned := extendContinuousTailToNativeGroupStart(entries, start); aligned != start {
+			return fmt.Errorf("compaction prefix splits a complete group")
+		}
+	}
+	if end < len(entries) {
+		if aligned := extendContinuousTailToNativeGroupStart(entries, end); aligned != end {
+			return fmt.Errorf("compaction prefix splits a complete group")
+		}
+	}
+	return nil
+}
+
+func ensureCompactionToolBoundaryClosed(entries []HistoryEntry, boundary int) error {
+	if boundary <= 0 || boundary >= len(entries) {
+		return nil
+	}
+	aligned, err := compactionToolBoundaryStart(entries, boundary)
+	if err != nil {
+		return err
+	}
+	if aligned != boundary {
+		return fmt.Errorf("compaction prefix splits a complete group")
+	}
+	return nil
+}
+
+func parseNativeArchiveSource(raw json.RawMessage) (*compactionNativeArchiveSource, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &keys); err != nil {
+		return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	for _, key := range []string{"prefix_start", "prefix_end", "candidate_count", "actual_count", "window_tail"} {
+		value, ok := keys[key]
+		if !ok || !jsonRawStrictInteger(value) {
+			return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	var source compactionNativeArchiveSource
+	if err := decoder.Decode(&source); err != nil {
+		return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	return &source, nil
+}
+
+func jsonRawStrictInteger(raw json.RawMessage) bool {
+	token := bytes.TrimSpace(raw)
+	if len(token) == 0 {
+		return false
+	}
+	if token[0] == '-' {
+		token = token[1:]
+		if len(token) == 0 {
+			return false
+		}
+	}
+	if token[0] < '0' || token[0] > '9' {
+		return false
+	}
+	if token[0] == '0' && len(token) != 1 {
+		return false
+	}
+	for _, b := range token[1:] {
+		if b < '0' || b > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func decodeCompactionSummaryPayload(raw json.RawMessage) (compactionSummaryEntryPayload, error) {
+	var payload compactionSummaryEntryPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return compactionSummaryEntryPayload{}, fmt.Errorf("native checkpoint: invalid native archive source")
+	}
+	return payload, nil
+}
+
+func verifyFrozenCompactionSource(conversation *ConversationFile, plan *PendingCompaction) error {
+	if plan == nil || !plan.HomologousPrefixFrozen {
+		return nil
+	}
+	if conversation == nil {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	start, end := plan.FrozenPrefixStart, plan.FrozenPrefixEnd
+	if start < 0 || end > len(conversation.Entries) || start > end {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	if end-start != len(plan.FrozenPrefixEntries) {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	for index, frozen := range plan.FrozenPrefixEntries {
+		if err := frozenHistoryEntryMatches(frozen, conversation.Entries[start+index]); err != nil {
+			return err
+		}
+	}
+	if plan.NativeArchiveSource == nil {
+		return nil
+	}
+	src := plan.NativeArchiveSource
+	if src.PrefixStart != start || src.PrefixEnd != end {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	coreMessages, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, src.PrefixStart, src.PrefixEnd)
+	if err != nil {
+		return fmt.Errorf("compaction native archive source mismatch: %w", err)
+	}
+	oldSummaryCount := uint32(0)
+	if strings.TrimSpace(plan.ExistingSummary) != "" {
+		oldSummaryCount = 1
+	}
+	actual := oldSummaryCount + uint32(len(coreMessages))
+	if actual != src.ActualCount || src.CandidateCount != src.ActualCount || src.WindowTail != 0 {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	return nil
+}
+
+func frozenHistoryEntryMatches(frozen HistoryEntry, live HistoryEntry) error {
+	if frozen.Seq != live.Seq ||
+		frozen.TurnSeq != live.TurnSeq ||
+		frozen.RequestID != live.RequestID ||
+		frozen.ModelCallID != live.ModelCallID ||
+		frozen.IdempotencyKey != live.IdempotencyKey ||
+		frozen.Role != live.Role ||
+		frozen.Kind != live.Kind ||
+		frozen.ToolCallID != live.ToolCallID ||
+		frozen.ParentToolCallID != live.ParentToolCallID ||
+		!frozen.CreatedAt.Equal(live.CreatedAt) {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	frozenPayload, err := stableCompactionJSON(frozen.Payload)
+	if err != nil {
+		return fmt.Errorf("compaction native archive source mismatch: %w", err)
+	}
+	livePayload, err := stableCompactionJSON(live.Payload)
+	if err != nil {
+		return fmt.Errorf("compaction native archive source mismatch: %w", err)
+	}
+	if !bytes.Equal(frozenPayload, livePayload) {
+		return fmt.Errorf("compaction native archive source mismatch")
+	}
+	return nil
+}
+
+func stableCompactionJSON(raw json.RawMessage) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(json.RawMessage(trimmed))
 }
 
 func selectTurnsForCompaction(candidates []compactionCandidateTurn, manual bool, reclaimTokens int64) (int, int32, []compactedTurnSummary) {
@@ -1209,6 +1596,27 @@ func buildContextTurnCompactionCandidate(entries []HistoryEntry) (compactionCand
 		case "tool_result":
 			if step := summarizeCurrentTurnToolResultEntry(entry); step != "" {
 				summary.Steps = append(summary.Steps, step)
+			}
+			replayCount++
+			estimatedTokens += estimateTextTokens(string(entry.Payload))
+		case "model_message":
+			var payload modelMessageEntryPayload
+			if json.Unmarshal(entry.Payload, &payload) != nil {
+				continue
+			}
+			switch strings.TrimSpace(payload.Message.Role) {
+			case "user":
+				if strings.TrimSpace(summary.UserText) == "" {
+					summary.UserText = truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3)
+				}
+			case "assistant":
+				if text := truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3); text != "" {
+					summary.Steps = append(summary.Steps, "assistant="+text)
+				}
+			case "tool":
+				if text := truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3); text != "" {
+					summary.Steps = append(summary.Steps, firstNonEmpty(payload.Message.Name, "tool")+"="+text)
+				}
 			}
 			replayCount++
 			estimatedTokens += estimateTextTokens(string(entry.Payload))
@@ -1564,6 +1972,80 @@ func (err compactionTerminalError) TerminalCode() string {
 	return strings.TrimSpace(err.code)
 }
 
+func isCompactionSummaryOutputLimit(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errProviderLoopInterrupted) {
+		return false
+	}
+	var terminal *modeladapter.ProviderTerminalStatusError
+	return errors.As(err, &terminal) && terminal != nil &&
+		strings.EqualFold(strings.TrimSpace(terminal.Status), "incomplete") &&
+		(strings.EqualFold(strings.TrimSpace(terminal.Message), "max_output_tokens") ||
+			strings.EqualFold(strings.TrimSpace(terminal.Code), "max_output_tokens"))
+}
+
+func resolveCompactionSummaryResult(plan *PendingCompaction, summaryText string, err error) (string, error) {
+	if err != nil {
+		if modeladapter.IsContextOverflowError(err) || isCompactionSummaryOutputLimit(err) {
+			return buildFallbackCompactionSummary(plan), nil
+		}
+		return "", err
+	}
+	if trimmed := strings.TrimSpace(summaryText); trimmed != "" {
+		return trimmed, nil
+	}
+	return buildFallbackCompactionSummary(plan), nil
+}
+
+func (service *Service) prepareCompactionSummaryMessages(plan *PendingCompaction) ([]modeladapter.Message, bool, error) {
+	if plan == nil {
+		return nil, false, nil
+	}
+	if plan.HomologousPrefixFrozen {
+		messages, err := service.buildCompactionSummaryMessages(plan)
+		if err != nil {
+			return nil, false, err
+		}
+		budget := compactionBudgetTokens(plan.ContextWindowSize)
+		estimated := estimateModelMessagesTokens(messages) + compactionSummaryOutputMaxTokens
+		if budget > 0 && estimated > budget {
+			return nil, false, compactionTerminalError{
+				code: compactionOverflowTerminalCode,
+				message: fmt.Sprintf(
+					"compaction summary request exceeds context budget (estimated=%d budget=%d)",
+					estimated,
+					budget,
+				),
+			}
+		}
+		if len(messages) == 0 {
+			return nil, true, nil
+		}
+		return messages, false, nil
+	}
+	budget := compactionBudgetTokens(plan.ContextWindowSize)
+	turns := append([]compactedTurnSummary(nil), plan.CompactedTurns...)
+	startedWithTurns := len(plan.CompactedTurns) > 0
+	for {
+		view := clonePendingCompaction(plan)
+		view.CompactedTurns = turns
+		messages, err := service.buildCompactionSummaryMessages(view)
+		if err != nil {
+			return nil, false, err
+		}
+		estimated := estimateModelMessagesTokens(messages) + compactionSummaryOutputMaxTokens
+		if budget > 0 && estimated <= budget {
+			if startedWithTurns && len(turns) == 0 {
+				return nil, true, nil
+			}
+			return messages, false, nil
+		}
+		if len(turns) == 0 {
+			return nil, true, nil
+		}
+		turns = turns[1:]
+	}
+}
+
 func (service *Service) buildCompactionSummaryMessages(plan *PendingCompaction) ([]modeladapter.Message, error) {
 	if plan == nil {
 		return nil, nil
@@ -1612,43 +2094,89 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 	if service == nil || stream == nil || plan == nil {
 		return "", nil
 	}
-	messages, err := service.buildCompactionSummaryMessages(plan)
+	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
 	if err != nil {
 		return "", err
 	}
-	if len(messages) == 0 {
-		return "", nil
+	if useFallback || len(messages) == 0 {
+		return buildFallbackCompactionSummary(plan), nil
 	}
+	if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
+		return "", err
+	}
+	text, err := service.generateCompactionSummaryAttempt(ctx, stream, plan, modelCallID, messages, compactionSummaryOutputMaxTokens)
+	if interrupted := providerLoopInterruptErr(ctx, stream, modelCallID); interrupted != nil {
+		return "", interrupted
+	}
+	if !isCompactionSummaryOutputLimit(err) {
+		return text, err
+	}
+
+	// 仅重试无工具副作用的摘要请求；不放宽普通 Agent 的 output_observed 保护。
+	// 重试保留同一冻结前缀，且输入与输出总量不得超过原压缩预算。
+	retryMaxTokens := int64(compactionSummaryRetryMaxTokens)
+	if available := compactionBudgetTokens(plan.ContextWindowSize) - estimateModelMessagesTokens(messages); available < retryMaxTokens {
+		retryMaxTokens = available
+	}
+	if retryMaxTokens <= compactionSummaryOutputMaxTokens {
+		log.Printf("forwarder compaction summary fallback request_id=%s model_call_id=%s reason=output_limit_budget", stream.RequestID, modelCallID)
+		return "", err
+	}
+	retryCallID := uuid.NewString()
+	stream.mu.Lock()
+	// 在切换调用标识前再次检查取消与替换，避免恢复已终止的会话。
+	if isTerminalStreamStatus(stream.Status) || stream.CurrentModelCallID != modelCallID || (ctx != nil && ctx.Err() != nil) {
+		stream.mu.Unlock()
+		return "", errProviderLoopInterrupted
+	}
+	stream.CurrentModelCallID = retryCallID
+	if stream.PendingCompaction != nil {
+		stream.PendingCompaction.SummaryModelCallID = retryCallID
+	}
+	stream.mu.Unlock()
+	plan.SummaryModelCallID = retryCallID
+	log.Printf("forwarder compaction summary retry request_id=%s model_call_id=%s max_tokens=%d reason=output_limit", stream.RequestID, retryCallID, retryMaxTokens)
+	text, err = service.generateCompactionSummaryAttempt(ctx, stream, plan, retryCallID, messages, int(retryMaxTokens))
+	if interrupted := providerLoopInterruptErr(ctx, stream, retryCallID); interrupted != nil {
+		return "", interrupted
+	}
+	if isCompactionSummaryOutputLimit(err) {
+		log.Printf("forwarder compaction summary fallback request_id=%s model_call_id=%s reason=output_limit_exhausted", stream.RequestID, retryCallID)
+	}
+	return text, err
+}
+
+func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, stream *ActiveStream, plan *PendingCompaction, modelCallID string, messages []modeladapter.Message, maxTokens int) (string, error) {
 	accumulated := ""
 	usage := turnUsageSnapshot{}
-	err = service.provider.StartStream(ctx, ProviderRequest{
+	var outputLimitErr error
+	err := service.provider.StartStream(ctx, ProviderRequest{
 		RequestID:      stream.RequestID,
 		ConversationID: stream.ConversationID,
 		RunID:          stream.RequestID,
 		ModelCallID:    modelCallID,
 		ModelID:        stream.ModelID,
+		ThinkingEffort: "disabled",
 		Mode:           agentv1.AgentMode_AGENT_MODE_AGENT,
 		Messages:       messages,
-		MaxTokens:      compactionSummaryOutputMaxTokens,
-		CompileSummary: fmt.Sprintf("compaction trigger=%s source=%s turns=%d messages=%d", plan.Trigger, plan.RequestSource, plan.CompactTurnCount, plan.MessagesToCompact),
-		Observer:       service.recorder,
-		ArtifactPaths:  &modeladapter.LLMArtifactPaths{},
+		MaxTokens:      maxTokens,
+		// 摘要必须让 provider 真正收到 4096/8192 的输出预算，不能被渠道额度省略或夹回。
+		EnforceOutputLimit: true,
+		CompileSummary:     fmt.Sprintf("compaction trigger=%s source=%s turns=%d messages=%d", plan.Trigger, plan.RequestSource, plan.CompactTurnCount, plan.MessagesToCompact),
+		Observer:           service.recorder,
+		ArtifactPaths:      &modeladapter.LLMArtifactPaths{},
 	}, func(event modeladapter.ModelEvent) error {
 		if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
 			return err
 		}
 		switch event.Kind {
 		case modeladapter.ModelEventKindTextDelta:
+			// 未完成的摘要不得发布为有效内容；成功后由 handleCompactionEvent 统一发布。
 			accumulated += event.Text
-			if strings.TrimSpace(accumulated) == "" {
-				return nil
-			}
-			return service.broker.Publish(stream.RequestID, StreamEvent{
-				Message: buildSummaryMessage(accumulated),
-			})
+			return nil
 		case modeladapter.ModelEventKindThinkingDelta, modeladapter.ModelEventKindThinkingCompleted:
 			return nil
-		case modeladapter.ModelEventKindToolLikeCompleted:
+		case modeladapter.ModelEventKindPartialToolCall, modeladapter.ModelEventKindToolCallDelta, modeladapter.ModelEventKindToolLikeCompleted:
 			return fmt.Errorf("compaction summary generation must not invoke tools")
 		case modeladapter.ModelEventKindTurnFinished:
 			usage = turnUsageSnapshot{
@@ -1662,6 +2190,10 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 				CacheReadPresent:  event.CacheReadPresent,
 				CacheWritePresent: event.CacheWritePresent,
 			}
+			switch strings.ToLower(strings.TrimSpace(event.FinishReason)) {
+			case "length", "max_tokens", "max_output_tokens":
+				outputLimitErr = &modeladapter.ProviderTerminalStatusError{Status: "incomplete", Code: "max_output_tokens"}
+			}
 			return nil
 		case modeladapter.ModelEventKindProviderError:
 			if event.Err != nil {
@@ -1672,6 +2204,9 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 			return nil
 		}
 	})
+	if err == nil {
+		err = outputLimitErr
+	}
 	if err != nil {
 		if !errors.Is(err, errProviderLoopInterrupted) {
 			stream.mu.Lock()

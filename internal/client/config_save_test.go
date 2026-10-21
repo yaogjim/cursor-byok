@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	serverconfig "cursor/internal/backend/server/config"
+	"cursor/internal/netproxy"
 )
 
 func TestSaveUserConfigPreservesLastAgentModelHash(t *testing.T) {
@@ -32,5 +34,127 @@ func TestSaveUserConfigPreservesLastAgentModelHash(t *testing.T) {
 	}
 	if got.Appearance.Theme != "dark" {
 		t.Fatalf("theme = %q, want dark", got.Appearance.Theme)
+	}
+}
+
+func TestSaveHomeMetricsDoesNotOverwriteOtherSections(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	seed := serverconfig.DefaultConfig()
+	seed.Gateway.Enabled = true
+	seed.Gateway.Token = "live-token"
+	seed.Appearance.Theme = "dark"
+	seed.HomeMetrics.IncludeCacheWriteInHitRate = false
+	if _, err := service.store.Save(context.Background(), seed); err != nil {
+		t.Fatalf("seed Save() error = %v", err)
+	}
+
+	stale := seed
+	stale.Appearance.Theme = "light"
+	stale.Gateway.Token = ""
+	stale.HomeMetrics.IncludeCacheWriteInHitRate = true
+	if err := service.SaveHomeMetrics(stale); err != nil {
+		t.Fatalf("SaveHomeMetrics() error = %v", err)
+	}
+
+	got, err := service.LoadUserConfig()
+	if err != nil {
+		t.Fatalf("LoadUserConfig() error = %v", err)
+	}
+	if !got.HomeMetrics.IncludeCacheWriteInHitRate {
+		t.Fatal("home metrics section not saved")
+	}
+	if got.Appearance.Theme != "dark" {
+		t.Fatalf("theme = %q, want dark", got.Appearance.Theme)
+	}
+	if got.Gateway.Token != "live-token" {
+		t.Fatalf("token = %q", got.Gateway.Token)
+	}
+}
+
+func TestUserConfigChangedPayloadOmitsGatewayToken(t *testing.T) {
+	cfg := serverconfig.DefaultConfig()
+	cfg.Gateway.Token = "event-secret-token"
+	cfg.Gateway.TokenConfigured = true
+	payload := serverconfig.RedactGatewayTokenForUI(cfg)
+	if payload.Gateway.Token != "" {
+		t.Fatalf("event payload leaked token = %q", payload.Gateway.Token)
+	}
+	if !payload.Gateway.TokenConfigured {
+		t.Fatal("event payload dropped tokenConfigured")
+	}
+}
+
+func TestSaveModelAdaptersRejectsBrokenGatewayPublicModels(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	seed := serverconfig.DefaultConfig()
+	seed.ModelAdapters = []serverconfig.ModelAdapterConfig{{
+		DisplayName:     "physical",
+		Type:            "openai",
+		BaseURL:         "https://api.example.com/v1",
+		APIKey:          "test-key",
+		TooltipData:     "physical",
+		ModelID:         "physical",
+		ReasoningEffort: "medium",
+		OpenAIEndpoint:  "/v1/responses",
+	}}
+	saved, err := service.store.Save(context.Background(), seed)
+	if err != nil {
+		t.Fatalf("seed Save() error = %v", err)
+	}
+	gateway := saved.Gateway
+	gateway.PublicModels = []serverconfig.GatewayPublicModel{{
+		ID:              "public-a",
+		TargetAdapterID: saved.ModelAdapters[0].ID,
+	}}
+	if _, err := service.store.SaveGatewayConfig(context.Background(), gateway); err != nil {
+		t.Fatalf("SaveGatewayConfig() error = %v", err)
+	}
+
+	cleared := saved
+	cleared.ModelAdapters = []serverconfig.ModelAdapterConfig{}
+	if err := service.SaveModelAdapters(cleared); err != nil {
+		t.Fatalf("SaveModelAdapters() error = %v", err)
+	}
+	loaded, err := service.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.ModelAdapters) != 0 || len(loaded.Gateway.PublicModels) != 0 {
+		t.Fatalf("stale public mapping survived delete: %+v", loaded)
+	}
+}
+
+func TestSaveSystemSettingsAppliesGlobalOutboundProxy(t *testing.T) {
+	t.Cleanup(func() { netproxy.SetGlobal(netproxy.Config{}) })
+	service := newConfigTransferTestService(t)
+	seed := serverconfig.DefaultConfig()
+	seed.Appearance.Theme = "light"
+	if _, err := service.store.Save(context.Background(), seed); err != nil {
+		t.Fatalf("seed Save() error = %v", err)
+	}
+
+	cfg := seed
+	cfg.OutboundProxy = netproxy.Config{Enabled: true, URL: "http://user:s3cret@global.example:8080"}
+	if err := service.SaveSystemSettings(cfg); err != nil {
+		t.Fatalf("SaveSystemSettings() error = %v", err)
+	}
+	got := netproxy.GlobalConfig()
+	if !got.Enabled || got.URL != "http://user:s3cret@global.example:8080" {
+		t.Fatalf("applied global = %+v", got)
+	}
+	status := service.GetState()
+	if status.NetProxySource != "custom" || !status.NetProxyUsingCustom || !status.NetProxyActive {
+		t.Fatalf("state = %+v", status)
+	}
+	if strings.Contains(status.NetProxyHTTP, "s3cret") || strings.Contains(status.NetProxyDescription, "s3cret") {
+		t.Fatalf("status leaked credentials: %+v", status)
+	}
+
+	cfg.OutboundProxy.Enabled = false
+	if err := service.SaveSystemSettings(cfg); err != nil {
+		t.Fatalf("disable SaveSystemSettings() error = %v", err)
+	}
+	if netproxy.GlobalConfig().Enabled || service.GetState().NetProxyUsingCustom {
+		t.Fatal("disabling global custom did not restore inherit")
 	}
 }

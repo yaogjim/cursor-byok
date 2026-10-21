@@ -30,6 +30,12 @@ func TestDefaultConfigUsesSafeClientPreferences(t *testing.T) {
 	if cfg.Updates.CheckOnStartup {
 		t.Fatal("startup update checks must be disabled by default")
 	}
+	if cfg.StreamContinuation.Enabled {
+		t.Fatal("streamContinuation must be disabled by default")
+	}
+	if cfg.StreamContinuation.MaxPerTurn != 0 {
+		t.Fatalf("default streamContinuation.maxPerTurn = %d, want 0 (missing key)", cfg.StreamContinuation.MaxPerTurn)
+	}
 }
 
 func TestNormalizeConfigNormalizesThemeAndPreservesPreferences(t *testing.T) {
@@ -56,6 +62,15 @@ func TestNormalizeConfigNormalizesThemeAndPreservesPreferences(t *testing.T) {
 	}
 	if normalized.Appearance.Theme != DefaultTheme {
 		t.Fatalf("invalid theme normalized to %q, want %q", normalized.Appearance.Theme, DefaultTheme)
+	}
+
+	input.Appearance.Theme = " SYSTEM "
+	normalized, err = NormalizeConfig(input)
+	if err != nil {
+		t.Fatalf("NormalizeConfig() system theme error = %v", err)
+	}
+	if normalized.Appearance.Theme != "system" {
+		t.Fatalf("normalized theme = %q, want system", normalized.Appearance.Theme)
 	}
 }
 

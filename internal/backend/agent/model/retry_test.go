@@ -7,15 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"cursor/internal/audit"
+
+	"golang.org/x/net/http2"
 )
 
 func instantRetry() providerRetry {
@@ -85,13 +89,13 @@ func TestProviderRetryTransportFailsThenSucceeds(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].Attempt != 1 || events[0].MaxAttempts != 3 || events[0].RetryDecision != retryDecisionRetry {
+	if events[0].Attempt != 1 || events[0].MaxAttempts != providerRequestMaxAttempts || events[0].RetryDecision != retryDecisionRetry {
 		t.Fatalf("first response = %+v", events[0])
 	}
 	if events[0].ErrorCategory != ProviderErrorTransport {
 		t.Fatalf("first error_category = %q", events[0].ErrorCategory)
 	}
-	if events[1].Attempt != 2 || events[1].MaxAttempts != 3 || events[1].RetryDecision != retryDecisionSuccessAfterRetry {
+	if events[1].Attempt != 2 || events[1].MaxAttempts != providerRequestMaxAttempts || events[1].RetryDecision != retryDecisionSuccessAfterRetry {
 		t.Fatalf("final response = %+v", events[1])
 	}
 }
@@ -218,11 +222,11 @@ func TestProviderRetry503Exhausted(t *testing.T) {
 	if response.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d", response.StatusCode)
 	}
-	if hits != 3 || builds != 3 {
-		t.Fatalf("hits=%d builds=%d, want 3/3", hits, builds)
+	if hits != providerRequestMaxAttempts || builds != providerRequestMaxAttempts {
+		t.Fatalf("hits=%d builds=%d, want %d/%d", hits, builds, providerRequestMaxAttempts, providerRequestMaxAttempts)
 	}
-	if closed != 2 {
-		t.Fatalf("retried bodies closed = %d, want 2", closed)
+	if closed != providerRequestMaxAttempts-1 {
+		t.Fatalf("retried bodies closed = %d, want %d", closed, providerRequestMaxAttempts-1)
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
@@ -231,14 +235,185 @@ func TestProviderRetry503Exhausted(t *testing.T) {
 	}
 
 	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
-	if len(events) != 3 {
+	if len(events) != providerRequestMaxAttempts {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].RetryDecision != retryDecisionRetry || events[1].RetryDecision != retryDecisionRetry {
-		t.Fatalf("intermediate decisions = %q, %q", events[0].RetryDecision, events[1].RetryDecision)
+	if events[0].RetryDecision != retryDecisionRetry {
+		t.Fatalf("intermediate decisions = %q", events[0].RetryDecision)
 	}
-	if events[2].Attempt != 3 || events[2].MaxAttempts != 3 || events[2].RetryDecision != retryDecisionExhausted {
-		t.Fatalf("final event = %+v", events[2])
+	if events[len(events)-1].Attempt != providerRequestMaxAttempts || events[len(events)-1].MaxAttempts != providerRequestMaxAttempts || events[len(events)-1].RetryDecision != retryDecisionExhausted {
+		t.Fatalf("final event = %+v", events[len(events)-1])
+	}
+}
+
+func TestHTTPRetryObservationAllowlist(t *testing.T) {
+	cases := []struct {
+		status      int
+		retryable   bool
+		reason      string
+		suppression string
+	}{
+		{http.StatusTooManyRequests, true, "http_429", "not_recorded"},
+		{http.StatusInternalServerError, true, "http_5xx", "not_recorded"},
+		{http.StatusBadGateway, true, "http_5xx", "not_recorded"},
+		{http.StatusServiceUnavailable, true, "http_5xx", "not_recorded"},
+		{http.StatusGatewayTimeout, true, "http_5xx", "not_recorded"},
+		{HTTPStatusCloudflareTimeout, true, "http_524", "not_recorded"},
+		{529, false, "not_recorded", "http_status"},
+		{http.StatusBadRequest, false, "not_recorded", "http_status"},
+		{http.StatusOK, false, "not_recorded", "http_status"},
+	}
+	for _, test := range cases {
+		retryable, reason, suppression := HTTPRetryObservation(test.status)
+		if retryable != test.retryable || reason != test.reason || suppression != test.suppression {
+			t.Fatalf("status %d: retryable=%v reason=%q suppression=%q, want %v %q %q",
+				test.status, retryable, reason, suppression, test.retryable, test.reason, test.suppression)
+		}
+		if isRetryableHTTPStatus(test.status) != test.retryable {
+			t.Fatalf("isRetryableHTTPStatus(%d) = %v, want %v", test.status, !test.retryable, test.retryable)
+		}
+	}
+}
+
+func TestProviderRetry524ThenSucceeds(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		if hits == 1 {
+			writer.WriteHeader(HTTPStatusCloudflareTimeout)
+			_, _ = writer.Write([]byte("timeout"))
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("ok-body"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	var builds int
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			builds++
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("retry after 524: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatalf("read success body: %v", err)
+	}
+	if string(body) != "ok-body" {
+		t.Fatalf("2xx body = %q", body)
+	}
+	if hits != 2 || builds != 2 {
+		t.Fatalf("hits=%d builds=%d, want 2/2", hits, builds)
+	}
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != 2 {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].Status != HTTPStatusCloudflareTimeout || events[0].RetryDecision != retryDecisionRetry || events[0].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("first 524 response = %+v", events[0])
+	}
+	if events[1].RetryDecision != retryDecisionSuccessAfterRetry {
+		t.Fatalf("final response = %+v", events[1])
+	}
+}
+
+func TestProviderRetry524Exhausted(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(HTTPStatusCloudflareTimeout)
+		_, _ = writer.Write([]byte("timeout"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	var builds int
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			builds++
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("exhausted 524 should return response: %v", err)
+	}
+	if response.StatusCode != HTTPStatusCloudflareTimeout {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if hits != providerRequestMaxAttempts || builds != providerRequestMaxAttempts {
+		t.Fatalf("hits=%d builds=%d, want %d/%d", hits, builds, providerRequestMaxAttempts, providerRequestMaxAttempts)
+	}
+	_ = response.Body.Close()
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != providerRequestMaxAttempts {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].RetryDecision != retryDecisionRetry {
+		t.Fatalf("intermediate decisions = %q", events[0].RetryDecision)
+	}
+	if events[len(events)-1].RetryDecision != retryDecisionExhausted || events[len(events)-1].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("final event = %+v", events[len(events)-1])
+	}
+}
+
+func TestProviderRetry529DoesNotRetry(t *testing.T) {
+	hits := 0
+	providerServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		hits++
+		writer.WriteHeader(529)
+		_, _ = writer.Write([]byte("overloaded"))
+	}))
+	defer providerServer.Close()
+
+	observer, auditPath := newRetryAuditObserver(t)
+	response, err := doProviderRequest(
+		context.Background(),
+		providerServer.Client(),
+		"openai",
+		"request-id",
+		"model-call-id",
+		func(ctx context.Context) (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, http.MethodPost, providerServer.URL+"/v1/responses", bytes.NewReader([]byte(`{}`)))
+		},
+		observer,
+		instantRetry(),
+	)
+	if err != nil {
+		t.Fatalf("529 should return response: %v", err)
+	}
+	if response.StatusCode != 529 {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	if hits != 1 {
+		t.Fatalf("hits = %d, want 1", hits)
+	}
+	_ = response.Body.Close()
+	events := mustFindAuditEvents(t, readClosedAudit(t, observer, auditPath), "provider_response")
+	if len(events) != 1 {
+		t.Fatalf("provider_response count = %d", len(events))
+	}
+	if events[0].RetryDecision != retryDecisionNoRetryStatus || events[0].ErrorCategory != ProviderErrorServer5xx {
+		t.Fatalf("529 event = %+v", events[0])
 	}
 }
 
@@ -283,7 +458,7 @@ func TestProviderRetry401DoesNotRetry(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("provider_response count = %d", len(events))
 	}
-	if events[0].Attempt != 1 || events[0].MaxAttempts != 3 || events[0].RetryDecision != retryDecisionNoRetryStatus {
+	if events[0].Attempt != 1 || events[0].MaxAttempts != providerRequestMaxAttempts || events[0].RetryDecision != retryDecisionNoRetryStatus {
 		t.Fatalf("401 event = %+v", events[0])
 	}
 }
@@ -314,8 +489,8 @@ func TestProviderRetryRebuildsRequestEachAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if builds != hits || builds != 3 {
-		t.Fatalf("builds=%d hits=%d, want 3/3", builds, hits)
+	if builds != hits || builds != providerRequestMaxAttempts {
+		t.Fatalf("builds=%d hits=%d, want %d/%d", builds, hits, providerRequestMaxAttempts, providerRequestMaxAttempts)
 	}
 }
 
@@ -706,8 +881,6 @@ func TestHTTPAndStreamRetryShareMaximumAttempts(t *testing.T) {
 		calls++
 		switch calls {
 		case 1:
-			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("retry")), Request: request}, nil
-		case 2:
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
 		default:
 			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("recovered")), Request: request}, nil
@@ -1004,11 +1177,12 @@ func TestLLMRequestArtifactOmitsRequestAndMessageBodies(t *testing.T) {
 	observer := &privacyArtifactObserver{}
 	const secret = "child prompt and result must not be logged"
 	req := StreamRequest{
-		RequestID:   "request-privacy",
-		RunID:       "run-privacy",
-		ModelCallID: "call-privacy",
-		Messages:    []Message{{Role: "user", Content: secret}},
-		Observer:    observer,
+		RequestID:              "request-privacy",
+		RunID:                  "run-privacy",
+		ModelCallID:            "call-privacy",
+		FallbackArtifactSuffix: "_fb0",
+		Messages:               []Message{{Role: "user", Content: secret}},
+		Observer:               observer,
 	}
 	recordLLMRequestArtifact(req, "openai", "gpt-test", http.MethodPost, "https://example.test/v1/responses?api_key=url-secret#fragment", map[string]any{"input": secret, "api_key": "secret-key"})
 	encoded, err := json.Marshal(observer.request)
@@ -1020,6 +1194,12 @@ func TestLLMRequestArtifactOmitsRequestAndMessageBodies(t *testing.T) {
 	}
 	if observer.request["body_byte_len"] == nil {
 		t.Fatalf("request artifact omitted body size metadata: %#v", observer.request)
+	}
+	if observer.request["model_call_id"] != "call-privacy" {
+		t.Fatalf("canonical model_call_id = %#v", observer.request["model_call_id"])
+	}
+	if observer.request["artifact_model_call_id"] != "call-privacy_fb0" || observer.request["fallback_channel_index"] != 0 {
+		t.Fatalf("fallback artifact identity = %#v", observer.request)
 	}
 }
 
@@ -1053,7 +1233,7 @@ func TestApplyStreamRequestRetryOverridesWaitIncludingZero(t *testing.T) {
 		FallbackRemainingWait: 8 * time.Second,
 	})
 	if chainWait.maxTotalWait != 8*time.Second {
-		t.Fatalf("chain wait overlay = %v, want 8s (must exceed single-channel 4s)", chainWait.maxTotalWait)
+		t.Fatalf("chain wait overlay = %v, want 8s", chainWait.maxTotalWait)
 	}
 
 	disabled := applyStreamRequestRetry(base, StreamRequest{
@@ -1159,5 +1339,85 @@ func TestProviderRetryWaitZeroDoesNotFallBackToDefaultWait(t *testing.T) {
 	}
 	if len(delays) != 0 {
 		t.Fatalf("slept %v, want none", delays)
+	}
+}
+
+func TestZeroEventStreamRetryAllowlist(t *testing.T) {
+	resetErr := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "plain EOF", err: newStreamTruncatedError("openai", io.EOF), want: true},
+		{name: "unexpected EOF", err: newStreamTruncatedError("openai", io.ErrUnexpectedEOF), want: true},
+		{name: "connection reset", err: newStreamTruncatedError("openai", resetErr), want: true},
+		{name: "HTTP2 stream reset", err: newStreamTruncatedError("openai", http2.StreamError{StreamID: 1, Code: http2.ErrCodeInternal}), want: true},
+		{name: "HTTP2 GOAWAY", err: newStreamTruncatedError("openai", http2.GoAwayError{LastStreamID: 1, ErrCode: http2.ErrCodeInternal}), want: true},
+		{name: "missing marker after clean EOF", err: newStreamTruncatedError("openai", nil), want: true},
+		{name: "context canceled", err: newStreamTruncatedError("openai", context.Canceled), want: false},
+		{name: "deadline", err: newStreamTruncatedError("openai", context.DeadlineExceeded), want: false},
+		{name: "HTTP 400", err: &HTTPStatusError{StatusCode: http.StatusBadRequest}, want: false},
+		{name: "authentication", err: &HTTPStatusError{StatusCode: http.StatusUnauthorized}, want: false},
+		{name: "quota", err: &HTTPStatusError{StatusCode: http.StatusTooManyRequests}, want: false},
+		{name: "provider terminal", err: &ProviderTerminalStatusError{Provider: "openai", Status: "failed"}, want: false},
+		{name: "JSON syntax", err: &json.SyntaxError{}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := IsRetryableZeroEventStreamError(test.err); got != test.want {
+				t.Fatalf("IsRetryableZeroEventStreamError(%T) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestRunStreamWithZeroEventRecoverySafetyBoundary(t *testing.T) {
+	t.Run("retries exactly once and keeps final diagnostics", func(t *testing.T) {
+		diagnostics := &StreamDiagnostics{}
+		calls := 0
+		err := runStreamWithZeroEventRecovery(context.Background(), StreamRequest{StreamDiagnostics: diagnostics}, func(ModelEvent) error { return nil }, func(_ context.Context, req StreamRequest, _ func(ModelEvent) error) error {
+			calls++
+			if calls == 1 {
+				req.StreamDiagnostics.RecordHTTPResponse(&http.Response{StatusCode: http.StatusOK, Proto: "HTTP/2.0", Header: http.Header{"Content-Encoding": []string{"gzip"}}, ContentLength: -1}, 1, time.Now())
+				req.StreamDiagnostics.RecordConnection(true, true)
+				return newStreamTruncatedError("openai", io.ErrUnexpectedEOF)
+			}
+			if req.StreamRecoveryAttempt != 1 || req.FallbackMaxAttempts != 1 {
+				t.Fatalf("recovery request = %#v", req)
+			}
+			req.StreamDiagnostics.RecordHTTPResponse(&http.Response{StatusCode: http.StatusOK, Proto: "HTTP/1.1", Header: make(http.Header), ContentLength: -1}, 1, time.Now())
+			req.StreamDiagnostics.RecordConnection(false, false)
+			return newStreamTruncatedError("openai", io.EOF)
+		})
+		if err == nil || calls != 2 {
+			t.Fatalf("err=%v calls=%d, want error/2", err, calls)
+		}
+		snapshot := diagnostics.Snapshot()
+		if snapshot.StreamRecoveryAttempts != 1 || snapshot.HTTPProtocol != "HTTP/1.1" || snapshot.ContentEncoding != "identity" || snapshot.ConnectionReused {
+			t.Fatalf("final diagnostics = %#v", snapshot)
+		}
+	})
+
+	for _, test := range []struct {
+		name    string
+		prepare func(*StreamDiagnostics, func(ModelEvent) error)
+	}{
+		{name: "raw bytes observed", prepare: func(diagnostics *StreamDiagnostics, _ func(ModelEvent) error) { diagnostics.RecordBytes(1, time.Now()) }},
+		{name: "model event observed", prepare: func(_ *StreamDiagnostics, sink func(ModelEvent) error) {
+			_ = sink(ModelEvent{Kind: ModelEventKindTextDelta})
+		}},
+	} {
+		t.Run(test.name+" prevents retry", func(t *testing.T) {
+			diagnostics := &StreamDiagnostics{}
+			calls := 0
+			err := runStreamWithZeroEventRecovery(context.Background(), StreamRequest{StreamDiagnostics: diagnostics}, func(ModelEvent) error { return nil }, func(_ context.Context, _ StreamRequest, sink func(ModelEvent) error) error {
+				calls++
+				test.prepare(diagnostics, sink)
+				return newStreamTruncatedError("openai", io.ErrUnexpectedEOF)
+			})
+			if err == nil || calls != 1 || diagnostics.Snapshot().StreamRecoveryAttempts != 0 {
+				t.Fatalf("err=%v calls=%d diagnostics=%#v", err, calls, diagnostics.Snapshot())
+			}
+		})
 	}
 }

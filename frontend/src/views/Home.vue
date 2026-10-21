@@ -2,20 +2,25 @@
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import HomeMetricsCard from "@/components/HomeMetricsCard.vue";
-import CursorAccountCard from "@/components/CursorAccountCard.vue";
+import HomeAnalyticsPanel from "@/components/HomeAnalyticsPanel.vue";
 import { useMessage } from "@/composables/useMessage";
 import { showModal } from "@/composables/useModal";
-import { getAdRuntime } from "@/services/clientApi";
+import { accessRouteLocation } from "@/router/access";
+import { getAdRuntime, getHomeMetricsReport, launchCursor } from "@/services/clientApi";
 import {
   appState,
   appViewState,
-  openModelConfigWindow,
+  configSectionDirty,
   resetHomeMetrics,
-  syncHomeMetrics,
-  syncServiceState,
+  startGateway,
+  startService,
+  stopGateway,
+  stopService,
+  syncHomeMetricsReport,
   toUserError,
-  toggleService,
 } from "@/state/appState";
+import { normalizeHomeMetricsReport } from "@/state/homeMetrics";
+import { DEFAULT_GATEWAY_LISTEN_ADDR, countPublishedGatewayModels } from "@/state/configProjection";
 import { Events } from "@wailsio/runtime";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -27,6 +32,11 @@ const message = useMessage();
 
 const adRuntime = ref(null);
 let unsubscribeAdUpdated = null;
+const analyticsView = ref("trend");
+const activityDaily = ref([]);
+const activityLoading = ref(false);
+const activityError = ref("");
+const launchCursorBusy = ref(false);
 
 function asString(value) {
   if (typeof value === "string") {
@@ -54,10 +64,10 @@ const homeAds = computed(() => {
       const home = item.home && typeof item.home === "object" ? item.home : {};
       const title = asString(home.title);
       if (
-        !title ||
-        !asBoolean(item.available) ||
-        !asBoolean(item.enabled) ||
-        !asString(item.packageHash)
+        !title
+        || !asBoolean(item.available)
+        || !asBoolean(item.enabled)
+        || !asString(item.packageHash)
       ) {
         return null;
       }
@@ -69,6 +79,29 @@ const homeAds = computed(() => {
     })
     .filter(Boolean);
 });
+
+const cursorProxyAddr = computed(() =>
+  asString(appState.proxyListenAddr) || asString(appState.configProxyListenAddr) || "127.0.0.1:18080",
+);
+const cursorBackendAddr = computed(() =>
+  asString(appState.backendListenAddr) || asString(appState.configBackendListenAddr) || "127.0.0.1:18090",
+);
+const gatewayListenAddr = computed(() =>
+  asString(appState.gatewayRuntimeListenAddr)
+  || asString(appState.gatewayListenAddr)
+  || DEFAULT_GATEWAY_LISTEN_ADDR,
+);
+const gatewayPublicModelCount = computed(() => (
+  countPublishedGatewayModels(appState.modelAdapters, appState.gatewayPublicModels)
+));
+const cursorStartDisabled = computed(() =>
+  appState.serviceBusy || (configSectionDirty.cursor && !appState.serviceRunning),
+);
+const gatewayStartDisabled = computed(() =>
+  appState.gatewayBusy
+  || !appState.gatewayEnabled
+  || configSectionDirty.gateway,
+);
 
 async function syncAdRuntimeQuietly() {
   if (!appState.advertisingEnabled) {
@@ -95,30 +128,41 @@ function showActionError(title, error) {
   message(`${title}：${detail}`);
 }
 
-async function handleToggleService() {
-  const result = await toggleService();
-  if (!result.ok) {
-    showActionError("服务操作失败", result.error);
-  }
+function goAccess(client) {
+  router.push(accessRouteLocation(client));
 }
 
-async function handleRefreshState() {
-  const [serviceStateResult] = await Promise.allSettled([
-    syncServiceState(),
-    syncHomeMetrics(),
-  ]);
-  if (serviceStateResult.status === "rejected") {
-    showActionError("刷新失败", toUserError(serviceStateResult.reason));
+async function loadActivityDaily() {
+  activityLoading.value = true;
+  activityError.value = "";
+  try {
+    const report = normalizeHomeMetricsReport(await getHomeMetricsReport("all"));
+    activityDaily.value = report.daily;
+  } catch (error) {
+    activityDaily.value = [];
+    activityError.value = toUserError(error);
+  } finally {
+    activityLoading.value = false;
   }
 }
 
 async function handleRefreshMetrics() {
-  const result = await syncHomeMetrics();
+  const result = await syncHomeMetricsReport();
+  await loadActivityDaily();
   if (result.ok) {
     message("刷新成功");
     return;
   }
   showActionError("刷新失败", result.error);
+}
+
+async function handleRangeChange(range) {
+  const result = await syncHomeMetricsReport(range);
+  if (!result.ok) showActionError("加载趋势失败", result.error);
+}
+
+async function handleRetryAnalytics() {
+  await syncHomeMetricsReport();
 }
 
 async function handleResetMetrics() {
@@ -131,6 +175,7 @@ async function handleResetMetrics() {
     return;
   }
   const result = await resetHomeMetrics();
+  await loadActivityDaily();
   if (result.ok) {
     message("统计已重置");
     return;
@@ -138,21 +183,65 @@ async function handleResetMetrics() {
   showActionError("重置失败", result.error);
 }
 
-async function handleOpenConfig() {
-  await router.push("/config");
+async function handleCursorStart() {
+  const result = await startService();
+  if (result.cancelled) {
+    return;
+  }
+  if (result.partial) {
+    message(result.error);
+    return;
+  }
+  if (!result.ok) {
+    showActionError("启动失败", result.error);
+  }
 }
 
-async function handleOpenModelConfig() {
+async function handleCursorStop() {
+  const result = await stopService();
+  if (!result.ok) {
+    showActionError("停止失败", result.error);
+  }
+}
+
+async function handleGatewayStart() {
+  if (!appState.gatewayEnabled) {
+    message("请先在接入页把 Gateway 配置为启用并保存");
+    return;
+  }
+  const result = await startGateway();
+  if (!result.ok) {
+    showActionError("启动失败", result.error);
+  }
+}
+
+async function handleGatewayStop() {
+  const result = await stopGateway();
+  if (!result.ok) {
+    showActionError("停止失败", result.error);
+  }
+}
+
+async function handleLaunchCursor() {
+  if (launchCursorBusy.value) {
+    return;
+  }
+  launchCursorBusy.value = true;
   try {
-    await openModelConfigWindow();
+    await launchCursor();
+    message("已请求打开 Cursor");
   } catch (error) {
-    showActionError("打开失败", toUserError(error));
+    showActionError("打开 Cursor 失败", toUserError(error));
+  } finally {
+    launchCursorBusy.value = false;
   }
 }
 
 onMounted(() => {
   unsubscribeAdUpdated = Events.On(AD_UPDATED_EVENT, handleAdUpdated);
   void syncAdRuntimeQuietly();
+  void syncHomeMetricsReport();
+  void loadActivityDaily();
 });
 
 onBeforeUnmount(() => {
@@ -163,7 +252,134 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col gap-4 overflow-y-auto scroll-shadow-bottom p-4 pt-0 text-[var(--color-text)]">
+  <div class="page-shell flex h-full min-h-0 flex-col gap-4 overflow-y-auto scroll-shadow-bottom text-[var(--color-text)]">
+    <div class="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
+      <Card :padded="false" class="flex h-full flex-col">
+        <div class="ui-card-body flex flex-1 flex-col gap-2.5">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h3 class="card-title">Cursor</h3>
+              <div class="card-sub">本地代理与 Backend · 深度集成</div>
+            </div>
+            <span
+              class="status-pill"
+              :class="appState.serviceRunning ? 'is-ok' : (appState.serviceLastError ? 'is-err' : 'is-off')"
+            >
+              <i aria-hidden="true" />
+              {{ appViewState.serviceStatusText }}
+            </span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <span class="mono-chip">代理 {{ cursorProxyAddr }}</span>
+            <span class="mono-chip">Backend {{ cursorBackendAddr }}</span>
+          </div>
+          <div
+            v-if="appState.serviceLastError"
+            class="text-xs text-[var(--color-error-text)]"
+          >
+            {{ appState.serviceLastError }}
+          </div>
+          <div
+            v-if="configSectionDirty.cursor && !appState.serviceRunning"
+            class="text-xs text-[var(--color-warning-text)]"
+          >
+            请先保存 Cursor 配置
+          </div>
+        </div>
+        <div class="ui-card-foot mt-auto">
+          <Button
+            v-if="appState.serviceRunning"
+            class="btn-sm btn-risk"
+            :disabled="appState.serviceBusy"
+            @click="handleCursorStop"
+          >
+            {{ appState.serviceBusy ? "关闭中..." : "停止服务" }}
+          </Button>
+          <Button
+            v-else
+            class="btn-sm"
+            :disabled="cursorStartDisabled"
+            @click="handleCursorStart"
+          >
+            {{ appState.serviceBusy ? "启动中..." : "启动服务" }}
+          </Button>
+          <Button class="btn-sm" :disabled="launchCursorBusy" @click="handleLaunchCursor">
+            {{ launchCursorBusy ? "打开中..." : "打开 Cursor" }}
+          </Button>
+          <Button variant="text" class="btn-sm ml-auto" @click="goAccess('cursor')">配置 →</Button>
+        </div>
+      </Card>
+
+      <Card :padded="false" class="flex h-full flex-col">
+        <div class="ui-card-body flex flex-1 flex-col gap-2.5">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <h3 class="card-title">Gateway</h3>
+              <div class="card-sub">本机 HTTP 入口 · 供外部 AI 客户端使用</div>
+            </div>
+            <span
+              class="status-pill"
+              :class="appState.gatewayRunning ? 'is-ok' : (appState.gatewayLastError ? 'is-err' : 'is-off')"
+            >
+              <i aria-hidden="true" />
+              {{
+                appState.gatewayRunning
+                  ? "运行中"
+                  : appState.gatewayEnabled
+                    ? "未运行"
+                    : "未启用"
+              }}
+            </span>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <span class="mono-chip">{{ gatewayListenAddr }}</span>
+            <span class="mono-chip">公开模型 {{ gatewayPublicModelCount }} 个</span>
+          </div>
+          <div
+            v-if="appState.gatewayLastError"
+            class="text-xs text-[var(--color-error-text)]"
+          >
+            {{ appState.gatewayLastError }}
+          </div>
+          <div
+            v-if="!appState.gatewayEnabled"
+            class="text-xs text-[var(--color-text-muted)]"
+          >
+            需先在接入页把 Gateway 配置为启用并保存
+          </div>
+          <div
+            v-else-if="configSectionDirty.gateway && !appState.gatewayRunning"
+            class="text-xs text-[var(--color-warning-text)]"
+          >
+            请先保存 Gateway 配置
+          </div>
+        </div>
+        <div class="ui-card-foot mt-auto">
+          <Button
+            v-if="appState.gatewayRunning"
+            class="btn-sm btn-risk"
+            :disabled="appState.gatewayBusy"
+            @click="handleGatewayStop"
+          >
+            {{ appState.gatewayBusy ? "关闭中..." : "停止 Gateway" }}
+          </Button>
+          <Button
+            v-else
+            class="btn-sm"
+            :disabled="gatewayStartDisabled"
+            :title="!appState.gatewayEnabled ? '需先在接入页把 Gateway 配置为启用并保存' : ''"
+            @click="handleGatewayStart"
+          >
+            {{ appState.gatewayBusy ? "启动中..." : "启动 Gateway" }}
+          </Button>
+          <span v-if="!appState.gatewayEnabled" class="card-sub !mt-0">未配置启用</span>
+          <Button variant="text" class="btn-sm ml-auto" @click="goAccess('gateway')">
+            {{ appState.gatewayEnabled ? "配置 →" : "去配置 →" }}
+          </Button>
+        </div>
+      </Card>
+    </div>
+
     <HomeMetricsCard
       :metrics="appState.homeMetrics"
       :loading="appState.homeMetricsLoading"
@@ -173,45 +389,23 @@ onBeforeUnmount(() => {
       @refresh="handleRefreshMetrics"
       @reset="handleResetMetrics"
       @open-ad="handleOpenHomeAd"
-    />
-
-    <Card>
-      <div class="flex flex-col gap-4">
-        <div class="center-row justify-between gap-4">
-          <div class="flex flex-col gap-1">
-            <div class="text-sm" :class="appViewState.serviceStatusClass">
-              {{ appViewState.serviceStatusText }}
-            </div>
-          </div>
-          <div class="center-row gap-2">
-            <Button variant="primary" :disabled="appState.serviceBusy" @click="handleToggleService">
-              <span class="icon-[mdi--pause] text-[16px]" v-if="appState.serviceRunning"></span>
-              <span class="icon-[mdi--play] text-[16px]" v-else></span>
-              <span> {{ appViewState.serviceButtonText }}</span>
-            </Button>
-          </div>
-        </div>
-
-        <div v-if="appState.serviceLastError"
-          class="rounded-[8px] border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error-text)]">
-          {{ appState.serviceLastError }}
-        </div>
-      </div>
-    </Card>
-
-    <CursorAccountCard />
-
-    <Card class="">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <h2 class="text-base font-medium text-[var(--color-text)]">本地配置</h2>
-          <div class="text-sm text-[var(--color-text-secondary)]">打开设置目录，或单独管理模型配置</div>
-        </div>
-        <div class="center-row gap-2">
-          <Button variant="default" @click="handleOpenConfig">客户端设置</Button>
-          <Button variant="primary" @click="handleOpenModelConfig">模型配置</Button>
-        </div>
-      </div>
-    </Card>
+    >
+      <template #analytics>
+        <HomeAnalyticsPanel
+          :report="appState.homeMetricsReport"
+          :activity-daily="activityDaily"
+          :range="appState.homeMetricsRange"
+          :view="analyticsView"
+          :loading="appState.homeMetricsReportLoading"
+          :error="appState.homeMetricsReportError"
+          :activity-loading="activityLoading"
+          :activity-error="activityError"
+          @range-change="handleRangeChange"
+          @view-change="analyticsView = $event"
+          @retry="handleRetryAnalytics"
+          @retry-activity="loadActivityDaily"
+        />
+      </template>
+    </HomeMetricsCard>
   </div>
 </template>

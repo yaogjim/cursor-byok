@@ -117,6 +117,68 @@ func TestDebugRecorderProjectsLLMSummaryFailureAcrossCaptureModes(t *testing.T) 
 	}
 }
 
+func TestBidiRawDecodeErrorOnlyOnFailedDecode(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	recorder.LogBidiRaw(context.Background(), "request-1", "conversation-1", 1, "00", "accepted", nil)
+	recorder.LogBidiRaw(context.Background(), "request-1", "conversation-1", 2, "zz", "decode_error", map[string]any{"error": "invalid hex"})
+	if len(capture.captures) != 2 {
+		t.Fatalf("capture count = %d, want 2", len(capture.captures))
+	}
+	if capture.captures[0].Event.DecodeError {
+		t.Fatal("accepted bidi_raw set decode_error")
+	}
+	if !capture.captures[1].Event.DecodeError {
+		t.Fatal("decode_error status did not set DecodeError")
+	}
+}
+
+func TestLogProviderArtifactKeepsCanonicalModelCallID(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	recorder.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1_fb0", "llm_request", map[string]any{
+		"model_call_id": "model-call-1",
+	})
+	captured := capture.onlyCapture(t)
+	rawEvent, _ := captured.Payload.Data.(map[string]any)
+	if rawEvent["model_call_id"] != "model-call-1" {
+		t.Fatalf("payload model_call_id = %#v", rawEvent["model_call_id"])
+	}
+	if rawEvent["artifact_model_call_id"] != "model-call-1_fb0" || rawEvent["fallback_channel_index"] != 0 {
+		t.Fatalf("fallback identity = %#v", rawEvent)
+	}
+}
+
+func TestDebugRecorderAllowlistsAttemptPolicyFields(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	policyFields := map[string]any{
+		"failure_class": "transport_interrupted", "failure_origin": "provider_stream",
+		"reschedule_decision": "reschedule", "reschedule_suppressed_reason": "not_recorded",
+		"attempts_used": 2, "attempts_remaining": 1, "last_event_sequence": 17,
+		"last_event_at": "2026-08-30T10:00:00Z", "bytes_received": 4096, "events_received": 17,
+		"completion_marker_seen": false, "close_cause": "unexpected_eof",
+		"terminal_prepare_state": "prepared", "terminal_commit_state": "not_recorded",
+		"prompt": "must-not-record", "task_args": "must-not-record", "result": "must-not-record",
+		"transcript": "must-not-record", "error": "complete error must not record",
+	}
+	recorder.LogRuntime(context.Background(), "request-1", "conversation-1", "subagent_attempt_finished", policyFields)
+	captured := capture.onlyCapture(t)
+	if !reflect.DeepEqual(captured.Event.Fields, map[string]any{
+		"failure_class": "transport_interrupted", "failure_origin": "provider_stream",
+		"reschedule_decision": "reschedule", "reschedule_suppressed_reason": "not_recorded",
+		"attempts_used": 2, "attempts_remaining": 1, "last_event_sequence": 17,
+		"last_event_at": "2026-08-30T10:00:00Z", "bytes_received": 4096, "events_received": 17,
+		"completion_marker_seen": false, "close_cause": "unexpected_eof",
+		"terminal_prepare_state": "prepared", "terminal_commit_state": "not_recorded",
+	}) {
+		t.Fatalf("attempt policy fields = %#v", captured.Event.Fields)
+	}
+}
+
 func TestWorkspacePathsFromIntent(t *testing.T) {
 	intent := InboundIntent{RequestContext: &agentv1.RequestContext{Env: &agentv1.RequestContextEnv{
 		WorkspacePaths: []string{"/workspace/a", "/workspace/b"},

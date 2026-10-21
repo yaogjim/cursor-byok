@@ -12,12 +12,270 @@ import (
 	"time"
 
 	"cursor/gen/agentv1"
+	execbridge "cursor/internal/backend/agent/bridge/exec"
 	runtimecore "cursor/internal/backend/agent/core"
 )
 
 // ─────────────────────────────────────────────
 // computeSubagentParentCommitKey
 // ─────────────────────────────────────────────
+
+func TestLateSubagentResultPrepareRetriesStaleVersion(t *testing.T) {
+	store := NewSubagentRunStore(t.TempDir())
+	record, err := store.CreateRun(SubagentIdentity{SubagentRunID: "run-stale-recovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := *record
+	if _, err := store.BindChildIdentity(record.Identity.SubagentRunID, "child-conversation", "child-agent"); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{subagentRuns: store}
+	envelope := &SubagentResultEnvelope{
+		SubagentRunID: record.Identity.SubagentRunID, TerminalCategory: SubagentTerminalSucceeded,
+		TerminalAt: time.Now().UTC(), ParentCommitKey: "stale-recovery-commit", ToolResultPayload: "完成",
+	}
+	prepared, err := service.prepareRecoveredSubagentTerminal(&stale, envelope)
+	if err != nil {
+		t.Fatalf("恢复应重新加载并重试过期版本: %v", err)
+	}
+	if prepared.Status != SubagentRunTerminalPrepared || prepared.Identity.ChildConversationID != "child-conversation" {
+		t.Fatalf("恢复不得丢失并发写入的子任务身份: %#v", prepared)
+	}
+}
+
+func TestLateSubagentResultPreparePreservesCrashWinner(t *testing.T) {
+	store := NewSubagentRunStore(t.TempDir())
+	record, err := store.CreateRun(SubagentIdentity{SubagentRunID: "run-crash-recovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner := &SubagentResultEnvelope{
+		SchemaVersion: subagentContractSchemaVersion, SubagentRunID: record.Identity.SubagentRunID,
+		TerminalCategory: SubagentTerminalCanceled, TerminalAt: time.Now().UTC(),
+		ParentCommitKey: "winner", ToolResultPayload: "已取消",
+	}
+	winner.Checksum = computeResultEnvelopeChecksum(winner)
+	// 模拟结果已落盘、run 状态尚未更新时崩溃。
+	if err := store.writeResultLocked(record.Identity.SubagentRunID, winner); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{subagentRuns: store}
+	prepared, err := service.prepareRecoveredSubagentTerminal(record, &SubagentResultEnvelope{
+		SubagentRunID: record.Identity.SubagentRunID, TerminalCategory: SubagentTerminalSucceeded,
+		TerminalAt: time.Now().UTC(), ParentCommitKey: "late-success", ToolResultPayload: "迟到成功",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Status != SubagentRunTerminalPrepared || prepared.TerminalCategory != SubagentTerminalCanceled || prepared.ParentCommitKey != "winner" {
+		t.Fatalf("恢复必须保留已落盘的取消终态: %#v", prepared)
+	}
+}
+
+func TestLateSubagentResultAcrossRequests(t *testing.T) {
+	for _, mode := range []string{"terminal_stream", "replacement_request", "already_committed", "restart", "missing_parent"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			service := &Service{store: NewConversationFileStore(root), subagentRuns: NewSubagentRunStore(root), broker: NewStreamBroker(), execBridge: execbridge.NewBridge()}
+			const convID = "conv-late"
+			identity := SubagentIdentity{SubagentRunID: "run-late", ParentConversationID: convID, ParentRequestID: "req-original", ParentToolCallID: "tc-late", ParentModelCallID: "model-original", ParentTurnSeq: 3}
+			if _, err := service.subagentRuns.CreateRun(identity, SubagentDispatch{ExecID: "exec-late", MessageID: 17, ArgsJSON: json.RawMessage(`{"description":"保留原始任务"}`)}); err != nil {
+				t.Fatal(err)
+			}
+			if mode != "missing_parent" {
+				if _, err := service.store.CreateConversation(convID, agentv1.AgentMode_AGENT_MODE_AGENT, "", "", convID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			requestID := identity.ParentRequestID
+			var stream *ActiveStream
+			if mode != "restart" && mode != "missing_parent" {
+				if mode == "replacement_request" || mode == "already_committed" {
+					requestID = "req-replacement"
+				}
+				var err error
+				stream, err = service.broker.OpenStream(requestID, convID, 4, "default", "", agentv1.AgentMode_AGENT_MODE_AGENT, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				stream.CheckpointConversation, err = service.store.LoadConversation(convID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "terminal_stream" {
+					stream.Status = StreamStatusCanceled
+					stream.Phase = TurnPhaseCanceled
+				}
+			} else {
+				if _, err := service.subagentRuns.ScanRecovery(); err != nil {
+					t.Fatal(err)
+				}
+				service.subagentRuns = NewSubagentRunStore(root)
+			}
+			if mode == "replacement_request" || mode == "already_committed" {
+				stream.PendingExecs = map[string]runtimecore.PendingExec{"exec-new": {ExecID: "exec-new", MessageID: 17, ExecKind: "read", ToolCallID: "tc-new"}}
+			}
+			intent := InboundIntent{Kind: "exec_result", RequestID: requestID, ExecClientMessage: &agentv1.ExecClientMessage{
+				ExecId: "exec-late", Id: 17,
+				Message: &agentv1.ExecClientMessage_SubagentResult{SubagentResult: &agentv1.SubagentResult{Result: &agentv1.SubagentResult_Success{Success: &agentv1.SubagentSuccess{FinalMessage: stringPtr("迟到但有效的任务结果")}}}},
+			}}
+			if mode == "already_committed" {
+				original := intent
+				original.RequestID = identity.ParentRequestID
+				if err := service.dispatchInboundIntent(original); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i := 0; i < 2; i++ {
+				if err := service.dispatchInboundIntent(intent); err != nil {
+					t.Fatalf("迟到结果应安全接收: %v", err)
+				}
+			}
+			record, err := service.subagentRuns.LoadRun(identity.SubagentRunID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "missing_parent" {
+				if record.Status != SubagentRunAwaitingParentResume {
+					t.Fatalf("父会话缺失时必须保存结果待恢复: %s", record.Status)
+				}
+				if _, err := service.store.CreateConversation(convID, agentv1.AgentMode_AGENT_MODE_AGENT, "", "", convID); err != nil {
+					t.Fatal(err)
+				}
+				if err := service.recoverSubagentTerminalPrepared(record); err != nil {
+					t.Fatal(err)
+				}
+			} else if record.Status != SubagentRunParentCommitted {
+				t.Fatalf("结果未提交: %s", record.Status)
+			}
+			conv, err := service.store.LoadConversation(convID)
+			if err != nil || conv == nil || countKind(conv.Entries, "tool_result") != 1 {
+				t.Fatalf("应恰好保存一个结果: conv=%+v err=%v", conv, err)
+			}
+			for _, entry := range conv.Entries {
+				if entry.Kind == "tool_result" && (entry.RequestID != identity.ParentRequestID || entry.TurnSeq != identity.ParentTurnSeq || entry.ModelCallID != identity.ParentModelCallID) {
+					t.Fatalf("结果归属必须使用原始请求身份: %+v", entry)
+				}
+			}
+			if stream != nil && mode == "terminal_stream" && stream.Status != StreamStatusCanceled {
+				t.Fatal("恢复结果不得复活已取消的父会话")
+			}
+			if mode == "replacement_request" || mode == "already_committed" {
+				stream.mu.Lock()
+				count := countKind(stream.CheckpointConversation.Entries, "tool_result")
+				pendingCount := len(stream.PendingExecs)
+				stream.mu.Unlock()
+				if count != 1 || pendingCount != 1 {
+					t.Fatalf("恢复应同步 checkpoint 且保留新请求工具: 结果=%d pending=%d", count, pendingCount)
+				}
+			}
+		})
+	}
+}
+
+func TestLateSubagentResultRejectsUnprovenIdentity(t *testing.T) {
+	for _, mode := range []string{"wrong_exec", "missing_exec", "wrong_message", "wrong_request", "wrong_conversation", "ordinary_result", "legacy_record", "agent_conflict", "ambiguous"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			service := &Service{store: NewConversationFileStore(root), subagentRuns: NewSubagentRunStore(root), broker: NewStreamBroker(), execBridge: execbridge.NewBridge()}
+			identity := SubagentIdentity{SubagentRunID: "run-safe", ParentRequestID: "req-safe", ParentConversationID: "conv-safe", ParentToolCallID: "tc-safe", AgentID: "agent-original"}
+			dispatch := SubagentDispatch{ExecID: "exec-safe", MessageID: 7}
+			var err error
+			if mode == "legacy_record" {
+				_, err = service.subagentRuns.CreateRun(identity)
+			} else {
+				_, err = service.subagentRuns.CreateRun(identity, dispatch)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "ambiguous" {
+				identity.SubagentRunID = "run-other"
+				if _, err := service.subagentRuns.CreateRun(identity, dispatch); err != nil {
+					t.Fatal(err)
+				}
+			}
+			msg := &agentv1.ExecClientMessage{ExecId: "exec-safe", Id: 7, Message: &agentv1.ExecClientMessage_SubagentResult{SubagentResult: &agentv1.SubagentResult{Result: &agentv1.SubagentResult_Success{Success: &agentv1.SubagentSuccess{FinalMessage: stringPtr("result")}}}}}
+			intent := InboundIntent{Kind: "exec_result", RequestID: "req-safe", ExecClientMessage: msg}
+			switch mode {
+			case "wrong_exec":
+				msg.ExecId = "exec-other"
+			case "missing_exec":
+				msg.ExecId = ""
+			case "wrong_message":
+				msg.Id = 8
+			case "wrong_request":
+				intent.RequestID = "req-other"
+			case "wrong_conversation":
+				intent.ConversationID = "conv-other"
+			case "ordinary_result":
+				msg.Message = &agentv1.ExecClientMessage_ReadResult{ReadResult: &agentv1.ReadResult{}}
+			case "agent_conflict":
+				msg.GetSubagentResult().GetSuccess().AgentId = "agent-other"
+			}
+			handled, err := service.recoverLateSubagentResult(intent)
+			if handled && err == nil {
+				t.Fatal("关联不可信的结果不应被接收")
+			}
+			envelope, err := service.subagentRuns.LoadResult("run-safe")
+			if err != nil || envelope != nil {
+				t.Fatalf("无效身份不得写入结果: %+v %v", envelope, err)
+			}
+		})
+	}
+}
+
+func TestLateSubagentResultConcurrentAndFirstTerminalWins(t *testing.T) {
+	for _, mode := range []string{"concurrent_duplicates", "prepared_cancel_wins", "late_background_wins"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			service := &Service{store: NewConversationFileStore(root), subagentRuns: NewSubagentRunStore(root), broker: NewStreamBroker(), execBridge: execbridge.NewBridge()}
+			identity := SubagentIdentity{SubagentRunID: "run-race", ParentRequestID: "req-race", ParentConversationID: "conv-race", ParentToolCallID: "tc-race", ParentTurnSeq: 1}
+			record, err := service.subagentRuns.CreateRun(identity, SubagentDispatch{ExecID: "exec-race", MessageID: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.store.CreateConversation(identity.ParentConversationID, agentv1.AgentMode_AGENT_MODE_AGENT, "", "", identity.ParentConversationID); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "prepared_cancel_wins" {
+				_, err := service.subagentRuns.PrepareTerminal(identity.SubagentRunID, record.Version, &SubagentResultEnvelope{SubagentRunID: identity.SubagentRunID, TerminalCategory: SubagentTerminalCanceled, TerminalAt: time.Now().UTC(), ParentCommitKey: "cancel-winner", ToolResultPayload: "canceled"})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			intent := InboundIntent{Kind: "exec_result", RequestID: identity.ParentRequestID, ExecClientMessage: &agentv1.ExecClientMessage{ExecId: "exec-race", Id: 2, Message: &agentv1.ExecClientMessage_SubagentResult{SubagentResult: &agentv1.SubagentResult{Result: &agentv1.SubagentResult_Success{Success: &agentv1.SubagentSuccess{FinalMessage: stringPtr("late success")}}}}}}
+			if mode == "late_background_wins" {
+				background := intent
+				background.ExecClientMessage = &agentv1.ExecClientMessage{ExecId: "exec-race", Id: 2, Message: &agentv1.ExecClientMessage_ForceBackgroundSubagentResult{ForceBackgroundSubagentResult: &agentv1.ForceBackgroundSubagentResult{}}}
+				if err := service.dispatchInboundIntent(background); err != nil {
+					t.Fatal(err)
+				}
+			}
+			results := make(chan error, 8)
+			for i := 0; i < cap(results); i++ {
+				go func() { results <- service.dispatchInboundIntent(intent) }()
+			}
+			for i := 0; i < cap(results); i++ {
+				if err := <-results; err != nil {
+					t.Errorf("并发回传失败: %v", err)
+				}
+			}
+			conv, err := service.store.LoadConversation(identity.ParentConversationID)
+			if err != nil || countKind(conv.Entries, "tool_result") != 1 {
+				t.Fatalf("并发结果必须幂等: conv=%+v err=%v", conv, err)
+			}
+			envelope, err := service.subagentRuns.LoadResult(identity.SubagentRunID)
+			if err != nil || envelope == nil {
+				t.Fatalf("结果信封缺失: %v", err)
+			}
+			if mode != "concurrent_duplicates" && envelope.TerminalCategory != SubagentTerminalCanceled {
+				t.Fatal("迟到成功不得覆盖取消或后台化终态")
+			}
+		})
+	}
+}
 
 func TestComputeSubagentParentCommitKey_Stable(t *testing.T) {
 	k1 := computeSubagentParentCommitKey("run-1", "tc-1", "digest-abc")

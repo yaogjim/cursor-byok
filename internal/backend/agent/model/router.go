@@ -3,11 +3,18 @@ package modeladapter
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
-	"time"
 
+	"cursor/internal/modelchannel"
+	"cursor/internal/netproxy"
 	legacyruntime "cursor/internal/runtime"
+	"cursor/internal/subscriptionauth"
 )
 
 // Router 是 MVP 阶段的模型适配路由器。
@@ -18,11 +25,12 @@ type Router struct {
 	anthropic ModelAdapter
 	// resolver 负责从本地配置中解析实际模型通道。
 	resolver ChannelResolver
+	// credentials 负责 managed channel 的运行时凭据解析；nil 时 static 行为不变。
+	credentials subscriptionauth.CredentialResolver
 }
 
 type ChannelResolver interface {
 	SelectChannelForModel(context.Context, string) (*legacyruntime.ResolvedChannel, error)
-	ProviderStreamIdleTimeout(context.Context) time.Duration
 }
 
 // ChannelPlanResolver 扩展 ChannelResolver，增加多渠道 fallback 计划解析能力。
@@ -41,6 +49,13 @@ func NewRouter(resolver ChannelResolver) *Router {
 	}
 }
 
+func (router *Router) SetCredentialResolver(credentials subscriptionauth.CredentialResolver) {
+	if router == nil {
+		return
+	}
+	router.credentials = credentials
+}
+
 // Stream 根据模型标识选择具体 provider 并转发请求。
 func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
 	if router == nil || router.resolver == nil {
@@ -54,18 +69,45 @@ func (router *Router) Stream(ctx context.Context, req StreamRequest, sink func(M
 		return fmt.Errorf("no available channel for model %q", req.ModelID)
 	}
 
-	resolved := applyChannelToRequest(req, channel, router.resolver.ProviderStreamIdleTimeout(ctx))
+	resolved := applyChannelToRequest(req, channel)
 	return router.streamPreResolved(ctx, resolved, sink)
 }
 
 // streamPreResolved 使用已完整填充的 StreamRequest（Provider 字段已设置）直接选择适配器。
 // 供 FallbackAwareRouter 使用，跳过 SelectChannelForModel 解析步骤。
 func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
-	release, err := acquireUpstreamCapacity(ctx, req)
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
+	resolved, err := router.applyRuntimeCredentials(ctx, req)
+	if err != nil {
+		return err
+	}
+	release, err := acquireUpstreamCapacity(ctx, resolved)
 	if err != nil {
 		return err
 	}
 	defer release()
+
+	eventObserved := false
+	wrappedSink := func(event ModelEvent) error {
+		eventObserved = true
+		return sink(event)
+	}
+	err = router.dispatchResolved(ctx, resolved, wrappedSink)
+	if err == nil {
+		return nil
+	}
+	retryReq, shouldRetry, retryErr := router.prepareManagedCredentialRetry(ctx, resolved, err, eventObserved)
+	if retryErr != nil {
+		return retryErr
+	}
+	if !shouldRetry {
+		return err
+	}
+	return router.dispatchResolved(ctx, retryReq, wrappedSink)
+}
+
+func (router *Router) dispatchResolved(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	req.Messages = sanitizeProviderMessagesForTarget(req.Messages, reasoningOriginFromRequest(req))
 	switch strings.TrimSpace(req.Provider) {
 	case "anthropic":
 		return router.anthropic.Stream(ctx, req, sink)
@@ -76,9 +118,132 @@ func (router *Router) streamPreResolved(ctx context.Context, req StreamRequest, 
 	}
 }
 
+func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamRequest) (StreamRequest, error) {
+	source := subscriptionauth.NormalizeCredentialSource(req.CredentialSource)
+	if source == "" {
+		source = subscriptionauth.CredentialSourceStatic
+	}
+	req.CredentialSource = string(source)
+	if !source.Managed() {
+		req.StableAccountID = false
+		req.CodexAffinity = CodexAffinity{}
+		return req, nil
+	}
+	if router == nil || router.credentials == nil {
+		return req, fmt.Errorf("managed credential source %q is unavailable", source)
+	}
+	cred, err := router.credentials.Resolve(ctx, source)
+	if err != nil {
+		return req, err
+	}
+	req, err = applyCredentialToRequest(req, cred)
+	if err != nil {
+		return req, err
+	}
+	return router.attachCodexAffinity(req), nil
+}
+
+func applyCredentialToRequest(req StreamRequest, cred subscriptionauth.Credential) (StreamRequest, error) {
+	req.APIKey = strings.TrimSpace(cred.AccessToken)
+	req.CredentialID = strings.TrimSpace(cred.AccountID)
+	req.ChatGPTAccountID = strings.TrimSpace(cred.ChatGPTAccountID)
+	req.StableAccountID = cred.StableAccountID
+	req.CodexAffinity = CodexAffinity{}
+	if req.APIKey == "" {
+		return req, subscriptionauth.ErrAuthRequired
+	}
+	return req, nil
+}
+
+func isUnauthorizedHTTPStatus(err error) bool {
+	var httpErr *HTTPStatusError
+	return errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode == 401
+}
+
+func isModelAdapterTestRequest(req StreamRequest) bool {
+	const prefix = "model-adapter-test-"
+	return strings.HasPrefix(req.RequestID, prefix) ||
+		strings.HasPrefix(req.RunID, prefix) ||
+		strings.HasPrefix(req.ModelCallID, prefix)
+}
+
+func managedCredentialRetryBudgetAvailable(req StreamRequest) bool {
+	if req.FallbackBudget == nil {
+		return true
+	}
+	remaining, _ := req.FallbackBudget.Remaining()
+	return remaining > 0
+}
+
+func (router *Router) prepareManagedCredentialRetry(ctx context.Context, req StreamRequest, err error, eventObserved bool) (StreamRequest, bool, error) {
+	if eventObserved || err == nil || router == nil || router.credentials == nil {
+		return StreamRequest{}, false, nil
+	}
+	if req.FallbackSafety != nil && req.FallbackSafety.Snapshot().ModelEventObserved {
+		return StreamRequest{}, false, nil
+	}
+	source := subscriptionauth.NormalizeCredentialSource(req.CredentialSource)
+	if !source.Managed() || !managedCredentialRetryBudgetAvailable(req) {
+		return StreamRequest{}, false, nil
+	}
+	switch source {
+	case subscriptionauth.CredentialSourceCodex:
+		if isUnauthorizedHTTPStatus(err) {
+			cred, resolveErr := router.credentials.ResolveAfterUnauthorized(ctx, source, req.CredentialID)
+			if resolveErr != nil {
+				return StreamRequest{}, false, resolveErr
+			}
+			next, applyErr := applyCredentialToRequest(req, cred)
+			if applyErr != nil {
+				return StreamRequest{}, false, applyErr
+			}
+			return router.attachCodexAffinity(next), true, nil
+		}
+		if isModelAdapterTestRequest(req) || !subscriptionauth.IsQuotaError(err) {
+			return StreamRequest{}, false, nil
+		}
+		if markErr := router.credentials.MarkQuotaExhausted(ctx, req.CredentialID); markErr != nil {
+			if errors.Is(markErr, subscriptionauth.ErrQuotaExhausted) {
+				return StreamRequest{}, false, markErr
+			}
+			return StreamRequest{}, false, nil
+		}
+		cred, resolveErr := router.credentials.Resolve(ctx, source)
+		if resolveErr != nil || strings.TrimSpace(cred.AccountID) == "" || strings.TrimSpace(cred.AccountID) == strings.TrimSpace(req.CredentialID) {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		next, applyErr := applyCredentialToRequest(req, cred)
+		if applyErr != nil {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		return router.attachCodexAffinity(next), true, nil
+	case subscriptionauth.CredentialSourceGrok:
+		if isModelAdapterTestRequest(req) || isUnauthorizedHTTPStatus(err) || !subscriptionauth.IsQuotaError(err) {
+			return StreamRequest{}, false, nil
+		}
+		if markErr := router.credentials.MarkQuotaExhausted(ctx, req.CredentialID); markErr != nil {
+			if errors.Is(markErr, subscriptionauth.ErrQuotaExhausted) {
+				return StreamRequest{}, false, markErr
+			}
+			return StreamRequest{}, false, nil
+		}
+		cred, resolveErr := router.credentials.Resolve(ctx, source)
+		if resolveErr != nil || strings.TrimSpace(cred.AccountID) == "" || strings.TrimSpace(cred.AccountID) == strings.TrimSpace(req.CredentialID) {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		next, applyErr := applyCredentialToRequest(req, cred)
+		if applyErr != nil {
+			return StreamRequest{}, false, subscriptionauth.ErrQuotaExhausted
+		}
+		return router.attachCodexAffinity(next), true, nil
+	default:
+		return StreamRequest{}, false, nil
+	}
+}
+
 // applyChannelToRequest 将 ResolvedChannel 的字段映射到 StreamRequest 副本中并返回。
 // 深拷贝 RequestKnobs，以确保 fallback 多渠道循环中各次调用互不污染同一 map。
-func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedChannel, idleTimeout time.Duration) StreamRequest {
+func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedChannel) StreamRequest {
 	resolved := req
 	// 深拷贝 RequestKnobs，防止 fallback 循环中多个渠道共享同一 map 造成互相覆盖。
 	if req.RequestKnobs != nil {
@@ -91,6 +256,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.Provider = strings.TrimSpace(channel.Provider)
 	resolved.BaseURL = strings.TrimSpace(channel.BaseURL)
 	resolved.APIKey = strings.TrimSpace(channel.APIKey)
+	resolved.CredentialSource = strings.TrimSpace(channel.CredentialSource)
 	resolved.MaxConcurrentRequests = channel.MaxConcurrentRequests
 	resolved.UpstreamCapacityGroupKey = strings.TrimSpace(channel.UpstreamCapacityGroupKey)
 	if resolved.UpstreamCapacityGroupKey == "" {
@@ -104,6 +270,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.OpenAIEndpoint = strings.TrimSpace(channel.OpenAIEndpoint)
 	resolved.OpenAIExtraParamsEnabled = channel.OpenAIExtraParamsEnabled
 	resolved.OpenAIExtraParamsJSON = strings.TrimSpace(channel.OpenAIExtraParamsJSON)
+	resolved.OpenAIImageGenerationEnabled = channel.OpenAIImageGenerationEnabled
 	resolved.CustomHeadersEnabled = channel.CustomHeadersEnabled
 	resolved.CustomHeadersJSON = strings.TrimSpace(channel.CustomHeadersJSON)
 	resolved.AnthropicExtraParamsEnabled = channel.AnthropicExtraParamsEnabled
@@ -111,7 +278,7 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 	resolved.AnthropicMaxTokens = channel.AnthropicMaxTokens
 	resolved.AnthropicThinkingEffort = strings.TrimSpace(channel.AnthropicThinkingEffort)
 	resolved.ThinkingBudgetTokens = channel.ThinkingBudgetTokens
-	resolved.ProviderStreamIdleTimeout = idleTimeout
+	resolved.OutboundProxy = channel.OutboundProxy
 	runtimeThinkingEffort := normalizeRuntimeThinkingEffort(req.ThinkingEffort)
 	if runtimeThinkingEffort != "" {
 		resolved.ThinkingEffort = runtimeThinkingEffort
@@ -153,12 +320,13 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 			}
 			resolved.RequestKnobs["openai_endpoint"] = resolved.OpenAIEndpoint
 			resolved.RequestKnobs["openai_extra_params_enabled"] = resolved.OpenAIExtraParamsEnabled
+			resolved.RequestKnobs["openai_image_generation_enabled"] = resolved.OpenAIImageGenerationEnabled
 			resolved.RequestKnobs["custom_headers_enabled"] = resolved.CustomHeadersEnabled
 		} else if resolved.Provider == "anthropic" {
 			delete(resolved.RequestKnobs, "reasoning_effort")
 			resolved.RequestKnobs["custom_headers_enabled"] = resolved.CustomHeadersEnabled
 			resolved.RequestKnobs["anthropic_extra_params_enabled"] = resolved.AnthropicExtraParamsEnabled
-			anthropicMaxTokens := maxAnthropicTokens(resolved)
+			anthropicMaxTokens := effectiveAnthropicOutputTokens(resolved)
 			resolved.RequestKnobs["max_tokens"] = anthropicMaxTokens
 			resolved.RequestKnobs["anthropic_max_tokens"] = anthropicMaxTokens
 			if strings.TrimSpace(resolved.AnthropicThinkingEffort) != "" {
@@ -175,6 +343,15 @@ func applyChannelToRequest(req StreamRequest, channel *legacyruntime.ResolvedCha
 // assistant prefill so providers that require a user/tool terminal message do
 // not reject the request.
 func sanitizeProviderMessages(input []Message) []Message {
+	return sanitizeProviderMessagesForTarget(input, ReasoningOrigin{})
+}
+
+// SanitizeProviderMessagesForTarget 按目标来源身份剥离不兼容的 opaque 字段组。
+func SanitizeProviderMessagesForTarget(input []Message, target ReasoningOrigin) []Message {
+	return sanitizeProviderMessagesForTarget(input, target)
+}
+
+func sanitizeProviderMessagesForTarget(input []Message, target ReasoningOrigin) []Message {
 	if len(input) == 0 {
 		return nil
 	}
@@ -187,6 +364,9 @@ func sanitizeProviderMessages(input []Message) []Message {
 		filtered = append(filtered, message)
 	}
 	filtered = mergeAdjacentAssistantToolCallMessages(filtered)
+	if !target.IsZero() {
+		filtered = stripIncompatibleProviderOpaqueMetadata(filtered, target)
+	}
 	filtered = trimDanglingAssistantToolCalls(filtered)
 	for len(filtered) > 0 && isAssistantPrefillMessage(filtered[len(filtered)-1]) {
 		filtered = filtered[:len(filtered)-1]
@@ -195,6 +375,191 @@ func sanitizeProviderMessages(input []Message) []Message {
 		return nil
 	}
 	return filtered
+}
+
+func reasoningOriginFromRequest(req StreamRequest) ReasoningOrigin {
+	modelID := strings.TrimSpace(req.ProviderModelID)
+	if modelID == "" {
+		modelID = strings.TrimSpace(req.ModelID)
+	}
+	return ReasoningOrigin{
+		Provider:         strings.ToLower(strings.TrimSpace(req.Provider)),
+		Endpoint:         providerOpaqueEndpointIdentity(req.Provider, req.BaseURL, req.OpenAIEndpoint),
+		CredentialSource: strings.ToLower(strings.TrimSpace(string(subscriptionauth.NormalizeCredentialSource(req.CredentialSource)))),
+		AccountID:        reasoningOriginAccountID(req),
+		ModelID:          modelID,
+	}
+}
+
+func reasoningOriginAccountID(req StreamRequest) string {
+	if req.StableAccountID {
+		return strings.TrimSpace(req.CredentialID)
+	}
+	if subscriptionauth.NormalizeCredentialSource(req.CredentialSource).Managed() {
+		return ""
+	}
+	return opaqueAPIKeyFingerprint(req.APIKey)
+}
+
+func opaqueAPIKeyFingerprint(apiKey string) string {
+	trimmed := strings.TrimSpace(apiKey)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:])
+}
+
+func providerOpaqueEndpointIdentity(provider string, baseURL string, openAIEndpoint string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	host := providerOpaqueHostIdentity(baseURL)
+	switch provider {
+	case "anthropic":
+		if host == "" {
+			return "anthropic"
+		}
+		return "anthropic:" + host
+	case "openai":
+		if isChatGPTCodexHost(baseURL) {
+			return "chatgpt_codex"
+		}
+		shape := modelchannel.OpenAIEndpointShape(ResolveOpenAIEndpoint(baseURL, openAIEndpoint))
+		kind := "openai_chat_completions"
+		if shape == "responses" {
+			kind = "openai_responses"
+		}
+		if host == "" {
+			return kind
+		}
+		return kind + ":" + host
+	default:
+		if host == "" {
+			return provider
+		}
+		return provider + ":" + host
+	}
+}
+
+func providerOpaqueHostIdentity(baseURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return ""
+	}
+	if port := parsed.Port(); port != "" && !isDefaultURLPort(parsed.Scheme, port) {
+		host = net.JoinHostPort(host, port)
+	}
+	path := strings.TrimRight(strings.TrimSpace(parsed.Path), "/")
+	if path == "" {
+		return host
+	}
+	return host + path
+}
+
+func isDefaultURLPort(scheme, port string) bool {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "http":
+		return port == "80"
+	case "https":
+		return port == "443"
+	default:
+		return false
+	}
+}
+
+func stripIncompatibleProviderOpaqueMetadata(input []Message, target ReasoningOrigin) []Message {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make([]Message, 0, len(input))
+	for _, message := range input {
+		cloned := cloneProviderMessage(message)
+		applyTargetAwareProviderOpaqueSanitization(&cloned, target)
+		output = append(output, cloned)
+	}
+	return output
+}
+
+func applyTargetAwareProviderOpaqueSanitization(message *Message, target ReasoningOrigin) {
+	if message == nil || !messageHasProviderOpaqueMetadata(*message) {
+		return
+	}
+	if !message.ReasoningOrigin.IsZero() {
+		if message.ReasoningOrigin.Equal(target) {
+			return
+		}
+		stripProviderOpaqueMetadata(message)
+		return
+	}
+	if canKeepLegacyAnthropicOpaque(*message, target) {
+		stripOpenAIResponsesOpaqueMetadata(message)
+		return
+	}
+	stripProviderOpaqueMetadata(message)
+}
+
+func messageHasProviderOpaqueMetadata(message Message) bool {
+	if strings.TrimSpace(message.ReasoningSignature) != "" ||
+		strings.TrimSpace(message.ReasoningSignatureSource) != "" ||
+		strings.TrimSpace(message.OpenAIResponsesReasoningID) != "" ||
+		strings.TrimSpace(message.OpenAIResponsesReasoningStatus) != "" ||
+		len(message.OpenAIResponsesReasoningSummary) > 0 {
+		return true
+	}
+	for _, toolCall := range message.ToolCalls {
+		if strings.TrimSpace(toolCall.OpenAIResponsesID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesCallID) != "" ||
+			strings.TrimSpace(toolCall.OpenAIResponsesStatus) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func canKeepLegacyAnthropicOpaque(message Message, target ReasoningOrigin) bool {
+	if strings.ToLower(strings.TrimSpace(target.Provider)) != "anthropic" {
+		return false
+	}
+	source := strings.TrimSpace(message.ReasoningSignatureSource)
+	if source == ReasoningSignatureSourceOpenAIResponses {
+		return false
+	}
+	if source != "" && source != ReasoningSignatureSourceAnthropic {
+		return false
+	}
+	return true
+}
+
+func stripProviderOpaqueMetadata(message *Message) {
+	if message == nil {
+		return
+	}
+	message.ReasoningSignature = ""
+	message.ReasoningSignatureSource = ""
+	message.ReasoningOrigin = ReasoningOrigin{}
+	stripOpenAIResponsesOpaqueMetadata(message)
+}
+
+func stripOpenAIResponsesOpaqueMetadata(message *Message) {
+	if message == nil {
+		return
+	}
+	message.OpenAIResponsesReasoningID = ""
+	message.OpenAIResponsesReasoningStatus = ""
+	message.OpenAIResponsesReasoningSummary = nil
+	if len(message.ToolCalls) == 0 {
+		return
+	}
+	toolCalls := append([]ToolCallDescriptor(nil), message.ToolCalls...)
+	for index := range toolCalls {
+		toolCalls[index].OpenAIResponsesID = ""
+		toolCalls[index].OpenAIResponsesCallID = ""
+		toolCalls[index].OpenAIResponsesStatus = ""
+	}
+	message.ToolCalls = toolCalls
 }
 
 func isAssistantPlaceholderMessage(message Message) bool {
@@ -350,6 +715,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	last.ReasoningSignature = mergedSignature
 	if mergedSignature == "" {
 		last.ReasoningSignatureSource = ""
+		last.ReasoningOrigin = ReasoningOrigin{}
 		last.OpenAIResponsesReasoningID = ""
 		last.OpenAIResponsesReasoningStatus = ""
 		last.OpenAIResponsesReasoningSummary = nil
@@ -357,6 +723,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	}
 	if leftSignature == "" && rightSignature != "" {
 		last.ReasoningSignatureSource = strings.TrimSpace(current.ReasoningSignatureSource)
+		last.ReasoningOrigin = current.ReasoningOrigin
 		last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		last.OpenAIResponsesReasoningStatus = current.OpenAIResponsesReasoningStatus
 		last.OpenAIResponsesReasoningSummary = append([]byte(nil), current.OpenAIResponsesReasoningSummary...)
@@ -364,6 +731,7 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 	}
 	if leftSignature == rightSignature {
 		last.ReasoningSignatureSource = mergeProviderReasoningSignatureSource(last.ReasoningSignatureSource, current.ReasoningSignatureSource)
+		last.ReasoningOrigin = mergeProviderReasoningOrigin(last.ReasoningOrigin, current.ReasoningOrigin)
 		if strings.TrimSpace(last.OpenAIResponsesReasoningID) == "" {
 			last.OpenAIResponsesReasoningID = current.OpenAIResponsesReasoningID
 		}
@@ -374,6 +742,16 @@ func mergeProviderReasoningMetadata(last *Message, current Message) {
 			last.OpenAIResponsesReasoningSummary = append([]byte(nil), current.OpenAIResponsesReasoningSummary...)
 		}
 	}
+}
+
+func mergeProviderReasoningOrigin(left ReasoningOrigin, right ReasoningOrigin) ReasoningOrigin {
+	if left.IsZero() {
+		return right
+	}
+	if right.IsZero() || left.Equal(right) {
+		return left
+	}
+	return ReasoningOrigin{}
 }
 
 // providerToolResponseWindowEnd 返回 assistant tool-call 消息的响应收集窗口右边界（不含）。

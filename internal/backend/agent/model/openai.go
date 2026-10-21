@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	runtimecore "cursor/internal/backend/agent/core"
 	"cursor/internal/modelchannel"
 	"cursor/internal/netproxy"
+	"cursor/internal/subscriptionauth"
 )
 
 // OpenAIAdapter 实现 OpenAI 兼容流式请求。
@@ -175,11 +177,77 @@ func (parser *openAIThinkTagParser) Flush() []openAIContentPart {
 	}}
 }
 
+func splitOpenAISSEData(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	consumed := 0
+	for {
+		blockEnd, separatorLength := nextSSEBlock(data)
+		if blockEnd < 0 {
+			if !atEOF || len(data) == 0 {
+				return consumed, nil, nil
+			}
+			blockEnd = len(data)
+			separatorLength = 0
+		}
+		block := data[:blockEnd]
+		step := blockEnd + separatorLength
+		payload, ok := sseDataPayload(block)
+		consumed += step
+		if ok {
+			return consumed, payload, nil
+		}
+		if step == 0 || step >= len(data) {
+			return consumed, nil, nil
+		}
+		data = data[step:]
+	}
+}
+
+func nextSSEBlock(data []byte) (int, int) {
+	lf := bytes.Index(data, []byte("\n\n"))
+	crlf := bytes.Index(data, []byte("\r\n\r\n"))
+	switch {
+	case lf < 0:
+		if crlf < 0 {
+			return -1, 0
+		}
+		return crlf, 4
+	case crlf < 0 || lf < crlf:
+		return lf, 2
+	default:
+		return crlf, 4
+	}
+}
+
+func sseDataPayload(block []byte) ([]byte, bool) {
+	normalized := strings.ReplaceAll(string(block), "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	dataLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSuffix(line, "\r")
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		value := strings.TrimPrefix(line, "data:")
+		value = strings.TrimPrefix(value, " ")
+		dataLines = append(dataLines, value)
+	}
+	if len(dataLines) == 0 {
+		return nil, false
+	}
+	return []byte(strings.Join(dataLines, "\n")), true
+}
+
 // NewOpenAIAdapter 创建一个 OpenAI 兼容适配器。
 func NewOpenAIAdapter() *OpenAIAdapter {
-	return &OpenAIAdapter{
-		client: netproxy.NewHTTPClient(0),
+	return NewOpenAIAdapterWithClient(nil)
+}
+
+// NewOpenAIAdapterWithClient 供测试注入出站 client；nil 时使用默认 Provider transport。
+func NewOpenAIAdapterWithClient(client *http.Client) *OpenAIAdapter {
+	if client == nil {
+		client = netproxy.NewProviderHTTPClient(0)
 	}
+	return &OpenAIAdapter{client: client}
 }
 
 func openAIModelSupportsPromptCacheKey(modelID string) bool {
@@ -211,91 +279,6 @@ func applyOpenAIPromptCacheKeyOverride(body map[string]any, req StreamRequest, m
 	if key := openAIPromptCacheKey(req, modelID); key != "" {
 		body["prompt_cache_key"] = key
 	}
-}
-
-func shouldExposeOpenAIResponsesImageGeneration(req StreamRequest, tools []map[string]any) bool {
-	if !openAIResponsesToolNamePresent(tools, "GenerateImage") {
-		return false
-	}
-	return openAITextLooksLikeImageGenerationRequest(openAILatestUserRequestText(req))
-}
-
-func ensureOpenAIResponsesImageGenerationTool(tools []map[string]any) []map[string]any {
-	for _, tool := range tools {
-		if strings.TrimSpace(fmt.Sprint(tool["type"])) == "image_generation" {
-			return tools
-		}
-	}
-	return append(tools, map[string]any{"type": "image_generation"})
-}
-
-func openAIResponsesToolNamePresent(tools []map[string]any, name string) bool {
-	for _, tool := range tools {
-		if strings.TrimSpace(fmt.Sprint(tool["name"])) == name {
-			return true
-		}
-		if functionShape, ok := tool["function"].(map[string]any); ok {
-			if strings.TrimSpace(fmt.Sprint(functionShape["name"])) == name {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func openAILatestUserRequestText(req StreamRequest) string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		message := req.Messages[i]
-		if strings.TrimSpace(strings.ToLower(message.Role)) != "user" {
-			continue
-		}
-		text := message.Content
-		if strings.TrimSpace(text) == "" && len(message.ContentParts) > 0 {
-			text = collapseTextContentParts(message.ContentParts)
-		}
-		if tagged := textBetweenOpenAITag(text, "current_user_request"); tagged != "" {
-			return tagged
-		}
-		if tagged := textBetweenOpenAITag(text, "user_query"); tagged != "" {
-			return tagged
-		}
-		if strings.TrimSpace(text) != "" {
-			return strings.TrimSpace(text)
-		}
-	}
-	return ""
-}
-
-func textBetweenOpenAITag(text string, tag string) string {
-	openTag := "<" + tag + ">"
-	closeTag := "</" + tag + ">"
-	start := strings.LastIndex(text, openTag)
-	if start < 0 {
-		return ""
-	}
-	start += len(openTag)
-	end := strings.Index(text[start:], closeTag)
-	if end < 0 {
-		return ""
-	}
-	return strings.TrimSpace(text[start : start+end])
-}
-
-func openAITextLooksLikeImageGenerationRequest(text string) bool {
-	trimmed := strings.TrimSpace(strings.ToLower(text))
-	if trimmed == "" {
-		return false
-	}
-	imageTerms := []string{
-		"图片", "图像", "照片", "相片", "人像", "头像", "插画", "海报", "壁纸", "封面", "摄影", "真实摄影",
-		"image", "picture", "photo", "portrait", "illustration", "poster", "wallpaper", "cover", "photorealistic",
-	}
-	for _, term := range imageTerms {
-		if strings.Contains(trimmed, term) {
-			return true
-		}
-	}
-	return false
 }
 
 func OpenAIEndpointURL(baseURL string, endpoint string) string {
@@ -409,6 +392,14 @@ func ProviderURLHasEndpoint(baseURL string, endpoints ...string) bool {
 
 // Stream 发送 OpenAI 兼容流式请求，并解析统一模型事件。
 func (adapter *OpenAIAdapter) Stream(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	if req.StreamDiagnostics == nil {
+		req.StreamDiagnostics = &StreamDiagnostics{}
+	}
+	return runStreamWithZeroEventRecovery(ctx, req, sink, adapter.streamOnce)
+}
+
+func (adapter *OpenAIAdapter) streamOnce(ctx context.Context, req StreamRequest, sink func(ModelEvent) error) error {
+	ctx = netproxy.WithRequestConfig(ctx, req.OutboundProxy)
 	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
 	if baseURL == "" {
 		return fmt.Errorf("openai base url is empty")
@@ -488,6 +479,8 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
+	enforceOpenAIOutputLimit(bodyMap, req, modelID, "chat")
+	enforceOpenAIChatCompletionsImageGenerationToolPolicy(bodyMap)
 	body = bodyMap
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
 	recordLLMRequestArtifact(req, "openai", modelID, "POST", requestURL, body)
@@ -498,11 +491,19 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
+	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, requestURL, bytes.NewReader(payload))
@@ -511,11 +512,12 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+		applyOpenAIRequestHeaders(httpReq, req, requestURL)
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
-		return httpReq, nil
+		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false
@@ -556,9 +558,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		} `json:"function"`
 	}
 	type openAIChunk struct {
-		Type      string `json:"type"`
-		RequestID string `json:"request_id"`
-		Error     *struct {
+		Type           string `json:"type"`
+		RequestID      string `json:"request_id"`
+		SequenceNumber int64  `json:"sequence_number"`
+		Error          *struct {
 			Message string `json:"message"`
 			Type    string `json:"type"`
 			Code    string `json:"code"`
@@ -573,10 +576,10 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		} `json:"choices"`
 		Model string `json:"model"`
 		Usage *struct {
-			PromptTokens        int64 `json:"prompt_tokens"`
-			CompletionTokens    int64 `json:"completion_tokens"`
+			PromptTokens        *int64 `json:"prompt_tokens"`
+			CompletionTokens    *int64 `json:"completion_tokens"`
 			PromptTokensDetails *struct {
-				CachedTokens int64 `json:"cached_tokens"`
+				CachedTokens *int64 `json:"cached_tokens"`
 			} `json:"prompt_tokens_details,omitempty"`
 		} `json:"usage,omitempty"`
 	}
@@ -612,6 +615,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			Provider:           "openai",
 			Model:              currentModel,
 			ThinkingDurationMS: duration,
+			ReasoningOrigin:    reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -707,13 +711,20 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
 	}
 	errorFromChunk := func(chunk openAIChunk) error {
 		finishReason = "error"
+		code := ""
+		var streamErr error
 		if chunk.Error != nil {
+			code = strings.TrimSpace(chunk.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(chunk.Error.Type) {
+				code = strings.TrimSpace(chunk.Error.Type)
+			}
 			parts := make([]string, 0, 4)
 			if value := strings.TrimSpace(chunk.Error.Type); value != "" {
 				parts = append(parts, "type="+value)
@@ -726,69 +737,104 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			}
 			if message := strings.TrimSpace(chunk.Error.Message); message != "" {
 				if len(parts) > 0 {
-					return fmt.Errorf("openai chat stream error %s: %s", strings.Join(parts, " "), message)
+					streamErr = fmt.Errorf("openai chat stream error %s: %s", strings.Join(parts, " "), message)
+				} else {
+					streamErr = fmt.Errorf("openai chat stream error: %s", message)
 				}
-				return fmt.Errorf("openai chat stream error: %s", message)
-			}
-			if len(parts) > 0 {
-				return fmt.Errorf("openai chat stream error %s", strings.Join(parts, " "))
+			} else if len(parts) > 0 {
+				streamErr = fmt.Errorf("openai chat stream error %s", strings.Join(parts, " "))
 			}
 		}
-		return fmt.Errorf("openai chat stream error")
+		if streamErr == nil {
+			streamErr = fmt.Errorf("openai chat stream error")
+		}
+		if isContextOverflowCode(code) {
+			return &ProviderTerminalStatusError{Provider: "openai", Status: "failed", Code: code, Message: streamErr.Error()}
+		}
+		return streamErr
 	}
 	applyUsage := func(usage *struct {
-		PromptTokens        int64 `json:"prompt_tokens"`
-		CompletionTokens    int64 `json:"completion_tokens"`
+		PromptTokens        *int64 `json:"prompt_tokens"`
+		CompletionTokens    *int64 `json:"completion_tokens"`
 		PromptTokensDetails *struct {
-			CachedTokens int64 `json:"cached_tokens"`
+			CachedTokens *int64 `json:"cached_tokens"`
 		} `json:"prompt_tokens_details,omitempty"`
 	}) {
 		if usage == nil {
 			return
 		}
 		usagePresent = true
-		promptTokens := usage.PromptTokens
-		cachedTokens := int64(0)
-		if usage.PromptTokensDetails != nil {
+		if usage.PromptTokensDetails != nil && usage.PromptTokensDetails.CachedTokens != nil {
 			cacheReadPresent = true
-			cachedTokens = usage.PromptTokensDetails.CachedTokens
+			cacheReadTokens = maxInt64(*usage.PromptTokensDetails.CachedTokens, 0)
 		}
-		if promptTokens < 0 {
-			promptTokens = 0
+		if usage.PromptTokens != nil {
+			promptTokens := maxInt64(*usage.PromptTokens, 0)
+			if cacheReadTokens > promptTokens {
+				cacheReadTokens = promptTokens
+			}
+			inputTokens = promptTokens - cacheReadTokens
 		}
-		if cachedTokens < 0 {
-			cachedTokens = 0
+		if usage.CompletionTokens != nil {
+			outputTokens = maxInt64(*usage.CompletionTokens, 0)
 		}
-		if cachedTokens > promptTokens {
-			cachedTokens = promptTokens
-		}
-		inputTokens = promptTokens - cachedTokens
-		outputTokens = maxInt64(usage.CompletionTokens, 0)
-		cacheReadTokens = cachedTokens
 		cacheWriteTokens = 0
 		cacheWritePresent = true
 	}
+	flushCompletedTools := func() error {
+		for _, accumulator := range tools {
+			if !openAIToolArgsComplete(accumulator.Args.String()) {
+				continue
+			}
+			if err := sink(ModelEvent{
+				Kind:            ModelEventKindToolLikeCompleted,
+				OccurredAt:      time.Now().UTC(),
+				Provider:        "openai",
+				Model:           currentModel,
+				ReasoningOrigin: reasoningOriginFromRequest(req),
+				ToolInvocation: &runtimecore.ToolInvocation{
+					CallID:   strings.TrimSpace(accumulator.CallID),
+					ToolName: strings.TrimSpace(accumulator.Name),
+					ArgsJSON: normalizeCompletedOpenAIToolArgs(accumulator.Args.String()),
+				},
+			}); err != nil {
+				return err
+			}
+			streamIdle.MarkEffectiveContent()
+		}
+		return nil
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
+	scanner.Split(splitOpenAISSEData)
 	for scanner.Scan() {
-		rawLine := scanner.Text()
-		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine(rawLine)+"\n")
-		line := strings.TrimSpace(rawLine)
-		if line == "" || !strings.HasPrefix(line, "data:") {
+		payloadLine := strings.TrimSpace(scanner.Text())
+		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine("data: "+payloadLine)+"\n\n")
+		if payloadLine == "" {
 			continue
 		}
 		if firstEventAt.IsZero() {
 			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
-		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
 			}
 			if err := flushThinkingCompleted(); err != nil {
 				return fail(err)
+			}
+			if !turnFinishedPending {
+				finishReason = normalizeOpenAIChatFinishReason("", len(tools) > 0)
+				if finishReason == "tool_calls" {
+					if err := flushCompletedTools(); err != nil {
+						return fail(err)
+					}
+				}
+				tools = make(map[int]*openAIToolAccumulator)
+				turnFinishedPending = true
 			}
 			if err := flushTurnFinished(); err != nil {
 				return fail(err)
@@ -800,6 +846,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		if err := json.Unmarshal([]byte(payloadLine), &chunk); err != nil {
 			return fail(err)
 		}
+		req.StreamDiagnostics.RecordSSEEvent(firstNonEmptyString(chunk.Type, "chat.completion.chunk"), chunk.RequestID, chunk.SequenceNumber, "")
 		if strings.TrimSpace(chunk.Type) == "error" || chunk.Error != nil {
 			return fail(errorFromChunk(chunk))
 		}
@@ -820,6 +867,9 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			continue
 		}
 		choice := chunk.Choices[0]
+		if choice.FinishReason != nil {
+			req.StreamDiagnostics.RecordSSEEvent(firstNonEmptyString(chunk.Type, "chat.completion.chunk"), chunk.RequestID, chunk.SequenceNumber, strings.TrimSpace(*choice.FinishReason))
+		}
 		if strings.TrimSpace(chunk.Model) != "" {
 			currentModel = strings.TrimSpace(chunk.Model)
 		}
@@ -876,27 +926,13 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 			if err := flushThinkingCompleted(); err != nil {
 				return fail(err)
 			}
-			for _, accumulator := range tools {
-				if !openAIToolArgsComplete(accumulator.Args.String()) {
-					continue
-				}
-				if err := sink(ModelEvent{
-					Kind:       ModelEventKindToolLikeCompleted,
-					OccurredAt: time.Now().UTC(),
-					Provider:   "openai",
-					Model:      currentModel,
-					ToolInvocation: &runtimecore.ToolInvocation{
-						CallID:   strings.TrimSpace(accumulator.CallID),
-						ToolName: strings.TrimSpace(accumulator.Name),
-						ArgsJSON: []byte(accumulator.Args.String()),
-					},
-				}); err != nil {
+			finishReason = normalizeOpenAIChatFinishReason(*choice.FinishReason, len(tools) > 0)
+			if finishReason == "tool_calls" {
+				if err := flushCompletedTools(); err != nil {
 					return fail(err)
 				}
-				streamIdle.MarkEffectiveContent()
 			}
 			tools = make(map[int]*openAIToolAccumulator)
-			finishReason = strings.TrimSpace(*choice.FinishReason)
 			turnFinishedPending = true
 			sawCompletionMarker = true
 		}
@@ -909,25 +945,6 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 	}
 	if !sawCompletionMarker {
 		return fail(newStreamTruncatedError("openai", nil))
-	}
-	for _, accumulator := range tools {
-		if !openAIToolArgsComplete(accumulator.Args.String()) {
-			continue
-		}
-		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
-			ToolInvocation: &runtimecore.ToolInvocation{
-				CallID:   strings.TrimSpace(accumulator.CallID),
-				ToolName: strings.TrimSpace(accumulator.Name),
-				ArgsJSON: []byte(accumulator.Args.String()),
-			},
-		}); err != nil {
-			return fail(err)
-		}
-		streamIdle.MarkEffectiveContent()
 	}
 	if err := flushTaggedContentTail(); err != nil {
 		return fail(err)
@@ -1003,9 +1020,12 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return WrapFallbackSafetyError(err, req.FallbackSafety)
 	}
-	body = bodyMap
-
+	enforceOpenAIOutputLimit(bodyMap, req, modelID, "responses")
+	enforceOpenAIResponsesImageGenerationToolPolicy(bodyMap, req)
 	requestURL := OpenAIEndpointURL(baseURL, req.OpenAIEndpoint)
+	filterCodexResponsesBody(bodyMap, req, requestURL)
+	applyCodexAffinityToBody(bodyMap, req, requestURL)
+	body = bodyMap
 	recordLLMRequestArtifact(req, "openai", modelID, "POST", requestURL, body)
 
 	payload, err := json.Marshal(body)
@@ -1013,11 +1033,19 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		buildErr := &RequestBuildError{Err: err}
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, buildErr))
-		return buildErr
+		return wrapRequestBuildFailure(req, buildErr)
+	}
+	if err := checkEncodedRequestBodyLimit(payload); err != nil {
+		finishedAt = time.Now().UTC()
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
+		return wrapRequestBuildFailure(req, err)
 	}
 
-	streamCtx, streamIdle := newProviderStreamIdleWatchdog(ctx, req.ProviderStreamIdleTimeout)
-	defer streamIdle.Stop()
+	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
+	if ownedLiveness {
+		defer streamIdle.Stop()
+	}
+	streamIdle.AttachDiagnostics(req.StreamDiagnostics)
 
 	buildHTTPRequest := func(requestContext context.Context) (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(requestContext, http.MethodPost, requestURL, bytes.NewReader(payload))
@@ -1026,11 +1054,12 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+		applyOpenAIRequestHeaders(httpReq, req, requestURL)
 		if err := ApplyCustomHeaders(httpReq, req.CustomHeadersEnabled, req.CustomHeadersJSON); err != nil {
 			return nil, &RequestBuildError{Err: err}
 		}
-		return httpReq, nil
+		applyManagedCodexReservedHeaders(httpReq, req, requestURL, apiKey)
+		return netproxy.AttachRequest(httpReq, req.OutboundProxy), nil
 	}
 
 	sawStreamEvent := false
@@ -1104,6 +1133,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	type openAIResponsesStreamEvent struct {
 		Type            string                     `json:"type"`
 		RequestID       string                     `json:"request_id"`
+		SequenceNumber  int64                      `json:"sequence_number"`
 		Delta           string                     `json:"delta"`
 		Arguments       string                     `json:"arguments"`
 		PartialImageB64 string                     `json:"partial_image_b64"`
@@ -1169,6 +1199,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			Provider:           "openai",
 			Model:              currentModel,
 			ThinkingDurationMS: duration,
+			ReasoningOrigin:    reasoningOriginFromRequest(req),
 		}); err != nil {
 			return err
 		}
@@ -1265,6 +1296,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 				trunc.RawBytesObserved = true
 			}
 		}
+		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
@@ -1306,7 +1338,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			}
 		}
 		if !openAIToolArgsComplete(accumulator.Args.String()) {
-			return nil
+			return newStreamTruncatedError("openai", nil)
 		}
 		completedTools[completionKey] = struct{}{}
 		if strings.TrimSpace(accumulator.CallID) != "" {
@@ -1314,10 +1346,11 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		emittedToolInvocation = true
 		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
+			Kind:            ModelEventKindToolLikeCompleted,
+			OccurredAt:      time.Now().UTC(),
+			Provider:        "openai",
+			Model:           currentModel,
+			ReasoningOrigin: reasoningOriginFromRequest(req),
 			ToolInvocation: &runtimecore.ToolInvocation{
 				CallID:         strings.TrimSpace(accumulator.CallID),
 				ToolName:       strings.TrimSpace(accumulator.Name),
@@ -1402,10 +1435,11 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		}
 		emittedToolInvocation = true
 		if err := sink(ModelEvent{
-			Kind:       ModelEventKindToolLikeCompleted,
-			OccurredAt: time.Now().UTC(),
-			Provider:   "openai",
-			Model:      currentModel,
+			Kind:            ModelEventKindToolLikeCompleted,
+			OccurredAt:      time.Now().UTC(),
+			Provider:        "openai",
+			Model:           currentModel,
+			ReasoningOrigin: reasoningOriginFromRequest(req),
 			ToolInvocation: &runtimecore.ToolInvocation{
 				CallID:         strings.TrimSpace(accumulator.CallID),
 				ToolName:       "GenerateImage",
@@ -1442,6 +1476,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			ThinkingDurationMS:      duration,
 			ThinkingSignature:       trimmedSignature,
 			ThinkingSignatureSource: ReasoningSignatureSourceOpenAIResponses,
+			ReasoningOrigin:         reasoningOriginFromRequest(req),
 			ProviderItemID:          strings.TrimSpace(providerItemID),
 			ProviderStatus:          strings.TrimSpace(providerStatus),
 			ProviderSummary:         cloneRawJSON(providerSummary),
@@ -1507,31 +1542,48 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 			return nil
 		}
 	}
-	errorFromEvent := func(event openAIResponsesStreamEvent) error {
-		if event.Error != nil && strings.TrimSpace(event.Error.Message) != "" {
-			return fmt.Errorf("openai responses stream error %s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
+	errorFromEvent := func(event openAIResponsesStreamEvent, status string) error {
+		message := ""
+		code := ""
+		if event.Error != nil {
+			code = strings.TrimSpace(event.Error.Code)
+			if !isContextOverflowCode(code) && isContextOverflowCode(event.Error.Type) {
+				code = strings.TrimSpace(event.Error.Type)
+			}
+			if strings.TrimSpace(event.Error.Message) != "" {
+				message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Error.Type, event.Error.Code, event.RequestID), strings.TrimSpace(event.Error.Message))
+			}
 		}
-		if event.Response != nil && event.Response.Error != nil && strings.TrimSpace(event.Response.Error.Message) != "" {
-			return fmt.Errorf("openai responses stream error %s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
+		if event.Response != nil && event.Response.Error != nil {
+			if code == "" {
+				code = strings.TrimSpace(event.Response.Error.Code)
+				if !isContextOverflowCode(code) && isContextOverflowCode(event.Response.Error.Type) {
+					code = strings.TrimSpace(event.Response.Error.Type)
+				}
+			}
+			if message == "" && strings.TrimSpace(event.Response.Error.Message) != "" {
+				message = fmt.Sprintf("%s: %s", openAIStreamErrorDetails(event.Response.Error.Type, event.Response.Error.Code, event.RequestID), strings.TrimSpace(event.Response.Error.Message))
+			}
 		}
-		return fmt.Errorf("openai responses stream failed")
+		return &ProviderTerminalStatusError{Provider: "openai responses", Status: status, Code: code, Message: message}
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), openAIStreamMaxTokenSize)
+	scanner.Split(splitOpenAISSEData)
+responsesScan:
 	for scanner.Scan() {
-		rawLine := scanner.Text()
-		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine(rawLine)+"\n")
-		line := strings.TrimSpace(rawLine)
-		if line == "" || !strings.HasPrefix(line, "data:") {
+		payloadLine := strings.TrimSpace(scanner.Text())
+		_, _ = appendLLMResponseArtifact(req, redactOpenAIStreamArtifactLine("data: "+payloadLine)+"\n\n")
+		if payloadLine == "" {
 			continue
 		}
 		if firstEventAt.IsZero() {
 			sawStreamEvent = true
 			firstEventAt = time.Now().UTC()
 		}
-		payloadLine := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payloadLine == "[DONE]" {
+			req.StreamDiagnostics.RecordSSEEvent("[DONE]", "", 0, "completed")
 			sawCompletionMarker = true
 			if err := flushTaggedContentTail(); err != nil {
 				return fail(err)
@@ -1549,6 +1601,22 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 					return fail(err)
 				}
 			}
+			for _, accumulator := range tools {
+				if accumulator == nil || openAIToolArgsComplete(accumulator.Args.String()) {
+					continue
+				}
+				// [DONE] 兜底路径下仍有未收口的 function_call 参数：completeTool 已因非法 JSON 跳过，
+				// 不能当作普通成功收尾，必须 fail-closed。
+				return fail(newStreamTruncatedError("openai", nil))
+			}
+			if !turnFinishedPending {
+				// 仿照 Chat 路径：仅收到 [DONE]（缺 response.completed）时兜底补发 TurnFinished。
+				// 无工具普通成功默认 stop；已发工具完成时保留空值交由 effectiveFinishReason 归一为 tool_calls。
+				if !emittedToolInvocation && strings.TrimSpace(finishReason) == "" {
+					finishReason = "stop"
+				}
+				turnFinishedPending = true
+			}
 			if err := flushTurnFinished(); err != nil {
 				return fail(err)
 			}
@@ -1559,6 +1627,13 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		if err := json.Unmarshal([]byte(payloadLine), &event); err != nil {
 			return fail(err)
 		}
+		responseID := ""
+		responseStatus := ""
+		if event.Response != nil {
+			responseID = event.Response.ID
+			responseStatus = event.Response.Status
+		}
+		req.StreamDiagnostics.RecordSSEEvent(event.Type, firstNonEmptyString(responseID, event.RequestID), event.SequenceNumber, responseStatus)
 		if event.Response != nil {
 			if strings.TrimSpace(event.Response.Model) != "" {
 				currentModel = strings.TrimSpace(event.Response.Model)
@@ -1675,10 +1750,16 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 					finishReason = strings.TrimSpace(event.Response.IncompleteDetails.Reason)
 				}
 			}
+			if strings.TrimSpace(event.Type) == "response.incomplete" {
+				return fail(&ProviderTerminalStatusError{Provider: "openai responses", Status: "incomplete", Message: finishReason})
+			}
 			turnFinishedPending = true
 			sawCompletionMarker = true
+			break responsesScan
 		case "response.failed", "error":
-			return fail(errorFromEvent(event))
+			return fail(errorFromEvent(event, "failed"))
+		case "response.cancelled", "response.canceled":
+			return fail(&ProviderTerminalStatusError{Provider: "openai responses", Status: "cancelled"})
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -1712,6 +1793,33 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 	finishedAt = time.Now().UTC()
 	recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", currentModel, startedAt, firstEventAt, finishedAt, effectiveFinishReason(), inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil))
 	return nil
+}
+
+func normalizeOpenAIChatFinishReason(raw string, hasTools bool) string {
+	reason := strings.TrimSpace(raw)
+	switch reason {
+	case "content_filter", "length":
+		return reason
+	case "tool_calls", "function_call":
+		return "tool_calls"
+	case "", "stop":
+		if hasTools {
+			return "tool_calls"
+		}
+		return "stop"
+	default:
+		if hasTools {
+			return "tool_calls"
+		}
+		return reason
+	}
+}
+
+func normalizeCompletedOpenAIToolArgs(raw string) []byte {
+	if strings.TrimSpace(raw) == "" {
+		return []byte("{}")
+	}
+	return []byte(raw)
 }
 
 func openAIToolArgsComplete(raw string) bool {
@@ -1935,6 +2043,33 @@ func shouldSendOpenAIMaxOutputTokens(modelID string) bool {
 	return !strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "gpt")
 }
 
+// shouldSendOpenAIMaxCompletionTokens 判断 OpenAI chat 是否应使用 max_completion_tokens。
+// 只有显式强制输出预算的摘要调用会走到这里；普通调用保持既有省略行为。
+func shouldSendOpenAIMaxCompletionTokens(modelID string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "gpt")
+}
+
+// enforceOpenAIOutputLimit 在摘要等显式强制预算的调用中，把 MaxTokens 写回请求体，
+// 并清除互斥的额度字段，避免自定义 extra params 覆盖摘要预算。
+// endpoint 取 chat 或 responses；Chat 的 GPT 模型使用 max_completion_tokens，其余使用 max_tokens。
+func enforceOpenAIOutputLimit(body map[string]any, req StreamRequest, modelID string, endpoint string) {
+	if body == nil || !req.EnforceOutputLimit || req.MaxTokens <= 0 {
+		return
+	}
+	delete(body, "max_tokens")
+	delete(body, "max_completion_tokens")
+	delete(body, "max_output_tokens")
+	if endpoint == "responses" {
+		body["max_output_tokens"] = req.MaxTokens
+		return
+	}
+	if shouldSendOpenAIMaxCompletionTokens(modelID) {
+		body["max_completion_tokens"] = req.MaxTokens
+		return
+	}
+	body["max_tokens"] = req.MaxTokens
+}
+
 func shouldIncludeOpenAIReasoningContent(message Message, thinkingEnabled bool) bool {
 	if strings.TrimSpace(message.ReasoningContent) != "" {
 		return true
@@ -1952,7 +2087,8 @@ func applyOpenAIThinkingDisable(body map[string]any, req StreamRequest, baseURL 
 	if len(body) == 0 || normalizeRuntimeThinkingEffort(req.ThinkingEffort) != "disabled" {
 		return
 	}
-	switch openAIThinkingDisableKind(baseURL, modelID, endpoint) {
+	kind := openAIThinkingDisableKind(baseURL, modelID, endpoint)
+	switch kind {
 	case "thinking_type":
 		body["thinking"] = map[string]any{"type": "disabled"}
 		delete(body, "reasoning_effort")
@@ -1961,11 +2097,16 @@ func applyOpenAIThinkingDisable(body map[string]any, req StreamRequest, baseURL 
 		body["enable_thinking"] = false
 		delete(body, "reasoning_effort")
 		setRequestKnob(req, "thinking_disabled_provider_param", "enable_thinking")
-	case "reasoning_none":
+	case "reasoning_none", "reasoning_low":
+		effort := "none"
+		if kind == "reasoning_low" {
+			// sol 无法关闭思考；使用已验证的最低合法等级，而非发送必然被拒绝的 none。
+			effort = "low"
+		}
 		if modelchannel.OpenAIEndpointShape(endpoint) == "responses" {
-			body["reasoning"] = map[string]any{"effort": "none"}
+			body["reasoning"] = map[string]any{"effort": effort}
 		} else {
-			body["reasoning_effort"] = "none"
+			body["reasoning_effort"] = effort
 		}
 		setRequestKnob(req, "thinking_disabled_provider_param", "reasoning.effort")
 	}
@@ -1994,6 +2135,9 @@ func openAIThinkingDisableKind(baseURL string, modelID string, endpoint string) 
 		strings.Contains(model, "mimo") ||
 		strings.Contains(model, "minimax"):
 		return "thinking_type"
+	case model == "gpt-6.1-sol" || strings.HasPrefix(model, "gpt-6.1-sol-"):
+		// 此模型的合法等级从 low 开始；不能从 gpt-6 前缀推断其支持 none。
+		return "reasoning_low"
 	case openAIModelSupportsReasoningNone(model):
 		return "reasoning_none"
 	default:
@@ -2347,4 +2491,101 @@ func openAIStreamErrorDetails(errorType string, code string, requestID string) s
 		return "provider_error"
 	}
 	return strings.Join(parts, " ")
+}
+
+func isChatGPTCodexHost(requestURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(requestURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "chatgpt.com")
+}
+
+func isChatGPTCodexResponsesURL(requestURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(requestURL))
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(parsed.Hostname(), "chatgpt.com") {
+		return false
+	}
+	return strings.TrimRight(parsed.Path, "/") == "/backend-api/codex/responses"
+}
+
+func isManagedCodexChatGPTRequest(req StreamRequest, requestURL string) bool {
+	return subscriptionauth.NormalizeCredentialSource(req.CredentialSource) == subscriptionauth.CredentialSourceCodex &&
+		isChatGPTCodexResponsesURL(requestURL)
+}
+
+func applyOpenAIRequestHeaders(httpReq *http.Request, req StreamRequest, requestURL string) {
+	if httpReq == nil {
+		return
+	}
+	if isManagedCodexChatGPTRequest(req, requestURL) {
+		applyManagedCodexIdentityHeaders(httpReq, req)
+		return
+	}
+	httpReq.Header.Set("User-Agent", ClaudeCodeUserAgent)
+}
+
+func applyManagedCodexReservedHeaders(httpReq *http.Request, req StreamRequest, requestURL string, apiKey string) {
+	if httpReq == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	applyManagedCodexIdentityHeaders(httpReq, req)
+}
+
+func applyManagedCodexIdentityHeaders(httpReq *http.Request, req StreamRequest) {
+	httpReq.Header.Set("originator", "codex_cli_rs")
+	if accountID := strings.TrimSpace(req.ChatGPTAccountID); accountID != "" {
+		httpReq.Header.Set("ChatGPT-Account-Id", accountID)
+	} else {
+		httpReq.Header.Del("ChatGPT-Account-Id")
+	}
+	httpReq.Header.Del("session-id")
+	httpReq.Header.Del("thread-id")
+	httpReq.Header.Del("x-client-request-id")
+	if sessionID := strings.TrimSpace(req.CodexAffinity.SessionID); sessionID != "" {
+		httpReq.Header.Set("session-id", sessionID)
+	}
+	if threadID := strings.TrimSpace(req.CodexAffinity.ThreadID); threadID != "" {
+		httpReq.Header.Set("thread-id", threadID)
+	}
+	if requestID := strings.TrimSpace(req.CodexAffinity.ClientRequestID); requestID != "" {
+		httpReq.Header.Set("x-client-request-id", requestID)
+	}
+}
+
+func isCodexResponsesAllowedKey(key string) bool {
+	switch key {
+	// previous_response_id 与签发它的 ChatGPT 账号绑定；managed Codex 无法验证归属，因此不允许透传。
+	case "model", "input", "instructions", "stream", "store", "include", "tools", "tool_choice", "reasoning", "truncation", "prompt_cache_key":
+		return true
+	default:
+		return false
+	}
+}
+
+func filterCodexResponsesBody(body map[string]any, req StreamRequest, requestURL string) {
+	if body == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	body["store"] = false
+	for key := range body {
+		if !isCodexResponsesAllowedKey(key) {
+			delete(body, key)
+		}
+	}
+	delete(body, "prompt_cache_key")
+}
+
+func applyCodexAffinityToBody(body map[string]any, req StreamRequest, requestURL string) {
+	if body == nil || !isManagedCodexChatGPTRequest(req, requestURL) {
+		return
+	}
+	delete(body, "prompt_cache_key")
+	if key := strings.TrimSpace(req.CodexAffinity.PromptCacheKey); key != "" {
+		body["prompt_cache_key"] = key
+	}
 }

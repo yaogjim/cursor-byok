@@ -143,6 +143,32 @@ func MockProtoAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFun
 	}
 }
 
+// MergedCatalogAction returns official catalog protobuf plus local BYOK models.
+// Pure local identity skips the official fetch. Official fetch failures keep
+// local entries but omit synthesized local default/fallback recommendations.
+func MergedCatalogAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
+	return func(ctx *server.Context) error {
+		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
+		if err != nil {
+			return err
+		}
+		return handleMergedCatalog(reqCtx, route)
+	}
+}
+
+// OfficialDefaultModelAction returns the official default-model protobuf when
+// the inbound identity is official. Local identity uses cfg.MockBuilder.
+// Official fetch failures fail closed instead of projecting the first local adapter.
+func OfficialDefaultModelAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
+	return func(ctx *server.Context) error {
+		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
+		if err != nil {
+			return err
+		}
+		return handleOfficialDefaultModel(reqCtx, route)
+	}
+}
+
 func newCompatRouteObjects(ctx *server.Context, deps Dependencies, cfg CompatRouteConfig) (*RequestContext, *Route, error) {
 	if ctx == nil || ctx.Request == nil {
 		return nil, nil, nil

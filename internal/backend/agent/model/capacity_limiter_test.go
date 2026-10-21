@@ -123,7 +123,7 @@ func TestApplyChannelToRequestProjectsCapacity(t *testing.T) {
 	req := capacityTestRequest(t, 9)
 	req.UpstreamCapacityGroupKey = "stale-request-key"
 
-	got := applyChannelToRequest(req, &channel, time.Second)
+	got := applyChannelToRequest(req, &channel)
 	if got.MaxConcurrentRequests != 2 {
 		t.Fatalf("projected capacity = %d, want 2", got.MaxConcurrentRequests)
 	}

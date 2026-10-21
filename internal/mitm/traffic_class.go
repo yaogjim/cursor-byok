@@ -2,8 +2,11 @@ package mitm
 
 import (
 	"net"
+	"net/http"
 	"strings"
 	"unicode"
+
+	"cursor/internal/observability"
 )
 
 const (
@@ -17,6 +20,35 @@ const (
 
 	maxObservabilityPathRunes = 160
 )
+
+// shouldForwardToLocalBackend 决定解密后的 HTTP 请求是否送入本地 backend。
+// CONNECT 仍按 host 白名单 MITM，以便读取 path；MITM 层无法按模型分流。
+// 受管 Agent / 目录 / 控制面以及现有 TAB、FileSync、Repo、Docs、MCP、遥测路径
+// 继续送本地，避免改变既有 relay 或把本地处理的数据扩到官方出口。
+// 未分类路径透明回源，不改写 Authorization。
+func shouldForwardToLocalBackend(host, method, path string) bool {
+	if !isWhitelistedRelayHost(host) {
+		return false
+	}
+	return ClassifyTraffic(host, method, path) != TrafficClassUnknown
+}
+
+func httpRequestPath(req *http.Request) string {
+	if req == nil || req.URL == nil {
+		return "/"
+	}
+	if strings.TrimSpace(req.URL.Path) == "" {
+		return "/"
+	}
+	return req.URL.Path
+}
+
+func httpRequestMethod(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	return req.Method
+}
 
 // ClassifyTraffic 按 path 优先、host 仅提示的规则划分流量。CONNECT 或缺少 path 时返回 unknown。
 func ClassifyTraffic(host, method, path string) string {
@@ -66,6 +98,15 @@ func ClassifyTraffic(host, method, path string) string {
 	default:
 		return TrafficClassUnknown
 	}
+}
+
+// ClassifyCapability 仅识别可聚合的 SCM/FSSync/repository 路径；其余保持 unknown，避免发明能力。
+func ClassifyCapability(path string) string {
+	return observability.ClassifyRequestCapability(observabilityPath(path))
+}
+
+func ClassifyOperation(capability string) string {
+	return observability.ClassifyRequestOperation(capability, "transport.forward")
 }
 
 func observabilityPath(path string) string {

@@ -61,6 +61,9 @@ func TestHostReplaceConfigReplacesHash(t *testing.T) {
 func newHostConfigTestManager(t *testing.T) *serverconfig.Manager {
 	t.Helper()
 	root := t.TempDir()
+	// Host construction also opens history and starts debug retention cleanup.
+	// Isolate appdata paths as well as the config store from the user's home.
+	t.Setenv("HOME", root)
 	store := serverconfig.NewStore(filepath.Join(root, "config.yaml"), filepath.Join(root, "logs"))
 	manager, err := serverconfig.NewManager(context.Background(), store)
 	if err != nil {

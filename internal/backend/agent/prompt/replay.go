@@ -250,6 +250,9 @@ func marshalReplayMessage(message Message) ([]byte, error) {
 	if len(message.OpenAIResponsesReasoningSummary) > 0 {
 		payload["openai_responses_reasoning_summary"] = json.RawMessage(append([]byte(nil), message.OpenAIResponsesReasoningSummary...))
 	}
+	if !message.ReasoningOrigin.IsZero() {
+		payload["reasoning_origin"] = message.ReasoningOrigin
+	}
 	if len(message.ToolCalls) > 0 {
 		payload["tool_calls"] = message.ToolCalls
 	}

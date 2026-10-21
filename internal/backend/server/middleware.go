@@ -47,11 +47,17 @@ func Observe(recorder captureRecorder) Middleware {
 			if requestBytes < 0 {
 				requestBytes = 0
 			}
+			requestPath := ""
+			if ctx.Request.URL != nil {
+				requestPath = ctx.Request.URL.Path
+			}
+			capability := observability.ClassifyRequestCapability(requestPath, ctx.RouteName)
+			operation := observability.ClassifyRequestOperation(capability, "transport.request")
 			recorder.RecordEvent(requestContext, observability.Event{
 				Layer:        "backend",
 				Event:        "request_started",
-				Capability:   "unknown",
-				Operation:    "transport.request",
+				Capability:   capability,
+				Operation:    operation,
 				Direction:    observability.DirectionCursorToProxy,
 				Route:        ctx.RouteName,
 				Protocol:     string(ctx.Protocol),
@@ -59,7 +65,7 @@ func Observe(recorder captureRecorder) Middleware {
 				RequestBytes: requestBytes,
 				Fields: map[string]any{
 					"method": ctx.Request.Method,
-					"path":   ctx.Request.URL.Path,
+					"path":   requestPath,
 				},
 			})
 
@@ -82,23 +88,28 @@ func Observe(recorder captureRecorder) Middleware {
 				if finalErr != nil || statusCode >= http.StatusBadRequest {
 					status = "error"
 				}
+				severity := ""
+				if statusCode == http.StatusNotFound && capability != "unknown" {
+					severity = observability.SeverityWarning
+				}
 				recorder.RecordEvent(requestContext, observability.Event{
 					Layer:           "backend",
 					Event:           "request_finished",
-					Capability:      "unknown",
-					Operation:       "transport.request",
+					Capability:      capability,
+					Operation:       operation,
 					Direction:       observability.DirectionProxyToCursor,
 					Route:           ctx.RouteName,
 					ExecutionTarget: executionTarget(ctx),
 					Protocol:        string(ctx.Protocol),
 					Status:          status,
+					Severity:        severity,
 					ErrorCategory:   serverErrorCategory(finalErr, statusCode),
 					DurationMS:      time.Since(ctx.StartedAt).Milliseconds(),
 					RequestBytes:    requestBytes,
 					ResponseBytes:   responseBytes,
 					Fields: map[string]any{
 						"method":      ctx.Request.Method,
-						"path":        ctx.Request.URL.Path,
+						"path":        requestPath,
 						"status_code": statusCode,
 						"source":      string(ctx.Source),
 					},

@@ -16,6 +16,13 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 const CURSOR_ACCOUNT_CONTRIBUTOR_URL = "https://github.com/aike0210";
 const message = useMessage();
 
+defineProps({
+  flush: {
+    type: Boolean,
+    default: false,
+  },
+});
+
 const cursorAccountStatus = ref({
   state: "signed_out",
   authId: "",
@@ -55,11 +62,20 @@ const cursorAccountDisplayIdentifier = computed(() => {
     cursorAccountStatus.value.email || cursorAccountStatus.value.authId,
   );
 });
+const cursorAccountCountText = computed(() => {
+  if (cursorAccountSignedIn.value) {
+    return "1 个账号；独立用于插件、Skills 和 MCP，后台调用策略不在此配置";
+  }
+  return "尚未登录；登录后用于插件、Skills 和 MCP，不会改变 Cursor 客户端当前账号";
+});
 const cursorAccountStateText = computed(() => {
   if (cursorAccountSignedIn.value) return "已经登录";
   if (cursorAccountWaiting.value) return "等待浏览器登录";
   return "未连接";
 });
+const cursorAccountTitle = computed(() =>
+  cursorAccountDisplayIdentifier.value || "未连接",
+);
 
 function showActionError(title, error) {
   const detail = String(error || "服务错误").trim() || "服务错误";
@@ -128,19 +144,11 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <Card>
-    <div class="flex flex-col gap-3">
-      <div class="flex items-center justify-between gap-4">
-        <div class="flex min-w-0 flex-wrap items-center gap-2">
-          <h2 class="text-base font-medium text-[var(--color-text)]">Cursor 控制面账号</h2>
-          <span
-            class="rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"
-          >
-            {{ cursorAccountStateText }}
-          </span>
-        </div>
-        <div class="flex shrink-0 items-center gap-1 text-xs text-[var(--color-text-muted)]">
-          <span>@aike0210</span>
+  <component :is="flush ? 'div' : Card">
+    <div class="setting-row">
+      <div class="setting-l">
+        <div class="setting-t">
+          授权账号
           <Tooltip>
             <div class="flex min-w-[220px] flex-col gap-2">
               <div>感谢 @aike0210 对 Cursor 控制面账号功能的贡献。</div>
@@ -156,32 +164,35 @@ onUnmounted(() => {
             </div>
           </Tooltip>
         </div>
+        <div class="setting-s">{{ cursorAccountCountText }}</div>
       </div>
-
-      <div class="flex items-end justify-between gap-4">
+    </div>
+    <div class="setting-row">
+      <div class="row-inline">
+        <span class="access-client-icon is-cursor" style="width:32px;height:32px;flex-basis:32px" aria-hidden="true">
+          <span class="icon-[mdi--account-circle-outline] text-[18px]" />
+        </span>
         <div class="min-w-0">
-          <div
-            v-if="cursorAccountDisplayIdentifier"
-            class="truncate text-sm text-[var(--color-text)]"
-          >
-            {{ cursorAccountDisplayIdentifier }}
-          </div>
-          <div class="mt-1 text-sm text-[var(--color-text-secondary)]">
-            独立用于插件、Skills 和 MCP；不会改变 Cursor 客户端当前账号
-          </div>
-          <div v-if="cursorAccountWaiting" class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+          <div class="setting-t truncate">{{ cursorAccountTitle }}</div>
+          <div class="setting-s">Cursor 控制面账号 · 用于插件、Skills 和 MCP</div>
+          <div v-if="cursorAccountWaiting" class="setting-s text-[var(--color-warning-text)]">
             请在浏览器完成登录，完成后返回 Cursor 重新打开插件市场
           </div>
-          <div
-            v-if="cursorAccountStatus.error"
-            class="mt-1 break-all text-sm text-red-700 dark:text-red-300"
-          >
+          <div v-if="cursorAccountStatus.error" class="setting-s break-all text-[var(--color-error-text)]">
             {{ cursorAccountStatus.error }}
           </div>
         </div>
+      </div>
+      <div class="row-inline">
+        <span
+          class="status-pill"
+          :class="cursorAccountSignedIn ? 'is-ok' : (cursorAccountWaiting ? 'is-warn' : 'is-off')"
+        >
+          {{ cursorAccountStateText }}
+        </span>
         <Button
           v-if="cursorAccountSignedIn"
-          class="shrink-0"
+          class="btn-sm"
           :disabled="cursorAccountBusy"
           @click="handleCursorAccountDisconnect"
         >
@@ -189,7 +200,7 @@ onUnmounted(() => {
         </Button>
         <Button
           v-else
-          class="shrink-0"
+          class="btn-sm"
           variant="primary"
           :disabled="cursorAccountBusy || cursorAccountWaiting"
           @click="handleCursorAccountLogin"
@@ -198,5 +209,5 @@ onUnmounted(() => {
         </Button>
       </div>
     </div>
-  </Card>
+  </component>
 </template>

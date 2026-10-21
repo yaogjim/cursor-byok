@@ -1,604 +1,467 @@
 # 活动任务
 
 > 本文件是项目活动任务的唯一真值源。`.cursor/plans/*.plan.md` 的 frontmatter todo 仅作阶段索引，不代表任务已满足 Definition of Ready。
+> 主控与子任务的拆分、分配、续办和验收遵循 [贡献指南：主控与子任务交付协作](../CONTRIBUTING.md#主控与子任务交付协作)：责任连续性为底线，委派、分层验证、执行节奏和交接按场景触发，效率复盘按需开展。委派时显式传递适用要求，不假定子任务自动继承规则；在现有任务和证据记录中维护负责人及当前有效状态，不另建流程系统。
+
+## 当前焦点
+
+### 0.0.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
+
+- 负责人：主会话；目标为修复主对话出现 `chat context summarized` 后失败，并查明同一聊天 BYOK→官网模型被要求新建聊天的原因。源码基线 `ca4d6ed`；本轮保留既有协作规范修改，不部署、重启、修改 Cursor 安装/真实会话或配置，不 commit/push。
+- [completed] `077-summary-parameter-fix`：真实上游最小对照确认 `gpt-6.1-sol` 拒绝 `reasoning.effort=none`（400）；相同输入和4096输出预算仅改 `low` 后200且完成。摘要关闭思考的适配只对精确 `gpt-6.1-sol` / `gpt-6.1-sol-*` 映射最低合法 `low`，普通gpt-6与显式high保持原行为。现场未保留错误正文，因此对照证明参数缺陷及其摘要失败链，不冒充原请求完整重放。
+- [completed] `077-summary-resume-regression`：`TestCompactionSolSummaryResumesMainTurn` 经真实适配器及actor主回合续接，修复前failed/无法恢复，修复后完成；工具调用/结果保留、摘要仅发布一次、摘要low→主回合high及既有有界输出/截断恢复回归通过。
+- [completed] `077-agent-control-routes`：仅补 `GetNewChatNudgeParameterizedModelPicker`、`UpdateConversationMetadata` 两条已观察404的AgentService接口；官网身份保留凭据原样转发，本地relay不送官网，目录与未知接口边界不放宽。Host入口、分流和竞态回归通过；这项只关闭接口缺失，不等于切换症状已修复。
+- [completed] `077-switch-client-probe`（只读取证）：Cursor 3.15.19实际工作台函数9项合成断言通过。选模禁用由已有历史和会话字段 `applyAgentBackendTypeRestrictions=true` 共同决定（编辑唯一首条消息除外）；nudge失败只记录事件，不设置该字段。构建客户端首次提交分支返回不设限；另存在缺失历史Blob时要求新建聊天的独立错误。当前导出无提示正文/对应客户端状态，不能判定用户命中了哪条分支，也不能归因于nudge 404。
+- [completed] `077-source-validation`：最终7个Go改动后的 `go test -count=1 -timeout=300s ./...` 全部通过；摘要/适配器/分流/配置重建定向race四包通过；本次隔离HOME的四包vet、gofmt及diff检查通过。完整证据归档 `/tmp/cursor-byok-077-closeout.o0DDAt`，详见 `docs/process.md` 同名节。文档首次落盘后四包定向复测再次通过（`closeout-tests.log`），桌面验收仍pending。全仓测试保留macOS目标版本链接warning；未构建新安装包。
+- [pending] `077-real-cursor-acceptance`：摘要修复仍待候选产物的真实桌面验收；同聊天切换根因尚未闭合，须用准确提示截图/同次客户端日志及请求ID区分“选模受限”与“历史内容缺失”，随后只修已证实分支。源码/模拟接口通过不提升为真实BYOK→官网往返通过，不修改安装脚本或真实会话字段绕过限制；原混用兼容专项不随本切片完成。
+
+### 官方/BYOK 混用兼容（分段设计与实施；整体 delivery_status=planned）
+
+- 授权：本轮执行 `.cursor/plans/官方与_byok_混用兼容改进实施计划_da959273.plan.md`（承接 `7be7660b` 与原 `0ab94bd0` 计划）；主会话为唯一负责人和文档写入者，按当前委派授权安排有界实现与独立复核，委派结果由主会话独立验收。按已确认顺序先收口 C2B 保存，再推进缺失内容读取、增量同步、旧会话恢复条件及父子链。C0-P1 参数保留及 C0-H1 已预取文本历史读取已完成；复杂异步读取、历史同步和新参数承载仍须对应合同闭合，不把路线授权当作未决设计获批。
+- 已确认需求：官方首次切 BYOK 恢复历史、同会话往返保留新增历史、原生可读检查点、主子模型独立选择及唯一结果回流。冲突采用 preserve-and-stop：保留原记录并停止本次请求；正常历史自动同步，不自动分支或静默删减。
+- 约束：最小直接可回退；不新增依赖/通用抽象/范围外兼容或迁移，不改 Cursor 安装、真实配置、凭据和业务数据，不部署/重启/commit/push；未知业务取舍先确认。旧活动任务保留。
+- 最新执行验收（2026-10-13，`da959273`，§19.3k）：本地压缩原生归档与同源摘要独立切片已完成本轮源码复核和隔离验收（读侧/模拟协议 verified-partial，写侧 implemented-not-wired）。先复现并修复五个归档来源整数必填字段接受 `null` 的缺陷；永久回归覆盖逐字段 null/非整数/缺失及完整0值，RED→GREEN。独立复核另发现活动尾段复用模型投影而将18,432字节工具结果裁到16,384字节；新增生产 plan/apply→原生root→落盘重读回归先RED，随后复用同一连续尾算法分离模型结果改写与原生完整正文，两处native入口均修正，默认模型裁剪语义不变；独立复审确认阻塞关闭。主控最后源码修改后两包test（18.127s/0.265s）、保存/压缩/导入/确认及actor等待定向race（9.000s）、两包vet、gofmt和diff检查全部退出0，`MIXED_SAVE_19K_PRIMARY_VALIDATION_PASS`，证据 `/tmp/mixed-save-19k-primary.lqX3M1`。整数/裁剪两组RED分别在 `/tmp/cbyok-19.3k-p1-3-20261013194937`、`/tmp/cbyok-19.3k-p1-4-20261013202106`。此前§19.3k只有源码/早期日志而摘要落后的差异已校正，不再将本地压缩当前状态记为只读取证或最新null仍RED。C2B仍in_progress：下一检查点是闭合推理/签名/provider元数据、图片/文件、未完成工具、数值/结果类型及外部State内容的无损/回读/失败边界，再做默认接线和入口级验收；当前编码器仍有相应拒绝门禁，不能直接全局替换而让现有会话保存失败。保存→缺失读取→增量/旧会话→子任务→整体验收顺序不变，后续设计未被本轮批准，专项planned。业务新增修改仅已有compaction.go/projector.go及对应两测试；无真实会话、配置、凭据、部署、重启、提交或推送，保留用户原有全部改动及AGENTS等删除。
+- 最新续办（2026-10-13）：继续按“保存→取回缺失内容→同步新增历史→子任务→整体验收”实施。§19.3g 连续尾段已验收；用户已批准现有历史载荷增加可选原生正文/归档来源信息，格式方向不再待确认。§19.3h 已预取原生 root 正文及摘要保全已完成源码和隔离验收（verified-partial）：首条 raw+parts 绑定完整视图，保留重复/空实例及多结果分组，摘要原文不包装、模型视图只包装一次；旧格式兼容。主控复核新增永久 RED 并修复落盘缩进/HTML转义导致参数及对象结果失配、字符串结果被误套本地重编码规则、负数parts及缺原文标记未按分组错误停止三类问题。最后行为修改后两包 test、原生/导入/压缩定向race、两包vet、gofmt及diff检查通过，证据 `/tmp/mixed-native-save.gZeS67`，终态 `NATIVE_ROOT_PRESERVATION_PRIMARY_VALIDATION_PASS`。C2B保存阶段仍in_progress：下一步闭合并实现原生归档来源/引用图保全及本地压缩归档、其它内容域，再接默认writer；当前默认入口未切换。缺失读取/增量同步/子任务/整体验收仍pending，未跳过保存，也未操作真实数据/配置、部署、重启、提交或推送。
+- 本轮续办验收（2026-10-13）：§19.3i 回合引用图及 §19.3j 官方摘要/归档来源保全已完成主控源码复核和隔离验收（verified-partial）；预取完整图校验→原字节内容库保存→会话落盘/重建→独立原生写出→HTTP 全 ACK 后唯一发布均有永久回归。先前回合图验收日志已确认通过；摘要归档初次 race 暴露 actor 退出与已返回命令结果竞争，已按永久 RED 修复，独立复核无阻塞，目标重复20次通过。最终两包 test、保存/导入/压缩及退出等待定向race、两包vet、gofmt、diff检查全批退出0，证据 `/tmp/mixed-save-graphs-reviewed.RZ7pVI`；失败导入仍不调用模型、不改原会话。默认 writer 未切换，保存阶段仍in_progress，后四阶段仍pending。本地压缩调查确认现有摘要请求是合成片段，预算裁剪不回写实际消息计数，不能从 MessagesToCompact 或尾段数推出原生 window_tail；下一步按 §19.3k 聚焦闭合归档前缀与实际摘要输入的关系，不凭空填0、不迁移旧历史。未操作真实数据/配置、部署、重启、commit/push。
+- 专项其余设计：owner=主会话，P0，规模按下列 S/M 切片，只读取证与设计，整体 Design Readiness=not-ready。依赖=已批准路线；需求=PRD §17；设计锚点=系统 Design §19 `DESIGN-MIXED-CHANNEL-COMPAT-001`。本次 `mixed-design-contract` 的独立检查点合同已收口至 §19.3c C0-W1，完成证据归档 `docs/process.md`；其余设计任务不随之完成，功能链状态仍为 planned。
+  - `mixed-codec-probe`：todo.status=done（取证切片，不代表功能完成）。主会话复核 root 原始32字节引用、单条 CoreMessage JSON、summary/archive schema；纠正独立报告对 reasoning 的误判，亲自动态提取 pi/hi 等真实客户端转换并通过合成消息断言。结构化状态全量映射、压缩/回退仍归下项，不以局部通过代替 C0。
+  - `mixed-model-probe`：todo.status=done（取证切片）。原变体字符串承载假设被否证；主会话要求将手写打印探针改为真实方法提取+assert，并复跑11项通过。继续亲自核查 `_runSubagent`：创建阶段与提交阶段不同，提交前 Max Mode 实际取父会话，resume 有条件保留/改模；追加合成断言通过。不能仅凭创建分支推断最终行为。
+  - `mixed-parent-selection-probe`：todo.status=in_progress，owner=主会话，规模=S，只读取证；用户已选择保留完整参数目标，不以拒绝子任务替代修复。候选为现有父请求/工具调用 header 关联；退出标准为 generation/attempt/传输 request_id 对应、BidiAppend/RunSSE 字段传递、四种父子组合、并发与恢复均有源码或合成证据。已否定“内存已完整存参数”“官方不改正文就能补参数”“header直接等于父stream ID”三项推断；尚未授权实现新关联机制或正文改写。
+  - `mixed-history-design`：todo.status=pending，owner=主会话，规模=M，只读设计；复用消息循环、内容存储、检查点确认和会话锁。退出标准为读取预算/完整性/取消、稳定消息映射、末回合/压缩/回退、基线复查、context/state部分提交及回滚合同闭合，并完成独立实现模拟后提交确认。当前已确认存储锁不等于基线复查，两文件写入不等于原子事务。
+  - 续查补充（只读，C0 仍未通过）：父子 header 包括父 generation ID 和 Task tool-call ID，网关路由依赖子 attempt 的消息体 request_id；官方父没有本地派发记录，子出口按子请求身份和模型独立判断。不能将父渠道推断为子渠道；客户端到网关实际头传递/重试关联/纯官方父选择捕获仍待验证。历史方面，内联 turn 无持久前缀引用，两个相同消息可共享哈希，本地重编码又会改变哈希；内容哈希集合和客户端 turn 数均不能单独证明对齐。现有两文件顺序写入和回退覆盖须有恢复/保全合同，不得依现状进入同步实现。
+  - 用户本轮同意把严格校验父子关联后，对官方子请求 `RequestedModel` 参数/Max Mode 的局部改写纳入 C0 候选设计；并非批准代码变更或无限制改写官方请求。尚需模拟协议证据和完整设计再确认；原始参数不可得时不以拒绝全部子任务代替修复，也不静默丢明确参数。官方正文原样透传的局部例外只适用于最终证实安全的子请求，未证实则该工作包继续受阻。
+  - 验收：原生格式、同步规则、参数承载、失败/取消/幂等、回滚边界均可核实；未知项按影响阻塞相关工作包，不宣称可直接实施。验证仅源码核查和必要合成协议探针，不运行真实模型或无关套件。
+  - 阻塞分类：fact/design gap=异步读取预算/取消、历史对齐/持久恢复及子模型替代承载；product-decision gap=具体替代承载设计尚未批准（完整参数目标已确认）；test/env gap=真实官方端到端。检查点写出改按 §19.3c 数据域分别治理：C0-W1 文本/可无损完整工具批次的输出与回滚合同已闭合，structured/压缩/其他内容/数值与结果类型/导入引用图/32字节歧义只阻塞对应切片。本轮没有启用异步读取、新写出或子请求改写；C0-P1 仅修复内存参数快照，已完成读取切片回退无需迁移。
+  - 早期取证证据：参数 `SUMMARY pass=11 fail=0`；主会话 `PRIMARY_NATIVE_PARTS_PASS`、`PRIMARY_NATIVE_REFERENCES_PASS`，原始引用恢复2条、旧内联恢复0条，工具关联/推理/图片文件字节通过。仅合成契约探针，不是修复验收；本轮参数永久回归和代码证据见 `docs/process.md` 本专项续办条目。
+- 真实日志差距核对（0.0.75.0，日志窗口2026-10-12 UTC；本轮只读诊断完成）：`/Users/yaogj/Downloads/logs`为basic模式，2324条连续events，171条diagnostics均为副本。BYOK主请求前4次模型调用成功，第5次在明确收到客户端cancel后取消；派发3个子任务，随后请求存在官方HTTP200，但缺正文/业务终态，不能据此认定子任务成功或结果唯一回流。39次检查点Blob均ACK，无超时证据；87次TLS拒绝及控制面404/502独立保留，未确证为混用根因。当前源码及0.0.75.0发布说明再次确认：缺失Blob异步读取、原生检查点写出、非空本地历史增量同步及完整子模型参数链是尚未交付的feature gap，而非仅缺实机验收。下一步先建立合成父Task→客户端子请求→模拟官方业务终态→父结果唯一追加的失败判据；basic材料不足以重放具体现场失败，不据猜测改运行配置或功能代码。既定缺失内容恢复优先级及设计门禁不变；完整证据与复用教训见`docs/process.md`同名节，整链状态不提升。
+- 界面截图续证（诊断完成，未修复）：用户截图明确三个子任务均`Stopped with error`，继续时官方选模界面出现`Conversation data missing / 19 missing blobs`；缺失标识前缀`7b22636f6e74`解码为`{"cont`。真实检查点投影的隔离Go overlay复现两条root为内联JSON（95/49字节、同前缀），按原生内容引用查找均缺失；既有本地回放对照通过、原生引用断言预期RED，证据`/tmp/byok-screenshot-probe.gckLUP/result.log`。因此阶段2B原生写出是已复现且与现场特征一致的用户可见阻塞，不仅是test/env gap。截图请求ID不在导出中，三个子任务具体错误、Git仓库识别失败与会话恢复错误是否同源仍待核实；不据此修改工作目录/证书或删除历史。应以原生消费者可解析全部root为写出修复验收标准，遵守对应设计门禁；不提升整体状态。详细更正与复用教训见`docs/process.md`截图续证节。
+- 已完成前置切片 `mixed-parameter-snapshot`：Design Readiness=approved（仅系统 Design §19.4b C0-P1）；真实解析入口 low/high 的永久回归先退出1，再修复转绿。参数序列与 protobuf 未知字段保留，源/克隆/lookup/Task桥隔离、既有选择规则和日志摘要均有测试；相关三包测试/vet、定向 race 验收批次退出0。详细完成记录已转 `docs/process.md`；不代表完整 C1/C4 或客户端最终参数传通。
+- 已完成前置切片 `mixed-native-read-fix`：系统 Design §19.3a C0-H1；已预取原生文本 root 的永久回归 RED→GREEN，HTTP BidiAppend→实际保存/编译/provider gateway→模拟模型输入接线通过。顺序/重复实例、root 优先、32字节内联兼容、部分缺失与解码失败完整会话保全均有回归；forwarder/prompt 两包测试、历史定向 race、vet 验收批次退出0。证据转 `docs/process.md` 最新续办条目，切片 delivery_status=verified-partial；后续文本/工具数组读取已完成，其余内容类型、异步 GetBlob、新检查点及增量同步仍未实现，不能标记完整 C2A 已完成。
+- `mixed-native-codec-read`：owner=主会话，P0，规模=M；文本/工具输入切片已完成源码与隔离入口验收（系统 Design §19.3b，delivery_status=verified-partial），其余内容保持 pending。永久回归证明 text/tool-call/tool-result 进入 BidiAppend→真实编译器→模拟模型请求，大整数参数/结果、乱序结果及重复工具批次保留；不完整或无法表示的内容明确失败，入口不调用模型、不改原会话。独立复审发现并修复分组 ID 导致结果重排和重复批次合并，两项均 RED→GREEN、复审关闭；相关包 test、历史/批次 race、vet 全批退出0（`NATIVE_TOOLS_REVIEWED_VALIDATION_PASS`）。未支持 reasoning/image/file、isError=true、多模态工具结果或调用后的文本；不新增模型 schema、协议或持久化字段。下一实施项为 `mixed-history-hydration`：缺失 Blob 异步恢复到模型输入，取消/超时/失配保全；具体预算/状态合同尚待闭合，不能借本切片宣称已恢复无预取的官方历史。
+- 本轮完成情况复核（2026-09-30，`mixed-completion-review`）：回读参数、原生导入、投影和入口测试，未确认新的业务代码缺陷；本轮仅补强永久测试，不新增业务实现。失败回归明确断言工具关联/未知字段/载荷失配、根引用/哈希/后段 plan/todo 的具体错误阶段；失败请求走真实 Connect HTTP BidiAppend，验证明确错误、不启动模型、原持久会话不变。修改后四个相关包完整 test、历史/投影/参数定向 race、四包 vet、gofmt、差异检查均通过（`MIXED_COMPLETION_FINAL_REVIEW_PASS`）；任务和过程记录最小同步后再做定向收口。已预取文本/工具输入与参数快照仍为已验证切片，整体保持 planned；缺失 Blob 读取、原生写出、增量及完整四组合参数链均未完成，不以本轮复核替代其实现或真实客户端验收。
+- 独立检查点合同承接（`mixed-design-contract` 完成归档，不是 writer 完成）：owner=主会话，P0，规模=M，需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY；Design=系统 §19.3c C0-W1 v1，Design Readiness=approved 仅限 W1，delivery_status=contract-ready。范围为文本/可无损完整工具批次→原生 CoreMessage/raw32/完整 Blob 图→既有 ACK 发布，冻结失败/并发/5秒写降级和读能力限定回滚；不改本地 replay/schema、凭据、部署或计划文件。已核实 plan/todo 引用、archive schema、客户端数字/结果类型限制和已发布状态不可撤回，不用这些未知整体阻塞 W1。验证与本轮证据见 `docs/process.md`“独立检查点写出与回滚合同”节。
+- `mixed-red-regressions`：owner=主会话，P0，todo.status=done（仅原生根引用永久回归），两条/19条/重复实例的旧默认 writer 语义 RED 已固化，W1 独立路径 GREEN；详细证据归档 `docs/process.md`。参数和已预取读取回归保留；缺失 Blob 主动读取、增量及完整父子链各自仍 pending，不随此索引完成。
+- 本轮 W1 切片 `mixed-checkpoint-w1-codec`：owner=主会话，P0，规模=M，todo.status=done（独立切片），Design Readiness=approved（仅系统 §19.3c），源码 delivery_status=implemented-not-wired、模拟投影/双读/HTTP ACK 路径 delivery_status=verified-partial。原生正文/raw32、2/19条与重复实例、完整工具关联和未裁剪结果、域外失败保全及全 ACK 才发布均由主控验收；初次交付漏样本、工具结果裁剪、错误标记测试层级和身份归一化问题已拒收并纠正。隔离 HOME 下两包 test、资源受限定向 race、两包 vet 退出0；原始证据 `/tmp/mixed-w1-main.yakIpl/{packages-test.log,race-bounded.log,vet.log}`。默认 `service.go` 仍调用 `ProjectCheckpointProjection`，未全局切换/发布，完整 C2B 保持 pending；具体命令及证据边界已归档 `docs/process.md`。
+- `mixed-checkpoint-domain-probe`：owner=主会话，P0，规模=S，todo.status=done（只读取证），需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY，设计=系统 §19.3d（Design Readiness=not-ready）。范围仅 plan/todos 双读判别与压缩归档来源；委派只读、主控复核，无功能改动。主控合成探针确认合法旧 plan/todo 内联可恰为32字节，也找到真实 SHA-256 被 protobuf 接受为空对象；不能采用“解析成功即旧内联”。压缩实际投影移除集合可以由 Entries/既有保留算法重建，已退回“必须扩展持久字段”的无证据结论；实际模型摘要候选与移除集合并不等同。证据 `/tmp/mixed-structured-probe.2dpCD5/result.log`，完整归档见 `docs/process.md`。
+- 已完成 `mixed-checkpoint-structured`：owner=主会话，P0，规模=M，todo.status=done（独立 C0-W2 切片），Design Readiness=approved（系统 §19.3e），读取接线及模拟协议 delivery_status=verified-partial，原生写侧仍 implemented-not-wired（默认入口未接）。用户明确批准的32字节歧义停止/新回滚读取边界已落实；真实 `importConversationState` 支持已校验 plan/todos 引用、旧非32内联及逐字段混合，新引用未知/损坏/缺失与空todo正文明确失败并保全。独立原生写侧将结构化 protobuf 正文加入完整 Blob 图，保留todos全部字段/int64/顺序/重复，Plans仍内联；默认 service/state_tools/schema/provider replay不改。测试任务固化读/写 RED；主控实现，独立复审发现全零Todo空引用丢实例后拒收，补永久 RED 并亲修，复审确认关闭；另纠正测试自身非法JSON快照及补混合编码覆盖。真实 HTTP 导入→持久化/编译→模拟模型的计划/待办提示、独立投影→SetBlob→保留一个todo正文到末次HTTP ACK→唯一终态均通过。主控最终 forwarder 全包 test、导入/原生/检查点定向 race、forwarder vet 退出0，`W2_PRIMARY_VALIDATION_PASS`；证据 `/tmp/mixed-structured-probe.2dpCD5/{read-red.log,write-red.log,empty-todo-red.log,w2-package.log,w2-race.log,w2-vet.log,structured-protocol.log}`，完整归档见 `docs/process.md`。未发布新格式、未验收真实产物或真实会话，不把 C0-W2 完成提升为 C2B 已完成。
+- 已承接的 `mixed-checkpoint-compaction-contract` 历史取证阶段：owner=主会话，P0，规模=S/M；该阶段当时仅授权只读取证与连续尾段设计、Design Readiness=not-ready，以下范围/验收保留为历史记录。后续 §19.3g/h/i/j/k 已分别批准并实施，§19.3k 本轮验收见顶部；不再将以下旧调查范围作为当前未授权编码的摘要。依赖=已完成 W1/W2 与 §19.3d 压缩来源事实，需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY。目标为闭合压缩会话的原生写出前置，不提升 C2B 状态；主控独占文档写入，独立只读核对 Go 压缩集合，主控核对客户端摘要标记及实际归档展开。范围为既有 projector/compaction/types/schema、公开客户端 bundle 和临时合成样本；不改功能代码/持久格式/默认入口，不读真实会话。验收须由现有算法验证单次/连续两次压缩的活动集合与新增移除集合，并由原生消费者断言顺序、重复实例和尾部排他性；取消/fork/预算裁剪分别核对，模型摘要输入不冒充投影移除集合。优先用现有 Entries/保留算法，不凭缺少显式区间新增持久字段。退出标准为可复核字段映射、有限合成证据与稳定 Design 锚点；承重反例成立则只登记 fact/design gap，需新业务语义时提交聚焦决策。预计仅改已有 task/process/Design，临时探针不进入仓库；只读取证无运行回滚，未批准合同前仍不实施压缩 writer。
+- W2 本次收尾复验：上述五个结构化读/写/失败/HTTP ACK 测试重新通过（0.637s），forwarder vet 退出0，`W2_CLOSEOUT_TEST_VET_PASS`；任务/过程/Design 已同步当前读取事实和回滚边界。本次未改 Go 源码，不重复无关套件；证据 `/tmp/mixed-structured-probe.2dpCD5/{w2-closeout-test.log,w2-closeout-vet.log}`。
+- 压缩取证结果（系统 Design §19.3f，非实现）：主控实际 Go overlay 得到稀疏活动序列 `[8,3,6,7]`，同轮摘要后工具追加又使其变为 `[8,3,9,10]`；实际客户端 DIu 对“移除集合归档”候选恢复为 `[1,2,4,5,3,6,7]`，连续两次同样乱序，数量/成员完整不能代替保序。纠正只读报告把 checkpoint 全量条目当原生归档的说法，拒收直接按集合实现；正文/存储/serde替身边界见过程记录。连续前缀/后缀候选样本可保序，但会改变模型输入保留政策且预算/取消/fork/回读仍待设计；用户已选择 `continuous_tail_design`，允许按“摘要+连续尾段”继续设计、核验预算与失败保全，方向决策关闭，具体合同未闭合前仍不编码/默认启用。证据 `/tmp/mixed-structured-probe.2dpCD5/{compaction-mapping.log,compaction-native-order.log,compaction-native-fragments.log}`；真实函数/探针整批退出0，`COMPACTION_PRIMARY_COUNTEREXAMPLE_AND_SCOPE_PASS`。现有 Entries 无需因本反例自动新增字段，默认入口/压缩代码未改，整体状态不提升。
+- 后续依赖：按新计划 `mixed-checkpoint-codec` → `mixed-history-hydration` → `mixed-history-reconciliation` → `mixed-subagent-contract` → `mixed-integration-delivery`；旧会话恢复条件随历史链验证。W1/W2 独立编码与定向确认已验收，压缩、其它内容与全局启用仍由对应数据域合同和读取/回滚回归约束。尚未满足设计门禁的实现保持 pending，新增持久化/真实会话操作/官方正文改写另行确认。
+- 本轮 `mixed-completed-slices-review`：owner=主会话，P0，规模=S/M，todo.status=done（仅已批准 C0-W1/W2 的完成情况复审）；系统 Design §19.3c/e、PRD §17 CHECKPOINT/CONFLICT/BOUNDARY，默认写侧仍 implemented-not-wired，生产预取读取/隔离协议仍 verified-partial。主控确认两项代码缺陷并先永久语义 RED 后修复：引用 Todo 非空 wire 可解为全零对象，现解码后检查语义空值且保留旧非32内联兼容；分组 assistant 的结果 override 会误改其他工具名称/参数，现只恢复匹配 ID 的调用参数，失配名称明确失败。另纠正原结构化失败 HTTP 证据声明过宽，新增真实 Connect HTTP BidiAppend 的缺失 plan/todo、歧义旧32字节 plan、默认字段全零 todo 四分支，均验证具体错误、不启动模型、不改已存会话。范围实际为 projector.go、imported_blobs.go、既有两测试及 task/process/Design；无新格式/依赖/配置，不扩展压缩或默认切换。最后源码修改后两包完整 test（18.377s/0.369s）、原生/检查点/导入/结构化定向 race（6.209s）、两包 vet、gofmt 和 diff 检查整批退出0，`COMPLETED_SLICES_REVIEW_PRIMARY_VALIDATION_PASS`；证据 `/tmp/mixed-completion-review.VIrJFy/{empty-wire-red.log,empty-wire-green.log,grouped-tools-red.log,grouped-tools-green.log,structured-http-green.log,packages.log,race.log,vet.log}`。具体命令及剩余 feature/design/test/env gap 归档 `docs/process.md` 本轮复审节；未操作真实会话、部署、重启、提交或推送，整体仍 planned。
+
+### 模型启停与共享入口默认公开（2026-09-24；verified-partial）
+
+- 已确认：模型停用影响 Cursor 等全部既有调用入口；模型默认启用。所有启用模型在共享入口默认按模型列表名称公开，允许单独改公开名或取消公开；冲突名称仅冲突项自动加稳定后缀。产品条款已同步工作决策基线 §10.10；设计锚点为系统 Design §14.11.3a，用户已确认最小方案。
+- 初始现实校准：旧模型无启用状态，Gateway 仅显式映射，公开 ID 禁空白且最多 32 条；Cursor 目录、选模、fallback 与 Gateway 均需接线。没有读取真实用户配置。
+- [completed] `design-approval`：用户确认全入口停用、重名后缀和最小实施方案；设计合同记录旧映射保留、默认公开与 opt-out、含空白与超过 32、fallback 忽略禁用成员以及回退边界。
+- [completed] `implementation-and-isolated-verification`：实现旧配置缺省启用、模型列表/编辑启停、Cursor/CLI 目录和旧 ID 运行时禁用、fallback 跳过停用渠道、Gateway 默认公开和显式不公开/改名。主会话复核并修复前端重名后缀抢占其他默认名、Go 超长自定义公开名静默截断两项问题（均先有失败回归，再修复）。隔离 HOME 和固定 Go 缓存下，修正回归后六个相关包最终测试全部通过；六包 vet、前端投影测试、production build、`git diff --check` 通过。合成内存数据浏览器检查了 3 模型时只列 2 个启用模型、同名加后缀、取消公开保留偏好和模型列表启停草稿；未调用保存桥接或真实上游。前端预览服务已停止，不改真实配置/服务、不 commit/push。
+- [pending] `runtime-acceptance`（test/env gap）：在后续独立窗口使用真实 Wails 配置保存/重载和 Cursor/OpenAI 客户端验证公开名称、停用旧 ID 及实际调用；本轮不部署/重启，不能把合成内存页面或包级测试当作真实客户端验收。当前整体 `verified-partial`。
+
+### 本机日志异常分诊与检查点过早超时修复（2026-09-21；verified-partial）
+
+- 授权与边界：用户要求主控主持并安排独立调查，仅处理当前已证实异常的最小可回退修复。不开新功能，不新增依赖/抽象/兼容层，不改真实配置、账号、证书、日志数据，不部署/重启，不 commit/push；保留策略、额度、上游恢复行为变更须另行确认。
+- 固定取证窗口：主会话 `20260911T101629.967688000Z-94cff1bba964`，最新诊断分片从 `2026-09-21T17:42:46.704664Z` 至 `2026-09-22T03:58:54.477331Z`（UTC），sequence ≤ 9452300；9470 条记录，294 error、9176 warning，不据异常分片计算全量失败率。
+- [completed] `log-triage-20260921`（主控汇总，三个独立调查）：检查点 230 timeout/230 skip/602 unmatched；模型明确 final 为 2 failed/1 partial，另有取消和终态缺失，不重复累加各层事件；普通日志配额已满，diagnostics 仍写入；Dashboard 本地 502 与 provider HTTP 502 分开归因。
+- [completed] `checkpoint-red-20260921`：历史完整 trace 第 41937–42028 行显示新写入约 270ms/不足 1ms 即 timeout。通过真实 queue A→ACK 发布→queue B→投递 A 旧 timer 的隔离回归，稳定失败 `stale timer skipped B pending=false writes=0`。已确认令牌在 clear/delete 后被重用，不能据此认定所有现场 timeout 同源。
+- [completed] `checkpoint-fix-20260921`（P1，S，依赖上述 RED）：`ActiveStream.NextTimerToken` 在既有锁内递增，`TimerTokens[key]` 使用该标识；clear 继续删除键，不留永久记录，也不改变 5 秒超时和 ACK/降级语义。新增回归证明旧事件不清新检查点、ACK 可发布、当前有效超时仍生效。隔离 HOME、禁下载依赖下，forwarder 包测试通过（18.032s），检查点定向 race 通过（1.740s），`git diff --check` 通过。代码回退仅撤销本轮 diff。
+- [completed] `log-closeout-20260921`：证据、统计更正及风险登记于 `docs/process.md` 同名节。模型最终失败与日志观测不足仍值得处理；TLS 对端进程、Dashboard 失败阶段和配额操作仅报告，无擅自配置/策略变更。
+- [completed] `checkpoint-independent-review-20260921`：用户再次授权仅处理检查点过早超时、最多两个并行任务。本轮独立源码复审已实际完成且无阻塞发现，覆盖 stream 生命周期、map 重建、锁与共享 provider/shell/orphan timer 兼容；取代上一轮三次 503 导致的复审缺口。主控补充 `NextTimerToken` 不得随 map 重建而重置的行内注释，未改变运行逻辑。
+- [completed] `checkpoint-reverify-20260921`：独立验证以临时 Go overlay 还原旧逻辑、保持工作区不变，目标回归预期失败 `stale timer skipped B pending=false writes=0`（退出 1，0.991s）；当前实现同一测试通过（0.447s），9 个检查点相关 race 用例通过（1.715s）。隔离 HOME、复用缓存、禁止下载依赖；主控已读取实际输出，未重跑无关全量检查。临时证据 `/tmp/ckpt-overlay.tw2xLv/{red,green,race}.stdout.txt`。
+- [pending] `checkpoint-runtime-acceptance-20260921`（test/env gap）：尚未构建、替换或重启真实 Gateway；需另行确认部署窗口，观察同一请求中 dispatch→ACK/timeout，并确认无过早超时且正常超时仍降级。当前仅源码与隔离回归验证完成，整体 `verified-partial`。
+
+### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+
+- 范围：用户提供 `/Users/yaogj/Downloads/logs 2`，要求定位同一 Agent 会话从模型 A 切换到高级模型后出现 `decode imported replay messages: invalid character ...` 的问题；只修复 replay 导入格式误判，不处理独立 provider 502，不部署、不重启、不 commit/push。
+- [completed] `log-and-code-triage`：请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e` 在约 7.77 MiB `run_request` 解码后 0.5ms 内进入 `dispatch_error` 并返回 500，未到 provider 调用；另外三个用户列出的请求 ID 不在本次导出中。Cursor 本机运行时代码确认 `rootPromptMessagesJson` 元素会作为 Blob ID 调用 `getBlob`，再反序列化为 `coreMessage`；网关原实现却直接交给 JSON 解码，因此随机 SHA-256 首字节被报告为 `>`、`h` 或其他非法字符。
+- [completed] `minimal-fix`：仅当全部非空 `root_prompt_messages_json` 元素均为 32 字节 Blob 引用且存在 `turns` 回退数据时，跳过 JSON replay 分支并复用既有 Blob-aware turns 导入；混合/普通非 JSON 数据及缺少 turns 的 Blob 引用继续报错，避免静默丢失历史。
+- [completed] `regression-and-verification`：新增 Blob root prompts→turns 回退、普通非法 replay 拒绝、无 turns 的 Blob replay 拒绝用例。目标回归在修复前稳定失败：`invalid character '\u008b' looking for beginning of value`；修复后目标四例通过，`go test ./internal/backend/forwarder -count=1` 与 `go vet ./internal/backend/forwarder` 通过，`git diff --check` 通过。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.2`；代码修复与版本元数据已提交并推送。
+- [pending] `runtime-acceptance`：未安装或替换当前 Gateway，未在真实 Cursor 会话执行“模型 A 完成任务→切换高级模型分析”的桌面实机验收；交付状态为 `verified-partial`。独立的 `server_5xx status=502` 属于 provider/上游问题，本轮只报告、不修改。
+
+### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
+
+- [completed] `responses-done-fallback`：`streamResponses` 的 `[DONE]` 兜底路径仿照 Chat 路径补发 `TurnFinished`（无工具普通成功默认 `stop`，已发工具完成保留空值交由 `effectiveFinishReason` 归一为 `tool_calls`）；`completeTool` 参数不完整改为返回 `StreamTruncatedError` fail-closed，不再静默跳过；`[DONE]` 兜底先复查全部 `tools` 累加器，任一参数未收口即按流截断 fail。正常 `response.completed` 终态路径与 Chat 路径行为不变。
+- [completed] `regression-tests`：新增 `TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished` 与 `TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates`；`go test ./internal/backend/agent/model/ -run 'TestOpenAIResponses' -count=1` 通过。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.1`。
+- [pending] `runtime-evidence`：真实上游 Responses 截断/正常混合流实机验收待后续窗口。
+
+### 0.0.71.2 日志增强与异常保留（2026-09-10；verified-partial）
+
+- **本次复核更正**：此前“全部完成”证据不足；旧复核中的 manifest 准入返回值被忽略、异常预检查阻断轮转、队列无异常预留等问题已由本次回归复现并修复。以下历史构建记录不代表当前源码已重新打包；现有 `79ce4e99…` DMG **不包含本次复核修复**。
+- [completed] `review-repair-storage`：manifest 真正拒绝超额写入，临时文件失败清理与计量失效重扫、关闭失败可查询且返回错误；app/event/payload 保留普通分区内既有 1 MiB 供元数据及原子替换使用。异常写满先回收封存分片、必要时封存自己的分片后再准入，保护其他写入器的活跃分片；超大单条不先删除历史。未知 schema/mode/身份 manifest 保留，已知 v1/v2 正常回收。
+- [completed] `review-repair-queue`：保留单个 FIFO 和原 QueueSize，普通入队不得占用 `max(1, QueueSize/8)` 异常预留；队列丢弃总数保持原口径，异常队列丢弃另计入 DiagnosticDropped，排空/关闭后不丢计数；off 不启用预留。
+- [completed] `review-repair-consumption`：跨全部输入路径统一排序使 trace 优先；按净化前事件的规范化摘要识别冲突，仅排除 `payload_ref`，不保存敏感原文。仅有异常分片（含身份缺失）通过现有 warning、报告和 GUI 总览提示材料不完整，不输出原始会话标识。
+- [completed] `review-repair-checkpoint`：拒绝 ACK 只记录固定 `client rejected checkpoint blob` 类别，移除 blob key 与任意客户端错误正文；待确认 checkpoint 丢弃及业务终态行为不变。
+- [completed] `review-verify`：隔离 HOME 下根模块 observability/logsink/logger/forwarder/client 定向测试、observability/logsink race、受影响包 vet；分析器 load/report/gui/analyze/project 定向测试与 vet、分析器 GUI 前端 production build 均通过。最终根模块再验证收口消息为 `FINAL_ROOT_REVIEW_PASS`。具体命令及限制见 `docs/process.md` 本次复核节。
+- [pending] `review-runtime-and-artifact`：桌面桥接/浏览器交互与真实运行尚未验证；本次不重新打包、不部署、不重启。旧 DMG 不用作本次修复的验收证据；重新构建须另行安排。
+
+- 已确认并实施：工作决策基线 §5.5 / LOG-ENH-1–4，设计锚点系统架构 §14.4 / DESIGN-LOG-ENHANCEMENT-20260910。异常纳入现有总额度 B，预留 `floor(B/8)`，不增加预算；GLM、checkpoint 恢复业务逻辑、证书信任、上游请求/重试/fallback 行为未改变。
+- [completed] `logging-reality-check` / `quota-reality` / `logging-scope-sync`：完成生产、保留、消费和状态链现实校准，并同步 implement/inside/1/8 及淘汰边界。
+- [completed] `log-consumption`：loader 识别 diagnostics 目录和直接文件；同一 dataset 仅以 `(app_session_id, sequence)` 合并副本，优先保留 full trace 的 `payload_ref`，真实冲突报错，旧身份缺失不猜测。安全字段贯通详情、查询和受限导出，v1/v2 缺失保持 unknown/not_recorded。
+- [completed] `diagnostic-retention`：WARN/ERROR 副本写入 `logs/diagnostics/diagnostics-*.jsonl`；异常预留 D 与普通 B-D 共享协调。普通分区按过期受管日志→closed/full→（closed/basic 与旧 app 分片合并为一个按时间、同时间按路径排序的层级）回收，保护活跃 trace/app、未知/损坏 manifest、未知文件和 symlink；无法腾出空间时停止超额日志写入并报告，业务继续。
+- [completed] `log-producers`：retrying 且明确继续恢复的 attempt 为 WARN，最终失败仍为 ERROR；checkpoint 增加 dispatch/ACK/timeout/cancel/unmatched 安全元数据，不记录 blob key 数组；`FetchUpstream` 增加实际失败阶段记录。human sink 和分析器双重白名单/脱敏，摘要上限 512 runes。
+- [completed] `status-and-lifecycle`：应用日志读取配置后才落盘并进入普通预算；trace/payload、diagnostics、app 降级状态可查询并在两个设置入口显示。配置重载失败恢复旧预算；日志轮转按容量或期限触发，关闭与并发写入通过定向 race 验证。
+- [completed] `verify-log-scope`：隔离 HOME 下根模块相关测试、observability/logger race、受影响包 vet；分析器 `./internal/...` test/vet；主前端配置投影和 production build、分析器 GUI build、`git diff --check` 均通过。一次 forwarder 全包测试暴露通用 `result` 白名单泄露，已改为专用 `checkpoint_result` 并重跑全包通过。
+- [completed] `review-final-diff` / `fix-integration`：独立只读复核在批准范围内发现三处缺陷并已修复——普通分区回收把 closed/basic trace 与旧 app 分片合并为按时间（同时间按路径）排序的单一层级；诊断分区改为在共享预算锁内按磁盘实际用量准入，达到 D 时丢弃并报告 `diagnostic_reserve_exceeded`；manifest 写入纳入普通分区准入与计量。删除死代码 `diagnosticUsageBytes`，补齐对应回归测试；锁序保持 sink → budget → RotatingFile，无反转。
+- [completed] `validate`：修复后于隔离 HOME 重跑 gofmt、`internal/observability|logger|logsink` 测试、observability/logsink race、forwarder 与 upstream 测试、受影响包 vet、分析器 `./internal/...` test/vet、前端配置投影和 `git diff --check`，全部退出 0。
+- [completed] `build-macos-arm64`：修复后在隔离 HOME 下重跑 `task build`，重新归档 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`（24292111 bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`）；版本 `0.0.71.2`、arm64、adhoc 签名、DMG 与深度签名校验通过。此前 `988e92b9…` 的产物早于上述修复，已被本次重建取代。未安装/重启、未做 notarization 或其他平台构建，未 commit/push。
+- [pending] `runtime-failure-evidence`：部署后的真实 checkpoint ACK/timeout、客户端 CA 具体信任来源、上游中断精确断点仍待新日志；不同请求后续成功不作为原失败恢复。当前未部署、未重启、未改真实日志/配置，未 commit/push。
+
+### 0.0.71.1 下载日志异常诊断与最小修复（2026-09-09）
+
+- 范围：用户要求主控安排取证、根因分析、review、验证及必要修复；读取 `/Users/yaogj/Downloads/logs` 六份 app 日志和两个 trace 会话，对照 `5926cc4`。不改真实模型/账号/CA/代理配置，不重启或部署，不 commit/push；未启动产品级自动恢复能力。
+- [completed] `log-triage`：旧版 0.0.71.0 当前样本 848 事件，新版 0.0.71.1 为 183889 事件；序号连续，JSON 解析无错误。新版 183 个唯一模型终态为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra-211` 是 7 失败加 1 取消，不能表述成 8 次故障。
+- [completed] `root-cause`：5 次 500 的上游摘要为 Codex TLS handshake EOF；1 次 503 为 auth_unavailable 并附 198.18.0.49 连接超时。六次均已有两次 HTTP attempt，候选耗尽；三条 Grok 流同时 unexpected_eof 支持共享链路中断，但具体网络节点未知。另有 1403 次客户端 CA 握手拒绝、默认模型 48 次本地 502、插件/MCP 本地 404、遥测 Batch 缺路由。
+- [completed] `managed-skills-fix`：Host 实际入口先复现未登录 GetManagedSkills fallback 在 proto/JSON Content-Type 下都返回 502；只补 `newProtoMessage` 的现有 `GetManagedSkillsResponse` 类型注册，两例转为 200、protobuf 可解码且 skills 为空。生产改动 2 行、既有测试增加 40 行；JSON 入站使用合法 `{}` 正文，保留其他控制面与身份语义。
+- [completed] `review-verify`：独立只读 review 未发现具体缺陷；主控复核 diff、原始日志统计、RED/GREEN，并运行相关两个包的定向契约测试与 vet，均通过。修正“gzip 已完全排除”“确定共用物理连接”“默认接口耗时证明上游成功”等过强诊断，详见 `docs/process.md` 最新节。
+- [completed] `closeout`：分析与源码最小修复完成；交付状态 `verified-partial`，真实现场、上游服务和证书尚未验收。下一步为失败渠道出站/DNS/账号取证、Grok 同时断流关联及默认接口脱敏错误阶段取证；404 的回源/空响应策略属于待确认建议，不擅自实施。
+- 恢复规则：本轮执行及 review 未发生服务中断，无需退避重试；若发生则在原 ID 按 20/40/80/160/320 秒最多五次恢复，持续失败暂停。测试环境的首次依赖缓存路径缺失已修正，不属于执行服务中断。
+
+### 0.0.71.0 对话连接回归取证（2026-09-08；日志 UTC 日期 09-09）
+
+- 范围：分析用户提供的 `/Users/yaogj/Downloads/logs`、本机应用和 Cursor 日志，对照 `4e4f2f1`（0.0.61.1）与 `818e293`（0.0.71.0）；保留用户已回退的实例，不改账号、证书、配置或服务。
+- [completed] `connection-log-triage`：下载样本 841 条事件，56 次后端 `bidi_append` 完成全部为 502；7 次已结束 `run_sse` 均约 60 秒后 canceled。本机 0.0.71.0 会话有同型 8 次 502，未见模型调用事件；回退 0.0.61.1 的读取快照已有 226 次 BidiAppend 200，较早快照有 6 次 provider request/response 和 521 条回复 chunk。
+- [completed] `connection-wire-probe`：继续分析时使用 `/tmp/gateway-wire-probe.d2P9ex` 的 Go overlay 与隔离 HOME，在原始 AgentRouteAction 上复现 gzip Protobuf / JSON 解码失败、502 与 RunSSE 等待；四种身份/选模×三种编码共 12 例，原源码 8 失败、4 通过。临时修正传入 Content-Encoding 并区分 JSON/Protobuf 后 12 例通过，转发 body/encoding 保持不变，相关分流与 Host 定向契约测试通过。不是实际官方/模型端到端验证。
+- [completed] `connection-root-cause-and-fix`（源码与隔离验证）：按批准计划修复 agent_action.go/agent_route.go 的 Content-Encoding 接线和 protobuf/JSON 解码；原始请求与分流规则不变。既有测试固化 12 组合、Connect 真解码、损坏/不支持编码及 Host gzip→模拟 provider 回复。最终两个包测试、定向 race、vet 通过；真实 Cursor 实机未执行，整体仍为 verified-partial。
+- 执行结果：`wire-regression` completed（分流 gzip/JSON RED；Host 普通请求成功、gzip 502）；`fix-wire-decoding` completed；`verify-and-record` completed；`runtime-acceptance` pending（需另行确认窗口）。独立 Spec 复审未发现生产缺陷；Standards 复审发现 Host 测试超时后接收协程收尾不可靠，主控移除不必要协程并检查 stream.Err，复审确认关闭，随后重跑全部计划内验证通过。
+- 中断恢复：Host 测试任务两次 provider_terminal/status=not_recorded，均未返回可恢复 ID，但已写入测试；实际等待 20 秒、40 秒后基于同一工作区保留改动继续剩余任务，第 2 次重试成功，未用到 80/160/320 秒。有 ID 的实现与复审沿原 ID 继续；没有持续失败或暗中跳过恢复。未改真实运行实例、未打包/安装、未 commit/push。
+- 最终收口证据：测试接收逻辑清理后，两个相关包完整测试、`AgentRoute|GatewayDuo` 定向 race、vet 再次退出 0；日志为 `/tmp/gateway-wire-closeout-{test,race,vet}.log`，命令及证据边界见 `docs/process.md` 最新修复收口节。
+- 真实验收状态：双渠道对话仍属阻塞回归，继续保留用户已回退实例。上线前需确认官方、Auto、官方身份下 BYOK 以及后续工具/取消均正常，真实 502 消失且有首段回复；证书告警独立排查。详细实验命令、证据与建议见 `docs/process.md`。
+
+### gateway-duo 合并（2026-09-08）
+
+- 工作包：`gateway-duo-merge-20260908`；`DESIGN_READINESS=approved`，`DELIVERY_STATUS=verified-partial`。用户已批准实施并要求主控安排最多两个并发执行任务、独立 review、验证与修复；源码移植、接线和隔离验证已收口，真实 Cursor 验收待完成。
+- 基线：目标 `4e4f2f176efee5b1f094b3b9ccd6f07182480375`，来源 `18ef0e219d7875fa2012d23b9774562ea8d7960c`，共同祖先 `334f538bedab3a27ce82e4c7ef772e2553c40be2`。仅功能移植，版本文件不变，不 commit/push，不替换真实代理实例。
+- 需求：工作决策基线 §10.17；设计：系统架构 §18「gateway-duo 合并」D1–D4。完整链路：保留/注入身份 → 标注来源的目录 → 按模型与身份分流 → 本地现有 provider 管线或官方透传 → 同 request_id 流与后续消息返回。
+- [completed] `record-dual-contract`：固化选模、身份、默认与 `[官方]`/`[BYOK]` 显示契约；不增加配置/UI/账号系统。
+- [completed] `merge-dual-routing`：D1/D2/D4；协议选模/运行消息识别、请求级记忆、auth DB、MITM、官方转发、OAuth 分流及 Host 接线；身份×模型×消息、先流后上行与取消由隔离测试覆盖。复审修复路由存储跨配置重建分裂，Host 生命周期共用存储；OAuth local/upstream 两模式都接入同一身份分流处理器。
+- [completed] `merge-labeled-catalog`：D3；目录合并与同 ID 本地优先、身份默认、失败不推荐本地默认、来源名称及 CLI 占位。纯本地目录同样标 `[BYOK]`，保留模型 ID 和 `cursor-byok-local`；目录及 Host 契约测试通过。
+- [completed] `verify-close-merge`（代码与隔离验证）：完成 Spec/质量只读 review、缺陷修复与复审。OAuth 最终接线后 `go test -count=1 -timeout=5m ./internal/...`、backend/cursor/mitm/upstream/protocol 五包 race、`go vet ./internal/backend/... ./internal/cursor ./internal/mitm` 及 `git diff --check` 均退出 0。测试统一隔离 HOME，完整命令和日志见 `docs/process.md`。
+- [pending] `real-cursor-acceptance`（test/env gap）：工作决策基线 §10.17 / 设计 D1–D4；在后续获准的实机窗口验证保留真实登录、桌面/CLI 来源显示、显式本地/官方及 Auto 对话、真实 OAuth 刷新、失败不跨渠道。当前无发布/替换实例授权，模拟官方服务不替代真实验收。
+- 执行恢复：每个中断任务在原 ID 上按 20/40/80/160/320 秒最多恢复五次；持续失败停止等待用户调整。本轮目录任务中断后等待 20 秒，从已有上下文恢复成功，未发生持续无法恢复；收尾复审未中断。
+- 测试隔离事件：早期后端测试构造 Host 触发真实用户目录过期 debug 清理，日志报告删除 8 个文件；已告知用户，没有原始内容不能恢复。测试 helper 已加临时 HOME，后续所有 Go 验证均隔离。复用教训记录于 `docs/process.md`。
+- 回退：仅撤销本次 diff，不整树 reset，不覆盖用户后续修改或新登录身份；旧版本会重新注入本地身份的风险保留。阶段结果与命令证据收口到 `docs/process.md`。
+
+### 重开确认、订阅状态与模型代理回归修复（2026-09-08）
+
+- 授权：用户要求修复三项缺陷，后明确主控安排独立执行、review 和验证；服务中断按 20/40/80/160/320 秒在原上下文最多重试五次，持续失败暂停。两项复审启动 503、浏览器启动连接中断均无 ID；等待 20 秒后各首次重试成功，后续沿同一 ID 收集结果，未用到后四次重试。
+- 已确认退出语义：退出暂停服务且保留 Cursor 接入配置；用户接受暂停期间代理不可用，显式停止清理仍保留 owner 边界。需求锚点为工作决策基线 §10.14，设计为系统架构 §6.0、§5.1、§14.19。
+- [completed] `restart`（隔离验证）：退出不再清设置和 CA 环境；新实例构造真实隔离 backend host，断言免确认、backend/proxy 运行、新 owner 接管及接管后显式停止能清配置；首次/真变更确认和所有权保护仍通过。CA/账号注入/真实 Cursor 用替身，不当作桌面实机证据。
+- [completed] `accounts`（组件及隔离浏览器验证）：active 与 ready/auth_required/quota 状态独立；刷新失败可再点击，错误保留后成功清除；激活后列表/页脚一致，旧 provider 响应不覆盖新列表。camelCase 为正式 DTO，PascalCase 仅兼容性覆盖，不当作已证实根因。
+- [blocked] `proxy`（原场景未复现）：模型列表刷新凭据漏传代理已修复；真实 TestModelAdapter 入口通过假 CONNECT/TLS 完成刷新→推理→success，模型代理两个目标 host 命中且 env 代理零命中。用户真实 7890 测速失败仍待原始错误/受控实机诊断，不能用模型列表修复替代该验收。
+- [completed] `verify`：独立 Spec/Standards review，无新增阻塞生产缺陷；主控补足新 owner/服务运行/不清 CA 的断言，并修复构建扫描将测试示例账号收进翻译资源的问题（RED/GREEN）。最终五个相关 Go 包完整测试及 vet、app Tray/AutoStart、十项前端测试、配置投影、54 调用点日志契约、production build 与发布 catalog 测试数据排除断言通过。命令/告警详见 `docs/process.md`。
+- 状态：`verified-partial`。未打包安装、未验证真实 Wails/系统 CA/真实 7890，未停止或重启真实服务，未 commit/push。历史自动重调度仍缺 typed Cursor 证据，ACP 仍缺真实客户端，不擅自解锁。
+- 测试隔离事件：早期复现曾调用真实 launchctl unsetenv NODE_EXTRA_CA_CERTS（执行方报告）；已补替身。主控只读确认当前 unset，清除前值无证据，不自动恢复。临时浏览器/Vite 已清理；复用教训与事件边界详见过程记录。
+
+### 模型导入、全部测试与分层代理（2026-09-08）
+
+- 授权：用户确认访谈结果及计划后选择 Build；实现与本轮定向验证已收口，交付 `verified-partial`（真实 Wails 文件对话框及外部代理实机验收未完成）。
+- 需求锚点：工作决策基线 §10.14「模型导入导出与全部测试」「分层出站代理」；设计锚点：系统架构 §14.19 `DESIGN-MODEL-IMPORT-PROXY-001`。
+- 范围：运行中可用的模型专用 YAML 导入→合并草稿→模型分区保存；全量物理模型测试；默认关闭的全局/模型自定义代理→真实出站请求。沿用现有保存、测试和网络层。
+- [completed] `record-contracts`：同步用户已确认需求和设计；保留历史任务及工作区既有版本/发布/翻译变更。
+- [completed] `fix-model-import`：只读 YAML 提取后复用 `NormalizeModelAdapterDrafts` 恢复 yaml 不序列化的派生 ID，跨模型引用校验延至合并后；同身份/唯一同名更新并映射导入 fallback 引用，保留当前未命中模型及引用。失败/取消不改草稿，导入对话框阶段即防重复，保存仍走模型分区。真实导出→读回 ID、部分 alias、前端合并/保存投影回归通过。
+- [completed] `wire-test-all`：按钮接全部草稿快照，沿用并发 10、逐项结果与超时；停止后续调度、等待在途结束，逻辑 alias/空列表明确提示。浏览器仅显示 1 个搜索结果时实际批次仍处理 2 个模拟模型，两个本地校验错误分别展示，模型数保持 2。
+- [completed] `wire-layered-proxy`：`outboundProxy` 配置、设置/编辑 UI、分区保存、请求级覆盖、全局热更新、推理/测试/发现/fallback 与共用网络层接线；修复候选请求在 liveness/retry 替换 context 时丢失模型代理。已保存全局使用响应式独立快照，保留设置草稿/仅模型重载时也更新真实已保存代理，旧测试结果正确标记需重测。
+- [completed] `verify-and-document`：九个相关 Go 包完整测试通过；最终导入修正后 config/client/bridge 再验证通过。`node frontend/scripts/test-config-projection.mjs`、`node frontend/scripts/test-client-api-logging.mjs`（54 call sites）、`npm run build --prefix frontend`、`git diff --check` 通过。浏览器验证开关、草稿、非法代理提示、全量调度及关闭保留地址；使用合成内存数据，无桌面桥接或配置写入。详情与告警见 `docs/process.md`。
+- 保留缺口：真实 Wails 文件选择器/保存桥接和外部 HTTP/HTTPS/SOCKS 实机未验证；本地 HTTP/SOCKS 代理与假上游已覆盖，不当作外部实机证据。未做完整仓库测试/race、打包部署或 macOS 低版本实测。
+- 非目标：超时、SSL、Task 恢复、PAC 引擎、修改 OS/其他进程代理、打包部署、commit/push。既有服务/真实配置未改变；隔离浏览器预览已清理。
+- 回退：未保存导入可重新加载；关闭模型/全局自定义代理恢复继承。代码仅回退本任务改动，保留既有工作及用户配置。
+
+### 🎯 Active Work Package
+
+**main-gateway-value-migration-20260907** (completed, verified-partial)
+- 最新追加复审授权：用户要求“review 完成情况，如果发现问题请修复”。重新审查 `2fc04e7` 全部 diff 和未跟踪文件，确认并修复三类 Cursor 缺陷；前次最终全量/真实应用验证豁免保持，不部署、不重启、不提交。
+- [completed] `review-followup-audit`：Spec `719d398e-ecab-441f-9479-1fbd52cdeee2` 与 Standards `b5a71c5c-b64b-45d2-ad49-6bd11a9a4b86` 只读复审；恢复/压缩、CLI、WebFetch、Shell/共享预算未报告新增具体缺陷。对两条建议核对基线后未采纳：不改变原有 Apply 的所有权转移语义，不在未知平台绕过退出保护直接写设置。
+- [completed] `review-followup-fixes`（CURSOR-1）：隔离测试先复现跨实例/同原 owner 新值被旧快照回滚、过期计划覆盖、运行中 LastError 被事件清空、Inspect 排队。Restore 增加 owner 与旧值/目标值核对；ApplyPlanned 在同一锁内核对计划并写入，StartProxy 传递同一快照，CA 后不另建计划；读取 owner 错误和内层回滚错误对外可见。状态事件保留失败信息，Inspect 使用 TryLock。补 owner 写失败/二次回滚、外部设置与无关键保留、启动入口所有权冲突、部分成功事件与显式清错测试；修复复审未发现新具体缺陷。
+- [completed] `review-followup-closeout`：修改后 `go test -count=1 -timeout=120s ./internal/cursor ./internal/client`、`go test -count=1 -timeout=90s ./internal/app -run 'Tray|AutoStart'`、`node frontend/scripts/test-config-projection.mjs`、`git diff --check` 均退出 0；macOS 版本链接 warning 保留。实际系统 CA/钥匙串、真实 Wails 事件投递、真实应用重启及最终整仓门禁未执行；隔离生命周期测试仍用设置/应用替身，不能据此称完整真实链验收。Windows/Linux 自动检测和设置切换仍未支持，不能将“手动退出后重试”提示当成该平台链路已实现。
+- 前次实施授权与结果：用户在完成情况 review 后要求继续，允许省略最后验证。前次先修复 `review-r1`～`review-r4`，再推进原计划剩余功能；保留每切片必要定向回归，省略最后重复全量/race/build、打包及真实应用验收，未验证范围明确记录为 test-gap。当前源码不自动部署，既有进程不重启。
+- Owner：orchestrator；Priority：P0/P1；Risk：high；Design Readiness：approved（行为合同与验收锚点：`docs/main_gateway_价值功能分析与迁移方案_20260907.md` §3～§4、§9～§13；执行编排：已批准 Cursor plan `价值功能迁移执行`）。
+- 目标链路：provider overflow 有界恢复、CLI 本地模型目录与凭据隔离、Shell/Bash 全链兼容、WebFetch 直连 DNS 固定/代理兼容，以及 P1 共享规则和 Cursor 正常重启；交付状态从 `planned` 推进到证据支持的 `verified-partial` 或 `accepted`。
+- 基线：`gateway@2fc04e7`；开工时仅迁移方案文档未跟踪，生产代码无既有修改。已安装 Gateway-byok 监听 `127.0.0.1:18080/18090` 且 `/healthz=ok`，Cursor 正在运行；`18091/9245` 未监听。测试使用合成凭据、临时目录和隔离端口，不替换现有进程。
+- 非目标：Rust/Tauri 整树、P2 Antigravity/OAuth callback、全局 transport/安全框架、配置开关矩阵、强制终止 Cursor、提交或推送。既有 blocked 的 subagent runtime wiring 与 ACP 工作包不解阻。
+- Subagent 中断规则：在原任务上按 20/40/80/160/320 秒最多恢复 5 次；仍失败则保存工作区和证据，停止后续修改等待人工调整。
+- [completed] `stage-0-baseline`（S）：工作包和安全基线已登记。工具链为 Go 1.26.1、Node 25.6.1、npm 11.9.0、Task 3.53.1、Cursor Agent 2026.08.11；本机无 `wails3`。Gateway-byok PID 53552 继续监听 18080/18090 且 healthz=ok，18091/9245 未监听；未停止或替换既有进程。
+- [completed] `stage-1a-overflow-classifier`（S）：可信 provider overflow 分类已接入 adapter；保持 HTTP/fallback 重试语义，排除普通错误/取消。
+- [completed] `stage-1b-compaction-budget`（M）：比例 reserve、完整摘要请求预算、完整轮次裁剪及一次本地 fallback 已接线；本轮 Compaction 定向回归通过。
+- [completed] `stage-1c-run-recovery`（M，verified-partial）：每 Run 一次恢复、当前调用输出门禁、旧事件隔离与 RunSSE 合成链已有实现；本轮修复普通 compiler/storage 错误被标成 overflow，使用 typed terminal code 并保留 usage_persistence_error；定向 overflow/compaction/handler 回归通过。真实 Cursor/BidiAppend 起始全链及最终 race 按最新授权省略。
+- [completed] `stage-2-cli-routing`（M，verified-partial）：四路径共用 builder/policy；目录固定哨兵、optional baseUrl 未设置；新增 Codex/Grok 从目录 ID 到运行时凭据 resolver/合成 provider 的测试，保留官方端点与请求时解析。真实 CLI 最终验收省略，不再把合成链缺口与此前取消混为一谈。
+- [completed] `stage-3-shell-alias`（M）：`CanonicalToolName` 在 known-tool/权限之前及 started/bridge/evidence/replay/truncation 边界统一四名称；工具目录仍仅 Shell，存量磁盘历史不重写；四名称与旧历史不重派发定向测试通过。
+- [completed] `stage-4-webfetch-security`（M，verified-partial）：直连固定已验证 DNS 地址、redirect 逐跳代理选择；修复非公网 IPv6 漏检和 6to4/NAT64 错误改写拨号目标，补 HTTPS Host/SNI fixture。真实直连/SOCKS-only及最终重新代理探测省略。
+- [completed] `p0-verification`（范围已调整）：主控完成 P0 diff 复核和逐切片定向回归，发现的三个反例均修复。最终全量/race/build 门禁按用户授权省略；不是完整 P0 发布验收。
+- [completed] `stage-5-shared-rules`（M，verified-partial）：CLI 目录/运行已共享 manager/channel ID 事实源，没有为不存在的重复新增服务；新增静态/订阅/fallback/thinking/capability/旧 ID 一致性测试。工具预算提取到 `agent/toolresult`，迁移展示及历史回放薄调用层，保留 Shell 分字段、图片回放省略、资源结构与 edit 错误差异；冻结样本和 UTF-8/幂等定向测试通过。
+- [completed] `stage-6-cursor-restart`（M，verified-partial）：macOS 已识别 bundle 的一次确认、正常退出总时限、被改键快照与失败回退接入真实 StartProxy/Wails/UI；只取消辅助命令，不强杀 Cursor；启动等待实际命令结果、只发一次；并发 start 返回 busy。托盘显式启动进入主窗口同一确认流程；自动启动需确认时显示 LastError、保持原状态且不自动弹窗。重启路径账号注入在正常退出之后；回滚/重启失败可见，已有共享 backend/MITM 不停止。Windows/Linux 不虚报未运行，需改设置时提示手动处理。真实窗口/退出/启动验收省略。
+- [completed] `final-review-fixes`（代码层）：Standards `37ce3f91-fc43-41bb-b3be-4b50e1931b7c` 与 Spec `050ba47b-b48e-40a2-92ef-18b451385821` 只读双轴复核；修复退出 helper 未受 context 约束、启动只 Start 误报成功、未知平台、重复启动排队、回滚失败不可见，以及托盘确认未接线和注入顺序；两轴复审报告无剩余具体 P0/P1。未将静态复审升级为真实运行验收。
+- [completed] `runtime-doc-closeout`（S）：最后 client/app 托盘与启动顺序定向回归、前端配置投影及 diff 检查均通过，证据已归档 `docs/process.md`；所有本轮受管测试已结束。没有停止既有 Gateway/Cursor，因此未执行恢复/重启；未部署/commit/push，历史外部条件 blocked 工作包保持原样。
+- [skipped-by-user] `final-validation`：最后根全量 test/race/build、打包、lint 及真实 CLI/Cursor/代理验收省略；代码实施完成不等于上线验收，交付状态为 `verified-partial`。
+- [completed] `review-completion-current`：完成情况 review 及修复已执行；三个临时反例转为永久回归，历史失败证据保留在 `docs/process.md`。
+  - [completed] `review-r1-ipv6-public`（P1；FETCH-1）：`fec0::1`、`::2`、`4000::1` 现被拒绝，固定公网/特殊用途判断用于所有目标边界。
+  - [completed] `review-r2-ip-identity`（P1；FETCH-1）：仅 IPv4-mapped 等价 unmap；内嵌 IPv4 用于附加风险检查，6to4/NAT64 允许目标保持原 IPv6；拨号/Host/SNI 回归通过。
+  - [completed] `review-r3-error-category`（P1；REC-3）：compiler/storage/usage 失败保留类别，真正 overflow 维持唯一非 retryable terminal；失败注入回归通过。
+  - [completed] `review-r4-cli-evidence`（CLI-1，合成部分）：补实际 Codex/Grok resolver 和 fake HTTP 请求，目录不刷新凭据；真实 CLI 部分转入授权省略的 test-gap。
+- 验收与回退：逐切片 RED→GREEN→REFACTOR；命令与场景按方案 §11，回退按 §10.3；fixture 不替代真实 CLI/Cursor/代理证据，任何数据完整性、真实凭据或共享服务所有权反例立即暂停相应工作包。
+
+**upstream-leookun-99d527d-review-20260906** (in_progress, verified-partial)
+- 同步边界已冻结：本地 `main` 在隔离 worktree 中快进到 `leookun/main@99d527d`，比较范围为 `543f618..99d527d`；不合并或改写 `gateway`，不 push。
+- 迁移纪律：P0 只移植行为规格、失败用例和状态不变量；只有新增 Go P0 测试失败后，才允许实施对应的最小局部 P1。禁止复制、重写或 cherry-pick Rust 业务实现。
+- 32 个非 merge 提交已按完整 diff 初分：
+  - P0 行为测试候选：`b6fc732`/`aa47152`（OpenAI terminal/tool-call 一致性与 content filter 安全拒绝）、`24c41d0`/`0f564c0`/`c3951a4`（Grep/MCP 截断预算、终止性、准确提示）、`ab4d3ad`（稀疏 usage 字段累加不擦除）、`a42f84c`（跨模型调用复用 tool-call ID 不挂起或串联）、`fdae9c4`（context overflow→压缩→重试、摘要输入边界及恢复不变量）。
+  - Gateway 已有等价能力，仅做精确验证：`e87abac`（Rule 与 Blob/checkpoint 生命周期）、`924b5e5`（Cursor 配置/模型目录/本地路由）、`1734216`（请求覆盖、兼容路由、Commit Message）；静态存在不作为行为兼容证据。
+  - Rust/Cursor/desktop/plugin/CI 专属，不移植：`86c3899`、`d7578bc`、`e4b5e13`、`e0f9bd6`、`49a38ca`、`8942287`、`3aae326`、`2428614`、`edcdd77`、`2f3bffd`、`0a8934b`、`4700d3a`、`8fbbcd5`、`2cb15b5`、`c379c31`、`20fdea8`、`7484bb9`、`03b25be`、`f1ab8c7`、`d8190fc`、`9637efd`；其中配置读取失败按架构差异记录，不误判为 Gateway 功能缺失。
+- 与既有 `upstream-p0-p1-safe-port-20260830` 去重：已通过的 token anchor、终态竞态和 ReadImage 投影不重复实现；本轮优先补 OpenAI terminal 矩阵、跨模型调用 ID、稀疏 usage、截断结构与 over-limit 恢复链。
+- 明确排除：Rust run engine、整套 Compaction、Task/subagent runtime、desktop、插件 UI 和 Cursor 专属 wire；Gateway 已有等价能力且 P0 回归通过时不改实现。
+- [completed] `p0-openai-terminal`：新增 stop+tools、content_filter+tools、length+tools、tool_calls、空白/缺失 finish reason 的结束语义和事件序列；初始测试确认终态标签、过滤拒绝和 `[DONE]` fallback 缺口。
+- [completed] `p0-tool-usage-gates`：新增跨模型调用复用 tool-call ID、稀疏 usage、空 tool arguments、UTF-8 截断、MCP 图片 MIME/base64/结构和 ListMcpResources 单位测试；ID 与 MCP 结构既有行为通过，稀疏 usage、空参数和资源提示初始失败。
+- [pending] `p0-compaction-recovery`：既有 token anchor、append-only、fallback summary 与预算终止测试保持通过；provider context-overflow→压缩→重试的完整链仍与 `byok-recovery-hardening-20260903` 恢复合同交叉，本轮不以单个字符串解析测试冒充端到端兼容，也不先行改恢复主链。
+- [completed] `p1-failed-only`：仅修复新 P0 证明的 OpenAI Chat terminal 收口、presence-aware usage、空参数 `{}` 规范化，以及 ListMcpResources 资源计数提示；未改 Rust/run engine/Compaction/Task/desktop。
+- [completed] `verification-report`：`go test -count=1 ./internal/backend/agent/model ./internal/backend/agent/bridge/exec ./internal/backend/forwarder`、同范围 `go test -race -count=1`、`go vet` 与 `git diff --check` 均通过；中文报告明确区分 P0/P1 和 provider-overflow 全链缺口。
+
+**byok-recovery-hardening-20260903** (in_progress)
+- 冻结预算化恢复合同：Cursor 只见一个逻辑模型 / 一个 RunSSE；网关吸收上游 500/503；耗尽后至多一次 terminal，`IsRetryable=false`。
+- 默认预算：全链 5 HTTP attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s；最多 1 primary + 4 candidates。`maxWaitSeconds` 只累计实际退避 sleep。
+- HTTP 500/502/503/504/524、可恢复 transport、TLS handshake EOF、建连/首事件超时：同渠道最多 2 次，安全窗口内再切候选。429 遵守可容纳的 Retry-After，否则跳过等待并切换。401 只走凭据刷新/账号轮换。403/其他 4xx/529/父取消/证书校验/永久 DNS/请求构建/协议解析/provider terminal：快速失败。
+- 安全门：任意 raw byte / 模型事件 / 副作用后禁止重试和切换。删除全局 `providerStreamIdleTimeout`，只保留模型级活性。单渠道计划仍注入 RecoverySettings + liveness。
+- 排除：熔断、按供应商拆网络、partial-output continuation、OpenAI/Anthropic 跨协议混排。
+- 保留未提交的原生图片生成改动，不 stash/reset。
+- 2026-09-03/04 构建安装门禁已闭合：目标仓库 `workspace-gateway-native-fix` 的 `bin/macos-arm64.dmg` 校验有效；DMG 与 `/Applications/Gateway-byok.app` 均为 `0.0.56.0`、arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。运行进程监听 `127.0.0.1:18080` / `127.0.0.1:18090`，`/healthz` 返回 `200 ok`；启动日志无配置归一化、panic 或 fatal 错误。
+- 真实 Cursor 正常流量冒烟已闭合：同一 Cursor request 只观察到 1 次 RunSSE 入站/转发，内部多个 model call 均成功，未产生 terminal provider error。结构化事件已包含 failure/action、链级及渠道级 attempt/wait、安全门和最终动作字段；对最新 trace 的敏感 key 与常见 Bearer/API key 值模式扫描均为 0。
+- 已安装应用的本机 Gateway 受控故障验收已闭合：HTTP 500 与 503 场景均在主渠道恰好失败 2 次后切备用并成功；TLS 握手阶段 accept-then-close 场景在客户端表现为 transport reset，主渠道 2 次后切备用并成功；partial-output 场景只命中主渠道 1 次，发布 `PARTIAL-CANARY` 后以 `output_observed` 关闭安全门，未请求备用；预算耗尽场景按主渠道 500×2、备用 503×2 消费全链 4 attempts，SSE 流体只有 1 个 `provider_error` terminal。五条 trace 的恢复字段完整，临时 key、Authorization/正文类字段和 canary/成功正文命中均为 0。
+- 临时在线配置已完整回滚：`config.yaml` SHA-256 与原始备份同为 `a324d89d9b6eaf30b387e85a51924a03f6c13bcef1e2df1cef194d3a022e9d37`，模型数回到 32，临时模型为 0，`18091` 与 `18180–18183` 均已释放；正常应用继续监听 `18080/18090`，`/healthz` 返回 200。
+- 当前交付仍为 `verified-partial`：上述受控请求直接经过本机 Gateway，不等同于 Cursor UI/RunSSE 故障注入。仍待用真实 Cursor 单 Run/Agent 验证内部恢复不创建新生命周期、任意输出后不重放，以及预算耗尽时 Cursor 最多收到一次 terminal provider error。
+
+**gateway-provider-stream-truncation-20260830** (in_progress, verified-partial)
+- 已完成共享 Provider HTTP 流观测第一阶段：`provider_stream_finished` 可投影最终 HTTP attempt 的协议、编码/自动解压、连接复用、原始字节数、最后 SSE 事件元数据、typed close cause 和累计零字节恢复次数；response ID 仅保存短哈希，不落完整正文或凭据。
+- 已完成 OpenAI Responses 与 Anthropic 终态收口：支持 Responses CRLF、多行 `data:`、最后事件后立即 EOF；`[DONE]`、`response.completed`、`message_stop` 成功，failed/cancelled/incomplete/显式 error 为协议终态，无合法 marker 的 EOF 保持 `StreamTruncatedError`。
+- 已修复实测事故中 `response.completed` 后继续等待连接关闭的问题：Responses 在完成最终内容和工具投影后立即进入统一收尾，不再被终态后的 `unexpected_eof` 覆盖为 `stream_decode`；回归覆盖连接不关闭、终态后异常 EOF、工具与 turn 完成事件仅发布一次。独立的连续 HTTP 502 保持既有三次 attempt 边界，本轮不扩大重试，也不执行 Transport A/B。
+- 已完成零 provider 字节且零 `ModelEvent` 的同渠道单次恢复；typed EOF、unexpected EOF、TCP reset、HTTP/2 stream reset/GOAWAY 在预算内最多新增一次请求。任意原始字节、模型事件、4xx、认证/配额、JSON 语法错误、取消、deadline 或明确协议终态均不重放。
+- 既有纯文本 checkpoint continuation 保持默认关闭、每 turn 一次及工具/checkpoint/pending interaction/subagent/Gateway 路径禁用；本轮只增加“非瞬时截断错误禁止续写”，未扩大部分输出恢复范围。
+- 已增加默认关闭的 Provider-only Transport 单变量实验：环境变量 `CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` 支持 `auto`（默认）、`http1`、`no_compression`、`fresh_connection`、`direct`；未知或组合值回退 `auto`。`direct` 只绕过显式 HTTP/SOCKS 代理，不能绕过操作系统 TUN。
+- 验证：`go test -count=1 ./internal/netproxy ./internal/backend/...`、`go vet ./internal/...` 与 `git diff --check` 通过。额外的 `go test -count=1 ./internal/...` 中，受影响包均通过，但完整命令被两个外部 CLI smoke 阻断：Codex 临时插件目录清理竞态，以及本机 OpenCode 数据库缺少 `name` 列；未修改产品代码绕过环境问题。
+- 待完成：按单变量实际运行并比较缺失终态率、零字节 reset 率与延迟；Cursor→Gateway 边界故障注入；确认无重复工具副作用后再评估是否扩大纯文本 continuation。HTTP/1.1 不作为默认修复，full/provider 日志采样后必须降级。
+
+**subagent-readonly-reschedule-20260830** (blocked, foundation-partial)
+- 真实 Cursor fixture 核查结论：当前生产链没有可稳定关联 parent/run/child/attempt/terminal 的 typed failure producer，也没有消费完整证据并驱动 relaunch 的 consumer；禁止按时间窗口或错误文本推断，runtime relaunch 必须保持 blocked。
+- 已冻结未来兼容边界：顶层 `subagentReschedule.enabled` 默认关闭，旧配置缺失关闭；首版仅 readonly Task，总计最多 3 attempts。Settings 固定禁用，前端保存强制 `false`，当前配置不触发自动重调度。
+- [completed] `config-contract`：正式配置类型、默认关闭和旧配置兼容；显式 true 仅保留未来合同，不代表当前运行时消费。
+- [completed] `attempt-ledger-foundation`：`attempts.json` 版本化 ledger、原子写入/读取及 attempt 身份基础已落地；不等于存在可靠触发证据或在线 relaunch。
+- [completed] `policy-foundation`：readonly-only、最多 3 attempts、typed evidence fail-closed 的策略基础与回归已落地；无稳定 typed 关联时结论只能是 suppressed/blocked。
+- [completed] `settings-design`：Settings 禁用占位、默认 false 投影及四状态机、重启、回滚和费用边界文档。
+- [blocked] `runtime-wiring`：生产 settings source 与在线 relaunch 不接线；等待稳定 typed producer/consumer 合同成立后另行实施。
+- [blocked] `typed-fixture`：等待真实 Cursor 提供可稳定关联的 typed failure fixture，覆盖错误、取消、断连、重启与 `resume_agent_id`。
+- [pending] `online-relaunch`：只有 typed fixture 解阻并证明 parent 单次结果、attempt 独立 usage/费用后才能进入；当前不得声称解决。
+
+**upstream-p0-p1-safe-port-20260830** (completed, verified)
+- 范围保持隔离：仅在现有 Go/Wails 架构内移植行为规格与回归测试，未引入 Rust/Tauri、SQLite、会话架构迁移、WebFetch 全文缓存或观测批处理。
+- [completed] `token-anchor`：自动压缩锚点改为最近一次成功 Provider 调用的 `InputTokens + CacheReadTokens + CacheWriteTokens`，不含输出 token、不跨调用累计；覆盖大输出、缓存读写、后续调用覆盖和 partial usage 场景。
+- [completed] `ttfr`：保留网络首字节、首模型事件和最后有效内容的既有语义，独立记录首个有效文本、思考或结构有效工具事件时间，并投影 `first_effective_content_at` / `ttfr_ms` 到脱敏观测链路。
+- [completed] `tool-sse-regression`：未知/已移除工具回归覆盖 started、失败结果、completed 和 checkpoint 闭环；终态竞态测试发现并修复 `Cancel` / `Fail` 可覆盖既有终态及重复发布 End 的缺陷，late cancel 在写入 metadata/stats 前短路。未为未知工具引入空 `ToolCall` 持久化。
+- [completed] `verification`：独立审查后修复上述终态缺陷；`go test -count=1 ./internal/backend/agent/model ./internal/backend/forwarder`、`go test -race -count=1 ./internal/backend/forwarder`、`go vet ./internal/backend/agent/model ./internal/backend/forwarder`、日志分析器 sanitize 测试和 `git diff --check` 通过；未 commit、未 push。
+
+### ⏸️ 暂停工作包
+
+**multi-client-acp-phase5-20260826** (blocked)
+- 状态：等待真实 ACP Client/编辑器到位
+- 风险：high
+- 条件：提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界
+
+### ✅ 最近完成
+
+**provider-history-sanitize-20260831** (completed, verified)
+- 发送边界按目标来源身份判断 opaque 兼容性；跨身份剥离 opaque reasoning / Responses item 元数据，保留文本与工具链。
+- HTTP 400 脱敏摘要进入诊断；最终编码请求体预检 32MiB，`request_build` 不重试、不 fallback。
+- 复审修复 provider done origin 清零导致落盘丢失、tool flush 顺序和 safety suppression。
+- 验证：`/opt/homebrew/bin/go test -count=1 ./internal/backend/agent/model ./internal/backend/agent/prompt ./internal/backend/forwarder`、同范围 `go vet`、`git diff --check` 通过；未 commit、未 push。
+
+**upstream-v0.1.5-review-20260830** (completed, verified)
+- 已核对正式版 `v0.1.5@b807608`、最新 `upstream/main@9120b90` 与此前基线 `76003a9`；正式版后的主线只删除 `server_backup/**`，没有新增核心运行时能力。
+- 本地 `main@305b108` 与上游已分叉；隔离 worktree 的显式 merge 出现内容、修改/删除和目录迁移冲突，已按 Runbook `git merge --abort`。`main`、`gateway@534ffc0` 与工作树均未改变，无提交、无 push。
+- 结论：P0 先加固现有 Rule 文件持久化；P1 独立补 managed Codex 缓存亲和；P1 在显式 opt-in 与隐私合同下设计 Rule 离线日志/镜像；P1/P2 仅增加官方/BYOK 展示分组。
+- 已确认无需重复移植官方/BYOK 切换、双向子代理、普通 OpenAI/Anthropic cache、Provider 空闲超时、Codex/Grok 主链路、额度与账号轮换；拒绝整体移植 Deno 插件、Rust provider/router 和 conversation runtime。
+- 上游性能、内存和缓存命中宣传缺少可复现 benchmark；完整审阅、最小移植单元和验证口径已写入 `docs/prd_cursor_byok_当前功能与上游差异.md` §16。
+
+**macos-build-0.0.52.5-20260830** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.5`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.5.md` 对齐到 `0.0.52.5`；保留构建前已有的工作树改动。
+- 本版本包含共享 Provider 流截断第一阶段治理：OpenAI/Anthropic 终态收口、零输出安全恢复、最终 attempt 观测字段、`CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` Transport 单变量实验。
+- 首次尝试误用 Go 1.26.3 且缓存被清空，在 8GB 内存/swap 压力下大文件编译停滞；改用 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后完成 `task build`，产物 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.5`；二进制注入版本 `0.0.52.5`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`；`SHA256SUMS` 校验通过。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**access-ui-screenshot-feedback-20260830** (completed, verified-partial)
+- 按截图精简 Codex/Grok 接入页：删除标题下的冗余说明，把“订阅授权”、账号数和操作说明合并到同一标题行，移除账号卡片底部重复的导入与设备码授权按钮，保留顶部入口和“清除全部”。
+- Gateway“启动 Gateway”按钮仅在可点击时使用与保存按钮一致的主色高亮；禁用时保持默认弱化样式。
+- 修复独立 Vite 预览空白页：平台检测缺少 Wails 后端时回退为非 Windows，避免顶层导入失败阻断 Vue 挂载；桌面后端能力在独立预览中仍不可用。
+- 验证：前端配置投影门禁和生产构建通过；Playwright 在 `http://127.0.0.1:4173/#/access?client=codex` 确认页面可挂载并显示调整后的授权布局。独立 Vite 预览仍会因没有 Wails 后端产生 `/wails/runtime` 404 和业务调用错误，未做真实 Wails 桌面窗口点击。
+
+**macos-build-0.0.52.4-20260829** (completed, verified)
+- 用户要求汇总更新情况作为 git 提交说明（版本号 `0.0.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.4.md` 对齐到 `0.0.52.4`；保留构建前已有的工作树改动。
+- 本版本新增 Gateway 可用性测试（启动后自动本机 HTTP 探测 `/v1/models`，卡片展示入口状态、模型数量与延迟）、token 复制/轮换改用 Wails 原生剪贴板、极简使用引导；managed Codex 请求体白名单 fail-closed 剥离 `previous_response_id`，static OpenAI 保留原请求体。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效（`codesign --verify --deep --strict` OK）；`hdiutil verify` VALID；SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`；`SHA256SUMS` 校验通过。
+- 已提交并 push（提交 `9c4db4f`）；未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release。
+
+**subscription-account-list-modal-fix-20260829** (completed, verified-partial)
+- 修复 Codex/Grok 多账号列表在固定高度卡片中被裁切的问题：账号列表成为独立纵向滚动区，卡片标题和底部操作栏保持可见。
+- 修复 sub2api 确认导入后选择弹窗未关闭的问题：成功路径不再调用受 `busy` 状态保护的手动关闭函数，而是直接重置并关闭弹窗状态。
+- 验证：前端配置投影门禁覆盖滚动容器和成功关闭路径，生产构建与 `git diff --check` 通过；未做真实 Wails 窗口点击，未重新打包 DMG。
+
+**macos-build-0.0.52.3-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.3`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.3.md` 对齐到 `0.0.52.3`；保留构建前已有的工作树改动。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.3/cursor-byok-0.0.52.3-macos-arm64.dmg`（24,019,575 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.3`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`；`SHA256SUMS` 校验通过。
+- 本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**codex-previous-response-stateless-boundary-20260829** (completed, verified)
+- Managed Codex ChatGPT Responses 在请求体白名单边界一律剥离 `previous_response_id`，无法验证引用所属账号时 fail-closed；static OpenAI Responses 保持原请求体不变。
+- 当前正常 Codex 请求发送完整 `input`，生产路径目前不生成 `RequestBodyOverride` / `previous_response_id`；回归覆盖 managed Codex 删除与 static Responses 保留，未创建提交。
+
+**subscription-sub2api-import-20260829** (completed, verified-partial)
+- 修复 Codex 单账户“刷新用量”调用了未绑定 Wails 方法的问题：桥接层补齐 `RefreshSubscriptionAccountUsage` 转发。
+- Codex 与 Grok 接入页增加 sub2api JSON 导入入口；后端先按当前页面类型过滤 OAuth 账号，前端弹窗展示候选账号并允许多选后导入。Codex 仅接受 `openai/codex + oauth`，Grok 仅接受 `grok/xai/x.ai + oauth`，其他平台、认证类型或缺少 access/refresh token 的项目跳过。
+- 导入只读取源文件并写入本应用私有凭据池；重复账号更新原账号，Codex/Grok 都不因后续导入抢占当前激活账号。
+- 验证：订阅认证 Go 测试（包含用户提供 sub2api 文件的只读解析、provider 过滤、选择导入和源文件不变）、Wails bindings 生成、前端配置投影和生产构建通过；桥接包完整测试因大型生成文件编译超过两分钟后终止，未使用真实外部订阅请求，未做 Wails 窗口点击。
+
+**codex-multi-account-rotation-20260829** (completed, verified-partial)
+- Codex 已升级为兼容旧单账户文件的多账户池；模型配置仍只保存 `credentialSource=codex`，第一个账户自动激活，后续账户作为备用，重复导入更新原账户。
+- 已实现逐账户激活、删除、双窗口用量、401 定向刷新和零输出明确配额错误下的幂等轮换；并发重复失败不会连续跳过备用账户。
+- 验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、前端配置投影测试和生产构建。
+- 已重新生成并核验包含本功能的 Apple Silicon macOS `0.0.52.2` DMG：23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`；未使用真实 Codex token，未做 Wails 窗口点击，未创建提交。
+
+**macos-build-0.0.52.2-20260829** (completed, superseded)
+- 用户要求编译 Apple Silicon macOS `0.0.52.2`。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.2.md` 对齐到 `0.0.52.2`，发布说明补充订阅模型测试端点修复；保留构建前已有的工作树改动。
+- 已重新生成包含当前 Codex 多账户功能的安装包，旧产物校验已被新产物取代：`bin/release/0.0.52.2/cursor-byok-0.0.52.2-macos-arm64.dmg`（23,070,403 bytes），SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.2`；最低 macOS `10.15.0`；Mach-O arm64；codesign 校验有效；`hdiutil verify` VALID；`SHA256SUMS` 校验通过。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**subscription-model-endpoint-normalization-20260829** (completed, verified-partial)
+- 根因：模型测试只把订阅 token 注入请求，却继续使用模型配置中的接口地址；当 Codex 配置填写本应用 Gateway 入站地址 `127.0.0.1:18091/v1` 时，请求带 ChatGPT token 回到本地 Gateway，而不是发往 Codex Responses 上游。
+- 修复：OpenAI 类型的 Codex 订阅固定归一化为 `https://chatgpt.com/backend-api/codex/responses` + `/v1/responses`；Grok 订阅固定归一化为 `https://api.x.ai/v1` + `/v1/chat/completions`。前后端保存、重载和测试使用同一规则，订阅模式下接口地址和端点不再允许编辑；静态 API key 配置保持自定义地址行为。
+- 验证：后端 Codex/Grok 端点归一化测试、Codex Responses 请求头/请求体测试、客户端订阅模型测试链路、前端配置投影和生产构建通过；未使用用户真实 token 请求外部上游，未重新打包 macOS 安装包。
+
+**macos-build-0.0.52.1-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS `0.0.52.1`，并直接在 `bin/release` 下创建版本目录和带版本号的产物。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.1.md` 对齐到 `0.0.52.1`；保留构建前已有的工作树改动。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成构建，产物为 `bin/release/0.0.52.1/cursor-byok-0.0.52.1-macos-arm64.dmg`（24,001,624 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `0.0.52.1`；最低 macOS `10.15.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `6de50cd36b295e7a31d6c58af4d7bfd93dfd3d18e80981874d286aae7ccb8271`。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
+
+**subscription-auth-access-layout-20260829** (completed, verified-partial)
+- 按用户确认截图移除接入页底部混合的 Codex/Grok 全局授权区，把 Codex `auth.json` 导入、设备码授权、用量与清除操作全部放入 Codex 接入详情，把 Grok 设备码、账号切换、删除与用量全部放入 Grok 接入详情。
+- 接入中心顺序调整为共享入口、Cursor、Codex、Grok、Anthropic；Anthropic 保留计划中占位，旧 `client=claude` 查询兼容映射到 Anthropic。
+- 更新模型页提示、Grok/Anthropic 品牌样式、四套语言目录和前端结构门禁；未修改认证协议、凭据存储或请求链路。
+- 验证：前端生产构建、配置投影测试、接入路由测试 5/5 和全局补丁格式检查通过；已重新打包并核验包含本次布局修复的 macOS DMG，未做真实 Wails 窗口点击。
+
+**macos-build-0.0.52.0-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.0`。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.0.md` 对齐到 `0.0.52.0`，并保留构建前已有的跨平台元数据改动。
+- 本机使用项目现有 Go 1.25.0 工具链和低并发参数完成 `task build`；布局修复后重新打包的 `bin/macos-arm64.dmg` 为 24,002,569 bytes。
+- 校验：Info.plist 版本为 `0.0.52.0`；最低 macOS `12.0.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `8cfa4d7c6797d8bae83603e24012b24513288d23c536d016388e493b0981511a`。
+- 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未更新 README 当前稳定发布。
+
+**gateway-subscription-auth-20260828** (completed, verified-partial)
+- 完成 Codex 设备码与 `auth.json` 双入口、Grok 设备码与账号管理、私有凭据存储、managed credential 请求链路、usage/模型发现/轮换、Wails/Vue 独立订阅区和 token 脱敏。
+- 修复 Codex usage 与会话窗口未持久化、Grok 耗尽账号仍可解析、设备授权终态清理、轮询失败等待态和 `pollToken` 脱敏缺口。
+- Go 定向回归、除 OpenCode 外的完整 internal 回归、vet、前端构建/配置投影/路由测试及 `git diff --check` 通过；race 已通过 `subscriptionauth` 和 `model`，`forwarder` 因 Go 1.26.3 对大型生成文件持续编译超过 12 分钟而终止，未得到结果。
+- 完整 internal 回归唯一失败是本机 OpenCode CLI 数据库缺少 `name` 列，属于外部安装环境问题；未修改产品代码绕过。
+- 已确认 `/Applications/Gateway-byok.app` 正在运行并监听 `127.0.0.1:18080`、`127.0.0.1:18090`，因此未重复启动 `task dev` 或替换现有实例。
+
+**macos-build-0.0.50.3-20260828** (completed, verified-partial)
+- 用户要求编译 macOS 版本，版本号 `0.0.50.3`
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.50.3.md` 对齐到 `0.0.50.3`
+- 本机 Apple Silicon 执行 `PATH=/Users/yaogj/go/bin:$PATH task build`，产出 `bin/macos-arm64.dmg`（约 22 MiB）
+- 校验：Info.plist `CFBundleShortVersionString`/`CFBundleVersion` = `0.0.50.3`；二进制注入版本 `0.0.50.3`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`
+- 未做 Developer ID 签名或 notarization；未发布 GitHub Release；未更新 README 当前稳定发布（仍为已发布的 v0.0.50.1）
+
+**ui-brand-icons-light-default-20260828** (completed, verified-partial)
+- 用户确认三张附件区域的 UI 设计，并批准应用到真实系统；范围仅限 Codex 接入详情、Claude Code 接入详情和模型管理主体
+- Codex 与 Claude Code 接入详情已应用授权管理布局；因真实授权 API 尚未接通，使用 0 账号空状态并禁用授权、同步、测试与保存操作，不写入演示账号
+- 模型管理已应用提供商筛选、彩色提供商标识、清除全部确认和精简操作菜单；沿用真实模型数据与既有导入、导出、测试、编辑、保存能力
+- 接入中心的 Codex 与 Claude Code 使用对应公司品牌图标；模型配置导入、导出按钮不显示图标
+- 浅色保持为新配置默认主题，深色与跟随系统仍可选；未修改主导航、总览、Gateway、Cursor、设置及其他区域
+- 2026-08-28 续验证：`npm run build --prefix frontend` 通过；`npm run test:config-projection --prefix frontend` 通过；`node --test frontend/src/router/access.test.js` 通过；相关文件 `git diff --check` 通过；`frontend/src` 无截图演示邮箱。配置投影测试已改为允许禁用的「添加授权」空态，并覆盖完整提供商 Tab。本机无 Wails 窗口视觉点击。
+
+**model-save-identity-remap-20260828** (completed, verified-partial)
+- 修复模型页保存身份变更与类型切换问题
+- 渠道 ID 精确 remap、删除/新增不自动配对、类型切换保留 modelID
+- 定向测试通过；未做 Wails 窗口点击
+
+**interrupt-recovery-error-propagation-20260827** (completed, verified-partial)
+- HTTP 524 零输出 allowlist、automatic-continuation、typed error propagation、stream diagnostics
+- 实现与定向验证完成；真实 Cursor 多段 continuation/TCP-TLS 故障注入仍是证据缺口
+- Design Gate: DESIGN-INTERRUPT-RECOVERY-001 approved
+
+### 📋 Pending Work (当前执行队列)
+
+- [completed] `rule-storage-hardening`：Rule 目录/文件私有权限、symlink 与路径逃逸拒绝、唯一临时文件原子替换、容量上限以及 Rule/docs index reconciliation 已实现并通过定向、race、vet 与 Windows 交叉构建验证；Windows 实机 ACL 行为仍归最终发布门禁。
+- [completed] `managed-codex-cache-affinity`：在继续剥离 `previous_response_id` 的前提下，已实现稳定账号隔离的 HMAC 域分离、私密安装密钥、`prompt_cache_key` 与三个保留 header 注入，以及 control/prompt_key/full profile；fake upstream、脱敏缓存观测和收益 A/B 作为独立后续工作，不把字段接线宣称为性能收益。
+- [pending] `managed-codex-cache-verification`：补 fake upstream、adapter HTTP retry、401 同账号刷新、quota 账号轮换、override/custom header 契约、脱敏缓存观测和 control/prompt/full 同负载 A/B 门禁。
+- [pending] `rule-offline-journal-design`：P0 完成后设计显式 opt-in 的 Rule 离线 journal、本地镜像、回放幂等、冲突恢复和跨来源内容去重；默认不得上传 Rule 正文。
+- [pending] `model-display-grouping`：仅增强官方模型、静态 BYOK、Codex 与 Grok 的模型列表展示分组，不改现有路由、凭据和子代理主链路。
+- [pending] `investigation-case-library`：持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验
+- [pending] `ai-evidence-bundle`：外部 AI 调查包导出、结构化分析结果导入和不可信日志数据边界
+- [pending] `client-analyzer-launcher`：客户端日志采集区接入跨平台分析器检测、启动按钮和未安装引导
+- [pending] `distribution-verification`：分析器独立发布、客户端归档隔离及跨版本/跨模块/跨平台验证证据
+
+---
 
 ## Active Work Package
 
-WORK_PACKAGE_ID: fallback-coverage-first-budget-20260825
+WORK_PACKAGE_ID: gateway-subscription-auth-20260828
 STATUS: completed
 RISK_LEVEL: high
 OWNER: orchestrator
-DESIGN_READINESS: approved（用户确认“保证渠道覆盖，再用剩余预算重试”；工作决策基线 §10.5 + 系统 Design §14.9.4）
-DELIVERY_STATUS: accepted（实现、定向测试、race、vet、前端投影检查和 diff 门禁通过；已纳入 0.0.49.6 提交）
+DESIGN_READINESS: approved（以 `.cursor/plans/gateway_subscription_auth_6eff22f5.plan.md` 为实施锚点；参考协议以 `/Users/yaogj/Downloads/works/gitprojects/cursor-byok` 的只读核对结果为准）
+DELIVERY_STATUS: verified-partial
 
 ### CONTEXT
 
-- 运行证据 `f4c6e4d2-5bd4-4265-98ec-0aa9bfa99b2b` 证明旧分配把默认 5 attempts 贪婪分成 `3+2+0`：前两个 transport 渠道耗尽预算，第三个已配置且可用渠道从未发送 HTTP。
-- 用户已确认根因级修复：启用 fallback 时先为每个后续兼容渠道预留 1 次 attempt，再把剩余预算用于前序渠道重试；全链 attempt/wait、单渠道最多 3、输出/副作用/context/错误 allowlist 和兼容性门禁保持不变。
-- 最多 5 个物理渠道；默认 5 attempts 必须形成全覆盖，9 attempts 对 5 渠道形成 `3+3+1+1+1`。若显式预算小于渠道数，则按配置顺序各 1 次直到预算耗尽，不突破共享预算。
-- 不修改真实 BYOK 配置、公共 proto、MITM/CA/证书、系统代理、18080/18090、前端交互和发布版本；本工作包已按用户要求提交并推送，发布构建另行生成且不上传 GitHub。
+- 本地 `gateway` 已快进到 `89524e3`，包含 subscriptionauth 领域、managed credential 基础接线和订阅授权 UI 的 WIP。
+- 已核实参考项目没有 refresh-token 刷新实现或独立 OAuth fixture；Codex refresh、401 单次安全重试必须先由 fake HTTP fixture 固定协议，再进入运行时。
+- 当前工作树原有的跨平台构建元数据改动与本工作包无关，继续保留且不修改。
+- 已运行的 `/Applications/Gateway-byok.app` 监听 `18080/18090`；实施和测试期间不替换、不重启，最终通过后再启动仓库 `task dev`。
 
 ### ACTIVE SLICES
 
-- [completed] `coverage-contract`：工作决策基线与系统 Design 已替换旧 `min(remaining,3)`/`3+2+0` 合同，冻结覆盖优先算法、预算不足边界和验收矩阵。
-- [completed] `coverage-tdd`：真实 HTTP fixture 覆盖三渠道、五渠道、transport、503、预算 5/9/2 以及不兼容候选预留计算。
-- [completed] `coverage-runtime`：router 按后续兼容渠道数预留 attempt，当前渠道只使用剩余额度且继续受单渠道 3 次上限与共享预算约束。
-- [in_progress] `coverage-verification-closeout`：运行相关/全量测试、race/vet、diff/lint/review，随后同步证据和交付状态。
+- [completed] `auth-baseline`：冻结 Codex/Grok 协议 fixture、核对 WIP 行为和错误分类。
+- [completed] `auth-domain`：补齐私有存储、刷新、账号状态和 resolver 合同。
+- [completed] `credential-integration`：完成 ChatGPT headers/body、401 安全刷新、Grok quota 轮换和 fake upstream 测试。
+- [completed] `subscription-auth-ui`：完成独立订阅区、多语言、Wails 脱敏和配置投影测试。
+- [completed] `usage-routing-verification`：完成 usage、模型发现和同 provider 轮换验证。
+- [completed] `auth-security-release`：完成 token 清洗、Go/前端/vet 回归、review 修复和运行状态确认；race 的 `forwarder` 包保留环境性验证缺口。
 
-### ACCEPTANCE AND ROLLBACK
+### DEFINITION OF DONE
 
-- 前两个 transport 或 503 渠道失败时，第三个兼容健康渠道必须收到 HTTP 并可成功终止；五渠道默认预算必须到达第五渠道。
-- 任意配置下总 HTTP attempt 不超过共享预算，单渠道不超过 3；等待预算、安全门禁、兼容性与同上游组跳过语义不放宽。
-- 回滚仅需恢复旧分配器与对应测试/文档；配置 schema 和持久化数据无迁移。
+- Codex 设备码与 `auth.json` 导入/恢复、Grok 设备码与账号管理闭环可用；源凭据文件不被修改。
+- Cursor backend 与独立 Gateway 共用 resolver；static/OpenAI/Anthropic 现有路径无回归。
+- 401 最多刷新重试一次；quota 仅在零输出窗口内同 provider 轮换；两者共享既有 attempt budget。
+- token/JWT/auth.json 原文不进入配置、日志、观测、artifact 或 Wails/Vue 状态。
+- 计划要求的 Go、race、vet、前端构建、配置投影和必要桌面验证均有本次运行证据。
 
-## Previous Work Package: Fallback 配置交互
+## Paused Work Package
 
-WORK_PACKAGE_ID: fallback-config-interaction-20260825
-STATUS: completed
-RISK_LEVEL: medium
+WORK_PACKAGE_ID: multi-client-acp-phase5-20260826
+STATUS: blocked
+RISK_LEVEL: high
 OWNER: orchestrator
-DESIGN_READINESS: approved（工作决策基线 §10.5 + 系统 Design §14.9.4/14.9.5）
-DELIVERY_STATUS: verified-partial（实现、定向/全量自动化和生产构建通过；本机缺少 Wails v3/task，未执行真实窗口视觉交互）
+DESIGN_READINESS: blocked（本机仅发现 ACP Agent 服务端，缺少可端到端验收的 ACP Client/编辑器）
+DELIVERY_STATUS: blocked
 
 ### CONTEXT
 
-- 用户确认：“测试全部”静默跳过逻辑 alias；单独测试逻辑 alias 保留实际运行验证提示。
-- fallback 链上限调整为总共 5 个物理渠道，即 1 个 primary + 1–4 个 candidates；默认全链预算继续为 5 attempts / 8 seconds，范围继续为 2–9 / 1–30，渠道增多不扩大全链预算。
-- 修复通用 Select 长列表的视口高度和滚动容器错位，使鼠标与键盘都能访问全部可用物理 adapter。
-- 不修改公共 proto、MITM/CA/证书、系统代理、18080/18090、真实 BYOK 配置、发布版本；本工作包此前已提交，当前发布版本为 0.0.49.6，并按 2026-08-25 用户最新要求随 `noad` 分支发布到 GitHub。
+- 阶段 2 Chat tools 已通过 OpenCode 1.2.25 隔离真实工具循环；阶段 3 `/v1/responses` 已通过 Codex 0.144.4 隔离真实 `exec_command` 工具循环；阶段 4 独立生命周期与 metadata-only 入站观测已实现并自动验证。
+- 本机可用的 `agent acp`/`opencode acp` 是 ACP Agent 服务端，不能冒充 ACP Client；未读取用户凭据或 prompt，也没有可验证 initialize/session/prompt/cancel/update 的真实编辑器。
+- 在真实 ACP Client 到位前，禁止声称 ACP v1 完成，禁止把服务端自测当成端到端验收，且不提前抽取共享 Agent Core。
 
 ### ACTIVE SLICES
 
-- [completed] `fallback-contract-tests`：需求/设计合同已补充 5 通道、批量/单独测试语义和预算边界；前端投影、后端校验与 resolver 顺序回归已添加。
-- [completed] `fallback-ui-bugs`：批量测试移除逻辑 alias 保存提示；Select 将 Floating UI 可用高度施加到真实 `ul` 滚动容器，并保留键盘聚焦滚动。
-- [completed] `fallback-five-channels`：前端候选槽改为 4 槽数据驱动，后端权威上限改为 4 candidates；清空中间槽截断后续，候选排重和逻辑 alias 排除保持。
-- [completed] `fallback-verify-closeout`：前端投影、后端定向、`internal/...` 全量、生产构建、lint/diff 门禁通过；本机缺少 Wails v3/task，未扰动运行中 18080/18090，视觉交互记录为环境缺口。
+- [blocked] `gateway-acp-v1`：等待一个真实 ACP Client/编辑器及其允许的隔离验收环境。
 
-### FINAL VERIFICATION EVIDENCE
+### UNBLOCK CONDITION
 
-- `node frontend/scripts/test-config-projection.mjs`：通过；覆盖 4 candidates 保存/顺序、第 5 candidate 拒绝、批量静默跳过、单独提示保留和 Select 真实滚动容器合同。
-- `go test ./internal/backend/server/config ./internal/client ./internal/backend/agent/model -count=1`：三包通过；仅有既有 macOS deployment target linker warning。
-- `go test ./internal/... -count=1`：全部 internal package 通过；同样仅有既有 linker warning。
-- `npm run build --prefix frontend`：Vite production build 通过（121 modules）；仅有既有 `--localstorage-file` 与 chunk-size warning。构建自动改写的 i18n 生成文件已恢复，未纳入本包。
-- `ReadLints`：受改源文件无诊断；`git diff --check` 与 gofmt 检查在收口时通过。
-- 浏览器边界：本机无 `wails3` 与 `task`，且没有可用浏览器 tab/开发 UI 端口；为避免占用运行中 Cursor 的 18080/18090，本轮不启动替代服务，视觉交互保持 `env/test gap`。
+- 提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界。届时先作 metadata-only 探针，再冻结协议与权限合同。
 
-### ACCEPTANCE AND ROLLBACK
-
-- 1 primary + 4 candidates 可保存并按序投影，第 5 candidate 被前后端拒绝；默认预算与运行算法不变。
-- “测试全部”只调度物理 adapter 且不弹逻辑 alias 保存提示；单独逻辑 alias 测试仍提示运行验证。
-- 长下拉可滚动并选择末项；浏览器不可用时必须记录环境缺口，不用源码断言冒充视觉证据。
-- 回退到旧版前须先把新配置缩回最多 2 candidates；否则旧版严格校验会拒绝配置。
-
-## Previous Work Package: 配置写竞态与物理上游容量
-
-WORK_PACKAGE_ID: config-race-upstream-capacity-20260825
-STATUS: completed
-RISK_LEVEL: high
-OWNER: orchestrator
-DESIGN_READINESS: approved（精简三写语义 + 物理上游共享槽）
-DELIVERY_STATUS: accepted（能力实现、受控非零 fixture、全量门禁和独立复审通过；当前真实 `grok-HA` 按用户决定保持不限流，在线容量保护未启用）
-
-### CONTEXT
-
-- 用户已批准 `.cursor/plans/配置竞态与上游容量风险精简计划_ff017475.plan.md`，目标是关闭普通 UI 保存与运行时 `lastAgentModelHash` 更新互相覆盖的进程内竞态，并提供默认关闭的物理上游共享容量限制。
-- 三种配置写语义固定为：普通保存保留最新 hash；hash-only 更新只 patch 该字段且相同值 no-op；完整导入显式全量替换并允许替换 hash。
-- `maxConcurrentRequests` 只挂物理 adapter：缺失/0 不限流，1–16 有效；逻辑 alias 必须为 0，同 provider + 规范化 Base URL + API Key 的物理 adapter 必须值一致。
-- 用户已确认本轮发布版本使用 `0.0.49.6`；`build/config.yml`、Wails 平台元数据、`release-notes.md` 和 `releaselog/0.0.49.6.md` 必须保持一致。2026-08-25 最新要求为：合并 `cli` 到 `noad`，更新 README 的“当前稳定发布”，推送 `noad`，并将构建资产发布到 GitHub；该要求取代此前仅生成本地资产的安排。
-- 不修改真实 `~/.cursor-local-assistant-v2/config.yaml`，不占用或重启 18080/18090；不修改公共 proto、MITM/CA/证书、系统代理或发布隔离。
-
-### COMPLETED SLICES
-
-- [completed] `config-write-transaction`：Store 锁内读取最新配置并分别实现 `SaveUserConfig`、`SaveLastAgentModelHash` 和完整 `Save`；Manager 写锁串行提交 disk/current/snapshot，hash-only 不通知 listener。Host/客户端普通保存与 import replace 已分流；确定性交错、并发 race、失败回滚、no-op 和完整替换测试已覆盖。
-- [completed] `capacity-schema-ui`：后端 schema、权威校验、resolver/runtime、前端状态/投影、ModelEditor 和四语种文案已接入 `maxConcurrentRequests`；逻辑 alias 非零、同组不一致和越界均拒绝，默认/边界/复制/roundtrip 已覆盖。
-- [completed] `provider-capacity-runtime`：进程级 limiter 按只在内存存在的 SHA-256 上游组共享槽，固定最多等待 2 秒，槽覆盖完整 Stream 和同渠道 retry；typed `capacity_unavailable` 只在零输出安全窗口切不同组，同组跳过，取消及时退出且 release 幂等。
-- [completed] `orchestrator-integration-review`：主控发现并修复 resolver 容量未覆盖到实际 `StreamRequest` 的跨切片 P1，同时补齐 Manager legacy snapshot 投影、runtime/前端上游组规范化和承重回归。独立复审确认无剩余 P0/P1。
-- [completed] `verification-closeout`：根 module、前端、CLI 独立 module、日志分析器、保护路径和 diff 门禁均通过；工作决策基线 §10.9 与系统 Design §14.10 已冻结合同。
-
-### FINAL VERIFICATION EVIDENCE
-
-- 定向后端：`go test ./internal/backend/agent/model ./internal/backend/server/config ./internal/runtime ./internal/client ./internal/backend -count=1 -timeout=120s` 通过；容量专项覆盖配置投影、limit=0、同组峰值、异组隔离、retry 持槽、2 秒 timeout fallback、同组跳过、取消无泄漏和 attempt/wait 预算零消耗。
-- 根 module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...` 全部通过。
-- 前端：`node scripts/test-config-projection.mjs` 和 `npm run build` 通过；仅有既有 chunk-size 与 Node localstorage 参数 warning。
-- CLI module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build ./...` 通过；日志分析器 module 的 test/race/vet 通过。
-- macOS 客户端：在 Apple Silicon / macOS 14.6.1 的既有历史验证曾生成版本 `0.0.49.5` 的 `bin/macos-arm64.dmg`（约 23 MiB，SHA-256 `8ad056b49386841ba2cd1a8a3cff7ae3489948f38e9be47373da693090d93841`）；`hdiutil verify`、DMG 只读挂载、Info.plist/buildinfo 版本、Mach-O arm64 检查及 app adhoc `codesign --verify --deep --strict` 均通过。产物受 `bin/` ignore 规则保护，不纳入 Git；未执行 Developer ID 签名或 notarization。
-- 最终检查：`git diff --check` 通过；`proto/`、`internal/mitm/`、`internal/certs/` 无 diff；本工作包未执行真实 BYOK 配置写入，也未占用或重启运行中端口。
-
-### ACCEPTANCE BOUNDARY AND ROLLBACK
-
-- 本工作包可声明“配置竞态修复和可选容量能力已实现并经非零受控 fixture 验证”。当前真实 `grok-HA` 未设置 `maxConcurrentRequests`，仍为无限并发，不得声明在线容量风险已经启用关闭。
-- 删除 `maxConcurrentRequests` 或设 0 可回滚 limiter；普通保存/hash patch/完整 replace 为持久化合同，回退时不得恢复整文件 hash RMW。
-- 三层模型路由工作包的 Wails 视觉验收与 CLI 两模型 pre-output 切换证据缺口保持独立，不由本包测试替代。
-
-## Previous Work Package: 三层模型路由与 CLI 模型池
-
-WORK_PACKAGE_ID: three-layer-subagent-provider-cli-pool-20260824
-STATUS: completed
-RISK_LEVEL: high
-OWNER: orchestrator
-DESIGN_READINESS: approved（双入口 probe + 独立两轮实现模拟通过）
-DELIVERY_STATUS: verified-partial（实现、自动化门禁和独立终审通过；真实 grok-HA Provider fallback 与 CLI 三物理模型只读预检/Ask 已观测；CLI 两模型 pre-output 故障切换与 Wails 浏览器视觉验收仍是证据缺口）
-
-### CONTEXT
-
-- 用户已批准 `.cursor/plans/逻辑子代理、可配置_provider_fallback_与_cli_模型池计划_ff730446.plan.md`，要求在 `cli` 分支由主控协调 subagent 完整执行。
-- 三层职责固定为：IDE 新 spawn 的软专用逻辑子代理模型；BYOK Provider 层安全 fallback；独立 Cursor CLI 物理模型池控制器。CLI 池不得引用启用 `providerFallback` 的逻辑 adapter，避免外层进程切换与内层渠道链预算乘法放大。
-- Provider 全链 `maxHttpAttempts` 默认 5、可配置 2–9；`maxWaitSeconds` 默认 8、可配置 1–30；单渠道固定最多 3，链级预算跨渠道共享。
-- 自动切换只允许在零 assistant、零 tool call、零 mutation 的窗口；真实 CLI probe 额外观察到 `thinking` 事件，当前设计采用保守门禁：任意 model-generated event（包括 thinking）均关闭自动切换窗口。
-- 不修改公共 proto、MITM、CA、系统代理、18080/18090 监听；不把 CLI module 并入客户端配置、Wails 构建或发布归档；不提交、不推送、不发布。
-
-### GOAL
-
-- 让逻辑子代理模型通过可配置但安全的 Provider fallback 获得确定的全链 HTTP/等待预算、保存/回显 UI 和 metadata-only 链级观测。
-- 新增独立 `tools/cursor-cli-model-pool` Go module，按有序物理模型各启动一次，并在任何模型输出、工具或 worktree mutation 后停止自动重放、转人工复核。
-- 以真实 IDE metadata、真实 CLI NDJSON、httptest/fake-agent、前端浏览器与各 module 门禁分别证明三条链，不跨对象借证据。
-
-### ACTIVE SLICES
-
-- [completed] `three-layer-probe-ide`（owner: orchestrator + readonly explorer；size: S）：真实父会话模型 A 与新 Explore/generalPurpose child 模型 B 不同；父 `subagent_model_override_resolved.effective_model_id`、child `requested_model.model_id` 与 child `stream_state_updated.model_id` 一致。证据只保留匿名会话哈希和模型 ID metadata，未读取 prompt/header/凭据；18080/18090 PID 未变。
-- [completed] `three-layer-probe-cli`（owner: orchestrator + readonly explorer；size: S）：核验 Agent CLI `2026.08.11-e8db854`；本机 18090 `agent models` 返回 21 个配置模型且均为未启用 fallback 的物理 adapter；受控 Ask probe 依次产生 `system/init → user → thinking* → assistant → result/success`，stdin prompt 未进入 argv，探针后工作树干净、healthz 正常、监听 PID 未变。
-- [completed] `three-layer-design-gate`（owner: orchestrator + readonly reviewer；size: M；depends_on: two probes）：工作决策基线 §10.5/§10.7/§10.8 与系统 Design §14.9 已冻结配置、状态、错误、隐私、防叠加、回滚与验证合同。独立首轮模拟发现 wait=0 哨兵、模型 identity/secret、typed 错误、Retry-After、write argv/worktree、HTTP 500 和取消存在自由裁量；修订后第二轮确认无 P0/阻塞 P1，`Design Readiness=approved`。
-- [completed] `provider-config-observability-red-green`（owner: provider-coding-subagent；size: M；depends_on: design gate）：配置默认/边界/roundtrip、resolver、真实 `httptest` HTTP 3+2/1+3+1、等待/Retry-After、安全门禁、同一 model-call 关联和 metadata 观测已按 RED→GREEN 落地；逻辑 adapter 不能嵌套成为 fallback 链成员。
-- [completed] `provider-ui-save-red-green`（owner: frontend-coding-subagent；size: M；depends_on: design gate）：已修复“剥离派生 id 后再校验”的悬空引用根因，接入预算 UI、物理渠道筛选、逻辑路由标记、alias 禁止直接测试、风险提示和多语言文案。Node 投影测试与生产构建通过；Wails 浏览器视觉验收受本机缺少 Wails v3 CLI 阻塞。
-- [completed] `cli-pool-red-green`（owner: cli-coding-subagent；size: M；depends_on: design gate）：独立 module 以 fake agent 覆盖 preflight、stdin/argv、NDJSON 状态机、typed 错误分类、进程组取消、Cursor 真实 worktree 路径与 sticky mutation 监视、metadata-only journal、物理模型限制和发布隔离；首轮 P0 worktree 路径问题及终审 P1 mutation/status 问题均已修复。
-- [completed-partial] `three-layer-runtime-closeout`（owner: orchestrator；size: M；depends_on: all implementations）：根 module 全量 test/race/vet、Provider 定向门禁、前端投影/生产构建、CLI module test/race/vet/build、分析器 test/race/vet、发布隔离、敏感路径与 diff 检查均通过；两路独立终审无剩余 P0/P1。2026-08-25 用户本机补证：逻辑路由 `grok-HA`（`543fe17c50d81660`）primary=`Grokeeror`/`d5ab6805830e5baa`，candidates=`grok-hongai`/`3d2b0ff4a6be3e42` 然后 `grok`/`378723ba5535e672`，预算 5/8s；traces 共 54 条 `provider_fallback_attempt`、28 个 `model_call_id`，前期 13 次 transport→hongai 成功（3+1），后期 13 次 hongai `server_5xx` 在 remain=0 时 `attempt_budget_exhausted`，第三候选 `grok` 因 3+2 预算未启动。CLI 临时 HOME 对 `grok-hongai`/`grok-aigo`/`gpt-honga` 的 `validate`/`dry-run` 通过，引用 `grok-HA` 被拒绝；仓库 cwd 的 Ask `run` 首模型 `3d2b0ff4a6be3e42` 成功故未切后续模型；`/tmp` cwd 因 Workspace Trust 得到 `unknown` 并 fail-closed。18080/18090 仍为 Cursor PID 96155。副作用：运行中 18090 把 `lastAgentModelHash` 从 `543fe17c50d81660` 写成 `3d2b0ff4a6be3e42`，adapter/fallback 链未改。Wails 浏览器视觉验收和 CLI 两模型 pre-output 故障切换仍未闭合，交付保持 `verified-partial`。
-
-### ACCEPTANCE
-
-- Provider：配置 2–9 严格控制同一 `model_call_id` 的真实 HTTP 总 attempt；单渠道不超过 3；等待不超过配置；任意 raw byte/model event/副作用后候选调用为 0；整链唯一业务终态。
-- CLI：有序物理模型各最多启动一次；只在 `preflight/launching/pre_output` 且无 model-generated event/tool/mutation 时切换；write 强制独立 worktree；prompt、NDJSON、工具参数和凭据不入 journal。
-- IDE/UI：新 spawn child 使用逻辑模型覆盖；配置可保存、导入导出和回显；逻辑 alias 不直接发送测试请求；费用、隐私、模型语义和工具兼容风险可见。
-- 根 module、`tools/cursor-cli-model-pool`、`tools/log-analyzer` 分别通过适用 test/race/vet；前端投影测试和生产构建通过；浏览器视觉验收因缺少 Wails runtime 记录为证据缺口；`git diff --check` 和敏感信息/发布隔离/禁止路径检查通过。
-
-### FINAL VERIFICATION EVIDENCE
-
-- 根 module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...` 通过。
-- Provider 定向：`go test ./internal/backend/server/config ./internal/backend/agent/model ./internal/runtime -count=1`、同范围 race 与 vet 通过；覆盖 3+2、1+3+1、2/7/9 封顶、等待预算归零、超预算 `Retry-After`、HTTP 500 不切换、取消、raw bytes/model event 和跨 Provider 兼容门禁。
-- 前端：`node scripts/test-config-projection.mjs` 与 `npm run build` 通过；逻辑链成员拒绝、先校验后剥 ID、预算边界和 alias 跳过直接测试有自动化回归。独立 Vite 浏览器只能加载空壳：`/wails/runtime` 404，且本机 `wails3` 不可用，所以视觉验收未通过、不是代码失败证据。
-- CLI module：`go test ./... -count=1`、`go test -race ./... -count=1`、`go vet ./...`、`go build` 通过；假 agent/fixture 的 `validate`/`dry-run` 以及 2026-08-25 真实三物理模型 `validate`/`dry-run` 通过。真实 Ask `run` 在仓库 cwd 由首模型成功结束；未写入真实 `cli-model-pool.yaml`/journal。adapter 身份未变，但 18090 将 `lastAgentModelHash` 更新为本次 Ask 使用的 `3d2b0ff4a6be3e42`。
-- 日志分析器：独立 module test/race/vet 通过；macOS 链接器仅报告既有 deployment target warning。
-- 发布与安全：根 `go list ./...` 不包含 CLI module；Taskfile 的 release prepare/verify 路径均调用 analyzer/CLI-pool 归档隔离检查；`proto/`、`internal/mitm/`、`internal/certs/`、`cursor-cli-docker/`、`bin/release/` 无本工作包 diff；`git diff --check` 通过。
-- 独立终审：Provider/frontend 与 CLI/security 两路复审在返工后均确认无剩余 P0/P1。残余 P2 包括 fallback 失败工件后缀/逻辑 alias 输出上限的既有语义、fsnotify 祖先目录事件可能导致额外 fail-closed、真实 `agent models` 输出 fixture 与 root identity golden 尚未固定；均不放宽安全窗口或重试预算。
-
-### ROLLBACK
-
-- Provider：关闭 `providerFallback.enabled` 恢复单渠道 P0；删除新预算字段回到默认 5 attempts/8 秒。配置现在拒绝逻辑 alias 嵌套在渠道链内。
-- CLI：停止使用或删除 `~/.cursor-local-assistant-v2/cli-model-pool.yaml` 即可；独立二进制/module 不进入客户端发布包，不修改 18090、IDE 配置或真实 BYOK `config.yaml`。
-- 前端：预算/UI/保存修复只投影现有配置 schema；回退相关前端文件不会迁移或重写已有配置。
-
-### STOP CONDITIONS
-
-- 需要修改公共 proto、MITM/CA/证书/系统代理、18080/18090 监听，或替换运行中唯一 Cursor 进程。
-- 无法可靠区分 CLI pre-output 与 model/tool/mutation，或无法终止整个子进程组。
-- 需要把 fallback-enabled 逻辑 adapter 放入 CLI 模型池，或发生完整 Agent runs × Provider fallback chain 的预算乘法。
-- subagent LLM 暂时失败时按 20/40/80/160/320 秒重试；连续五次仍失败则记录 agent ID、错误、diff/测试证据并停止等待用户。
-
-## Previous Work Package: Agent 治理补全
-
-WORK_PACKAGE_ID: agent-governance-completion-20260822
-STATUS: completed
-RISK_LEVEL: high
-OWNER: orchestrator
-DESIGN_READINESS: approved (compatible replay aggregation + single-retry evidence gate)
-DELIVERY_STATUS: accepted (implemented, wired, independently reviewed, fully regression-tested, documented; not committed or released)
-
-### CONTEXT
-
-- 用户已批准 `.cursor/plans/agent_治理补全主控执行计划_6bb10903.plan.md`，要求主控串行管理 subagent 完成 replay 聚合、执行证据账本、最终完成门禁、提示约束与 metadata-only 诊断。
-- 基线固定为 `v0.0.49.2` 发布提交 `487856170b29380671477e843d7fec15250323ae`；隔离分支/worktree 为 `agent-governance-0.0.49.2` / `cursor-byok-governance-0.0.49.2`。
-- `v0.0.49.1` 必须保持 `716b436ca0d79e34e52ea02a8ecc07f6579b5cfe`，不得移动、覆盖或复用。
-- 当前主工作树的无关 WIP 不纳入本包；stash `bd8bf912...`（protocol recorder）与 `ab88a93a...`（fixture exporter）禁止 apply/drop。
-- 用户已确认兼容式 history 双读和证据不足时最多一次提醒续跑；不修改公共 proto，不自动提交、推送或发布。
-
-### GOAL
-
-- 同一 `model_call_id` 的 reasoning 在内部 replay 只恢复一次，同时保持 canonical history、signature、provider metadata、工具顺序/参数/result 关联。
-- 只以结构化 ToolCall 与成功终态 tool result 建立 metadata-only mutation/verification 证据；pending、失败、取消、未知 MCP 和 assistant 自述不得成为成功证据。
-- mutation 后旧 verification 自动 stale；最终完成前最多提醒并续跑一次，第二次仍不足时保守结束并记录诊断。
-- 公共 `agent-transcripts` 继续零 reasoning 泄漏，普通日志和账本不复制 reasoning、stdout、文件正文、凭据、路径或工具参数正文。
-
-### ACTIVE SLICES
-
-- [completed] `gov-stage-0`：已核对发布/标签/stash 指针，保护当前 WIP，并从 `4878561` 创建干净隔离 worktree；`git diff --check` 与保护路径检查通过。
-- [completed] `gov-stage-1`：系统 Design §14.8 已冻结兼容 history/replay/ledger/gate、恢复与隐私合同；replay RED 测试按 TDD 落地。
-- [completed] `gov-stage-2`：已贯通 `HistoryEntry.ModelCallID` 并按模型调用聚合 reasoning；只读复审发现的“弱 tuple 先占槽导致完整 tuple 丢失”P1 已修复。主控复验 `go test ./internal/backend/forwarder -count=1 -timeout 600s`、同包 race、vet、`git diff --check` 全部通过。
-- [completed] `gov-stage-3`：已实现 metadata-only `execution_evidence`、typed terminal、mutation/verification 分类、最终 entry sequence、同一追加批次写入、跨 turn 幂等、restart/subagent rebuild 和 stale 判定。复审发现 AwaitShell 无 exit 误落失败及脚本前缀假阳性，均已修复；主控专项/全包/race/vet/diff 通过。保守边界：重启后不持久化后台命令正文，无法分类时保持 unknown；异步 subagent recovery 的 live 索引可能滞后，门禁必须从最新持久 history 重建。
-- [completed] `gov-stage-4`：已接入单次提醒续跑、restart/重复 complete 幂等和第二次不足保守收口。独立复审发现编辑+解释请求被错误绕过（P1）及中文建议问句误触发（P2），均已按 TDD 修复并复核关闭；主控专项、forwarder 全包、race、vet、gofmt、`git diff --check` 全部通过。服务切换后的首次 520 按 20 秒退避恢复成功。
-- [completed] `gov-stage-5`：已为 agent/subagent 静态 prompt 与动态 reminder 加入真实工具成功终态、mutation 后晚验证和失败缺口合同；Ask/Plan 不强制编辑且工具 allowlist 不变。`turn_completed` 与 debug recorder 已接入逐字段 metadata-only 诊断：reasoning SHA-256/absent、公共 transcript reasoning emit count、mutation/verification/stale/evidence 和 gate 状态。复审发现公共 transcript 合法 tool path 被隐私测试误报及投影错误 fail-open，均已修复；主控 prompt/专项/全包/race/vet/diff 通过。
-- [completed] `gov-stage-6`：治理故障矩阵、forwarder 全包/race/vet、`go test ./internal/...`、`go vet ./internal/...`、根模块 `go test .`/`go test ./...`/`go vet .`、prompt、前端配置投影与生产构建、根客户端二进制、`cursor-tab-server` test/race/vet、`tools/log-analyzer` test/race/vet 均通过。初次根全量并发链接因磁盘 `ENOSPC` 失败，系统回收后以 `-p 1` 相同覆盖范围重跑通过；生成 symlink/dist/临时二进制已删除，禁止路径与 `git diff --check` 无差异。
-- [completed] `gov-stage-7`：三路独立终审和主控反向审计已闭合。replay 终审发现并修复两个 P1：禁止 orphan reasoning 跨 `model_call_id` rehome，以及把 provider signature 与 exact reasoning content 绑定，避免“新正文 + 旧签名”；最终复核无新 P0/P1。账本/门禁及 prompt/诊断/隐私两路终审无可复现 P0/P1/P2。新增集成回归证明 completion gate 的内部 prompt reminder 与 metadata 保留在 canonical history、不会进入公共 transcript，同时用户可见回答和合法结构化 `tool_use.path` 均保留。
-- [completed] `gov-stage-8`：在 replay 终审修复后重新运行公共 transcript 专项、forwarder 全包/race/vet、根模块串行全量 test/vet、gofmt 与 `git diff --check`，全部通过；更新 `task/todo.md`、`docs/process.md` 与系统 Design。根测试首次因缺少真实 `frontend/dist` 而在 `go:embed` setup 阶段停止；只读复用主工作树依赖生成隔离临时 dist 后重跑通过，临时 dist、依赖 symlink、bindings symlink、`gen` symlink 均已删除。公开 proto、MITM/证书、发布资产、主工作树 WIP 与两个专用 stash 无漂移。
-- [completed] `post-governance-interrupted-work`：已只读分析指定 transcript 的全部用户请求、回合终态和结构化工具时间线；分析快照为 820 条 JSONL、SHA-256 `2f638d5571a0d3dc313033408d0700417d2dda6d2c76440575596f3b7aa3cf99`（该 transcript 会随当前会话继续增长，仅用于复算本次结论）。原会话中被停止的 Stage 4 在用户切换 LLM 服务后已恢复并闭合；Stage 6 的四条 `Superseded by newer request` 终态只是同一根测试命令被后续请求替代，之后已用 `-p 1` 串行重跑闭合，不是四个独立遗留任务。治理计划五项能力均已实现并验收。分析发现原建议中唯一可直接补齐的规格遗漏是“15K reasoning canary”；现已把三工具共享 reasoning 回归提升为显式 15 KiB start/end canary，并通过专项、forwarder 全包/race/vet 和 diff 检查。
-
-### FINAL VERIFICATION EVIDENCE
-
-- `go test ./internal/backend/forwarder -run 'TestCompleteSuccessfulTurnFirstInsufficientDoesNotProjectGateIntoPublicTranscript|TestPublicTranscriptReasoningEmitCountMustBeZero|TestCursorTranscript' -count=1 -timeout 600s`：通过。
-- `go test ./internal/backend/forwarder -run 'TestProjectCursorTranscriptMultipleToolCallsOmitShared15KReasoning|TestCompleteSuccessfulTurnFirstInsufficientDoesNotProjectGateIntoPublicTranscript|TestPublicTranscriptReasoningEmitCountMustBeZero' -count=1 -timeout 600s`：transcript 分析后新增的 15 KiB canary 专项通过。
-- `go test ./internal/backend/forwarder -count=1 -timeout 600s`：通过。
-- `go test -race ./internal/backend/forwarder -count=1 -timeout 600s`：通过，无 race。
-- `go vet ./internal/backend/forwarder`：通过。
-- `go test -p 1 ./... -count=1 -timeout 900s`：通过；覆盖根模块全部 package。
-- `go vet -p 1 ./...`：通过。
-- 改动 Go 文件 `gofmt -d` 无输出；`git diff --check` 通过。
-- Stage 6 已通过且本轮未受 replay 修复影响的既有证据继续有效：`go test ./internal/...` / `go vet ./internal/...`、根客户端构建、prompt 测试、前端配置投影与生产构建，以及 `cursor-tab-server`、`tools/log-analyzer` 两个独立模块的 test/race/vet。
-
-### CONSERVATIVE COMPATIBILITY BOUNDARIES
-
-- 裸 `modeladapter.Message` 二次 normalize 已丢失 model-call 身份时，不执行 orphan reasoning rehome；该保守行为避免跨调用误合并。
-- 旧 history 的连续工具批次若双方 `model_call_id` 都为空，继续保留旧合并行为；这只是旧数据兼容，不作为新 history 身份隔离能力宣传。
-- 真实 Cursor success/error/background/resume 六场景 fixture 仍是独立证据缺口；当前治理验收不证明 child 从中断执行点自动续跑。
-- 原始建议中的“逐项比对 assistant 声称文件与 Git diff”和“reasoning 超阈值时中途打断”没有作为本治理包运行语义实现：前者与 metadata-only、禁止持久路径/完整参数的隐私合同冲突，后者会改变流式模型行为。当前已批准实现是在完成点检查结构化 mutation 与晚于 mutation 的 verification，并最多提醒一次；若要增加更强门禁，必须另做 Design 与产品决策。
-- recorder/exporter 两个专用 stash 仍是独立工作包，未被读取、应用或混入治理；继续实现和真实 fixture 采集需要新的明确授权。
-
-### STOP CONDITIONS
-
-- 需要修改公共 proto、MITM/CA/证书/路由、发布元数据，或移动 `v0.0.49.1`。
-- 发现需要破坏性 history 迁移、无法避免重复工具副作用、或完成门禁会误伤纯问答且不能在既定语义内修复。
-- subagent 服务连续 5 次无法恢复；按 20/40/80/160/320 秒退避后保存 agent ID、错误、diff 和测试证据并停止等待用户。
-- 需要应用/删除 recorder 或 exporter 专用 stash，或把当前主工作树其他 WIP 整体复制进本分支。
-
-### ACCEPTANCE
-
-- 计划 §12 全部总体验收条件闭合；实现、接线、精确/全量/race/vet/build、隐私扫描、旧 history 双读、故障注入和独立复审均有实际成功证据。
-- `proto/`、`internal/mitm/`、证书、发布资产和两个专用 stash 无变化；不 commit/push/tag/release。
-- 完成后同步本文件、`docs/process.md` 和系统 Design；必要验证未运行时只能标 `verified-partial`，不得标 `accepted`。
-
-## Previous Work Package: P1 subagent handoff 与 Provider fallback
-
-WORK_PACKAGE_ID: p1-subagent-handoff-provider-fallback-20260821
-STATUS: completed
-RISK_LEVEL: high
-OWNER: orchestrator
-DESIGN_READINESS: approved (durable-handoff + ordered-allowlist)
-DELIVERY_STATUS: core implementation and verification completed; real Cursor protocol fixture remains pending evidence
-
-### CONTEXT
-
-- 用户已确认继续实施除 MITM、证书安装、系统代理接管和透明代理扩展外的 P1。
-- Subagent 恢复承诺为 `durable-handoff`：持久化已生成终态并在重启后幂等交接给 parent；不承诺 child 执行点自动续跑。
-- Provider fallback 为默认关闭的 `ordered-allowlist`：只尝试显式有序渠道；任意原始流字节、model event 或副作用后禁止切换；retry/fallback 共享 attempts 与等待预算。
-- 不修改 proto；child prompt/result 正文和 Provider 原始敏感响应不得进入观测日志，凭证和 Provider 原始敏感响应不得落盘。
-- 设计锚点：`docs/prd_cursor_byok_工作决策基线.md#10-p1-subagent-恢复与-provider-fallback-决策基线`、`docs/prd_cursor_byok_系统架构与核心业务数据流.md#147-design-p1-subagent-fallbacksubagent-恢复与-provider-fallback`。
-
-### GOAL
-
-- 建立版本化 `SubagentRunStore`，按 `terminal_prepared → parent_committed → acknowledged` 顺序完成本地 parent history/tool-result 的幂等唯一交接。
-- Backend 启动扫描持久化 run；已生成终态可重放，未终结 child 转为 `awaiting_client_resume`，不得自动重派。
-- 贯通 root/parent/tool/subagent/child/agent/model-call/attempt 的可选关联字段；缺失值保持空值，不按时间伪造。
-- 实现默认关闭、显式有序且安全窗口严格受限的 Provider fallback，并提供后端校验、前端编辑和受控观测。
-
-### NON_GOALS
-
-- 不承诺 Backend 崩溃后 child 从原执行点自动续跑，不自行重派 Task 或重放工具副作用。
-- 不实现已有输出后的 Provider 切换、续传、答案拼接或整轮重放。
-- 不修改公共 proto、MITM whitelist、CONNECT/直通、CA/证书、系统代理或透明代理行为。
-- 不提交、不推送、不发布，不停止或替换当前运行中的唯一代理实例。
-
-### ACTIVE SLICES
-
-- [completed] `p1-parent-correlation`：扩展并接线 parent/root/tool/subagent/child/agent/model-call/attempt correlation；缺失值保持 unknown/空值。
-- [completed] `p1-terminal-contract`：实现 typed terminal 分类、首个持久化终态胜出和冲突保护。
-- [completed] `p1-durable-handoff`：实现版本化 run/result、原子替换、checksum、启动恢复、parent 幂等提交及 crash-window/重复 replay/并发 CAS 测试。
-- [completed] `p1-provider-fallback`：实现默认关闭的显式有序配置、resolver/router、raw-byte/model-event/兼容性门禁、共享预算、工件隔离和前端入口。
-- [completed] `p1-integration-verification`：全仓 Go、race、vet、前端配置投影/生产构建、差异与敏感信息审查均通过；禁止范围零变更。
-- [pending-evidence] `p1-protocol-fixture`：未采集新的真实 Cursor 协议 fixture；本轮仅使用并测试已有生成字段，不修改 proto。该缺口不得被表述为 child 自动续跑已验证。
-
-### LATEST REVIEW
-
-- 修复缺失 parent 持久会话时恢复逻辑静默创建孤立 conversation 的问题：online/recovery handoff 现在只追加到已存在 parent；缺失或已删除时保持 durable result 并进入 `awaiting_parent_resume`。
-- 修复合法 checksum 但未知 run status 被启动扫描静默忽略的问题：未知状态现在隔离到 `_corrupt/`，不会被误判为无需处理。
-- 修复 fallback 链末尾候选均不兼容时，最后实际尝试渠道仍使用临时候缀且 `fallback_to` 指向被跳过渠道的问题：现在按下一实际兼容候选计算工件终点和切换观测。
-- 已补 online/recovery missing-parent、unknown-status isolation、跳过不兼容候选与实际最终渠道工件标识回归测试。
-
-### ACCEPTANCE
-
-- `gofmt`、`git diff --check`、`go test ./... -count=1` 通过。
-- 相关 Go 包 `go vet` 与 `go test -race` 通过；前端配置投影测试和生产构建通过。
-- 故障注入覆盖 result/run 原子写窗口、prepare/parent commit/run CAS 窗口、重复 replay、并发 CAS、非法 JSON/raw-byte、输出后禁止 fallback、预算和兼容门禁。
-- `git diff` 不包含 `proto/`、`internal/mitm/`、证书、透明代理或系统代理范围变更。
-- 记录单写者约束：同一 `historyRoot` 同时只能由一个活跃 Backend 写入；进程内 CAS 不宣传为跨进程 CAS。
-
-### STOP CONDITIONS
-
-- 需要扩大 MITM/证书/透明代理范围、修改公共 proto，或要求 child 崩溃后自动续跑。
-- 发现无法在零原始字节、零 model event、零副作用窗口内证明 fallback 安全。
-- 全仓回归需要扩大到未批准业务范围。
-
-## Previous Work Package (P0)
-
-WORK_PACKAGE_ID: provider-disconnect-recovery-20260821
-STATUS: completed
-RISK_LEVEL: high
-OWNER: orchestrator
-DESIGN_READINESS: approved (P0)
-DELIVERY_STATUS: completed (P0); P1 deferred to roadmap
-
-### CONTEXT
-
-- 用户已确认按 P0/P1/P2 优先级实施 Provider 断连改进，并授权主控使用 subagent 执行编码与验证。
-- 重点 trace `20260820T104843.414858000Z-5f93b537521a` 重新解析 241,852 条事件：21 个 `provider_stream_finished=error` 全部先出现 `llm_summary succeeded`；4 个失败调用已有 chunk，3 个存在 tool-call 关联元数据。
-- 已确认根因之一：basic artifact 使用 `payload_summary`，归一化只读取 `payload`，导致失败摘要被默认投影为成功。
-- 当前 HTTP retry 包围 `client.Do` 与 status；OpenAI/Anthropic 已校验 completion marker，但 2xx 后首个 model event 前的截断未进入请求重试。
-- 设计锚点：`docs/prd_cursor_byok_工作决策基线.md#62-agent工具链与-provider-断连`、`docs/prd_cursor_byok_系统架构与核心业务数据流.md#145-design-provider-disconnect-001provider-断连终态与安全恢复`。
-- 2026-08-21 P1 复核结论：当前 P0 已满足 provider 断连正确性门禁，父子关联、独立 checkpoint、结构化失败和原子结果提交只在承诺 subagent 崩溃恢复 / exactly-once 结果交付时成为必做；provider fallback 与 MITM 行为变更均非必做，全部暂缓到 `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`。
-
-### GOAL
-
-- 修复 basic/full 的 model-call 成功/失败语义冲突，建立可审计的 provider 协议终态和唯一业务终态。
-- 仅在首个 model event、下游发布、工具和 checkpoint 均未发生时，对可重试的流前截断执行有限重试。
-- 保持已有输出幂等保存、工具副作用保护、RunSSE 结构化失败和日志隐私边界。
-
-### NON_GOALS
-
-- 不实现已有输出后的 SSE 续传或答案拼接。
-- 不实现跨 provider fallback、熔断或自动模型切换。
-- 不在本工作包内临场设计 subagent checkpoint/result/parent commit 的原子持久化协议；该项进入后续 P1 独立设计与实施。
-- 不修改 MITM whitelist、CONNECT/直通决策、proto 公共契约、前端、发布资产，不提交、不推送、不发布。
-
-### BASELINE
-
-- branch/head：`noad` / `08509589d75cee408552f8cb80a3a9470a94be51`。
-- P0 已作为单个原子提交纳入仓库；本次仅做 P1 必要性复核和路线图收口。
-- 运行中唯一代理实例受保护；测试不得停止或替换 `127.0.0.1:18080` / `127.0.0.1:18090` 的服务。
-- `task/todo.md` 仅由主控修改；subagent 不得修改活动任务真值源。
-
-### SLICES
-
-#### provider-terminal-contract
-
-- priority: P0
-- status: completed
-- owner: coding-subagent
-- size: S
-- depends_on: none
-- scope: basic/full artifact error 投影、`llm_summary` 非业务终态语义、回归测试。
-- expected paths: `internal/backend/forwarder/debug_recorder.go`、同包测试、必要的 `internal/observability/` 契约测试。
-- acceptance: basic/full 的失败摘要均为 failed；同一 model call 不再因 basic omission 被错误标为 succeeded。
-
-#### provider-stream-final
-
-- priority: P0
-- status: completed
-- owner: coding-subagent
-- size: M
-- depends_on: provider-terminal-contract contract
-- scope: pass 进度状态、`provider_stream_finished` 结构化字段、唯一 `model_call_final`、RunSSE 一致性、脱敏错误。
-- expected paths: `internal/backend/forwarder/types.go`、`actor.go`、`service.go`、`provider.go`、相关测试；可选扩展 `internal/observability/contract.go`。
-- acceptance: success/error/cancel/truncated 均有唯一一致 final；已有输出幂等；partial/completed/dispatched tool 状态可审计且不重复执行。
-
-#### provider-stream-safe-retry
-
-- priority: P0
-- status: completed
-- owner: coding-subagent
-- size: M
-- depends_on: provider-terminal-contract contract
-- scope: OpenAI/Anthropic 2xx 后首 model event 前的可重试截断；保持同一 model call、重建 request、关闭 body、复用 attempts/退避预算。
-- expected paths: `internal/backend/agent/model/retry.go`、`openai.go`、`anthropic.go`、相关测试；如需共享 helper 仅限同包。
-- acceptance: 首事件前 EOF/transport 按预算重试；任意 model event/tool progress 后零重试；context cancel 不重试。
-
-#### provider-p0-integration-verification
-
-- priority: P0
-- status: completed
-- owner: orchestrator + readonly-verifier
-- size: M
-- depends_on: three P0 coding slices
-- scope: 集成、差异审查、测试/race/vet、真实或近真实 basic trace fixture 验证、文档收口。
-- acceptance: 相关 package tests/race/vet 与 `git diff --check` 通过；无 secret；无 whitelist/provider fallback 行为变化；残余 gap 分类记录。
-
-#### provider-parent-correlation
-
-- priority: P1
-- status: deferred-to-roadmap
-- owner: roadmap
-- size: M
-- depends_on: provider-p0-integration-verification
-- scope: root/parent conversation、parent tool、subagent task/run、model call、attempt 的可选关联字段与入口接线；不含原子结果提交。
-- acceptance: 父子调用可从入口关联到 terminal，缺失字段明确为 unknown。
-- reentry_condition: 需要跨父子审计、定位 child 失败归属，或开始设计 subagent 崩溃恢复。
-- roadmap: `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`
-
-#### subagent-atomic-result
-
-- priority: P1
-- status: deferred-to-roadmap
-- owner: roadmap
-- size: L，必须继续拆分
-- depends_on: provider-parent-correlation
-- block_reason: 需要独立实施级 Design 固化 child checkpoint/result、parent tool-result、结构化失败、事务/CAS、恢复和兼容合同。
-- reentry_condition: 产品明确承诺 subagent 进程重启恢复或 child result 到 parent tool-result 的 exactly-once 交付，或真实故障证明存在完成结果丢失/重复提交。
-- roadmap: `.cursor/plans/cursor_能力路线图_13d772bc.plan.md#暂缓provider-断连-p1-与进入条件`
-
-### ALLOWED_ROOTS
-
-- `internal/backend/agent/model/`
-- `internal/backend/forwarder/`
-- `internal/observability/`
-- `internal/audit/`（仅必要的 typed/sanitized 字段）
-- `docs/`
-- `task/`
-
-### FORBIDDEN_PATHS
-
-- `proto/`
-- `internal/mitm/`
-- `tools/log-analyzer/`
-- `cursor-tab-server/`
-- `frontend/`
-- `bin/release/`
-- `.git/`
-- 用户凭据、真实日志内容和运行中代理配置。
-
-### ALLOWED_DECISIONS
-
-- 同包私有 helper、结构体内部字段、事件 fields 的向后兼容可选扩展、测试夹具和错误类型组合。
-- 保持既有最大 attempts、退避预算和 provider/model 选择不变。
-- 对当前已确认的 basic 假成功、completion marker、幂等输出和副作用门禁做根因修复。
-
-### REQUIRES_PARENT_APPROVAL
-
-- 修改 public proto/API、持久化 schema 或 subagent 原子提交语义。
-- 新增跨 provider fallback、熔断、模型切换或已有输出后的自动续传。
-- 修改 MITM whitelist/CA/路由、引入依赖、停止运行中代理、提交、推送或发布。
-
-### ACCEPTANCE
-
-- `go test ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability -count=1` 通过。
-- `go test -race ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability -count=1` 在可接受时间内通过；若环境超时，只能记录 env-gap，不宣称通过。
-- `go vet ./internal/backend/agent/model ./internal/backend/forwarder ./internal/observability` 通过。
-- `git diff --check` 通过。
-- basic/full summary 失败语义一致；每个 model call 最多一个业务 final；首事件前可安全重试，已有事件/工具/checkpoint 后禁止重试；错误输出完成脱敏。
-
-### STOP_CONDITIONS
-
-- 需要修改公共协议、持久化 schema、MITM 路由或 provider fallback 语义。
-- 无法在不重复下游输出/工具副作用的情况下实现流前重试。
-- 测试发现已有 history replay、tool result、compaction 或 commit-message 链路回归且需要扩大范围才能修复。
-- 发现用户已有未归属改动或需要停止运行中的唯一代理实例。
-
-### MONITOR_POLICY
-
-- mode: event-driven；三个 P0 编码切片可在冻结合同后并行，主控负责集成；随后启动独立只读 verifier。
-
-### VERIFICATION_POLICY
-
-- verifier: required。
-- 先相关测试，再 package tests/race/vet，最后差异、安全、文档和任务状态反向审计。
-
-## 编排任务：upstream-sync-release-0.0.47
-
-- 用户请求：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`；不提 PR。
-- 用户确认：`noad` 本地领先 2 提交（`ad285dd`、`8e0f335`）纳入发布；当前 5 个本地脏文件保留为 BASELINE/FORBIDDEN；版本升到 `0.0.47`。
-- 权威流程：`docs/cursor_byok_upstream_sync_release_runbook.md` + `docs/cursor_byok_upstream_merge_requirements.md`。
-
-## Active StageSpec
-
-STAGE_ID: none
-STATUS: none
-OWNER: orchestrator
-NOTE: `cleanup-release-worktrees-01` 已通过 verifier 门禁；当前无辅助 worktree、无进行中 Active Stage。
-
-### cleanup-release-worktrees-01
-
-- STATUS: verified
-- executor: be054fa2-3f41-4ce0-b294-cee6d231520a
-- verifier: 6aab12fd-36bb-49e3-b4a3-15c3208c5b91
-- removed:
-  - `/Users/yaogj/Downloads/works/yaogjim/cursor-byok/cursor-byok-main-sync-wt`
-  - `/Users/yaogj/Downloads/works/yaogjim/cursor-byok/cursor-byok-noad-sync-wt`
-- preserved refs: `main@d306c30`、`noad@d013961`、`sync/main-into-noad-20260810-193647@d013961`、`v0.0.47@d013961`
-- release assets: `bin/release/0.0.47` preserved
-
-
-## Orchestration Result (upstream-sync-release-0.0.47)
-
-- overall: completed（在已验证范围内）
-- verified_stages:
-  - upstream-main-mirror-01
-  - noad-acceptance-bindings-tests-01（含 merge/stabilize 产物）
-  - push-origin-noad-0.0.47-01
-  - release-0.0.47-desktop-github-01
-- aborted_or_rework_history:
-  - noad-merge-main-0.0.47-01 aborted-partial → 稳定化为 c4edab0/d013961
-  - noad-merge-stabilize-verify-01 rework-required → bindings/tests 返工通过
-- key SHAs:
-  - upstream/main: da5fa34a4d501bcc8548f1140fe91e05e0da9c77
-  - main/origin/main: d306c3019db5fa7891af508cd2ea992f198cbc3e
-  - noad/origin/noad/tag v0.0.47: d0139611d33e441ac366cd3e20704c8d0ebae2d4
-- release: https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.47
-- platforms: macos-arm64, macos-amd64, windows-amd64（无 linux）
-- not done: BASELINE 本地脏文档未提交；差异 PRD 未强制追加本节；worktree 可后续清理
-
-## Stage History
-
-### release-0.0.47-desktop-github-01
-
-- STATUS: verified
-- VERDICT: pass（verifier b826a27c-ece1-4ed1-9b9b-e07b4e1eea76）
-- executor: 071c5b03-b8f5-427f-976c-e86bbc48f3c2
-- release: https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.47
-- sha: d0139611d33e441ac366cd3e20704c8d0ebae2d4
-
-
-### push-origin-noad-0.0.47-01
-
-- STATUS: verified
-- VERDICT: pass（verifier bb867ed9-f7fe-400b-8080-53aa4e358a31）
-- executor: 9e64948b-861d-46f9-9cd0-d8d731407e17
-- origin/noad: d0139611d33e441ac366cd3e20704c8d0ebae2d4
-
-### noad-acceptance-bindings-tests-01
-
-- STATUS: verified
-- VERDICT: pass（verifier d0e18dd9-ed45-4b4b-8197-5888c72395ac）
-- executor: ef42c04f-79c4-4ad4-bbad-8024ce7f2e35
-- tip: d013961；version 0.0.47；buildinfo yaogjim
-- residual_risk: verifier 未重跑全量 go test/frontend build，采用抽样 + executor 证据
-
-### noad-merge-stabilize-verify-01
-
-- STATUS: rework-required (partial)
-- executor: f710311d-73f1-4e9d-b1ae-4e730502bfa9
-- cleanup: pass；i18n commit d013961；主工作区仅 BASELINE keep
-- acceptance: go full internal hang/timeout；frontend build missing bindings in worktree
-- root_cause_followup: bindings gitignored；copy/generate in worktree；retest with -timeout
-
-### noad-merge-main-0.0.47-01
-
-- STATUS: aborted-partial
-- note: executor 被用户中止；merge commit 已存在
-- merge: c4edab0798283e887f9e00c213d18d5916f5509e (8e0f335 + d306c30)
-- backup: backup/noad-before-upstream-20260810-193647 @ 8e0f335
-- sync/worktree: sync/main-into-noad-20260810-193647 / cursor-byok-noad-sync-wt
-- residual: 主工作区 index reverse-diff；worktree i18n 5 文件脏
-- version/buildinfo: 0.0.47 / yaogjim OK
-
-### upstream-main-mirror-01
-
-- STATUS: verified
-- VERDICT: pass（verifier agent 899f0b73-e806-4a40-817c-f67eb154c9ae）
-- executor: 14f4a309-0404-4cb2-8a77-6b84b18a0fa7
-- main/origin/main: d306c3019db5fa7891af508cd2ea992f198cbc3e
-- upstream/main: da5fa34a4d501bcc8548f1140fe91e05e0da9c77
-- backup: backup/main-before-upstream-20260810-192846 @ ab53e21
-- deviation: README.md 冲突在 main 镜像阶段取 upstream；允许
-- noad tip 未变: 8e0f335
-
-## 当前执行队列
-
-- [completed] `semantic-design-contract`：更新 PRD、系统 Design 与任务真值源，冻结日志 v2、项目隐私、语义枚举、案例和 AI 包合同。
-- [completed] `analysis-project-engine`：抽取可复用 analysis project 生命周期，并保持现有 CLI 参数与报告语义兼容。
-- [completed] `semantic-capture-v2`：实现 v1/v2 兼容及客户端 project/turn/capability/operation/outcome/build 指纹采集。
-- [completed] `interactive-query-source`：实现 SQLite 分页、组合检索 DSL、保存查询、App 日志索引及安全 payload 按需访问。
-- [completed] `enhanced-diagnostics`：增加能力状态机、compat/partial、证据缺口、百分位和多维 baseline 诊断。
-- [pending] `investigation-case-library`：实现持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验。
-- [pending] `ai-evidence-bundle`：实现外部 AI 调查包导出、结构化分析结果导入和不可信日志数据边界。
-- [completed] `standalone-analyzer-gui`：完成首版独立 Wails/Vue GUI，接通项目生命周期、检索与分页、Finding/指标/App 日志/payload/保存查询/既有报告导出及安全 session 管理；案例、AI 包和复验入口保持明确未启用，归属后续独立切片。首版 macOS arm64 `.app` 已通过原生启动/退出 smoke、ad-hoc 签名、DMG/tar.gz 结构及 SHA-256 校验。
-- [completed] `analyzer-default-log-autoload`：GUI 启动后由后端按稳定路径合同解析并异步自动加载客户端默认日志目录；目录不存在、无可分析日志或加载失败时预填默认路径并保留手动选择。打开事务支持取消和最新请求发布，关闭项目/应用不会等待大目录分析结束；不建立对客户端运行时的模块依赖。
-- [pending] `client-analyzer-launcher`：在客户端日志采集区接入跨平台分析器检测、启动按钮和未安装引导。
-- [pending] `distribution-verification`：建立分析器独立发布、客户端归档隔离及跨版本/跨模块/跨平台验证证据；补充真实大默认日志根的完成耗时门禁（当前 `1.7 GB` 数据集 14 分钟内未完成，已验证可取消但尚未通过全量性能验收）。
-
-## 已完成支撑任务
-
-- [completed] `analyzer-sqlite-workspace`：建立分析器临时 SQLite workspace、schema、权限与生命周期。
-- [completed] `analyzer-stream-ingest`：将输入发现与 JSONL 解析改为批量流式导入。
-- [completed] `analyzer-stream-analysis`：将分析规则改为 SQLite 游标驱动的有界 Go trace reducer。
-- [completed] `analyzer-stream-reports`：将 JSON、HTML 和诊断 ZIP 改为数据库游标流式输出并接入 CLI。
-- [completed] `analyzer-sqlite-verification`：完成兼容性、大规模内存、故障注入、跨平台构建与发布隔离验证。
-  - 旧 `contract.Dataset.Events` / `load.Dataset` 全量生产链路已移除；CLI 已接入临时 SQLite workspace → 流式导入 → 有界 reducer → 流式 report staging/publish。
-  - 已验证：`GOPROXY=off GOSUMDB=off go test ./...`、`go test -race ./...`、`go vet ./...`、CLI smoke、20,000 events / 1,000 traces under `GOMEMLIMIT=96MiB`、`task release:verify:analyzer-isolation`、`CGO_ENABLED=0` darwin/linux/windows 构建、`git diff --check`。
-- [completed] `agents-init-locate`：定位并校验 AGENTS 全局母版与项目接入状态。
-- [completed] `agents-init-interview`：收集并确认项目上下文、权威入口与覆盖规则。
-- [completed] `agents-init-onboard`：生成或升级项目 AGENTS 接入文件并完成本机登记。
-- [completed] `enhance-sqlite-plan`：依据项目规范增强 SQLite 内存优化计划。
-- [completed] `analyzer-sqlite-design-gate`：将 SQLite 工作区与流式管线合同写入系统 Design，并完成 Design Gate。
-
-## 当前范围约束
-
-- 按 `semantic-design-contract → analysis-project-engine → semantic-capture-v2 → query/diagnostics → case/bundle → GUI/launcher → distribution` 的依赖顺序增量实施；每个切片保持可测试、可回退。
-- 客户端只采集并通过受限启动器打开独立分析器；不读取历史日志、不分析、不生成报告。
-- 第一版分析器不调用 AI、不修改仓库、不运行外部命令；只导出脱敏调查包并导入结构化分析结果。
-- `basic` 不记录正文或项目路径；full payload 默认不索引、不复制、不导出。调查案例默认只保存脱敏证据快照。
-- 分析器保持独立 module、独立进程和独立发布，不进入客户端二进制或更新归档。
-- 未经用户明确要求，不使用 subagent，不提交、不推送。
+## Completed Work Packages (Historical)

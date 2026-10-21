@@ -32,10 +32,10 @@ func TestApplyAnthropicThinkingConfig(t *testing.T) {
 			wantOutputCfg:  true,
 		},
 		{
-			name:           "empty_effort_no_op",
-			body:           map[string]any{"model": "m"},
-			wantThinking:   nil,
-			wantOutputCfg:  false,
+			name:          "empty_effort_no_op",
+			body:          map[string]any{"model": "m"},
+			wantThinking:  nil,
+			wantOutputCfg: false,
 		},
 		{
 			name:           "disabled_overrides_existing_adaptive_thinking",
@@ -55,9 +55,9 @@ func TestApplyAnthropicThinkingConfig(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := StreamRequest{
-				ThinkingEffort:         tc.thinkingEffort,
+				ThinkingEffort:          tc.thinkingEffort,
 				AnthropicThinkingEffort: tc.adaptiveEffort,
-				RequestKnobs:           map[string]any{},
+				RequestKnobs:            map[string]any{},
 			}
 			applyAnthropicThinkingConfig(tc.body, req)
 

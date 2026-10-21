@@ -1,12 +1,14 @@
 package bridge
 
 import (
+	"time"
+
 	"cursor/internal/appdata"
 	"cursor/internal/backend/forwarder"
 	"cursor/internal/historymetrics"
 )
 
-// HomeMetricsSummary 定义首页展示的历史统计摘要。
+// HomeMetricsSummary defines the aggregate metrics shown on the overview page.
 type HomeMetricsSummary struct {
 	ProviderCallsTotal int      `json:"providerCallsTotal"`
 	TurnsTotal         int      `json:"turnsTotal"`
@@ -19,20 +21,34 @@ type HomeMetricsSummary struct {
 	CacheHitRate       *float64 `json:"cacheHitRate"`
 }
 
-// MetricsService 定义首页统计相关的 Wails service。
+// MetricsService defines overview metrics methods exposed through Wails.
 type MetricsService struct{}
 
-// NewMetricsService 创建首页统计 service。
+// HomeMetricsReport contains a unified range report.
+// Daily remains populated for 7d/30d/all so existing daily consumers keep working.
+type HomeMetricsReport struct {
+	Range       string                        `json:"range"`
+	Granularity string                        `json:"granularity"`
+	Timezone    string                        `json:"timezone"`
+	Start       string                        `json:"start"`
+	End         string                        `json:"end"`
+	GeneratedAt string                        `json:"generatedAt"`
+	DataVersion string                        `json:"dataVersion"`
+	Summary     HomeMetricsSummary            `json:"summary"`
+	Daily       []historymetrics.DailySummary `json:"daily"`
+	Buckets     []historymetrics.Bucket       `json:"buckets"`
+}
+
+// NewMetricsService creates the metrics service.
 func NewMetricsService() *MetricsService {
 	return &MetricsService{}
 }
 
-// GetHomeMetricsSummary 返回首页展示的全量历史统计摘要。
+// GetHomeMetricsSummary returns the full aggregate summary.
 func (service *MetricsService) GetHomeMetricsSummary() (HomeMetricsSummary, error) {
 	if err := appdata.EnsureAssistantHome(); err != nil {
 		return HomeMetricsSummary{}, err
 	}
-
 	summary, err := historymetrics.LoadUsageSummary(appdata.UsageFilePath())
 	if err != nil {
 		return HomeMetricsSummary{}, err
@@ -50,7 +66,45 @@ func (service *MetricsService) GetHomeMetricsSummary() (HomeMetricsSummary, erro
 	}, nil
 }
 
-// ResetHomeMetricsSummary 清零首页会话统计，不删除会话历史。
+// GetHomeMetricsReport returns 24h hourly buckets or 7d/30d/all daily buckets.
+func (service *MetricsService) GetHomeMetricsReport(rangeName string) (HomeMetricsReport, error) {
+	if err := appdata.EnsureAssistantHome(); err != nil {
+		return HomeMetricsReport{}, err
+	}
+	summary, err := historymetrics.LoadUsageSummary(appdata.UsageFilePath())
+	if err != nil {
+		return HomeMetricsReport{}, err
+	}
+	built := historymetrics.BuildRangeReport(summary, rangeName, time.Now().UTC())
+	return homeMetricsReportFromRange(built), nil
+}
+
+func homeMetricsReportFromRange(built historymetrics.RangeReport) HomeMetricsReport {
+	return HomeMetricsReport{
+		Range:       built.Range,
+		Granularity: built.Granularity,
+		Timezone:    built.Timezone,
+		Start:       built.Start,
+		End:         built.End,
+		GeneratedAt: built.GeneratedAt,
+		DataVersion: built.DataVersion,
+		Daily:       built.Daily,
+		Buckets:     built.Buckets,
+		Summary: HomeMetricsSummary{
+			ProviderCallsTotal: built.Summary.ProviderCallsTotal,
+			TurnsTotal:         built.Summary.TurnsTotal,
+			ValidTurnsTotal:    built.Summary.ValidTurnsTotal,
+			InvalidTurnsTotal:  built.Summary.InvalidTurnsTotal,
+			RequestTokensTotal: built.Summary.RequestTokensTotal,
+			PromptTokensTotal:  built.Summary.PromptTokensTotal,
+			CacheReadTokens:    built.Summary.CacheReadTokens,
+			CacheWriteTokens:   built.Summary.CacheWriteTokens,
+			CacheHitRate:       built.Summary.CacheHitRate,
+		},
+	}
+}
+
+// ResetHomeMetricsSummary clears overview metrics without deleting session history.
 func (service *MetricsService) ResetHomeMetricsSummary() error {
 	if err := appdata.EnsureAssistantHome(); err != nil {
 		return err

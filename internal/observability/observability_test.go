@@ -1,8 +1,10 @@
 package observability
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,6 +23,8 @@ func TestWithCorrelationMergesAndNormalizesStableIdentifiers(t *testing.T) {
 		ParentModelCallID:    " parent-model-1 ",
 		ParentToolCallID:     " parent-tool-1 ",
 		SubagentRunID:        " run-1 ",
+		SubagentAttemptID:    " attempt-2 ",
+		SubagentAttemptNo:    2,
 		ChildConversationID:  " child-1 ",
 		AgentID:              " agent-1 ",
 		ProviderPass:         2,
@@ -39,7 +43,7 @@ func TestWithCorrelationMergesAndNormalizesStableIdentifiers(t *testing.T) {
 	if got.RootConversationID != "root-1" || got.ParentConversationID != "parent-1" || got.ParentModelCallID != "parent-model-1" || got.ParentToolCallID != "parent-tool-1" {
 		t.Fatalf("parent correlation was not preserved: %+v", got)
 	}
-	if got.SubagentRunID != "run-1" || got.ChildConversationID != "child-1" || got.AgentID != "agent-1" {
+	if got.SubagentRunID != "run-1" || got.SubagentAttemptID != "attempt-2" || got.SubagentAttemptNo != 2 || got.ChildConversationID != "child-1" || got.AgentID != "agent-1" {
 		t.Fatalf("subagent correlation was not preserved: %+v", got)
 	}
 	if got.ConversationID != "conversation-1" || got.ModelCallID != "model-1" || got.ProviderPass != 2 || got.HTTPAttempt != 3 {
@@ -55,6 +59,8 @@ func TestApplyCorrelationIncludesSubagentAndAttemptFields(t *testing.T) {
 		ParentModelCallID:    "parent-model-1",
 		ParentToolCallID:     "parent-tool-1",
 		SubagentRunID:        "run-1",
+		SubagentAttemptID:    "attempt-4",
+		SubagentAttemptNo:    4,
 		ChildConversationID:  "child-1",
 		AgentID:              "agent-1",
 		ProviderPass:         2,
@@ -63,7 +69,7 @@ func TestApplyCorrelationIncludesSubagentAndAttemptFields(t *testing.T) {
 	if event.RootConversationID != "root-1" || event.ParentConversationID != "parent-1" || event.ParentModelCallID != "parent-model-1" || event.ParentToolCallID != "parent-tool-1" {
 		t.Fatalf("event parent correlation = %+v", event)
 	}
-	if event.SubagentRunID != "run-1" || event.ChildConversationID != "child-1" || event.AgentID != "agent-1" || event.ProviderPass != 2 || event.HTTPAttempt != 4 {
+	if event.SubagentRunID != "run-1" || event.SubagentAttemptID != "attempt-4" || event.SubagentAttemptNo != 4 || event.ChildConversationID != "child-1" || event.AgentID != "agent-1" || event.ProviderPass != 2 || event.HTTPAttempt != 4 {
 		t.Fatalf("event subagent correlation = %+v", event)
 	}
 }
@@ -168,6 +174,21 @@ func TestRecorderBasicWritesEventsWithoutPayload(t *testing.T) {
 	}
 	assertPrivatePermissions(t, status.SessionPath, 0o700)
 	assertPrivatePermissions(t, filepath.Join(status.SessionPath, eventsFilename), 0o600)
+
+	budget := recorder.writer.budget
+	if budget == nil {
+		t.Fatal("recorder has no shared budget")
+	}
+	diskUsage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	cachedUsage := budget.normalUsage
+	budget.mu.Unlock()
+	if cachedUsage != diskUsage {
+		t.Fatalf("manifest bytes were not accounted in normal usage: cached=%d disk=%d", cachedUsage, diskUsage)
+	}
 }
 
 func TestRecorderContainsHumanSinkPanic(t *testing.T) {
@@ -546,13 +567,95 @@ func TestControllerReconfigureClosesPreviousSession(t *testing.T) {
 	if second.Mode != ModeFull || second.SessionID == first.SessionID {
 		t.Fatalf("unexpected reconfigured status: first=%+v second=%+v", first, second)
 	}
-	manifest, err := readManifest(filepath.Join(first.SessionPath, manifestFilename))
+	deadline := time.Now().Add(2 * time.Second)
+	var manifest Manifest
+	for {
+		manifest, err = readManifest(filepath.Join(first.SessionPath, manifestFilename))
+		if err == nil && manifest.Status == "closed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("previous session status = %q, want closed (err=%v)", manifest.Status, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestControllerReconfigureIgnoresRuntimeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	controller, err := NewController(root, Settings{
+		Mode:               ModeBasic,
+		RetentionDays:      7,
+		MaxDiskMB:          64,
+		RuntimeFingerprint: "routing-a",
+		Metadata:           SessionMetadata{ConfigFingerprint: "storage-a"},
+	})
 	if err != nil {
-		t.Fatalf("read first manifest: %v", err)
+		t.Fatalf("NewController() error = %v", err)
 	}
-	if manifest.Status != "closed" {
-		t.Fatalf("previous session status = %q, want closed", manifest.Status)
+	first := controller.Status()
+	if err := controller.Reconfigure(Settings{
+		Mode:               ModeBasic,
+		RetentionDays:      7,
+		MaxDiskMB:          64,
+		RuntimeFingerprint: "routing-b",
+		Metadata:           SessionMetadata{ConfigFingerprint: "storage-a"},
+	}); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
 	}
+	second := controller.Status()
+	if second.SessionID != first.SessionID {
+		t.Fatalf("runtime fingerprint change rotated session: first=%+v second=%+v", first, second)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestControllerReconfigureDoesNotBlockOnSlowRecorderClose(t *testing.T) {
+	entered := make(chan struct{})
+	block := make(chan struct{})
+	controller, err := NewControllerWithHumanSink(
+		t.TempDir(),
+		Settings{Mode: ModeBasic, RetentionDays: 7, MaxDiskMB: 64},
+		func(Event) {
+			select {
+			case <-entered:
+			default:
+				close(entered)
+			}
+			<-block
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewControllerWithHumanSink() error = %v", err)
+	}
+	if !controller.RecordEvent(context.Background(), Event{Layer: "backend", Event: "request_finished"}) {
+		t.Fatal("event was not accepted")
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("human sink was not entered")
+	}
+	started := time.Now()
+	if err := controller.Reconfigure(Settings{Mode: ModeFull, RetentionDays: 7, MaxDiskMB: 64}); err != nil {
+		t.Fatalf("Reconfigure() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 300*time.Millisecond {
+		t.Fatalf("Reconfigure blocked for %s", elapsed)
+	}
+	if !controller.RecordEvent(context.Background(), Event{Layer: "backend", Event: "request_finished"}) {
+		t.Fatal("new recorder did not accept event")
+	}
+	status := controller.Status()
+	if status.Mode != ModeFull {
+		t.Fatalf("status mode = %q, want full", status.Mode)
+	}
+	close(block)
 	if err := controller.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -585,5 +688,348 @@ func assertPrivatePermissions(t *testing.T, path string, expected os.FileMode) {
 	}
 	if actual := info.Mode().Perm(); actual != expected {
 		t.Fatalf("permissions for %s = %04o, want %04o", path, actual, expected)
+	}
+}
+
+// TestManifestAdmissionDeniedPreservesOldManifest guards the regression where a
+// full normal partition was ignored for the manifest and the bytes were written
+// over the quota anyway. A denied admission must leave the previous manifest on
+// disk untouched and keep the partition within its limit.
+func TestManifestAdmissionDeniedPreservesOldManifest(t *testing.T) {
+	root := t.TempDir()
+	budget := testBudget(root, 1<<20, 1<<20)
+	writer, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	manifestPath := filepath.Join(writer.dir, manifestFilename)
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	usage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	// No headroom: the open session is protected, so the rewrite cannot be
+	// admitted without exceeding the normal limit.
+	budget.mu.Lock()
+	budget.normalLimit = usage
+	budget.normalUsage = usage
+	budget.usageKnown = true
+	budget.mu.Unlock()
+
+	writer.markDegraded(3, "event_quota_exceeded")
+
+	after, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest after denied rewrite: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("denied manifest rewrite changed on-disk bytes")
+	}
+	if writer.manifestError() == "" {
+		t.Fatal("denied manifest rewrite was not recorded in memory")
+	}
+	finalUsage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("final normal usage: %v", err)
+	}
+	if finalUsage > budget.normalLimit {
+		t.Fatalf("normal partition exceeded limit after denied manifest: usage=%d limit=%d", finalUsage, budget.normalLimit)
+	}
+	// Close reports the denied terminal manifest instead of swallowing it; the
+	// in-memory status already records the same failure.
+	if err := writer.close("closed"); !errors.Is(err, errSessionQuotaExceeded) {
+		t.Fatalf("close error = %v, want %v", err, errSessionQuotaExceeded)
+	}
+}
+
+// TestManifestWriteFailureVisibleInStatus proves a failed manifest rewrite is
+// surfaced through the existing in-memory status instead of being silently
+// dropped, without adding a new schema field.
+func TestManifestWriteFailureVisibleInStatus(t *testing.T) {
+	root := t.TempDir()
+	budget := testBudget(root, 1<<20, 1<<20)
+	recorder, err := newRecorderWithBudget(root, Settings{Mode: ModeBasic, RetentionDays: 7}, nil, budget)
+	if err != nil {
+		t.Fatalf("newRecorderWithBudget: %v", err)
+	}
+	usage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	budget.normalLimit = usage
+	budget.normalUsage = usage
+	budget.usageKnown = true
+	budget.mu.Unlock()
+
+	recorder.setTraceDegraded("event_quota_exceeded")
+
+	status := recorder.Status()
+	if !strings.Contains(status.LastError, "manifest") {
+		t.Fatalf("manifest write failure not visible in status: %+v", status)
+	}
+	_ = recorder.Close()
+}
+
+// TestManifestRewriteRemovesTempAfterFailedRename pins the failure contract of
+// the temp-file manifest write: a deterministic rename failure must not leave
+// the just-written temp bytes behind, and it must invalidate the cached normal
+// usage so the next admission re-scans the directory instead of admitting
+// against a counter that no longer matches disk.
+func TestManifestRewriteRemovesTempAfterFailedRename(t *testing.T) {
+	root := t.TempDir()
+	budget := testBudget(root, 1<<20, 1<<20)
+	writer, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	manifestPath := filepath.Join(writer.dir, manifestFilename)
+	tempPath := manifestPath + ".tmp"
+	// A directory at the manifest path makes the final rename fail
+	// deterministically while the temp write itself still succeeds.
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatalf("remove manifest: %v", err)
+	}
+	if err := os.Mkdir(manifestPath, 0o700); err != nil {
+		t.Fatalf("block manifest path: %v", err)
+	}
+
+	writer.markDegraded(1, "manifest_rename_failed")
+
+	if writer.manifestError() == "" {
+		t.Fatal("failed manifest rewrite was not recorded in memory")
+	}
+	if _, statErr := os.Stat(tempPath); !os.IsNotExist(statErr) {
+		t.Fatalf("failed manifest rewrite left temp bytes behind: %v", statErr)
+	}
+	budget.mu.Lock()
+	known := budget.usageKnown
+	budget.mu.Unlock()
+	if known {
+		t.Fatal("failed manifest rewrite kept a cached normal usage")
+	}
+	// The next admission must re-scan: the counter has to match the bytes
+	// actually on disk before any further manifest write is admitted.
+	if !budget.admitNormalLocked(0, 0, "") {
+		t.Fatal("admission re-scan failed after a manifest write failure")
+	}
+	actual, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	counted := budget.normalUsage
+	budget.mu.Unlock()
+	if counted != actual {
+		t.Fatalf("admission did not re-scan after a failed manifest write: counted=%d actual=%d", counted, actual)
+	}
+}
+
+// TestManifestRewriteCountsLeftoverTempAtNextAdmission covers what the temp
+// removal cannot fix: when the temp path is a non-empty directory the write and
+// its cleanup both fail, so leftover bytes really do stay on disk. The cached
+// usage is still invalidated, so the next admission re-scans and counts them
+// rather than admitting against a stale counter.
+func TestManifestRewriteCountsLeftoverTempAtNextAdmission(t *testing.T) {
+	root := t.TempDir()
+	budget := testBudget(root, 1<<20, 1<<20)
+	writer, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	tempPath := filepath.Join(writer.dir, manifestFilename) + ".tmp"
+	if err := os.Mkdir(tempPath, 0o700); err != nil {
+		t.Fatalf("block temp manifest path: %v", err)
+	}
+	leftover := []byte(strings.Repeat("p", 4096))
+	if err := os.WriteFile(filepath.Join(tempPath, "partial.bin"), leftover, 0o600); err != nil {
+		t.Fatalf("seed leftover temp bytes: %v", err)
+	}
+	// The cached counter does not know about these bytes yet.
+	budget.mu.Lock()
+	before := budget.normalUsage
+	budget.mu.Unlock()
+
+	writer.markDegraded(1, "manifest_write_failed")
+
+	if writer.manifestError() == "" {
+		t.Fatal("failed manifest rewrite was not recorded in memory")
+	}
+	if _, statErr := os.Stat(tempPath); statErr != nil {
+		t.Fatalf("fixture did not exercise an unremovable temp path: %v", statErr)
+	}
+	if !budget.admitNormalLocked(0, 0, "") {
+		t.Fatal("admission re-scan failed after a failed manifest cleanup")
+	}
+	actual, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	counted := budget.normalUsage
+	budget.mu.Unlock()
+	if counted != actual {
+		t.Fatalf("admission did not re-scan leftovers from a failed cleanup: counted=%d actual=%d", counted, actual)
+	}
+	if counted < before+int64(len(leftover)) {
+		t.Fatalf("re-scan lost the leftover temp bytes: before=%d counted=%d leftover=%d", before, counted, len(leftover))
+	}
+	_ = writer.close("closed")
+}
+
+// TestClosedWriterRewriteDoesNotReclaimOwnSession guards the double-close
+// regression: a session already marked closed on disk is a reclaim candidate,
+// so an unaffordable manifest rewrite (Close called more than once) would free
+// room by deleting the very trace it belongs to and then fail on the missing
+// directory. Admission must exclude the caller's own session directory.
+func TestClosedWriterRewriteDoesNotReclaimOwnSession(t *testing.T) {
+	root := t.TempDir()
+	budget := testBudget(root, eventReserveBytes+1<<20, 1<<20)
+	writer, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	if err := writer.appendEvent(Event{Layer: "backend", Event: "info_event"}); err != nil {
+		t.Fatalf("appendEvent: %v", err)
+	}
+	if err := writer.close("closed"); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	// The session is closed on disk now, so only its own directory could
+	// satisfy the rewrite: leave no headroom at all.
+	usage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	budget.normalLimit = usage
+	budget.normalUsage = usage
+	budget.usageKnown = true
+	budget.mu.Unlock()
+
+	// The rewrite is denied and reported, but it must never free room by
+	// deleting the writer's own session.
+	if err := writer.close("closed"); !errors.Is(err, errSessionQuotaExceeded) {
+		t.Fatalf("second close error = %v, want %v", err, errSessionQuotaExceeded)
+	}
+	manifest, err := readManifest(filepath.Join(writer.dir, manifestFilename))
+	if err != nil {
+		t.Fatalf("own session manifest was lost by its own rewrite: %v", err)
+	}
+	if manifest.Status != "closed" {
+		t.Fatalf("own session manifest status = %q, want closed", manifest.Status)
+	}
+	if _, statErr := os.Stat(filepath.Join(writer.dir, eventsFilename)); statErr != nil {
+		t.Fatalf("own session events were removed by its own rewrite: %v", statErr)
+	}
+	if writer.manifestError() != "manifest_quota_exceeded" {
+		t.Fatalf("denied own rewrite not recorded in memory: %q", writer.manifestError())
+	}
+}
+
+// TestReservedHeadroomKeepsTerminalManifestWritable proves the approved budget
+// split end to end with real writes: ordinary event and app-log writes keep the
+// eventReserveBytes metadata headroom, so after the data room is exhausted the
+// terminal manifest still lands, the session reaches "closed", and the next
+// session can open and reclaim it instead of being blocked behind a trace stuck
+// in "open".
+func TestReservedHeadroomKeepsTerminalManifestWritable(t *testing.T) {
+	root := t.TempDir()
+	const dataRoom = int64(8192)
+	budget := testBudget(root, eventReserveBytes+dataRoom, 1<<20)
+	writer, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("openSession: %v", err)
+	}
+	filler := strings.Repeat("e", 1024)
+	refused := false
+	// With the reserve in place the data room rejects after a handful of events;
+	// the generous bound is only there so a missing reserve is proven by the
+	// terminal manifest being denied rather than by this loop ending.
+	for index := 0; index < 4096; index++ {
+		appendErr := writer.appendEvent(Event{Layer: "backend", Event: "info_fill", Fields: map[string]any{"detail": filler}})
+		if appendErr == nil {
+			continue
+		}
+		if !errors.Is(appendErr, errSessionQuotaExceeded) {
+			t.Fatalf("appendEvent: %v", appendErr)
+		}
+		refused = true
+		break
+	}
+	if !refused {
+		t.Fatal("ordinary event writes never exhausted the reserved data room")
+	}
+	// The invariant the reserve exists for: after any amount of ordinary writing
+	// the metadata headroom is still free, so the terminal manifest can land.
+	budget.mu.Lock()
+	remaining := budget.normalLimit - budget.normalUsage
+	budget.mu.Unlock()
+	if remaining < eventReserveBytes {
+		t.Fatalf("ordinary event writes consumed the metadata headroom: remaining=%d reserve=%d", remaining, eventReserveBytes)
+	}
+
+	// The app log path shares the same admission, so it is refused too and can
+	// never eat into the metadata headroom.
+	appSink, err := openAppLogSink(root, budget)
+	if err != nil {
+		t.Fatalf("openAppLogSink: %v", err)
+	}
+	appPayload := []byte(strings.Repeat("a", 4096))
+	if written, writeErr := appSink.write(appPayload); writeErr != nil || written != len(appPayload) {
+		t.Fatalf("app log write = (%d, %v), want a silent quota drop", written, writeErr)
+	}
+	if appSink.status().lastErr != "app_log_quota_exceeded" {
+		t.Fatalf("app log did not report the quota drop: %+v", appSink.status())
+	}
+	if size := appDirSize(t, root); size != 0 {
+		t.Fatalf("refused app write retained %d bytes", size)
+	}
+	if err := appSink.close(); err != nil {
+		t.Fatalf("app log close: %v", err)
+	}
+
+	// The terminal manifest must still fit inside the preserved headroom.
+	if err := writer.close("closed"); err != nil {
+		t.Fatalf("close after quota refusal: %v", err)
+	}
+	manifest, err := readManifest(filepath.Join(writer.dir, manifestFilename))
+	if err != nil {
+		t.Fatalf("read closed manifest: %v", err)
+	}
+	if manifest.Status != "closed" {
+		t.Fatalf("manifest status = %q, want closed", manifest.Status)
+	}
+	usage, err := normalUsageBytes(root)
+	if err != nil {
+		t.Fatalf("normal usage: %v", err)
+	}
+	budget.mu.Lock()
+	limit := budget.normalLimit
+	budget.mu.Unlock()
+	if usage > limit {
+		t.Fatalf("normal partition exceeded its limit: usage=%d limit=%d", usage, limit)
+	}
+
+	// Leave no headroom beyond the closed trace itself: the next session can only
+	// open by reclaiming it, which requires the "closed" status written above.
+	closedDir := writer.dir
+	budget.mu.Lock()
+	budget.normalLimit = usage
+	budget.normalUsage = usage
+	budget.usageKnown = true
+	budget.mu.Unlock()
+	next, err := openSession(root, Settings{Mode: ModeBasic, RetentionDays: 7}, budget)
+	if err != nil {
+		t.Fatalf("next session was blocked by the previous session: %v", err)
+	}
+	if _, statErr := os.Stat(closedDir); !os.IsNotExist(statErr) {
+		t.Fatalf("next session did not reclaim the closed trace: stat err = %v", statErr)
+	}
+	if err := next.close("closed"); err != nil {
+		t.Fatalf("next session close: %v", err)
 	}
 }

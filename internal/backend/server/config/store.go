@@ -109,6 +109,10 @@ func (store *Store) Save(_ context.Context, cfg Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	normalized, err = ensureGatewayToken(normalized)
+	if err != nil {
+		return Config{}, err
+	}
 	if err := store.saveLocked(normalized); err != nil {
 		return Config{}, err
 	}
@@ -127,8 +131,152 @@ func (store *Store) SaveUserConfig(_ context.Context, cfg Config) (Config, error
 	if err != nil {
 		return Config{}, err
 	}
-	merged := cfg
+	merged := OverlayGatewayToken(cfg, disk.Gateway.Token)
 	merged.LastAgentModelHash = disk.LastAgentModelHash
+	normalized, err := normalizeConfig(merged, disk.ModelAdapters)
+	if err != nil {
+		return Config{}, err
+	}
+	normalized, err = ensureGatewayToken(normalized)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveGatewayConfig(_ context.Context, gateway GatewayConfig) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	gateway.Token = disk.Gateway.Token
+	merged.Gateway = gateway
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	normalized, err = ensureGatewayToken(normalized)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveModelAdapters(_ context.Context, adapters []ModelAdapterConfig) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.ModelAdapters = adapters
+	normalized, err := normalizeConfig(merged, disk.ModelAdapters)
+	if err != nil {
+		return Config{}, err
+	}
+	pruneStaleGatewayPublicModels(&normalized)
+	if err := validateGatewayPublicModelTargets(normalized); err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveCursorConfig(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	if strings.TrimSpace(cfg.BackendListenAddr) != "" {
+		merged.BackendListenAddr = cfg.BackendListenAddr
+	}
+	if strings.TrimSpace(cfg.ProxyListenAddr) != "" {
+		merged.ProxyListenAddr = cfg.ProxyListenAddr
+	}
+	merged.Routing = cfg.Routing
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveSystemSettings(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.Observability = cfg.Observability
+	merged.Appearance = cfg.Appearance
+	merged.Advertising = cfg.Advertising
+	merged.Updates = cfg.Updates
+	merged.SubagentReschedule = cfg.SubagentReschedule
+	merged.OutboundProxy = cfg.OutboundProxy
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, err
+	}
+	return normalized, nil
+}
+
+func (store *Store) SaveHomeMetrics(_ context.Context, cfg Config) (Config, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, err
+	}
+	merged := disk
+	merged.HomeMetrics = cfg.HomeMetrics
 	normalized, err := NormalizeConfig(merged)
 	if err != nil {
 		return Config{}, err
@@ -167,6 +315,37 @@ func (store *Store) SaveLastAgentModelHash(_ context.Context, value string) (Con
 	return normalized, true, nil
 }
 
+func (store *Store) SaveGatewayToken(_ context.Context, value string) (Config, bool, error) {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return Config{}, false, errors.New("配置存储未初始化")
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	disk, err := store.readLatestLocked()
+	if err != nil {
+		return Config{}, false, err
+	}
+	normalizedValue := strings.TrimSpace(value)
+	if normalizedValue == "" {
+		return Config{}, false, errors.New("Gateway token 不能为空")
+	}
+	if strings.TrimSpace(disk.Gateway.Token) == normalizedValue {
+		return disk, false, nil
+	}
+	merged := disk
+	merged.Gateway.Token = normalizedValue
+	normalized, err := NormalizeConfig(merged)
+	if err != nil {
+		return Config{}, false, err
+	}
+	if err := store.saveLocked(normalized); err != nil {
+		return Config{}, false, err
+	}
+	return normalized, true, nil
+}
+
 func (store *Store) readLatestLocked() (Config, error) {
 	if store == nil || strings.TrimSpace(store.path) == "" {
 		return DefaultConfig(), nil
@@ -189,24 +368,67 @@ func (store *Store) saveLocked(normalized Config) error {
 	if err := os.MkdirAll(filepath.Dir(store.path), 0o755); err != nil {
 		return fmt.Errorf("创建用户配置目录失败: %w", err)
 	}
+	if err := store.backupPreGatewayLocked(); err != nil {
+		return err
+	}
 
 	data, err := yaml.Marshal(normalized)
 	if err != nil {
 		return fmt.Errorf("序列化用户配置失败: %w", err)
 	}
+	if err := writeFileMode(store.path, data, configFilePerm); err != nil {
+		return err
+	}
+	return nil
+}
 
-	tempPath := store.path + ".tmp"
-	if err := os.WriteFile(tempPath, data, 0o644); err != nil {
+func (store *Store) backupPreGatewayLocked() error {
+	if store == nil || strings.TrimSpace(store.path) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(store.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("读取用户配置失败: %w", err)
+	}
+	if yamlHasKey(data, "gateway") {
+		return nil
+	}
+	backupPath := store.path + PreGatewayBackupSuffix
+	if _, err := os.Stat(backupPath); err == nil {
+		return nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查 Gateway schema 升级备份失败: %w", err)
+	}
+	if err := writeFileMode(backupPath, data, configFilePerm); err != nil {
+		return fmt.Errorf("创建 Gateway schema 升级备份失败: %w", err)
+	}
+	return nil
+}
+
+func writeFileMode(path string, data []byte, perm os.FileMode) error {
+	tempPath := path + ".tmp"
+	if err := os.WriteFile(tempPath, data, perm); err != nil {
 		return fmt.Errorf("写入临时配置失败: %w", err)
 	}
-	if err := os.Rename(tempPath, store.path); err != nil {
+	if err := os.Chmod(tempPath, perm); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("设置临时配置权限失败: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
 		return fmt.Errorf("保存用户配置失败: %w", err)
+	}
+	if err := os.Chmod(path, perm); err != nil {
+		return fmt.Errorf("设置用户配置权限失败: %w", err)
 	}
 	return nil
 }
 
 func shouldPersistNormalizedConfig(raw []byte, current Config, normalized Config) bool {
-	for _, key := range []string{"observability", "backendListenAddr", "proxyListenAddr", "routing", "appearance", "advertising", "updates"} {
+	for _, key := range []string{"observability", "backendListenAddr", "proxyListenAddr", "routing", "appearance", "advertising", "updates", "gateway"} {
 		if !yamlHasKey(raw, key) {
 			return true
 		}
@@ -223,10 +445,10 @@ func shouldPersistNormalizedConfig(raw []byte, current Config, normalized Config
 	if current.Appearance.Theme != normalized.Appearance.Theme {
 		return true
 	}
-	if current.ProviderStreamIdleTimeout == normalized.ProviderStreamIdleTimeout {
-		return false
+	if yamlHasKey(raw, "providerStreamIdleTimeout") {
+		return true
 	}
-	return yamlHasKey(raw, "providerStreamIdleTimeout")
+	return false
 }
 
 func yamlHasKey(raw []byte, key string) bool {

@@ -34,6 +34,103 @@ func TestRotatingFileSplitsAndRetains(t *testing.T) {
 	}
 }
 
+func TestRotatingFileRotatesWhenActiveShardExpires(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	writer := NewRotatingFile(dir, RotationConfig{
+		Prefix:    "event",
+		Extension: ".jsonl",
+		MaxBytes:  1 << 20,
+		MaxAge:    time.Hour,
+		Now:       func() time.Time { return now },
+	})
+	if _, err := writer.Append([]byte("first\n")); err != nil {
+		t.Fatalf("append first payload: %v", err)
+	}
+	firstPath := writer.path
+	old := now.Add(-2 * time.Hour)
+	if err := os.Chtimes(firstPath, old, old); err != nil {
+		t.Fatalf("age active shard: %v", err)
+	}
+	if _, err := writer.Append([]byte("second\n")); err != nil {
+		t.Fatalf("append second payload: %v", err)
+	}
+	if writer.path == firstPath {
+		t.Fatal("expired active shard was not rotated")
+	}
+	if _, err := os.Stat(firstPath); !os.IsNotExist(err) {
+		t.Fatalf("expired shard was not removed: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+}
+
+func TestRotatingFileCleanupKeepsProtectedPaths(t *testing.T) {
+	dir := t.TempDir()
+	config := RotationConfig{
+		Prefix:        "diagnostics",
+		Extension:     ".jsonl",
+		MaxBytes:      1024,
+		MaxTotalBytes: 4096,
+	}
+	first := NewRotatingFile(dir, config)
+	second := NewRotatingFile(dir, config)
+	if _, err := first.Append([]byte("first\n")); err != nil {
+		t.Fatalf("first append: %v", err)
+	}
+	firstPath := first.CurrentPath()
+	if firstPath == "" {
+		t.Fatal("first writer has no active path")
+	}
+	// The second writer protects the first writer's open shard while it rotates
+	// and reclaims the shared directory.
+	second.SetProtectedPaths(map[string]struct{}{firstPath: {}})
+	for index := 0; index < 40; index++ {
+		if _, err := second.Append([]byte(strings.Repeat("s", 300))); err != nil {
+			t.Fatalf("second append: %v", err)
+		}
+	}
+	if _, err := os.Stat(firstPath); err != nil {
+		t.Fatalf("protected shard was removed: %v", err)
+	}
+}
+
+// TestRotatingFileCleanupSkipsSymlinkedShards guards that cleanup only manages
+// regular files: a symlink whose name matches the prefix must not be removed or
+// followed during rotation.
+func TestRotatingFileCleanupSkipsSymlinkedShards(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	linkName := filepath.Join(dir, "event-20260101T000000.000000000Z-000001.jsonl")
+	if err := os.Symlink(target, linkName); err != nil {
+		t.Fatalf("create symlinked shard: %v", err)
+	}
+	writer := NewRotatingFile(dir, RotationConfig{
+		Prefix:        "event",
+		Extension:     ".jsonl",
+		MaxBytes:      16,
+		MaxTotalBytes: 64,
+	})
+	for index := 0; index < 10; index++ {
+		if _, err := writer.Append([]byte("payload-xxxxxxxx\n")); err != nil {
+			t.Fatalf("append payload: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	if _, err := os.Lstat(linkName); err != nil {
+		t.Fatalf("symlinked shard was removed: %v", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("symlink target was removed: %v", err)
+	}
+}
+
 func TestPayloadPackStoreAggregatesPayloads(t *testing.T) {
 	root := t.TempDir()
 	store := NewPayloadPackStore(root, RotationConfig{

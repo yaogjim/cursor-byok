@@ -39,7 +39,7 @@ func (s *ProxyService) ExportUserConfig(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("读取当前配置失败: %w", err)
 	}
-	data, err := yaml.Marshal(cfg)
+	data, err := yaml.Marshal(serverconfig.StripGatewayToken(cfg))
 	if err != nil {
 		return "", fmt.Errorf("序列化导出配置失败: %w", err)
 	}
@@ -69,6 +69,13 @@ func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
 	if err != nil {
 		return serverconfig.Config{}, err
 	}
+	current, err := s.loadUserConfig()
+	if err != nil {
+		return serverconfig.Config{}, err
+	}
+	if strings.TrimSpace(cfg.Gateway.Token) == "" {
+		cfg = serverconfig.OverlayGatewayToken(cfg, current.Gateway.Token)
+	}
 	if err := s.replaceUserConfig(cfg); err != nil {
 		return serverconfig.Config{}, fmt.Errorf("保存导入配置失败: %w", err)
 	}
@@ -77,6 +84,19 @@ func (s *ProxyService) ImportUserConfig(path string) (UserConfig, error) {
 		return serverconfig.Config{}, fmt.Errorf("重新读取导入配置失败: %w", err)
 	}
 	return persisted, nil
+}
+
+// ReadModelAdaptersForImport 只读取 YAML 中的 modelAdapters，不写盘、不停服务。
+// 完整导出文件中的其他根字段会被忽略。
+func (s *ProxyService) ReadModelAdaptersForImport(path string) ([]serverconfig.ModelAdapterConfig, error) {
+	if s == nil {
+		return nil, errors.New("配置服务未初始化")
+	}
+	data, err := readImportedUserConfig(path)
+	if err != nil {
+		return nil, err
+	}
+	return decodeImportedModelAdapters(data)
 }
 
 func normalizeConfigExportPath(path string) string {
@@ -121,7 +141,7 @@ func writeExportedUserConfig(path string, data []byte) error {
 }
 
 func ensureConfigImportAllowed(state ProxyState) error {
-	if state.BackendRunning || state.ProxyRunning || state.Running {
+	if state.BackendRunning || state.ProxyRunning || state.Running || state.GatewayRunning {
 		return errors.New("服务运行中不能导入完整配置，请先停止服务")
 	}
 	return nil
@@ -156,6 +176,35 @@ func readImportedUserConfig(path string) ([]byte, error) {
 		return nil, fmt.Errorf("导入配置不能超过 %d MiB", maxConfigTransferFileSize>>20)
 	}
 	return data, nil
+}
+
+type importedModelAdaptersDocument struct {
+	ModelAdapters []serverconfig.ModelAdapterConfig `yaml:"modelAdapters"`
+}
+
+func decodeImportedModelAdapters(data []byte) ([]serverconfig.ModelAdapterConfig, error) {
+	if err := validateImportedUserConfigDocument(data); err != nil {
+		return nil, err
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	var document importedModelAdaptersDocument
+	if err := decoder.Decode(&document); err != nil {
+		return nil, fmt.Errorf("导入模型配置不是有效 YAML: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err == nil {
+		return nil, errors.New("导入配置只能包含单个 YAML 文档")
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("解析导入配置尾部失败: %w", err)
+	}
+	if document.ModelAdapters == nil {
+		return []serverconfig.ModelAdapterConfig{}, nil
+	}
+	normalized, err := serverconfig.NormalizeModelAdapterDrafts(document.ModelAdapters)
+	if err != nil {
+		return nil, fmt.Errorf("导入模型配置校验失败: %w", err)
+	}
+	return normalized, nil
 }
 
 func decodeImportedUserConfig(data []byte) (serverconfig.Config, error) {
