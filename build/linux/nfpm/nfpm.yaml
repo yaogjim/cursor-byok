@@ -4,15 +4,15 @@
 # The lines below are called `modelines`. See `:help modeline`
 
 name: "cursor-byok"
-arch: ${ARCH}
+arch: ${GOARCH}
 platform: "linux"
-version: ${VERSION}
+version: "1.77.0"
 section: "default"
 priority: "extra"
-maintainer: "yaogjim <yaogjim@users.noreply.github.com>"
+maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
 description: "cursor-byok"
 vendor: "cursor-byok"
-homepage: "https://github.com/yaogjim/cursor-byok"
+homepage: "https://wails.io"
 license: "MIT"
 release: "1"
 
@@ -20,10 +20,8 @@ contents:
   - src: "./bin/cursor-byok"
     dst: "/usr/local/bin/cursor-byok"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/1024x1024/apps/cursor-byok.png"
-  - src: "./build/appicon.png"
-    dst: "/usr/share/pixmaps/cursor-byok.png"
-  - src: "./build/linux/nfpm/cursor-byok.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/cursor-byok.png"
+  - src: "./build/linux/cursor-byok.desktop"
     dst: "/usr/share/applications/cursor-byok.desktop"
 
 # Default dependencies for Debian 12/Ubuntu 22.04+ with WebKit 4.1
@@ -48,7 +46,9 @@ overrides:
 # scripts section to ensure desktop database is updated after install
 scripts:
   postinstall: "./build/linux/nfpm/scripts/postinstall.sh"
-  postremove: "./build/linux/nfpm/scripts/postremove.sh"
+  # You can also add preremove, postremove if needed
+  # preremove: "./build/linux/nfpm/scripts/preremove.sh"
+  # postremove: "./build/linux/nfpm/scripts/postremove.sh"
 
 # replaces:
 #   - foobar

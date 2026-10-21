@@ -36,17 +36,16 @@
 
 ### CI 三平台构建 Windows/Linux 失败分析与修复（2026-10-21 至 2026-10-22；待真实运行复核）
 
-**远程分支与 `v1.77.0` tag 已按确认顺序推送；首次真实运行 macOS 成功、Windows 与 Linux 失败，本轮定位并修复三处缺陷，修复尚未推送。** 负责人：主会话。
+**远程分支与 `v1.77.0` tag 已按确认顺序推送；两次真实运行中 macOS 均成功，Windows 与 Linux 各暴露两类问题，本轮已修复并本地验证，第二次修复尚未推送。** 负责人：主会话。
 
-- **首次真实运行**：`main@5ec8065`（run 39557893089）、`gateway@79dc686`（run 39557889110）、`v1.77.0@5ec8065`（同名 run）均被触发。
-- **macOS job（119082219572）成功**：产出 DMG 与 updater tar.gz，并上传 artifact。
-- **Linux job（119082219212）失败**：`nfpm package -p deb` 报 `matching "./build/linux/cursor-byok.desktop": file does not exist`，`release:build:linux:installers` 退出 1。根因是改名时 `build/linux/desktop` 已移为 `build/linux/nfpm/cursor-byok.desktop`，而 `nfpm.yaml` 仍指向旧路径；另有隐藏问题：`postinstall.sh` / `postremove.sh` 因 `.gitignore` 整体忽略 `build/` 从未入库，只修 desktop 路径会接着因脚本缺失失败。
-- **Windows job（119082219652）失败**：`windows:create:zip` 执行 `zip -qry` 报 `zip error: Invalid command arguments (short option 'y' not supported)`，`release:build:windows:amd64` 以 exit status 16 退出；runner 上的 `zip` 命令行工具不支持 `-y`。
-- **修复 1（Linux 打包）**：`build/linux/nfpm/nfpm.yaml` 的 desktop 源改为 `./build/linux/nfpm/cursor-byok.desktop`；图标按真实尺寸装到 `hicolor/1024x1024` 并追加 `/usr/share/pixmaps` 副本；`version`/`arch` 改为由任务注入的 `${VERSION}`/`${ARCH}`，维护者与 homepage 改为固定值；启用 `postremove`；`postinstall.sh`、`postremove.sh` 用 `git add -f` 入库。
-- **修复 2（Windows 打包）**：`scripts/release` 新增 `zip` 子命令（`archive/zip` 实现），`windows:create:zip` 改为 `go run ./scripts/release zip -src <暂存目录> -out <zip>`，不再依赖各平台 `zip` 工具；Windows job 的 `choco install` 去掉 `zip`。
+- **第一次运行（run 39557893089，`main@5ec8065` 与 `v1.77.0` 同一 commit；`gateway@79dc686` 为 run 39557889110）**：macOS job（119082219572）成功；Linux job（119082219212）`nfpm package -p deb` 报 `matching "./build/linux/cursor-byok.desktop": file does not exist`；Windows job（119082219652）`windows:create:zip` 的 `zip -qry` 报 `zip error: Invalid command arguments (short option 'y' not supported)`，`release:build:windows:amd64` exit 16。
+- **第二次运行（run 39560016345，`main@6e852ff`）**：macOS job（119088737003）成功；Linux job（119088737026）在“校验构建资产与 build/config.yml 一致”步骤失败；Windows job（119088737044）`release:build:windows:installer` 报 `"makensis": executable file not found in $PATH`，exit 127。
+- **关键事实（wails v3.0.0-alpha.74 行为）**：`build/linux/nfpm/nfpm.yaml` 属于 `wails3 update build-assets` 的可更新资产，每次执行都会被模板重写（`arch: ${GOARCH}`、`version` 取自 `build/config.yml`、`maintainer` 用 `${GIT_COMMITTER_*}`、contents 引用 `./build/linux/<binary>.desktop`），而同一命令实际生成的桌面文件名是 `build/linux/desktop`，模板与实际文件名不匹配。直接修改 `nfpm.yaml` 会被 CI 的一致性校验判为不一致，第二次运行的 Linux 失败即此原因。
+- **修复 1（Linux 打包）**：`build/linux/nfpm/nfpm.yaml` 恢复为生成态；新增自维护配置 `build/linux/nfpm/cursor-byok.nfpm.yaml`（`version`/`arch` 由任务注入的 `${VERSION}`/`${ARCH}` 提供，维护者与 homepage 固定，图标 1024×1024 并加 pixmaps，启用 `postinstall`/`postremove`），`linux:package:installers` 改为显式引用该文件，不受 build-assets 重写影响。`postinstall.sh`、`postremove.sh` 因 `.gitignore` 的 `build/` 规则从未入库，已 `git add -f` 纳入版本控制。
+- **修复 2（Windows 打包）**：`scripts/release` 新增 `zip` 子命令（`archive/zip` 实现），`windows:create:zip` 改为 `go run ./scripts/release zip -src <暂存目录> -out <zip>`，不再依赖平台 `zip` 工具，`choco install` 去掉 `zip`。NSIS 方面，choco 安装的 NSIS 不在默认 PATH：工作流在安装步骤内搜索 `C:\Program Files (x86)\NSIS`（兼容 `C:\Program Files\NSIS`），写入 `GITHUB_PATH` 并用 `makensis -VERSION` 自检，找不到直接报错退出。
 - **修复 3（发布资产）**：发布 job 的 `files` 增加 `bin/release/*/*installer.exe`，此前 Windows NSIS 安装包不会进入 Release。
-- **本地验证**：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok，新增 `TestWriteZipDirArchivesDirectoryContents`；`wails3 task release:build:windows:amd64` 在 macOS 上完整跑通（含 `go run ... zip`），`unzip -l` 归档根为 `cursor-byok-windows-amd64.exe`，解包后 `file` 判定 `PE32+ executable (GUI) x86-64`；`nfpm` 用桩二进制重打 deb 与 rpm，deb `control` 的 `Version=1.77.0-1`、`Architecture=amd64`、维护者与 homepage 正确，`control.tar.gz` 含 `postinst`/`postrm`，`data.tar.gz` 含 desktop、`hicolor/1024x1024` 与 `pixmaps` 图标；`.github/workflows/build.yml` 与四个 Taskfile/nfpm 配置均通过 YAML 解析。
-- **未验证/受阻**：Windows NSIS 安装包仍未在 Windows CI 或实机验证（本机无 `makensis`）；Linux 真实二进制与 deb/rpm 的安装运行行为未在 Linux 实机验证；修复未推送，尚无新的 CI 结论。
+- **本地验证**：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok，新增 `TestWriteZipDirArchivesDirectoryContents`；`wails3 task release:build:windows:amd64` 在 macOS 上完整跑通（含 `go run ... zip`），`unzip -l` 归档根为 `cursor-byok-windows-amd64.exe`，解包后 `file` 判定 `PE32+ executable (GUI) x86-64`；`nfpm` 用桩二进制按新配置重打 deb 与 rpm，deb `control` 的 `Version=1.77.0-1`、`Architecture=amd64`、维护者与 homepage 正确，`control.tar.gz` 含 `postinst`/`postrm`，`data.tar.gz` 含 desktop、`hicolor/1024x1024` 与 `pixmaps` 图标；执行 `wails3 task common:update:build-assets` 后 `git diff` 不再包含 `build/` 变更；工作流与各 Taskfile/nfpm 配置均通过 YAML 解析。
+- **未验证/受阻**：Windows NSIS 安装包仍未在 Windows CI 或实机验证（本机无 `makensis`，brew 安装失败）；Linux 真实二进制与 deb/rpm 的安装运行行为未在 Linux 实机验证；第二次修复尚未推送，没有新的 CI 结论。
 
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
 
