@@ -42,6 +42,7 @@ type ReadyPayload struct {
 
 type ErrorPayload struct {
 	State      string `json:"state"`
+	Phase      string `json:"phase,omitempty"`
 	Version    string `json:"version,omitempty"`
 	Error      string `json:"error,omitempty"`
 	Prompt     bool   `json:"prompt,omitempty"`

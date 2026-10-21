@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -269,6 +271,7 @@ func TestShutdownCancelsInFlightDownloadWithoutReadyArchive(t *testing.T) {
 }
 
 func TestDownloadRejectsManifestSizeMismatch(t *testing.T) {
+	shortenRetryDelays(t)
 	payload := []byte("verified update archive")
 	checksum := sha256.Sum256(payload)
 	assetURL := "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz"
@@ -314,4 +317,294 @@ func waitForState(t *testing.T, manager *Manager, wanted State) {
 	state := manager.state
 	manager.mu.Unlock()
 	t.Fatalf("state = %s, want %s", state, wanted)
+}
+
+// shortenRetryDelays 让重试退避在测试中几乎不耗时。
+func shortenRetryDelays(t *testing.T) {
+	t.Helper()
+	originalBase, originalMax := retryBaseDelay, retryMaxDelay
+	retryBaseDelay = time.Millisecond
+	retryMaxDelay = 2 * time.Millisecond
+	t.Cleanup(func() {
+		retryBaseDelay = originalBase
+		retryMaxDelay = originalMax
+	})
+}
+
+// truncatedReader 先返回 data 再返回 err，用于模拟响应体被提前截断。
+type truncatedReader struct {
+	data []byte
+	pos  int
+	err  error
+}
+
+func (r *truncatedReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, r.err
+	}
+	n := copy(p, r.data[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+func TestRetryDelayGrowsAndIsCapped(t *testing.T) {
+	originalBase, originalMax := retryBaseDelay, retryMaxDelay
+	retryBaseDelay = 100 * time.Millisecond
+	retryMaxDelay = 350 * time.Millisecond
+	t.Cleanup(func() {
+		retryBaseDelay = originalBase
+		retryMaxDelay = originalMax
+	})
+
+	if got := retryDelay(1); got != 0 {
+		t.Fatalf("retryDelay(1) = %s, want 0", got)
+	}
+	if got := retryDelay(2); got != 100*time.Millisecond {
+		t.Fatalf("retryDelay(2) = %s, want 100ms", got)
+	}
+	if got := retryDelay(3); got != 200*time.Millisecond {
+		t.Fatalf("retryDelay(3) = %s, want 200ms", got)
+	}
+	if got := retryDelay(4); got != 350*time.Millisecond {
+		t.Fatalf("retryDelay(4) = %s, want capped 350ms", got)
+	}
+}
+
+func TestDownloadResumesAfterTruncatedResponse(t *testing.T) {
+	shortenRetryDelays(t)
+
+	payload := bytes.Repeat([]byte("cursor-byok-update-"), 97)
+	checksum := sha256.Sum256(payload)
+	cut := len(payload) / 2
+	assetURL := "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz"
+
+	var mu sync.Mutex
+	var ranges []string
+	attempt := 0
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	manager.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		mu.Lock()
+		attempt++
+		current := attempt
+		ranges = append(ranges, request.Header.Get("Range"))
+		mu.Unlock()
+
+		if current == 1 {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Body:          io.NopCloser(&truncatedReader{data: payload[:cut], err: io.ErrUnexpectedEOF}),
+				ContentLength: int64(len(payload)),
+				Header:        make(http.Header),
+				Request:       request,
+			}, nil
+		}
+
+		rest := payload[cut:]
+		header := make(http.Header)
+		header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", cut, len(payload)-1, len(payload)))
+		return &http.Response{
+			StatusCode:    http.StatusPartialContent,
+			Status:        "206 Partial Content",
+			Body:          io.NopCloser(bytes.NewReader(rest)),
+			ContentLength: int64(len(rest)),
+			Header:        header,
+			Request:       request,
+		}, nil
+	})}
+
+	archivePath, err := manager.downloadUpdate(context.Background(), &UpdateInfo{
+		Version: "9.9.9",
+		Asset: manifestPlatform{
+			URL:      assetURL,
+			Size:     int64(len(payload)),
+			Checksum: hex.EncodeToString(checksum[:]),
+		},
+	})
+	if err != nil {
+		t.Fatalf("downloadUpdate() error = %v, want success after resume", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(archivePath) })
+
+	written, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read downloaded archive: %v", err)
+	}
+	if !bytes.Equal(written, payload) {
+		t.Fatalf("downloaded archive mismatch: got %d bytes, want %d", len(written), len(payload))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	wantRange := fmt.Sprintf("bytes=%d-", cut)
+	if len(ranges) != 2 || ranges[0] != "" || ranges[1] != wantRange {
+		t.Fatalf("Range headers = %v, want [\"\" %q]", ranges, wantRange)
+	}
+}
+
+func TestDownloadRestartsFromScratchAfterChecksumMismatch(t *testing.T) {
+	shortenRetryDelays(t)
+
+	payload := bytes.Repeat([]byte("verified update archive-"), 53)
+	checksum := sha256.Sum256(payload)
+	corrupted := append([]byte(nil), payload...)
+	corrupted[7] ^= 0xff
+	assetURL := "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz"
+
+	var mu sync.Mutex
+	var ranges []string
+	attempt := 0
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	manager.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		mu.Lock()
+		attempt++
+		current := attempt
+		ranges = append(ranges, request.Header.Get("Range"))
+		mu.Unlock()
+
+		body := payload
+		if current == 1 {
+			body = corrupted
+		}
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Status:        "200 OK",
+			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
+			Header:        make(http.Header),
+			Request:       request,
+		}, nil
+	})}
+
+	archivePath, err := manager.downloadUpdate(context.Background(), &UpdateInfo{
+		Version: "9.9.9",
+		Asset: manifestPlatform{
+			URL:      assetURL,
+			Size:     int64(len(payload)),
+			Checksum: hex.EncodeToString(checksum[:]),
+		},
+	})
+	if err != nil {
+		t.Fatalf("downloadUpdate() error = %v, want success after restart", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(archivePath) })
+
+	written, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read downloaded archive: %v", err)
+	}
+	if !bytes.Equal(written, payload) {
+		t.Fatal("re-downloaded archive does not match manifest payload")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	// 校验失败后不能续传被污染的残片：第二次请求必须从头下载
+	if len(ranges) != 2 || ranges[0] != "" || ranges[1] != "" {
+		t.Fatalf("Range headers = %v, want two full downloads", ranges)
+	}
+}
+
+func TestFetchUpdateInfoRetriesTruncatedManifest(t *testing.T) {
+	shortenRetryDelays(t)
+
+	originalVersion := buildinfo.Version
+	buildinfo.Version = "1.0.0"
+	t.Cleanup(func() { buildinfo.Version = originalVersion })
+
+	platformKey, err := currentPlatformKey()
+	if err != nil {
+		t.Skipf("unsupported updater test platform %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	manifestBody, err := json.Marshal(manifest{
+		Version: "9.9.9",
+		Platforms: map[string]manifestPlatform{
+			platformKey: {
+				URL:      "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz",
+				Size:     16,
+				Checksum: strings.Repeat("a", sha256.Size*2),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+
+	var mu sync.Mutex
+	attempt := 0
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	manager.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		mu.Lock()
+		attempt++
+		current := attempt
+		mu.Unlock()
+
+		if current == 1 {
+			return &http.Response{
+				StatusCode:    http.StatusOK,
+				Status:        "200 OK",
+				Body:          io.NopCloser(&truncatedReader{data: manifestBody[:len(manifestBody)/2], err: io.ErrUnexpectedEOF}),
+				ContentLength: int64(len(manifestBody)),
+				Header:        make(http.Header),
+				Request:       request,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			Status:        "200 OK",
+			Body:          io.NopCloser(bytes.NewReader(manifestBody)),
+			ContentLength: int64(len(manifestBody)),
+			Header:        make(http.Header),
+			Request:       request,
+		}, nil
+	})}
+
+	info, err := manager.fetchUpdateInfo(context.Background())
+	if err != nil {
+		t.Fatalf("fetchUpdateInfo() error = %v, want success after retry", err)
+	}
+	if info == nil || info.Version != "9.9.9" {
+		t.Fatalf("fetchUpdateInfo() = %+v, want version 9.9.9", info)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if attempt != 2 {
+		t.Fatalf("manifest attempts = %d, want 2", attempt)
+	}
+}
+
+func TestDownloadErrorExplainsRetryExhaustion(t *testing.T) {
+	shortenRetryDelays(t)
+
+	manager := NewManager(nil)
+	t.Cleanup(manager.Shutdown)
+	manager.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, io.ErrUnexpectedEOF
+	})}
+
+	_, err := manager.downloadUpdate(context.Background(), &UpdateInfo{
+		Version: "9.9.9",
+		Asset: manifestPlatform{
+			URL:      "https://github.com/yaogjim/cursor-byok/releases/download/v9.9.9/update.tar.gz",
+			Size:     16,
+			Checksum: strings.Repeat("a", sha256.Size*2),
+		},
+	})
+	if err == nil {
+		t.Fatal("downloadUpdate() succeeded on a permanently broken connection")
+	}
+	message := err.Error()
+	if !strings.Contains(message, fmt.Sprintf("已尝试 %d 次", downloadMaxAttempts)) {
+		t.Fatalf("error = %q, want attempt count", message)
+	}
+	if !strings.Contains(message, "网络连接") {
+		t.Fatalf("error = %q, want network hint", message)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error = %v, want wrapped unexpected EOF", err)
+	}
 }

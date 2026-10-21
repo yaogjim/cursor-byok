@@ -1032,6 +1032,8 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 ### 2. 按时间索引
 
+- **2026-10-21**：加固自动更新的网络鲁棒性。用户反馈另一台 macOS 点更新偶发 `更新失败 / unexpected EOF`、多点几次才成功；本机 `netproxy` 日志确认走系统代理（`http://127.0.0.1:7890`），该错误只在响应体未读满即被断开时出现，而原实现单次请求、无重试、无续传，任何一次瞬时截断都会整体失败。改为：manifest 最多 3 次指数退避重试（仅网络错误/5xx/429，语义错误不重试）；更新包最多 4 次尝试，传输中断保留残片并用 `Range` 续传、服务器忽略 Range 时回退整包重下，大小或 SHA-256 不一致则从零重下（哈希改为下载后从文件重算）；错误文案改为中文并区分截断/代理/校验/超时；错误事件新增 `phase`，前端错误弹窗按阶段提供「重试下载/重试安装/重新检查」。`go test ./internal/updater` 全部通过（新增 5 个用例），临时 `httptest` 探针真实复现截断并在第二次请求续传成功，`go build ./...` 与 `npm run build` 通过。未在报错实机跑真实更新，留待实机复核。详见 `task/todo.md` 的「自动更新偶发 unexpected EOF 的重试与续传加固」。
+
 - **2026-08-31**：完成 Provider 历史净化。目标感知来源身份，跨身份剥离 opaque reasoning/Responses item 元数据但保留文本和工具链；400 脱敏摘要进入诊断；32MiB 最终编码请求体预检且 `request_build` 不重试/fallback。复审修复 provider done origin 清零落盘丢失、tool flush 顺序和 safety suppression。定向 `go test`/`go vet` 与 `git diff --check` 通过。详见 `task/todo.md` 的 `provider-history-sanitize-20260831`。
 
 - **2026-08-30**：完成 Rule P0 与 managed Codex affinity 基础检查点。Rule 私有权限、symlink/非普通文件拒绝、原子有界持久化、docs index 来源隔离与 reconciliation 已通过定向/race/vet 和 Windows 交叉构建；Windows 实机 ACL 仍待发布门禁。Codex 已接入稳定账号隔离、独立私密密钥、四字段 HMAC 域分离、精确 ChatGPT Responses 注入及 `control | prompt_key | full` profile，继续删除 `previous_response_id`。fake upstream、缓存观测和 A/B 尚未完成，不宣称性能收益；Rule journal 与手动同步尚未开始。

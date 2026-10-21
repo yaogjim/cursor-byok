@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,8 +28,22 @@ import (
 
 const (
 	manifestTimeout       = 90 * time.Second
-	downloadTimeout       = 10 * time.Minute
+	downloadTimeout       = 30 * time.Minute
 	maxUpdateArchiveBytes = 512 << 20
+	maxManifestBytes      = 1 << 20
+	manifestMaxAttempts   = 3
+	downloadMaxAttempts   = 4
+)
+
+// 更新请求的重试退避：用变量承载，便于测试压缩等待时间。
+var (
+	retryBaseDelay = 700 * time.Millisecond
+	retryMaxDelay  = 5 * time.Second
+)
+
+var (
+	errArchiveSizeMismatch = errors.New("archive size mismatch")
+	errArchiveChecksum     = errors.New("archive checksum mismatch")
 )
 
 var allowedRedirectHosts = map[string]struct{}{
@@ -205,7 +220,7 @@ func (m *Manager) checkNow(manual bool) {
 	if err != nil {
 		logger.Errorf("检查更新失败: %v", err)
 		m.setState(StateError, nil, "")
-		m.emitError(nil, err.Error(), manual)
+		m.emitError(nil, "check", err.Error(), manual)
 		return
 	}
 	if info == nil {
@@ -225,7 +240,8 @@ func (m *Manager) startAvailableDownload() error {
 		m.mu.Unlock()
 		return errors.New("更新管理器已关闭")
 	}
-	if m.state != StateAvailable || m.currentInfo == nil {
+	// 下载失败（StateError）后仍保留 currentInfo，允许用户直接重试下载
+	if (m.state != StateAvailable && m.state != StateError) || m.currentInfo == nil {
 		m.mu.Unlock()
 		return errors.New("当前没有等待下载的更新")
 	}
@@ -252,7 +268,7 @@ func (m *Manager) downloadAvailable(info *UpdateInfo) {
 		m.mu.Unlock()
 		if !closed {
 			m.setState(StateError, info, "")
-			m.emitError(info, err.Error(), true)
+			m.emitError(info, "download", err.Error(), true)
 		}
 		return
 	}
@@ -273,41 +289,72 @@ func (m *Manager) downloadAvailable(info *UpdateInfo) {
 }
 
 func (m *Manager) fetchUpdateInfo(ctx context.Context) (*UpdateInfo, error) {
+	var lastErr error
+	attempts := 0
+	for attempt := 1; attempt <= manifestMaxAttempts; attempt++ {
+		if attempt > 1 {
+			if err := sleepWithContext(ctx, retryDelay(attempt)); err != nil {
+				return nil, manifestFetchError(lastErr, attempts)
+			}
+			logger.Infof("重试获取更新清单：attempt=%d/%d", attempt, manifestMaxAttempts)
+		}
+		attempts = attempt
+		info, retryable, err := m.fetchUpdateInfoOnce(ctx)
+		if err == nil {
+			return info, nil
+		}
+		lastErr = err
+		// 语义类错误（版本未更新、缺少平台资产、清单字段非法）重试无意义
+		if !retryable || ctx.Err() != nil {
+			return nil, err
+		}
+		logger.Errorf("获取更新清单失败，准备重试：attempt=%d/%d err=%v", attempt, manifestMaxAttempts, err)
+	}
+	return nil, manifestFetchError(lastErr, attempts)
+}
+
+func (m *Manager) fetchUpdateInfoOnce(ctx context.Context) (*UpdateInfo, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildinfo.UpdateBaseURL+"update.json", nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("update manifest request failed: %s", resp.Status)
+		return nil, isRetryableStatus(resp.StatusCode), fmt.Errorf("update manifest request failed: %s", resp.Status)
+	}
+
+	// 整体读出再解析：被截断的响应体会表现为 unexpected EOF，可直接判定为可重试。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestBytes))
+	if err != nil {
+		return nil, true, err
 	}
 
 	var data manifest
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, true, err
 	}
 
 	if compareVersions(data.Version, buildinfo.CurrentVersion()) <= 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 
 	platformKey, err := currentPlatformKey()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	asset, ok := data.Platforms[platformKey]
 	if !ok {
-		return nil, errNoSupportedAsset
+		return nil, false, errNoSupportedAsset
 	}
 	if err := validateUpdateAsset(asset); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	return &UpdateInfo{
@@ -317,77 +364,324 @@ func (m *Manager) fetchUpdateInfo(ctx context.Context) (*UpdateInfo, error) {
 		Mandatory:    data.Mandatory,
 		PlatformKey:  platformKey,
 		Asset:        asset,
-	}, nil
+	}, true, nil
 }
 
+// isRetryableStatus 判断 HTTP 状态码是否值得重试（5xx 与 429 视为临时故障）。
+func isRetryableStatus(statusCode int) bool {
+	if statusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return statusCode >= 500
+}
+
+// retryDelay 返回第 attempt 次尝试前应等待的退避时长（指数退避，上限 retryMaxDelay）。
+func retryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 0
+	}
+	delay := retryBaseDelay
+	for i := 2; i < attempt; i++ {
+		delay *= 2
+		if delay >= retryMaxDelay {
+			return retryMaxDelay
+		}
+	}
+	if delay > retryMaxDelay {
+		return retryMaxDelay
+	}
+	return delay
+}
+
+func sleepWithContext(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func manifestFetchError(cause error, attempts int) error {
+	if cause == nil {
+		return errors.New("获取更新清单失败")
+	}
+	return fmt.Errorf("获取更新清单失败（已尝试 %d 次）：%s；底层错误：%w", attempts, transientNetworkHint(cause), cause)
+}
+
+// transientNetworkHint 把底层网络错误翻译成用户能理解的中文原因。
+func transientNetworkHint(err error) string {
+	switch {
+	case err == nil:
+		return "未知错误"
+	case errors.Is(err, context.Canceled):
+		return "操作已取消"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "网络请求超时"
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, io.EOF):
+		return "网络连接在数据接收完成前被中断，常见于代理、VPN 或运营商对 GitHub 连接的干扰"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "connection reset"), strings.Contains(message, "broken pipe"),
+		strings.Contains(message, "server closed idle connection"), strings.Contains(message, "unexpected eof"):
+		return "网络连接被对端提前断开"
+	case strings.Contains(message, "tls:"), strings.Contains(message, "handshake"):
+		return "TLS 握手失败，可能是代理证书或网络中间设备干扰"
+	case strings.Contains(message, "no such host"), strings.Contains(message, "i/o timeout"),
+		strings.Contains(message, "timeout"):
+		return "网络不可达或超时"
+	}
+	return "网络请求失败"
+}
+
+// downloadUpdate 下载更新包，失败时按指数退避重试。
+// 传输中断（如 unexpected EOF）保留已写入的字节并用 Range 续传；
+// 大小或校验值不一致说明数据不可信，下一次尝试从零重新下载。
 func (m *Manager) downloadUpdate(ctx context.Context, info *UpdateInfo) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.Asset.URL, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download request failed: %s", resp.Status)
-	}
-	if resp.ContentLength > maxUpdateArchiveBytes {
-		return "", fmt.Errorf("更新包超过大小限制: %d", resp.ContentLength)
-	}
-	if resp.ContentLength > 0 && resp.ContentLength != info.Asset.Size {
-		return "", fmt.Errorf("更新包 Content-Length 与 manifest 不一致: expected %d got %d", info.Asset.Size, resp.ContentLength)
-	}
-
 	tempFile, err := os.CreateTemp("", "cursor-byok-update-*"+archiveSuffix(info.Asset.URL))
 	if err != nil {
 		return "", err
 	}
-	defer func() {
+	archivePath := tempFile.Name()
+	discard := func(failure error) (string, error) {
 		_ = tempFile.Close()
-	}()
+		_ = os.Remove(archivePath)
+		return "", failure
+	}
 
-	hasher := sha256.New()
-	total := info.Asset.Size
-	if resp.ContentLength > 0 {
-		total = resp.ContentLength
+	var lastErr error
+	attempts := 0
+	restartFromScratch := false
+	for attempt := 1; attempt <= downloadMaxAttempts; attempt++ {
+		if attempt > 1 {
+			if err := sleepWithContext(ctx, retryDelay(attempt)); err != nil {
+				return discard(downloadFailure(lastErr, attempts))
+			}
+			logger.Infof("重试下载更新：version=%s attempt=%d/%d reason=%v", info.Version, attempt, downloadMaxAttempts, lastErr)
+			if restartFromScratch {
+				if err := tempFile.Truncate(0); err != nil {
+					return discard(err)
+				}
+				restartFromScratch = false
+			}
+		}
+
+		attempts = attempt
+		err := m.downloadArchiveOnce(ctx, info, tempFile)
+		if err == nil {
+			err = verifyArchiveFile(tempFile, info)
+		}
+		if err == nil {
+			_ = tempFile.Close()
+			m.emitProgress(info, info.Asset.Size, info.Asset.Size)
+			logger.Infof("更新包下载完成：version=%s path=%s", info.Version, archivePath)
+			return archivePath, nil
+		}
+		if ctx.Err() != nil {
+			return discard(ctx.Err())
+		}
+		// 大小或校验值不一致说明本地数据不可信，下一次从零重下而不是续传
+		if errors.Is(err, errArchiveSizeMismatch) || errors.Is(err, errArchiveChecksum) {
+			restartFromScratch = true
+		}
+		lastErr = err
+		logger.Errorf("下载更新包失败：version=%s attempt=%d/%d err=%v", info.Version, attempt, downloadMaxAttempts, err)
+	}
+
+	return discard(downloadFailure(lastErr, attempts))
+}
+
+// downloadArchiveOnce 执行一次下载尝试。文件非空时用 Range 续传，
+// 服务器忽略 Range 时自动回退到从头覆盖。
+func (m *Manager) downloadArchiveOnce(ctx context.Context, info *UpdateInfo, tempFile *os.File) error {
+	resumeOffset, err := tempFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, info.Asset.URL, nil)
+	if err != nil {
+		return err
+	}
+	if resumeOffset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", resumeOffset))
+	}
+
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	offset := resumeOffset
+	switch resp.StatusCode {
+	case http.StatusPartialContent:
+		if err := validateContentRange(resp, info, offset); err != nil {
+			// 续传起点不可信：丢掉本地残片，下次从头下载
+			if truncateErr := tempFile.Truncate(0); truncateErr != nil {
+				return truncateErr
+			}
+			return err
+		}
+	case http.StatusOK:
+		offset = 0
+		if err := tempFile.Truncate(0); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("download request failed: %s", resp.Status)
+	}
+
+	if resp.ContentLength > maxUpdateArchiveBytes {
+		return fmt.Errorf("更新包超过大小限制: %d", resp.ContentLength)
+	}
+	if offset+resp.ContentLength > maxUpdateArchiveBytes && resp.ContentLength > 0 {
+		return fmt.Errorf("更新包超过大小限制: %d", offset+resp.ContentLength)
+	}
+	if offset == 0 && resp.ContentLength > 0 && resp.ContentLength != info.Asset.Size {
+		return fmt.Errorf("更新包 Content-Length 与 manifest 不一致: expected %d got %d", info.Asset.Size, resp.ContentLength)
+	}
+	if resp.ContentLength > 0 && offset+resp.ContentLength > info.Asset.Size {
+		return fmt.Errorf("更新包大小超出 manifest 声明: expected %d got %d", info.Asset.Size, offset+resp.ContentLength)
+	}
+
+	if _, err := tempFile.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+
+	remaining := maxUpdateArchiveBytes + 1 - offset
+	if remaining < 1 {
+		return fmt.Errorf("更新包超过大小限制: %d", offset)
 	}
 	progress := newProgressWriter(func(downloaded int64) {
-		m.emitProgress(info, downloaded, total)
+		m.emitProgress(info, downloaded, info.Asset.Size)
 	})
-	m.emitProgress(info, 0, total)
-	limitedBody := io.LimitReader(resp.Body, maxUpdateArchiveBytes+1)
-	downloadedBytes, err := io.Copy(io.MultiWriter(tempFile, hasher, progress), limitedBody)
+	progress.downloaded = offset
+	m.emitProgress(info, offset, info.Asset.Size)
+
+	written, err := io.Copy(io.MultiWriter(tempFile, progress), io.LimitReader(resp.Body, remaining))
 	if err != nil {
-		_ = os.Remove(tempFile.Name())
-		return "", err
+		// 传输被截断：保留已写入内容，下一次尝试续传
+		return err
 	}
-	if downloadedBytes > maxUpdateArchiveBytes {
-		_ = os.Remove(tempFile.Name())
-		return "", fmt.Errorf("更新包超过大小限制: %d", downloadedBytes)
-	}
-	if downloadedBytes != info.Asset.Size {
-		_ = os.Remove(tempFile.Name())
-		return "", fmt.Errorf("更新包大小与 manifest 不一致: expected %d got %d", info.Asset.Size, downloadedBytes)
-	}
-	m.emitProgress(info, downloadedBytes, info.Asset.Size)
 
+	total := offset + written
+	if total > maxUpdateArchiveBytes {
+		return fmt.Errorf("更新包超过大小限制: %d", total)
+	}
+	if total != info.Asset.Size {
+		return fmt.Errorf("更新包大小与 manifest 不一致: expected %d got %d: %w", info.Asset.Size, total, errArchiveSizeMismatch)
+	}
+	return nil
+}
+
+// verifyArchiveFile 从磁盘重新计算大小与 SHA-256，避免续传时增量哈希失配。
+func verifyArchiveFile(tempFile *os.File, info *UpdateInfo) error {
 	expectedChecksum := strings.TrimSpace(strings.TrimPrefix(info.Asset.Checksum, "sha256:"))
-	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
 	if expectedChecksum == "" {
-		_ = os.Remove(tempFile.Name())
-		return "", errors.New("更新包缺少 SHA-256 校验值")
+		return errors.New("更新包缺少 SHA-256 校验值")
 	}
-	if !strings.EqualFold(expectedChecksum, actualChecksum) {
-		_ = os.Remove(tempFile.Name())
-		return "", fmt.Errorf("checksum mismatch: expected %s got %s", expectedChecksum, actualChecksum)
+	if err := tempFile.Sync(); err != nil {
+		return err
+	}
+	if _, err := tempFile.Seek(0, io.SeekStart); err != nil {
+		return err
 	}
 
-	logger.Infof("更新包下载完成：version=%s path=%s", info.Version, tempFile.Name())
-	return tempFile.Name(), nil
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, tempFile)
+	if err != nil {
+		return err
+	}
+	if size != info.Asset.Size {
+		return fmt.Errorf("更新包大小与 manifest 不一致: expected %d got %d: %w", info.Asset.Size, size, errArchiveSizeMismatch)
+	}
+	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(expectedChecksum, actualChecksum) {
+		return fmt.Errorf("checksum mismatch: expected %s got %s: %w", expectedChecksum, actualChecksum, errArchiveChecksum)
+	}
+	return nil
+}
+
+func downloadFailure(cause error, attempts int) error {
+	if cause == nil {
+		return errors.New("更新包下载失败")
+	}
+	return fmt.Errorf("更新包下载失败（已尝试 %d 次）：%s；底层错误：%w", attempts, downloadFailureHint(cause), cause)
+}
+
+func downloadFailureHint(err error) string {
+	switch {
+	case errors.Is(err, errArchiveChecksum):
+		return "下载内容与更新清单的校验值不一致，文件在传输中被破坏"
+	case errors.Is(err, errArchiveSizeMismatch):
+		return "下载内容大小与更新清单不一致"
+	}
+	return transientNetworkHint(err)
+}
+
+type contentRange struct {
+	start int64
+	end   int64
+	total int64
+}
+
+func parseContentRange(raw string) (contentRange, bool) {
+	value := strings.TrimSpace(raw)
+	if !strings.HasPrefix(strings.ToLower(value), "bytes") {
+		return contentRange{}, false
+	}
+	value = strings.TrimSpace(value[len("bytes"):])
+	slash := strings.Index(value, "/")
+	if slash < 0 {
+		return contentRange{}, false
+	}
+	rangePart := strings.TrimSpace(value[:slash])
+	totalPart := strings.TrimSpace(value[slash+1:])
+	dash := strings.Index(rangePart, "-")
+	if dash < 0 {
+		return contentRange{}, false
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(rangePart[:dash]), 10, 64)
+	if err != nil || start < 0 {
+		return contentRange{}, false
+	}
+	result := contentRange{start: start}
+	if end, err := strconv.ParseInt(strings.TrimSpace(rangePart[dash+1:]), 10, 64); err == nil && end >= start {
+		result.end = end
+	}
+	if totalPart != "*" {
+		if total, err := strconv.ParseInt(totalPart, 10, 64); err == nil && total > 0 {
+			result.total = total
+		}
+	}
+	return result, true
+}
+
+// validateContentRange 校验续传响应的起点与总大小，防止拼接出错误的文件。
+func validateContentRange(resp *http.Response, info *UpdateInfo, offset int64) error {
+	raw := strings.TrimSpace(resp.Header.Get("Content-Range"))
+	if raw == "" {
+		// 个别代理会移除该响应头，退化为按最终大小与校验值校验
+		return nil
+	}
+	parsed, ok := parseContentRange(raw)
+	if !ok {
+		return fmt.Errorf("服务器返回了无法解析的 Content-Range: %s: %w", raw, errArchiveSizeMismatch)
+	}
+	if parsed.start != offset {
+		return fmt.Errorf("续传起点与本地残片不一致: expected %d got %d: %w", offset, parsed.start, errArchiveSizeMismatch)
+	}
+	if parsed.total > 0 && parsed.total != info.Asset.Size {
+		return fmt.Errorf("更新包总大小与 manifest 不一致: expected %d got %d: %w", info.Asset.Size, parsed.total, errArchiveSizeMismatch)
+	}
+	return nil
 }
 
 func (m *Manager) installReadyUpdate() error {
@@ -411,7 +705,7 @@ func (m *Manager) installReadyUpdate() error {
 	if err := m.spawnInstaller(archivePath); err != nil {
 		m.setState(StateReady, info, archivePath)
 		m.emitState(StateReady, info, "", "", false, "")
-		m.emitError(info, err.Error(), true)
+		m.emitError(info, "install", err.Error(), true)
 		return err
 	}
 
@@ -595,13 +889,14 @@ func (m *Manager) emitReady(info *UpdateInfo, prompt bool) {
 	m.app.Event.Emit(EventReady, payload)
 }
 
-func (m *Manager) emitError(info *UpdateInfo, errMsg string, prompt bool) {
+func (m *Manager) emitError(info *UpdateInfo, phase, errMsg string, prompt bool) {
 	if m.app == nil {
 		return
 	}
 
 	payload := ErrorPayload{
 		State:      string(StateError),
+		Phase:      strings.TrimSpace(phase),
 		Error:      strings.TrimSpace(errMsg),
 		Prompt:     prompt,
 		PromptKind: "error",

@@ -5,6 +5,17 @@
 
 ## 当前焦点
 
+### 自动更新偶发 unexpected EOF 的重试与续传加固（2026-10-21；local-verified）
+
+- 负责人：主会话。目标：定位「本机点更新正常、另一台 macOS 偶尔报 `unexpected EOF`，点多次才能成功」的原因并加固更新链路。
+- [completed] `root-cause`：`unexpected EOF` 只在响应体未读满即被对端断开时出现（Go 在 `io.Copy` 时报此错），说明是传输层截断而非校验或权限问题。原实现 `internal/updater/manager.go` 对 manifest 与更新包都只请求一次、无重试、无续传，任何一次瞬时截断都会让整个下载失败，用户只能重新点「下载更新」碰运气。本机 `netproxy` 日志显示代理来源为「系统代理」（`http://127.0.0.1:7890`），经代理的 GitHub 长连接更易被中途重置；另一台机器网络路径/代理不同，因此只在它上面偶发。
+- [completed] `retry-manifest`：`fetchUpdateInfo` 拆成「重试循环 + 单次请求」，最多 3 次指数退避（0.7s 起、上限 5s），整段响应体读出后再解析 JSON 以识别截断；仅网络错误、5xx、429 重试，语义错误（无新版本、缺少平台资产、清单字段非法）不重试。
+- [completed] `retry-download-resume`：`downloadUpdate` 最多 4 次尝试；传输中断时保留已落盘字节，下次用 `Range: bytes=N-` 续传，服务器忽略 Range（返回 200）时自动回退为从头覆盖；`Content-Range` 的起点与总大小都会校验，不可信则丢弃残片。
+- [completed] `verify-and-error-text`：大小或 SHA-256 不一致时判定本地数据不可信，下一次从零重下而不是续传；哈希改为下载完成后从文件重算，避免续传时增量哈希失配。失败信息改为中文并区分「网络被中断 / 代理或 VPN 干扰 / 校验失败 / 超时」，同时保留底层错误。
+- [completed] `retry-from-ui`：错误事件新增 `phase`（`check`/`download`/`install`）；后端允许在 `StateError` 且仍持有 `currentInfo` 时重新下载；前端错误弹窗的确认按钮改为按阶段重试（重试下载/重试安装/重新检查），并保留「关闭」。
+- [completed] `local-verification`：`go test ./internal/updater -count=1` 全部通过，新增 5 个用例（退避曲线、截断后续传成功、校验失败后从头重下、清单截断重试、重试耗尽的中文错误）；临时探针用 `httptest` 真实服务在响应中途 `Hijack` 断开，复现 `unexpected EOF` 并在第二次请求看到 `Range: bytes=30037-`、最终文件与原文一致（探针跑完已删除）；`go build ./...` 退出 0；`npm run build` 成功，i18n 目录自动补入 3 条新文案。
+- [pending] `real-machine-verify`：未在报错的那台 macOS 实机跑一次真实更新；真实 GitHub Release 下载的复现与修复效果仍需实机确认。
+
 ### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；已推送）
 
 - 负责人：主会话。目标：把应用名 `Gateway-byok` 改为 `cursor-byok`（含构建应用名、产物名与各文档），并让 GitHub 在 push 后自动构建 macOS/Windows/Linux 安装包，替代本机编译后手工上传；同时修复在 GitHub 上构建可能失败的问题。

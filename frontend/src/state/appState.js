@@ -1254,6 +1254,12 @@ function applyUpdateSnapshot(raw) {
     appState.updateError = "";
   }
 
+  if (typeof data.phase === "string") {
+    appState.updateErrorPhase = data.phase.trim();
+  } else if (nextState !== "error") {
+    appState.updateErrorPhase = "";
+  }
+
   if (typeof data.message === "string") {
     appState.updateMessage = data.message.trim();
   } else if (!data.prompt) {
@@ -1431,6 +1437,7 @@ export const appState = reactive({
   updateProgressTotal: 0,
   updateProgressPercent: 0,
   updateError: "",
+  updateErrorPhase: "",
   updateMessage: "",
   updatePromptVisible: false,
   updatePromptKind: "idle",
@@ -1718,6 +1725,15 @@ export const updateViewState = reactive({
     if (appState.updatePromptKind === "ready") {
       return "立即重启更新";
     }
+    if (appState.updatePromptKind === "error") {
+      if (appState.updateErrorPhase === "download") {
+        return "重试下载";
+      }
+      if (appState.updateErrorPhase === "install") {
+        return "重试安装";
+      }
+      return "重新检查";
+    }
     return "确定";
   }),
   promptCancelText: computed(() => {
@@ -1727,9 +1743,12 @@ export const updateViewState = reactive({
     if (appState.updatePromptKind === "ready") {
       return "稍后";
     }
+    if (appState.updatePromptKind === "error") {
+      return "关闭";
+    }
     return "取消";
   }),
-  promptShowCancel: computed(() => ["available", "ready"].includes(appState.updatePromptKind)),
+  promptShowCancel: computed(() => ["available", "ready", "error"].includes(appState.updatePromptKind)),
 });
 
 export function getModelAdapterTestResultByID(adapterID) {
@@ -2379,7 +2398,13 @@ export async function confirmUpdatePrompt() {
     return;
   }
 
-  // idle / error：仅关闭提示
+  // error：按失败阶段直接重试，避免用户反复点“检查更新”
+  if (appState.updatePromptKind === "error") {
+    await retryFailedUpdateAction();
+    return;
+  }
+
+  // idle：仅关闭提示
   if (!["available", "ready"].includes(appState.updatePromptKind)) {
     dismissUpdatePrompt();
     return;
@@ -2400,6 +2425,29 @@ export async function confirmUpdatePrompt() {
     const message = toUserError(error);
     appState.updateError = message;
     openUpdatePrompt("error", { error: message });
+  }
+}
+
+async function retryFailedUpdateAction() {
+  const phase = asString(appState.updateErrorPhase) || "check";
+  appState.updatePromptBusy = true;
+  try {
+    if (phase === "download") {
+      await downloadAvailableUpdate();
+      dismissUpdatePrompt();
+      return;
+    }
+    if (phase === "install") {
+      await installReadyUpdate();
+      return;
+    }
+    await checkForUpdates();
+    dismissUpdatePrompt();
+  } catch (error) {
+    appState.updatePromptBusy = false;
+    const message = toUserError(error);
+    appState.updateError = message;
+    openUpdatePrompt("error", { error: message, phase });
   }
 }
 
