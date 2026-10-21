@@ -31,6 +31,7 @@
 - **打包缺陷修复**：`build/linux/nfpm/nfpm.yaml` 原先引用不存在的 `build/linux/Gateway-byok.desktop` 与 `scripts/postinstall.sh`，版本与维护者硬编码（CI 无 `GIT_COMMITTER_NAME`）；现改为仓库根目录相对路径、`VERSION`/`ARCH` 由调用方注入、维护者固定、512×512 应用图标，并新增 `postinstall.sh` / `postremove.sh`。新增 `linux:package:installers`（一次编译产出 deb 与 rpm）、根任务 `release:build:linux:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:verify:installers`，并把安装包纳入 `release:prepare:macos` / `:darwin` / `:linux`。
 - **本地验证**：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`wails3 task release:prepare:macos` 成功，产出 `cursor-byok-1.77.0-macos-arm64.dmg`（24,343,468 字节）、`cursor-byok-1.77.0-macos-amd64.dmg`（25,665,638 字节）与两个同名 tar.gz（21,309,616 / 22,363,677 字节），两个 DMG 均通过 `hdiutil verify`；arm64 包内二进制为 `Mach-O 64-bit executable arm64`，`Info.plist` 的 `CFBundleName`、`CFBundleExecutable` 与 `CFBundleShortVersionString` 分别为 `cursor-byok`、`cursor-byok`、`1.77.0`；`release:build:windows:amd64` 在 macOS 上交叉编译成功并产出 `cursor-byok-1.77.0-windows-amd64.zip`；`nfpm` 用桩二进制产出 deb/rpm，解包核对 deb 的 `Package`、`Version`、`Depends`、维护者与安装路径均正确。
 - **未验证/受阻**：GitHub Actions 尚未真实运行（需要推送后观察）；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 的安装运行行为未在对应实机验证；本机无 Docker daemon，未执行 `release:build:linux:amd64`。
+- **提交与分支状态**：`main` 的改名为 `6a0e370`，CI 触发条件收敛为 `739dc6d`；`gateway` 以合并提交 `398d50e` 同步同一批改动（并补齐其余上游署名清理），两条分支当前内容完全一致。`v1.77.0` 指向 `main@739dc6d`，尚未推送。
 - **待办**：推送后在 Actions 页面确认首次三平台运行结果；按用户确认的顺序同步远程分支与 `v1.77.0` tag。
 
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
