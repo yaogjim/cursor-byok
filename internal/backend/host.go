@@ -699,6 +699,7 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 	}
 	bidiRoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalBidiHandler)
 	runSSERoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalRunSSE)
+	agentServicePassthrough := upstream.AgentRouteAction(routeDeps, host.agentSessions, http.NotFoundHandler())
 
 	host.mux = server.New(
 		server.Use(
@@ -791,6 +792,18 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 			server.ConnectUnary(),
 			server.Local(defaultModelForCli),
 			server.Upstream(defaultModelForCli),
+		),
+		server.POST("/agent.v1.AgentService/GetNewChatNudgeParameterizedModelPicker",
+			server.Name("agent_model_picker_nudge"),
+			server.HTTP(),
+			server.Local(agentServicePassthrough),
+			server.Upstream(agentServicePassthrough),
+		),
+		server.POST("/agent.v1.AgentService/UpdateConversationMetadata",
+			server.Name("agent_conversation_metadata"),
+			server.HTTP(),
+			server.Local(agentServicePassthrough),
+			server.Upstream(agentServicePassthrough),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModel",
 			server.Name("default_model"),

@@ -1440,6 +1440,86 @@ func (resolver compactionHTTPChannelResolver) SelectChannelForModel(context.Cont
 	return resolver.channel, nil
 }
 
+// TestCompactionSolSummaryResumesMainTurn 使用真实请求构建和 actor 续接链路，
+// 将已捕获的 gpt-6.1-sol 参数拒绝条件固定为回归，避免只用假 provider 漏掉 400。
+func TestCompactionSolSummaryResumesMainTurn(t *testing.T) {
+	var mu sync.Mutex
+	var efforts []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reasoning, _ := body["reasoning"].(map[string]any)
+		effort, _ := reasoning["effort"].(string)
+		mu.Lock()
+		efforts = append(efforts, effort)
+		isSummary := len(efforts) == 1
+		mu.Unlock()
+		if effort == "none" {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(writer, `{"error":{"code":"unsupported_value","message":"Unsupported value: 'none' is not supported with the 'gpt-6.1-sol' model. Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'.","param":"reasoning.effort","type":"invalid_request_error"}}`)
+			return
+		}
+		if isSummary && body["max_output_tokens"] != float64(compactionSummaryOutputMaxTokens) {
+			t.Errorf("摘要输出额度缺失或发生变化: %v", body["max_output_tokens"])
+		}
+		if isSummary && body["tools"] != nil {
+			t.Error("摘要请求不应派发工具")
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"已保留任务进展\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-sol\",\"model\":\"gpt-6.1-sol\",\"status\":\"completed\"}}\n\n")
+	}))
+	defer server.Close()
+
+	service, stream := testOverflowRecoveryStream(t)
+	appendCompletedToolHistory(t, service, stream)
+	gateway := NewProviderGateway(compactionHTTPChannelResolver{channel: &legacyruntime.ResolvedChannel{
+		ID: "sol-channel", Provider: "openai", Model: "gpt-6.1-sol", BaseURL: server.URL,
+		APIKey: "test-key", OpenAIEndpoint: "/v1/responses", ReasoningEffort: "high",
+	}})
+	provider := &overflowRecoveryTestProvider{}
+	provider.handler = gateway.StartStream
+	service.provider = provider
+	failedCall := stream.CurrentModelCallID
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: stream.CurrentProviderToken, Done: true, Err: testContextOverflowErr()}); err != nil {
+		t.Fatal(err)
+	}
+	completeOverflowPreCompactHook(t, service, stream)
+	waitForOverflowRecoveryResume(t, service, stream, failedCall, provider)
+
+	stream.mu.Lock()
+	status := stream.Status
+	entries := cloneHistoryEntries(stream.CheckpointConversation.Entries)
+	stream.mu.Unlock()
+	if status != StreamStatusCompleted {
+		t.Fatalf("主对话摘要后未正常完成: %s", status)
+	}
+	if countHistoryKind(entries, "tool_call") != 1 || countHistoryKind(entries, "tool_result") != 1 {
+		t.Fatal("压缩重放或丢失了已完成工具")
+	}
+	summaries := 0
+	for _, event := range readCheckpointTestEvents(t, service, stream) {
+		if summary := event.Message.GetInteractionUpdate().GetSummary(); summary != nil {
+			summaries++
+			if summary.GetSummary() != "已保留任务进展" {
+				t.Fatalf("摘要内容错误: %q", summary.GetSummary())
+			}
+		}
+	}
+	if summaries != 1 {
+		t.Fatalf("摘要应只发布一次: %d", summaries)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(efforts, []string{"low", "high"}) {
+		t.Fatalf("摘要应使用最低合法等级，续接应恢复渠道等级: %v", efforts)
+	}
+}
+
 // TestCompactionSummaryRealAdapterSendsBoundedOutputBudgets 通过真实 OpenAI 适配器
 // 校验摘要两次 HTTP 请求确实携带 4096/8192 的 max_completion_tokens。
 func TestCompactionSummaryRealAdapterSendsBoundedOutputBudgets(t *testing.T) {

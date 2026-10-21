@@ -1,8 +1,19 @@
 # 活动任务
 
 > 本文件是项目活动任务的唯一真值源。`.cursor/plans/*.plan.md` 的 frontmatter todo 仅作阶段索引，不代表任务已满足 Definition of Ready。
+> 主控与子任务的拆分、分配、续办和验收遵循 [贡献指南：主控与子任务交付协作](../CONTRIBUTING.md#主控与子任务交付协作)：责任连续性为底线，委派、分层验证、执行节奏和交接按场景触发，效率复盘按需开展。委派时显式传递适用要求，不假定子任务自动继承规则；在现有任务和证据记录中维护负责人及当前有效状态，不另建流程系统。
 
 ## 当前焦点
+
+### 0.0.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
+
+- 负责人：主会话；目标为修复主对话出现 `chat context summarized` 后失败，并查明同一聊天 BYOK→官网模型被要求新建聊天的原因。源码基线 `ca4d6ed`；本轮保留既有协作规范修改，不部署、重启、修改 Cursor 安装/真实会话或配置，不 commit/push。
+- [completed] `077-summary-parameter-fix`：真实上游最小对照确认 `gpt-6.1-sol` 拒绝 `reasoning.effort=none`（400）；相同输入和4096输出预算仅改 `low` 后200且完成。摘要关闭思考的适配只对精确 `gpt-6.1-sol` / `gpt-6.1-sol-*` 映射最低合法 `low`，普通gpt-6与显式high保持原行为。现场未保留错误正文，因此对照证明参数缺陷及其摘要失败链，不冒充原请求完整重放。
+- [completed] `077-summary-resume-regression`：`TestCompactionSolSummaryResumesMainTurn` 经真实适配器及actor主回合续接，修复前failed/无法恢复，修复后完成；工具调用/结果保留、摘要仅发布一次、摘要low→主回合high及既有有界输出/截断恢复回归通过。
+- [completed] `077-agent-control-routes`：仅补 `GetNewChatNudgeParameterizedModelPicker`、`UpdateConversationMetadata` 两条已观察404的AgentService接口；官网身份保留凭据原样转发，本地relay不送官网，目录与未知接口边界不放宽。Host入口、分流和竞态回归通过；这项只关闭接口缺失，不等于切换症状已修复。
+- [completed] `077-switch-client-probe`（只读取证）：Cursor 3.15.19实际工作台函数9项合成断言通过。选模禁用由已有历史和会话字段 `applyAgentBackendTypeRestrictions=true` 共同决定（编辑唯一首条消息除外）；nudge失败只记录事件，不设置该字段。构建客户端首次提交分支返回不设限；另存在缺失历史Blob时要求新建聊天的独立错误。当前导出无提示正文/对应客户端状态，不能判定用户命中了哪条分支，也不能归因于nudge 404。
+- [completed] `077-source-validation`：最终7个Go改动后的 `go test -count=1 -timeout=300s ./...` 全部通过；摘要/适配器/分流/配置重建定向race四包通过；本次隔离HOME的四包vet、gofmt及diff检查通过。完整证据归档 `/tmp/cursor-byok-077-closeout.o0DDAt`，详见 `docs/process.md` 同名节。文档首次落盘后四包定向复测再次通过（`closeout-tests.log`），桌面验收仍pending。全仓测试保留macOS目标版本链接warning；未构建新安装包。
+- [pending] `077-real-cursor-acceptance`：摘要修复仍待候选产物的真实桌面验收；同聊天切换根因尚未闭合，须用准确提示截图/同次客户端日志及请求ID区分“选模受限”与“历史内容缺失”，随后只修已证实分支。源码/模拟接口通过不提升为真实BYOK→官网往返通过，不修改安装脚本或真实会话字段绕过限制；原混用兼容专项不随本切片完成。
 
 ### 官方/BYOK 混用兼容（分段设计与实施；整体 delivery_status=planned）
 

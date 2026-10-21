@@ -65,6 +65,138 @@ func TestCursorBackendContractHealthzTracesAndProcedures(t *testing.T) {
 	}
 }
 
+func TestHostAgentModelSwitchNudgeForwardsOfficial(t *testing.T) {
+	// 0.0.77 日志中模型选择提示接口被送到本地后返回 404。
+	// 官方身份应保留原始凭据并转发；这只验证缺失接口修复，
+	// 不将该 404 与客户端新建对话提示之间的相关性当作已证实因果。
+	manager := newHostConfigTestManager(t)
+	cfg := DefaultHostTestConfig(t, manager, nil)
+	host := &Host{configs: manager}
+	if err := host.rebuild(cfg); err != nil {
+		t.Fatalf("rebuild() error = %v", err)
+	}
+
+	const (
+		nudgePath    = "/agent.v1.AgentService/GetNewChatNudgeParameterizedModelPicker"
+		metadataPath = "/agent.v1.AgentService/UpdateConversationMetadata"
+		catalogPath  = "/agent.v1.AgentService/GetUsableModels"
+		officialAuth = "Bearer official-test-token"
+	)
+	var (
+		nudgeHits    cliCatalogAtomicInt
+		metadataHits cliCatalogAtomicInt
+		catalogHits  cliCatalogAtomicInt
+		sawAuth      string
+		sawRelay     bool
+	)
+	official := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case nudgePath:
+			nudgeHits.Add(1)
+			sawAuth = request.Header.Get("Authorization")
+			if sawAuth == "Bearer "+legacyruntime.LocalRelayToken || strings.Contains(strings.ToLower(sawAuth), "local-relay") {
+				sawRelay = true
+			}
+			if request.Header.Get(server.HeaderServerUpstreamURL) != "" {
+				t.Errorf("official nudge leaked %s", server.HeaderServerUpstreamURL)
+			}
+			writer.Header().Set("Content-Type", "application/proto")
+			writer.WriteHeader(http.StatusOK)
+			_, _ = writer.Write([]byte("official-nudge-ok"))
+		case metadataPath:
+			metadataHits.Add(1)
+			if request.Header.Get("Authorization") != officialAuth {
+				t.Error("元数据更新未保留官方身份")
+			}
+			payload, _ := io.ReadAll(request.Body)
+			if string(payload) != "metadata-payload" {
+				t.Errorf("元数据请求体被改写: %q", payload)
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		case catalogPath:
+			catalogHits.Add(1)
+			writer.WriteHeader(http.StatusTeapot)
+		default:
+			t.Errorf("unexpected official path %s", request.URL.Path)
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer official.Close()
+
+	nudgeReq := httptest.NewRequest(http.MethodPost, nudgePath, strings.NewReader("{}"))
+	nudgeReq.Header.Set("Content-Type", "application/json")
+	nudgeReq.Header.Set("Authorization", officialAuth)
+	nudgeReq.Header.Set(server.HeaderServerUpstreamURL, official.URL+nudgePath)
+	nudgeRec := httptest.NewRecorder()
+	host.mux.ServeHTTP(nudgeRec, nudgeReq)
+	if nudgeRec.Code == http.StatusNotFound {
+		t.Fatalf("model-switch nudge status=404; official never received the picker request")
+	}
+	if nudgeRec.Code != http.StatusOK {
+		t.Fatalf("model-switch nudge status=%d body=%q", nudgeRec.Code, nudgeRec.Body.String())
+	}
+	if nudgeHits.Load() != 1 {
+		t.Fatalf("official nudge hits=%d, want 1", nudgeHits.Load())
+	}
+	if sawAuth != officialAuth {
+		t.Fatalf("official nudge authorization=%q, want inbound official token", sawAuth)
+	}
+	if sawRelay {
+		t.Fatal("official nudge carried LocalRelayToken")
+	}
+	if got := nudgeRec.Body.String(); got != "official-nudge-ok" {
+		t.Fatalf("nudge body=%q, want official response", got)
+	}
+
+	catalogReq := httptest.NewRequest(http.MethodPost, catalogPath, nil)
+	catalogReq.Header.Set("Content-Type", "application/proto")
+	catalogReq.Header.Set("Authorization", officialAuth)
+	catalogReq.Header.Set(server.HeaderServerUpstreamURL, official.URL+catalogPath)
+	catalogRec := httptest.NewRecorder()
+	host.mux.ServeHTTP(catalogRec, catalogReq)
+	if catalogRec.Code == http.StatusTeapot {
+		t.Fatal("GetUsableModels was swallowed by the AgentService passthrough")
+	}
+	if catalogRec.Code != http.StatusOK {
+		t.Fatalf("GetUsableModels status=%d", catalogRec.Code)
+	}
+
+	localNudge := httptest.NewRequest(http.MethodPost, nudgePath, strings.NewReader("{}"))
+	localNudge.Header.Set("Content-Type", "application/json")
+	localNudge.Header.Set("Authorization", "Bearer "+legacyruntime.LocalRelayToken)
+	localNudge.Header.Set(server.HeaderServerUpstreamURL, official.URL+nudgePath)
+	localRec := httptest.NewRecorder()
+	host.mux.ServeHTTP(localRec, localNudge)
+	if nudgeHits.Load() != 1 {
+		t.Fatalf("local-relay nudge hit official %d extra times", nudgeHits.Load()-1)
+	}
+	if localRec.Code != http.StatusNotFound {
+		t.Fatalf("本地身份不应调用官方选模接口: %d", localRec.Code)
+	}
+	for _, test := range []struct {
+		path string
+		auth string
+		want int
+	}{
+		{metadataPath, officialAuth, http.StatusNoContent},
+		{metadataPath, "Bearer " + legacyruntime.LocalRelayToken, http.StatusNotFound},
+		{"/agent.v1.AgentService/UnknownProcedure", officialAuth, http.StatusNotFound},
+	} {
+		request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader("metadata-payload"))
+		request.Header.Set("Content-Type", "application/proto")
+		request.Header.Set("Authorization", test.auth)
+		request.Header.Set(server.HeaderServerUpstreamURL, official.URL+test.path)
+		recorder := httptest.NewRecorder()
+		host.mux.ServeHTTP(recorder, request)
+		if recorder.Code != test.want {
+			t.Errorf("%s 状态=%d，期望=%d", test.path, recorder.Code, test.want)
+		}
+	}
+	if metadataHits.Load() != 1 {
+		t.Fatalf("官方元数据更新次数=%d，期望=1", metadataHits.Load())
+	}
+}
+
 type unsignedControlPlaneAuth struct{}
 
 func (unsignedControlPlaneAuth) Authorization(context.Context) (string, error) {

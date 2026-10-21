@@ -7,6 +7,34 @@
 
 ## 一、待完成的内容
 
+### 0.0.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
+
+**主对话摘要参数缺陷已修复并通过源码回归；两条缺失控制接口已补齐；同聊天BYOK→官网模型要求新建聊天的现场症状仍未关闭。** 主会话持续负责整合；基线 `ca4d6ed`，修改未提交。当前保留工作区原有协作规范修改；未替换运行实例、构建发布、部署/重启、修改Cursor安装/真实会话/配置或commit/push。
+
+#### 摘要失败：最小真实请求对照与永久续接回归
+
+- 用户材料为 `/Users/yaogj/Downloads/logs 3`；主trace为 `20261021T030127.693286000Z-38902ba83896`。摘要请求连续400后结束，导出缺少具体错误体。使用已配置渠道、合成短文本及4096输出预算作最小请求：`gpt-6.1-sol` / `reasoning.effort=none` 返回400，明确 `unsupported_value`；仅改为 `low` 后200、收到 `response.completed`。没有发送真实会话正文；没有输出凭据。参数缺陷已直接复现，错误体大小与现场记录一致仅为辅助证据，不当作原请求完整重放。
+- 根因为摘要流程关闭思考，适配器按gpt-6前缀误推支持none。`openai.go` 只对精确 `gpt-6.1-sol` 和 `gpt-6.1-sol-*` 将disabled映射low，同时覆盖Responses与Chat形状；普通gpt-6、其它模型及显式high保持既有语义。没有扩大重试、吞错、修改摘要预算或持久化格式。
+- 新增 `TestCompactionSolSummaryResumesMainTurn`：真实请求构建→模拟上游拒绝none→摘要应用→actor续接主回合。修复前永久回归退出1（状态failed，等待恢复超时）；修复后退出0（1.212s）。断言主回合完成、工具调用/结果各保留一条、摘要只发布一次、摘要low后续接恢复high、摘要额度仍4096且不带工具。模拟上游不是实机Cursor验收；适配器单测另覆盖两个端点及显式high不变。
+
+#### 模型切换：独立404修复与客户端限制取证
+
+- nudge接口在主trace第124–125行、`03:01:50Z`即404，早于相关对话失败；元数据更新也多次404。只给 `GetNewChatNudgeParameterizedModelPicker`、`UpdateConversationMetadata` 增加显式Host路由及官方身份转发；沿用现有官方透传，本地relay仍走本地404，不放宽未知AgentService方法。Host测试覆盖原凭据/请求体/响应保留、内部路由头不外泄、local-relay不送官网、目录不被吞、未知接口仍404；既有模型身份分流/配置重建回归保留。
+- 继续读取本机Cursor 3.15.19工作台产物，SHA-256=`18f9a52779fa03f58989bf45f4abbcf18f3efec8dbf205e6aa71429297fd2ef9`。动态提取实际 `shouldDisableModelSwitchingForConversation` 及其首消息判断、首次提交方法，使用合成服务替身执行9项断言通过（`CLIENT_SWITCH_PROBE_PASS`）。实际选模受限条件为已有历史且 `applyAgentBackendTypeRestrictions===true`，编辑唯一首条消息时例外；受限点击对应“Switching models can degrade quality…Start New Chat?”。构建环境首次提交方法直接返回cursor-agent且不设限制，不能凭发现该分支就认定现场会话被锁。
+- 实际nudge调用失败分支只上报 `model_nudge.rpc_failed`，没有设置上述限制字段；因此不能用修补404解释或承诺消除新建聊天提示。客户端还存在缺失Blob时的“This conversation's data is missing and can't be restored. Start a new chat to continue.”独立错误。当前用户导出未记录这两类提示正文/会话限制状态；目标会话已有确定的本地sol流失败，但未建立一次真实官网切换成功或失败的完整证据链。源码函数级断言不替代现场复现，也不把历史混用专项的缺口当成该次现场的已证实根因。
+
+#### 验证、证据适用性与下一步
+
+证据统一归档 `/tmp/cursor-byok-077-closeout.o0DDAt`：`provider-none.log` / `provider-low.log` 为合成真实上游对照；`summary-red.log` / `summary-green.log` 为永久回归先失败后通过；`regression.log` / `race.log` 为最终Go代码后的回归；`client-switch-probe.log` 为本次客户端函数断言；`vet.log`为空且命令实际退出0。
+
+- `go test -count=1 -timeout=300s ./...`：根Go模块全部通过；model 8.275s、forwarder 23.736s、upstream 2.238s、backend 12.516s。有macOS对象14.0/链接目标11.0的warning，不等于低版本实测；独立子模块/前端构建未执行。
+- `go test -race -count=1 -timeout=180s ./internal/backend/forwarder ./internal/backend/agent/model ./internal/backend/server/upstream ./internal/backend -run 'TestCompactionSol|TestCompactionSummaryOutputLimit|TestCompactionSummaryRealAdapter|TestOpenAIThinkingDisableKind|TestApplyOpenAIThinkingDisable|TestHostAgentModelSwitch|TestAgentRouteModelSwitch|TestGatewayDuoHostAgentRouteIdentity|TestGatewayDuoRunSSESurvivesConfigRebuild'`：四包通过（5.381s/2.845s/1.953s/3.347s）。全量和race结果本次已复核日志及成功退出状态，无需重复未变化源码的全量测试。
+- 本次续办另以隔离HOME、固定宿主Go缓存和 `GOENV=off GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off` 执行 `go vet ./internal/backend/agent/model ./internal/backend/forwarder ./internal/backend/server/upstream ./internal/backend`，退出0。源码修改范围为openai适配器及其测试、主回合压缩测试、Host和Agent路由及两个契约测试，共7个Go文件；没有启用原生writer或扩展历史同步。
+
+- 文档首次落盘后的定向复测：沿用上述隔离环境及race相同包/筛选式（去掉 `-race`，`-timeout=90s`），四包再次通过，forwarder 2.492s、model 0.906s、upstream 0.578s、backend 1.728s；实际输出为同目录 `closeout-tests.log`。该记录只补充源码与隔离接口证据，桌面验收状态不变。
+
+源码/模拟接口交付为 `verified-partial`。下一步须在获准候选窗口验收主对话摘要后续接，并取得同聊天切换的准确提示截图或同次客户端日志/请求ID，先区分客户端限制与历史Blob缺失，再针对已证实分支修复。缺少现场证据时保留会话和内容，不改安装JS、真实数据库或会话限制字段绕过门禁，不把两个症状合并称为已解决；原官方/BYOK混用专项仍维持自身状态。
+
 ### 官方/BYOK 混用兼容：分段设计与实施（整体 delivery_status=planned）
 
 #### 执行 `da959273`：本地压缩归档 §19.3k 已通过隔离验收（2026-10-13）

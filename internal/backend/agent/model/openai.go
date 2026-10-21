@@ -2087,7 +2087,8 @@ func applyOpenAIThinkingDisable(body map[string]any, req StreamRequest, baseURL 
 	if len(body) == 0 || normalizeRuntimeThinkingEffort(req.ThinkingEffort) != "disabled" {
 		return
 	}
-	switch openAIThinkingDisableKind(baseURL, modelID, endpoint) {
+	kind := openAIThinkingDisableKind(baseURL, modelID, endpoint)
+	switch kind {
 	case "thinking_type":
 		body["thinking"] = map[string]any{"type": "disabled"}
 		delete(body, "reasoning_effort")
@@ -2096,11 +2097,16 @@ func applyOpenAIThinkingDisable(body map[string]any, req StreamRequest, baseURL 
 		body["enable_thinking"] = false
 		delete(body, "reasoning_effort")
 		setRequestKnob(req, "thinking_disabled_provider_param", "enable_thinking")
-	case "reasoning_none":
+	case "reasoning_none", "reasoning_low":
+		effort := "none"
+		if kind == "reasoning_low" {
+			// sol 无法关闭思考；使用已验证的最低合法等级，而非发送必然被拒绝的 none。
+			effort = "low"
+		}
 		if modelchannel.OpenAIEndpointShape(endpoint) == "responses" {
-			body["reasoning"] = map[string]any{"effort": "none"}
+			body["reasoning"] = map[string]any{"effort": effort}
 		} else {
-			body["reasoning_effort"] = "none"
+			body["reasoning_effort"] = effort
 		}
 		setRequestKnob(req, "thinking_disabled_provider_param", "reasoning.effort")
 	}
@@ -2129,6 +2135,9 @@ func openAIThinkingDisableKind(baseURL string, modelID string, endpoint string) 
 		strings.Contains(model, "mimo") ||
 		strings.Contains(model, "minimax"):
 		return "thinking_type"
+	case model == "gpt-6.1-sol" || strings.HasPrefix(model, "gpt-6.1-sol-"):
+		// 此模型的合法等级从 low 开始；不能从 gpt-6 前缀推断其支持 none。
+		return "reasoning_low"
 	case openAIModelSupportsReasoningNone(model):
 		return "reasoning_none"
 	default:

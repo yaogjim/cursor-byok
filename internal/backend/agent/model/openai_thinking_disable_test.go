@@ -30,6 +30,10 @@ func TestOpenAIThinkingDisableKindMiMo(t *testing.T) {
 		// 回归：reasoning_none 分支（gpt-5.1+/gpt-6）
 		{name: "gpt-5.1", baseURL: "https://api.openai.com/v1", modelID: "gpt-5.1", endpoint: "/chat/completions", want: "reasoning_none"},
 		{name: "gpt-6", baseURL: "https://api.openai.com/v1", modelID: "gpt-6", endpoint: "/chat/completions", want: "reasoning_none"},
+		// sol 的最低合法等级为 low，不能沿用整个 gpt-6 家族的 none 假设。
+		{name: "sol responses", baseURL: "https://custom.example/v1", modelID: "gpt-6.1-sol", endpoint: "/v1/responses", want: "reasoning_low"},
+		{name: "sol chat", baseURL: "https://custom.example/v1", modelID: "gpt-6.1-sol", endpoint: "/v1/chat/completions", want: "reasoning_low"},
+		{name: "sol variant", baseURL: "https://custom.example/v1", modelID: "GPT-6.1-SOL-211", endpoint: "/v1/responses", want: "reasoning_low"},
 		// 回归：未知 provider 不做 disable
 		{name: "unknown provider", baseURL: "https://api.unknown-llm.com/v1", modelID: "some-model", endpoint: "/chat/completions", want: ""},
 	}
@@ -40,6 +44,34 @@ func TestOpenAIThinkingDisableKindMiMo(t *testing.T) {
 				t.Fatalf("openAIThinkingDisableKind(%q, %q, %q) = %q, want %q", tc.baseURL, tc.modelID, tc.endpoint, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestApplyOpenAIThinkingDisableSolUsesLowestSupportedEffort(t *testing.T) {
+	for _, endpoint := range []string{"/v1/responses", "/v1/chat/completions"} {
+		for _, effort := range []string{"disabled", "high"} {
+			t.Run(endpoint+"/"+effort, func(t *testing.T) {
+				req := StreamRequest{ThinkingEffort: effort, RequestKnobs: map[string]any{}}
+				body := map[string]any{"model": "gpt-6.1-sol"}
+				if endpoint == "/v1/responses" {
+					body["reasoning"] = map[string]any{"effort": "high"}
+				} else {
+					body["reasoning_effort"] = "high"
+				}
+				applyOpenAIThinkingDisable(body, req, "https://custom.example/v1", "gpt-6.1-sol", endpoint)
+				got := body["reasoning_effort"]
+				if endpoint == "/v1/responses" {
+					got = body["reasoning"].(map[string]any)["effort"]
+				}
+				want := "high"
+				if effort == "disabled" {
+					want = "low"
+				}
+				if got != want {
+					t.Fatalf("思考等级=%v，期望=%s", got, want)
+				}
+			})
+		}
 	}
 }
 

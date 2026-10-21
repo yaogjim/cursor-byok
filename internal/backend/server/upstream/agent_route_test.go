@@ -129,6 +129,73 @@ func TestUnknownModelDoesNotUseFirstLocalAdapter(t *testing.T) {
 	}
 }
 
+func TestAgentRouteModelSwitchNudgeForwardsOfficial(t *testing.T) {
+	t.Parallel()
+	const nudgePath = "/agent.v1.AgentService/GetNewChatNudgeParameterizedModelPicker"
+	var (
+		officialHits int32
+		sawAuth      string
+		sawRelay     bool
+	)
+	official := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		atomic.AddInt32(&officialHits, 1)
+		sawAuth = request.Header.Get("Authorization")
+		if strings.Contains(strings.ToLower(sawAuth), "local-relay") || sawAuth == "Bearer "+legacyruntime.LocalRelayToken {
+			sawRelay = true
+		}
+		if request.URL.Path != nudgePath {
+			t.Errorf("official path = %s", request.URL.Path)
+		}
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("official-nudge-ok"))
+	}))
+	defer official.Close()
+	localHits := int32(0)
+	local := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&localHits, 1)
+		http.NotFound(writer, nil)
+	})
+	action := AgentRouteAction(agentRouteDeps(t, official.Client()), NewAgentSessionStore(), local)
+	recorder := invokeAgentRoute(t, action, agentRouteInvoke{
+		path:          nudgePath,
+		body:          []byte("{}"),
+		contentType:   "application/json",
+		authorization: agentTestInboundAuth,
+		officialURL:   official.URL + nudgePath,
+		mode:          server.ModeLocal,
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%q", recorder.Code, recorder.Body.String())
+	}
+	if atomic.LoadInt32(&localHits) != 0 {
+		t.Fatal("model-switch nudge hit local 404 handler")
+	}
+	if atomic.LoadInt32(&officialHits) != 1 {
+		t.Fatalf("official hits = %d", officialHits)
+	}
+	if sawAuth != agentTestInboundAuth {
+		t.Fatalf("authorization = %q", sawAuth)
+	}
+	if sawRelay {
+		t.Fatal("official nudge carried LocalRelayToken")
+	}
+
+	localRecorder := invokeAgentRoute(t, action, agentRouteInvoke{
+		path:          nudgePath,
+		body:          []byte("{}"),
+		contentType:   "application/json",
+		authorization: agentTestLocalAuth,
+		officialURL:   official.URL + nudgePath,
+		mode:          server.ModeLocal,
+	})
+	if localRecorder.Code != http.StatusNotFound {
+		t.Fatalf("local-relay nudge status = %d, want 404", localRecorder.Code)
+	}
+	if atomic.LoadInt32(&officialHits) != 1 {
+		t.Fatalf("local-relay nudge hit official %d extra times", officialHits-1)
+	}
+}
+
 func TestAgentRouteLocalHitUsesForwarderNotOfficial(t *testing.T) {
 	t.Parallel()
 	officialHits := int32(0)

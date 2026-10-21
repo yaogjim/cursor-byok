@@ -12,6 +12,9 @@ import (
 // AgentRouteAction splits BidiAppend/RunSSE by model identity.
 // Local hits the existing BYOK forwarder; unmatched models with official
 // identity go to official upstream with the inbound Authorization preserved.
+// The observed model-picker nudge and conversation-metadata methods also need
+// official forwarding. This fixes their local 404s; the logs alone do not prove
+// those 404s caused the client's new-chat prompt. Other methods stay local.
 func AgentRouteAction(deps Dependencies, sessions *AgentSessionStore, local http.Handler) server.HandlerFunc {
 	if sessions == nil {
 		sessions = NewAgentSessionStore()
@@ -33,6 +36,8 @@ func AgentRouteAction(deps Dependencies, sessions *AgentSessionStore, local http
 			return routeBidiAppend(reqCtx, sessions, local)
 		case runSSEProcedure:
 			return routeRunSSE(reqCtx, sessions, local)
+		case "/agent.v1.AgentService/GetNewChatNudgeParameterizedModelPicker", "/agent.v1.AgentService/UpdateConversationMetadata":
+			return routeOfficialAgentControl(reqCtx, local)
 		default:
 			return serveLocalAgent(reqCtx, local)
 		}
@@ -89,6 +94,13 @@ func routeRunSSE(reqCtx *RequestContext, sessions *AgentSessionStore, local http
 		return fmt.Errorf("agent run sse canceled before routing decision")
 	}
 	return dispatchAgent(reqCtx, dest, local)
+}
+
+func routeOfficialAgentControl(reqCtx *RequestContext, local http.Handler) error {
+	if reqCtx != nil && hasOfficialIdentity(reqCtx.Headers) {
+		return forwardOfficialAgent(reqCtx)
+	}
+	return serveLocalAgent(reqCtx, local)
 }
 
 func dispatchAgent(reqCtx *RequestContext, dest AgentDestination, local http.Handler) error {
