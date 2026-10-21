@@ -26,11 +26,11 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 
 func TestUpdateSourceUsesForkRepository(t *testing.T) {
 	const (
-		forkRepo         = "yaogjim/cursor-byok"
-		manifestURL      = "https://github.com/yaogjim/cursor-byok/releases/latest/download/update.json"
-		releasePageURL   = "https://github.com/yaogjim/cursor-byok/releases"
-		forkAssetURL     = "https://github.com/yaogjim/cursor-byok/releases/download/v1.0.0/update.tar.gz"
-		upstreamAssetURL = "https://github.com/leookun/cursor-byok/releases/download/v1.0.0/update.tar.gz"
+		forkRepo       = "yaogjim/cursor-byok"
+		manifestURL    = "https://github.com/yaogjim/cursor-byok/releases/latest/download/update.json"
+		releasePageURL = "https://github.com/yaogjim/cursor-byok/releases"
+		forkAssetURL   = "https://github.com/yaogjim/cursor-byok/releases/download/v1.0.0/update.tar.gz"
+		otherAssetURL  = "https://github.com/example-org/cursor-byok/releases/download/v1.0.0/update.tar.gz"
 	)
 
 	if buildinfo.ReleaseRepo != forkRepo {
@@ -47,8 +47,8 @@ func TestUpdateSourceUsesForkRepository(t *testing.T) {
 	if err := validateUpdateAsset(manifestPlatform{URL: forkAssetURL, Size: 1, Checksum: validChecksum}); err != nil {
 		t.Fatalf("fork release asset rejected: %v", err)
 	}
-	if err := validateUpdateAsset(manifestPlatform{URL: upstreamAssetURL, Size: 1, Checksum: validChecksum}); err == nil {
-		t.Fatal("upstream repository release asset was accepted")
+	if err := validateUpdateAsset(manifestPlatform{URL: otherAssetURL, Size: 1, Checksum: validChecksum}); err == nil {
+		t.Fatal("non-release repository asset was accepted")
 	}
 }
 
