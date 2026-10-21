@@ -94,7 +94,7 @@ jobs:
       - name: 安装构建工具链
         run: |
           set -euo pipefail
-          choco install --yes --no-progress nsis zip protoc
+          choco install --yes --no-progress nsis protoc
           npm install --global "yarn@${YARN_VERSION}"
           go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
           go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
@@ -248,6 +248,7 @@ jobs:
             bin/release/*/*.dmg
             bin/release/*/*.tar.gz
             bin/release/*/*.zip
+            bin/release/*/*installer.exe
             bin/release/*/*.deb
             bin/release/*/*.rpm
             bin/release/*/update.json
