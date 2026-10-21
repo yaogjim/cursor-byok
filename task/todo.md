@@ -14,6 +14,7 @@
 - [completed] `packaging-fixes`：修正 nfpm 引用了不存在的 desktop 文件与安装脚本、硬编码版本/维护者、图标尺寸；新增 `postinstall.sh`/`postremove.sh`、`linux:package:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:build:linux:installers`、`release:verify:installers`。
 - [completed] `local-verification`：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`release:prepare:macos` 产出两个 DMG 与两个 tar.gz，DMG 均通过 `hdiutil verify`，arm64 二进制为 Mach-O arm64，`CFBundleName`/`CFBundleExecutable`/版本为 `cursor-byok`/`cursor-byok`/`1.77.0`；`release:build:windows:amd64` 交叉编译出 zip；nfpm 桩二进制产出 deb/rpm 且 deb 字段与路径解包核对正确。
 - [pending] `ci-real-run`：工作流尚未在 GitHub 上真实运行，需推送后确认三平台 job 结论；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 安装行为未在对应实机验证；本机无 Docker daemon，未跑 `release:build:linux:amd64`。
+- [completed] `commits`：`main` 改名为 `6a0e370`，CI 触发条件收敛为 `739dc6d`；`gateway` 用合并提交 `398d50e` 同步且内容与 `main` 一致；`v1.77.0` 指向 `main@739dc6d`。
 - [pending] `remote-sync`：沿用上一条任务的推送窗口，按用户确认顺序执行远程分支与 `v1.77.0` tag 同步。
 
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
