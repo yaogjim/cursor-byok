@@ -17,7 +17,7 @@
 - [completed] `commits`：`main` 改名为 `6a0e370`，CI 触发条件收敛为 `739dc6d`；`gateway` 用合并提交 `398d50e` 同步且内容与 `main` 一致；`v1.77.0` 指向 `main@739dc6d`。
 - [completed] `remote-sync`：已按确认顺序完成：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、`origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0`。修复前 `origin/main` 为 `5ec8065`，`origin/gateway` 为 `79dc686`。
 
-### CI 构建 Windows/Linux 失败修复（2026-10-21；本地已验证，待真实运行复核）
+### CI 构建 Windows/Linux 失败修复（2026-10-21；main/gateway 已全绿，tag 待重指）
 
 - 负责人：主会话。目标：修复 GitHub Actions 上 Windows 与 Linux 安装包 job 的失败，使三平台安装包与 tag 触发的一致。
 - [completed] `linux-nfpm-paths`：发现 `build/linux/nfpm/nfpm.yaml` 属于 `wails3 update build-assets` 的可更新资产、会被模板重写，且模板引用的 `build/linux/<binary>.desktop` 与生成的实际文件名 `build/linux/desktop` 不一致。处理方式：`nfpm.yaml` 保持生成态，新增自维护配置 `build/linux/nfpm/cursor-byok.nfpm.yaml`（`${VERSION}`/`${ARCH}` 由任务注入、维护者与 homepage 固定、图标 1024×1024 加 pixmaps、启用 `postinstall`/`postremove`），`linux:package:installers` 改为引用该文件。
@@ -26,7 +26,8 @@
 - [completed] `windows-nsis-path`：Windows job 报 `makensis: executable file not found in $PATH`；工作流改为在安装步骤内搜索 `C:\Program Files (x86)\NSIS`（兼容 `C:\Program Files\NSIS`），加入 `GITHUB_PATH` 并 `makensis -VERSION` 自检。
 - [completed] `release-assets-glob`：发布 job 的 `files` 增加 `bin/release/*/*installer.exe`，Windows NSIS 安装包此前不会上传到 Release。
 - [completed] `local-verification`：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok（新增 zip 回归测试）；`release:build:windows:amd64` 完整跑通，zip 根目录为 `cursor-byok-windows-amd64.exe`，解包为 `PE32+ executable (GUI) x86-64`；nfpm 桩二进制按新配置重打 deb/rpm，deb 的 control、postinst/postrm、desktop 与图标路径均核对正确；`common:update:build-assets` 后 `build/` 无 diff；相关 YAML 全部通过解析。
-- [pending] `ci-recheck`：第二次修复尚待推送与真实运行复核。Windows NSIS 实际编译与 Linux 真实二进制/deb/rpm 安装行为仍需在对应 runner 或实机确认。
+- [completed] `ci-recheck`：run 39561163065（`main@94215cc`）与 run 39561166881（`gateway`）三平台 job 全部 success；Windows 由 `go run ./scripts/release zip` 产出 zip、`makensis` 产出 `cursor-byok-1.77.0-windows-amd64-installer.exe`；Linux 的 `nfpm` 产出 `.deb` 与 `.rpm`；三份 artifact 分别 90,618,209 / 46,189,797 / 66,161,119 字节。
+- [pending] `tag-release`：`v1.77.0` 仍指向 `5ec8065`（首次失败提交），需重指到 `94215cc` 才会触发 `发布 GitHub Release` 并上传三平台安装包；待用户确认后执行。另：Windows NSIS 安装包与 Linux deb/rpm 均未在对应实机安装运行验证。
 
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
 

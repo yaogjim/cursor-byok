@@ -34,9 +34,9 @@
 - **提交与分支状态**：`main` 的改名为 `6a0e370`，CI 触发条件收敛为 `739dc6d`；`gateway` 以合并提交 `398d50e` 同步同一批改动（并补齐其余上游署名清理），两条分支当前内容完全一致。`v1.77.0` 指向 `main@739dc6d`，尚未推送。
 - **待办**：推送后在 Actions 页面确认首次三平台运行结果；按用户确认的顺序同步远程分支与 `v1.77.0` tag。远程同步已执行完毕，真实运行结果与后续修复见下一节。
 
-### CI 三平台构建 Windows/Linux 失败分析与修复（2026-10-21 至 2026-10-22；待真实运行复核）
+### CI 三平台构建 Windows/Linux 失败分析与修复（2026-10-21 至 2026-10-22；main/gateway 已全绿，tag 待重指）
 
-**远程分支与 `v1.77.0` tag 已按确认顺序推送；两次真实运行中 macOS 均成功，Windows 与 Linux 各暴露两类问题，本轮已修复并本地验证，第二次修复尚未推送。** 负责人：主会话。
+**远程分支与 `v1.77.0` tag 已按确认顺序推送；三次真实运行后 `main` 与 `gateway` 的三平台 job 全部成功。`v1.77.0` tag 仍指向首次失败提交，尚未触发过 `发布 GitHub Release` job。** 负责人：主会话。
 
 - **第一次运行（run 39557893089，`main@5ec8065` 与 `v1.77.0` 同一 commit；`gateway@79dc686` 为 run 39557889110）**：macOS job（119082219572）成功；Linux job（119082219212）`nfpm package -p deb` 报 `matching "./build/linux/cursor-byok.desktop": file does not exist`；Windows job（119082219652）`windows:create:zip` 的 `zip -qry` 报 `zip error: Invalid command arguments (short option 'y' not supported)`，`release:build:windows:amd64` exit 16。
 - **第二次运行（run 39560016345，`main@6e852ff`）**：macOS job（119088737003）成功；Linux job（119088737026）在“校验构建资产与 build/config.yml 一致”步骤失败；Windows job（119088737044）`release:build:windows:installer` 报 `"makensis": executable file not found in $PATH`，exit 127。
@@ -45,7 +45,8 @@
 - **修复 2（Windows 打包）**：`scripts/release` 新增 `zip` 子命令（`archive/zip` 实现），`windows:create:zip` 改为 `go run ./scripts/release zip -src <暂存目录> -out <zip>`，不再依赖平台 `zip` 工具，`choco install` 去掉 `zip`。NSIS 方面，choco 安装的 NSIS 不在默认 PATH：工作流在安装步骤内搜索 `C:\Program Files (x86)\NSIS`（兼容 `C:\Program Files\NSIS`），写入 `GITHUB_PATH` 并用 `makensis -VERSION` 自检，找不到直接报错退出。
 - **修复 3（发布资产）**：发布 job 的 `files` 增加 `bin/release/*/*installer.exe`，此前 Windows NSIS 安装包不会进入 Release。
 - **本地验证**：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok，新增 `TestWriteZipDirArchivesDirectoryContents`；`wails3 task release:build:windows:amd64` 在 macOS 上完整跑通（含 `go run ... zip`），`unzip -l` 归档根为 `cursor-byok-windows-amd64.exe`，解包后 `file` 判定 `PE32+ executable (GUI) x86-64`；`nfpm` 用桩二进制按新配置重打 deb 与 rpm，deb `control` 的 `Version=1.77.0-1`、`Architecture=amd64`、维护者与 homepage 正确，`control.tar.gz` 含 `postinst`/`postrm`，`data.tar.gz` 含 desktop、`hicolor/1024x1024` 与 `pixmaps` 图标；执行 `wails3 task common:update:build-assets` 后 `git diff` 不再包含 `build/` 变更；工作流与各 Taskfile/nfpm 配置均通过 YAML 解析。
-- **未验证/受阻**：Windows NSIS 安装包仍未在 Windows CI 或实机验证（本机无 `makensis`，brew 安装失败）；Linux 真实二进制与 deb/rpm 的安装运行行为未在 Linux 实机验证；第二次修复尚未推送，没有新的 CI 结论。
+- **第三次运行（run 39561163065，`main@94215cc`；`gateway` 为 run 39561166881）**：三平台 job 全部 `success`，`发布 GitHub Release` 因非 tag 触发而 `skipped`。macOS 上传 `macos-assets`（90,618,209 字节）、Windows 上传 `windows-assets`（46,189,797 字节）、Linux 上传 `linux-assets`（66,161,119 字节）。日志佐证：Windows 的 `go run ./scripts/release zip` 生成 zip，`makensis` 输出 `bin/cursor-byok-amd64-installer.exe` 并重命名为 `cursor-byok-1.77.0-windows-amd64-installer.exe`；Linux 的 `nfpm` 依次生成 `cursor-byok-1.77.0-linux-amd64.deb` 与 `.rpm`。
+- **未验证/受阻**：Windows NSIS 安装包已由 CI 真实编译成功，但未在 Windows 实机安装运行；Linux deb/rpm 未在 Linux 实机安装运行（本机无 `makensis`，brew 安装失败）。`v1.77.0` tag 仍指向 `5ec8065`，需在确认后重指到 `94215cc` 才能触发 Release 发布。
 
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
 
