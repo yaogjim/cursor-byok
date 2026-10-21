@@ -30,7 +30,7 @@ func TestUpdateSourceUsesForkRepository(t *testing.T) {
 		manifestURL      = "https://github.com/yaogjim/cursor-byok/releases/latest/download/update.json"
 		releasePageURL   = "https://github.com/yaogjim/cursor-byok/releases"
 		forkAssetURL     = "https://github.com/yaogjim/cursor-byok/releases/download/v1.0.0/update.tar.gz"
-		upstreamAssetURL = "https://github.com/leookun/cursor-byok/releases/download/v1.0.0/update.tar.gz"
+		upstreamAssetURL = "（原上游仓库地址，已移除）/releases/download/v1.0.0/update.tar.gz"
 	)
 
 	if buildinfo.ReleaseRepo != forkRepo {

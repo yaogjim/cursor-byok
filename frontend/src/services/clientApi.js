@@ -17,10 +17,8 @@ import {
   CheckForUpdates,
   DownloadAvailableUpdate,
   GetAppVersion,
-  GetFooterAuthorInfo,
   InstallReadyUpdate,
   OpenConfigWindow,
-  OpenFooterAuthorHome,
   OpenHistoryWindow,
   OpenModelConfigWindow,
 } from "@bindings/cursor/internal/bridge/windowservice.js";
@@ -147,10 +145,6 @@ export function getAppVersion() {
   return withApiLogging("GetAppVersion", () => GetAppVersion());
 }
 
-export function getFooterAuthorInfo() {
-  return withApiLogging("GetFooterAuthorInfo", () => GetFooterAuthorInfo());
-}
-
 export function checkForUpdates() {
   return withApiLogging("CheckForUpdates", () => CheckForUpdates());
 }
@@ -161,10 +155,6 @@ export function downloadAvailableUpdate() {
 
 export function installReadyUpdate() {
   return withApiLogging("InstallReadyUpdate", () => InstallReadyUpdate());
-}
-
-export function openFooterAuthorHome() {
-  return withApiLogging("OpenFooterAuthorHome", () => OpenFooterAuthorHome());
 }
 
 export function openModelConfig() {

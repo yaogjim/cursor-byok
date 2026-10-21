@@ -6,7 +6,7 @@
 - **当前发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`（仍为 `v0.0.48`）
 - **本次合并来源**：本地 `main@305b108e8cb44f68c15672809fc579acc65a9835`（含本地 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
 - **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
-- **原始仓库**：<https://github.com/leookun/cursor-byok>
+- **原始仓库**：<（原上游仓库地址，已移除）>
 - **原始上游核对基线**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`；最终 `git fetch upstream --prune --no-tags` 已通过，远端仍为此 SHA
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
 - **当前工作树**：`0.0.49` 已在隔离 worktree 语义合入并完成可执行门禁；用户已确认创建本地 merge commit 并推进 `noad`；**仍未 push**
@@ -32,10 +32,10 @@
 
 本次核对得到：
 
-- 原始仓库 `https://github.com/leookun/cursor-byok.git` 已同步到 `main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`。
+- 原始仓库 `（原上游仓库地址，已移除）` 已同步到 `main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`。
 - 上游目标先以真实双父 merge 合入本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`，再以真实双父 merge 合入 `noad@ad50039f5bf83b8df257c5375d6f24b3a16ae31e`。
 - 本地同步前基线为 `noad@869f45f539e416b0fbe2c95c25b33f3c6350615e`；`ad50039` 的两个父提交分别为 `869f45f` 与 `d082e79`。
-- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `https://github.com/leookun/cursor-byok.git`，没有从 `origin/main` 推断上游状态。
+- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `（原上游仓库地址，已移除）`，没有从 `origin/main` 推断上游状态。
 - 本次仅更新本地分支，没有执行 `git push`。
 
 本次 merge 相对 `noad@869f45f` 的差异为 **23 个文件，258 行新增、1889 行删除**。主要删除来自上游为修复会话消失而回退 blob/checkpoint 同步，不代表本地其他能力被整体移除。
@@ -81,7 +81,7 @@
 已完成验证：`git diff --check`、`go test ./...`、`go build ./...`、`yarn test:config-projection` 和 `yarn build`。
 ## 4. 相对原始仓库的功能差异
 
-历史差异以 `leookun/cursor-byok main@799dbda` 为起点；上一同步记录核对到 `main@9e05739`，本次实际同步原始上游 `release/0.0.43@726f082`，并经本地 `main@14f20fe` 合入。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
+历史差异以 `原上游仓库 main@799dbda` 为起点；上一同步记录核对到 `main@9e05739`，本次实际同步原始上游 `release/0.0.43@726f082`，并经本地 `main@14f20fe` 合入。下表把“代码已经改变”“已经验证”和“仅作决策”分开记录。
 
 | 功能域 | 原始主线行为 | 本地已提交差异 | 当前工作树或决策 | 状态与合并口径 |
 | --- | --- | --- | --- | --- |
@@ -131,7 +131,7 @@
 ## 7. `main@b438237` 同步记录
 
 - **同步时间**：`2026-07-26T18:07:14-07:00`
-- **原始上游核对点**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **原始上游核对点**：`原上游仓库 main@9e057399690bff78cd7571dba2e7a14e12767585`
 - **本地合并来源**：`main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
 - **本地同步前基线**：`noad@841a49c0963a911b4c838157438e074ef930b33b`
 - **merge commit**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
@@ -454,7 +454,7 @@
 - 保留广告关闭零请求、手动三阶段更新、local/official/relay **无隐式 fallback**。
 - 保留 fork 发布身份：`yaogjim/cursor-byok`；更新资源只指向该 fork。
 - 保留 Windows `WAILS_INSTALL_SCOPE` user/machine 双 scope，仅同步版本号到 `0.0.49`。
-- 删除 prompt 中的 `leookun` 身份覆盖；既有作者署名与 updater 负向 fixture 不改。
+- 删除 prompt 中的 原上游作者 身份覆盖；既有作者署名与 updater 负向 fixture 不改。
 - 拒绝含糊上游 release note；`release-notes.md` 按 noad 风格重写为 v0.0.49。
 - 修复导入导出中的 duplicated `routing` YAML key，以及旧 `Config.Log` 测试断言。
 - 本轮 merge 曾把 Windows 安装器覆盖成固定 admin/HKLM，已恢复 dual scope。
@@ -483,7 +483,7 @@ MERGE_MSG 记录的 **8 个文本冲突**：
 | 配置导入导出与 routing | `config_transfer.go`、`config.go`、`lifecycle.go`、`service.go` | 接受导入导出与锁分层；以 noad schema 为准，去掉 legacy 重复 `routing` 键 |
 | 前端导出 API 日志契约 | `frontend/src/services/clientApi.js` | 最终 review 修复：导出调用必须遵守 noad 两参数封装，不得沿用三参数写法 |
 | Windows 安装 scope | `build/windows/nsis/wails_tools.nsh` | 拒绝固定 admin/HKLM；恢复 `WAILS_INSTALL_SCOPE` 双模式，只升版本 |
-| prompt 身份 | `prompt/**` | 接受 prompt 更新与 `FAKE_MODEL_NAME` 渲染；删除 `@leookun` 身份覆盖 |
+| prompt 身份 | `prompt/**` | 接受 prompt 更新与 `FAKE_MODEL_NAME` 渲染；删除 原上游作者的身份标识 身份覆盖 |
 | 发布身份 | `internal/buildinfo/buildinfo.go`、`Taskfile.yml` | 保持 `yaogjim/cursor-byok`，不回写上游 Release |
 
 ### 14.4 测试与构建证据

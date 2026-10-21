@@ -4,7 +4,7 @@
 - **端到端操作手册（推荐入口）**：[`cursor_byok_upstream_sync_release_runbook.md`](cursor_byok_upstream_sync_release_runbook.md)  
   常规流程：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`。  
   **本文件**负责冲突分类、必须保留的本地行为与停止条件；命令级顺序与发版步骤以 Runbook 为准。
-- **原始上游仓库**：<https://github.com/leookun/cursor-byok>
+- **原始上游仓库**：<（原上游仓库地址，已移除）>
 - **本地 Fork（`origin`）**：<https://github.com/yaogjim/cursor-byok>
 - **本地分支**：`noad`
 - **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
@@ -39,7 +39,7 @@ git status --short
 git branch --show-current
 git log --oneline --decorate -20
 git remote -v
-git ls-remote --heads https://github.com/leookun/cursor-byok.git
+git ls-remote --heads （原上游仓库地址，已移除）
 ```
 
 ## 2. 上游变更分类
@@ -141,7 +141,7 @@ git remote get-url upstream
 如果不存在才添加：
 
 ```bash
-git remote add upstream https://github.com/leookun/cursor-byok.git
+git remote add upstream （原上游仓库地址，已移除）
 ```
 
 只获取引用，不修改当前工作树：
@@ -366,7 +366,7 @@ cd frontend && yarn test:config-projection && yarn build
 
 - **同步时间**：`2026-07-26T18:07:14-07:00`
 - **同步来源**：本地 `main@b438237e08ed42f871dd7de2f05ee1dd9689a72a`
-- **原始上游核对点**：`leookun/cursor-byok main@9e057399690bff78cd7571dba2e7a14e12767585`
+- **原始上游核对点**：`原上游仓库 main@9e057399690bff78cd7571dba2e7a14e12767585`
 - **本地同步前基线**：`noad@841a49c0963a911b4c838157438e074ef930b33b`
 - **安全 merge commit**：`74c1c38ec3e68ed0f40fbefceaedd41c69616065`
 - **拓扑**：双父分别为 `841a49c` 与 `b438237`，使用真实 merge，未使用 cherry-pick。
@@ -451,7 +451,7 @@ cd frontend && yarn test:config-projection && yarn build
 | 配置导入导出与 routing | `config_transfer.go*`、`config.go`、`lifecycle.go`、`service.go`、`bridge/proxy.go` | legacy `routing` 重复键、配置事实源被前端覆盖 | 接受导入导出与锁分层；YAML 为事实源；去掉 duplicated routing key；修复旧 `Config.Log` 测试 |
 | 前端导出 API 日志契约 | `frontend/src/services/clientApi.js` | 三参数导出调用把 noad 两参数 `withApiLogging(name, runner)` 打成 TypeError，导出到不了后端 | 最终 review 发现并修复为两参数；新增静态契约检查覆盖 24 个调用点 |
 | Windows 安装 scope | `build/windows/nsis/wails_tools.nsh` | 固定 `RequestExecutionLevel admin` / 只写 HKLM | 拒绝上游固定管理员安装；恢复 `WAILS_INSTALL_SCOPE` user/machine 双模式，仅升到 `0.0.49` |
-| prompt 身份 | `prompt/**` | 把运行时身份改写成 `leookun/cursor-byok` | 接受 prompt 更新；删除 leookun 身份覆盖；作者署名与 updater 负向 fixture 不改 |
+| prompt 身份 | `prompt/**` | 把运行时身份改写成 `原上游仓库` | 接受 prompt 更新；删除原上游作者的身份覆盖；作者署名与 updater 负向 fixture 不改 |
 | 发布身份 | `internal/buildinfo/buildinfo.go`、`Taskfile.yml`、updater 测试 | 更新 URL 回写上游 Release | 保持 `yaogjim/cursor-byok` |
 
 ### 9.3 验证门禁（本轮已执行）

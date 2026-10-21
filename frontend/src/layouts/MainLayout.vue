@@ -1,5 +1,5 @@
 <script setup>
-import { Browser, Window } from "@wailsio/runtime";
+import { Window } from "@wailsio/runtime";
 import LocaleSelect from "@/components/LocaleSelect.vue";
 import { useMessage } from "@/composables/useMessage";
 import {
@@ -19,9 +19,6 @@ const showIcon = computed(() => route.meta.showIcon !== false);
 const title = computed(() => route.meta.title ?? "Cursor助手｜永久免费｜自定义API");
 const directlyClose = computed(() => route.meta.directlyClose === true);
 const showFooter = computed(() => route.path === "/");
-const AUTHOR_REPOSITORY_URL = "https://github.com/leookun/cursor-byok";
-const AUTHOR_LABEL = "@leookun";
-const usageDocsURL = "https://docs.leokun.cn";
 let proxyStateTimer = null;
 const proxyStatePollIntervalMs = 10000;
 const netProxyEndpoint = computed(
@@ -87,22 +84,6 @@ async function handleCheckForUpdates() {
 function showActionError(title, error) {
   const detail = String(error || "操作失败").trim() || "操作失败";
   message(`${title}：${detail}`);
-}
-
-async function handleOpenAuthorHome() {
-  try {
-    await Browser.OpenURL(AUTHOR_REPOSITORY_URL);
-  } catch (error) {
-    showActionError("打开作者地址失败", error);
-  }
-}
-
-async function handleOpenUsageDocs() {
-  try {
-    await Browser.OpenURL(usageDocsURL);
-  } catch (error) {
-    showActionError("打开使用教程失败", error);
-  }
 }
 
 onMounted(() => {
@@ -181,22 +162,6 @@ onUnmounted(() => {
       >
         <span>{{ updateViewState.footerVersionLabel }}</span>
         <span>检查更新</span>
-      </button>
-      <button
-        type="button"
-        class="center-row shrink-0 gap-[2px]  cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
-        @click="handleOpenUsageDocs"
-      >
-        <span class="icon-[mdi--file-document-outline] text-[15px]"></span>
-        <span>使用教程</span>
-      </button>
-      <button
-        type="button"
-        class="center-row shrink-0 gap-[6px] cursor-pointer rounded-[6px] px-[6px] py-[3px] transition-colors duration-150 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]"
-        @click="handleOpenAuthorHome"
-      >
-        <span class="icon-[mdi--github] text-[14px]"></span>
-        <span>{{ AUTHOR_LABEL }}</span>
       </button>
       <div
         v-if="updateViewState.footerDownloading"

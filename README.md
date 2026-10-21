@@ -12,12 +12,11 @@
 
 | 分支 | 定位 |
 | --- | --- |
-| `cli` | **当前分支**：在 noad 基础上加入 Docker CLI、WeTTY 和 CLI 模型池 |
-| `gateway` | 最新主线：路由、官方/BYOK 共存、共享入口、订阅账号，并且已经包含 CLI 能力 |
-| `noad` | 早期无广告版，停留在 v0.0.49.x |
-| `main` | 上游镜像，与 [leookun/cursor-byok](https://github.com/leookun/cursor-byok) 保持一致 |
+| `cli` | **当前分支**：在 noad 基础上加入 Docker CLI、WeTTY 和 CLI 模型池，版本停留在 0.0.49.x |
+| `main` | **主线（默认分支）**：由原 `noad` 分支承接并合并 `gateway`，包含路由、官方/BYOK 共存、共享入口、订阅账号与 CLI 能力 |
+| `gateway` | 功能开发分支：路由、官方/BYOK 共存、共享入口、订阅账号的持续开发线 |
 
-如果你只是想在 Cursor 桌面端使用 BYOK，`noad` 就够用；如果你想把同一套模型接到 CLI、或者想用共享入口和订阅账号，建议直接使用 `gateway`。
+`noad` 分支已改名为 `main`，原上游镜像 `main` 已删除；本仓库不再跟踪任何上游仓库。如果你只是想在 Cursor 桌面端使用 BYOK，`main` 就够用；如果你想把同一套模型接到 CLI、或者想用共享入口和订阅账号，建议直接使用 `main`。
 
 ## CLI 能力
 
