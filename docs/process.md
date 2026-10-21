@@ -9,12 +9,12 @@
 
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only，未推送）
 
-**已完成本地分支重构、全仓版本重编号与上游署名清理；远程尚未同步。** 负责人：主会话。用户确认的边界：先在本地完成并验证，推送前再确认；删除 `leookun`、`komeadanagito` 两个远程；版本按 `0.0.50` 之后统一改为 `1.x`（旧 tag 保留，另建 `v1.77.0`）；`cli` 保持 `0.0.49.6` 不参与新序列；删除作者入口与外部帮助链接；`LICENSE` 署名改为 `yaogjim`。
+**已完成本地分支重构、全仓版本重编号与上游署名清理；远程尚未同步。** 负责人：主会话。用户确认的边界：先在本地完成并验证，推送前再确认；删除原上游与中转镜像两个远程；版本按 `0.0.50` 之后统一改为 `1.x`（旧 tag 保留，另建 `v1.77.0`）；`cli` 保持 `0.0.49.6` 不参与新序列；删除作者入口与外部帮助链接；`LICENSE` 署名改为 `yaogjim`。
 
 - **分支**：删除原上游镜像 `main`（原 `31e9f5c`），将 `noad`（原 `954b7ac`）改名为 `main`，再合并 `gateway@96a6d6a`。合并仅 `README.md` 一处内容冲突（下载入口文案），取 `gateway` 版本；`internal/backend/forwarder/subagent_store.go` 自动合并，已核对 `b61a4de` 的 Windows 目录 fsync 修复仍在。合并提交 `6f8e9c2`。
 - **版本重编号**：`0.0.N.M`（N≥50）→ `1.N.M`，如 `0.0.51.0`→`1.51.0`、`0.0.77.0`→`1.77.0`；`0.0.49.x` 及更早保持不变。覆盖 `build/config.yml`、`build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/linux/nfpm/nfpm.yaml`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/windows/wails.exe.manifest`、`README.md`、`release-notes.md`、`releaselog/`（26 个文件改名）、`docs/**`、`task/todo.md`、`internal/updater/semver_test.go` 中的版本 fixture。`go run ./scripts/release version -config ./build/config.yml` 输出 `1.77.0`。
 - **署名清理**：删除 `internal/bridge/window_author.go`（`GetFooterAuthorInfo`/`OpenFooterAuthorHome`），移除 `MainLayout.vue` 的作者入口、“使用教程”按钮及对应 handler/常量，清理 `clientApi.js` 的绑定导出，`LICENSE` 版权行改为 `Copyright (c) 2026 yaogjim`，updater 负向 fixture 改用中性外部仓库地址。`tab.leokun.cn`、`ads.leokun.cn` 属运行时中继/广告端点配置，不是仓库署名，未改动。
-- **远程**：已删除 `leookun`、`komeadanagito` 两个 remote，仅保留 `origin`（`https://github.com/yaogjim/cursor-byok`）。`main` 解除了对 `origin/noad` 的旧上游跟踪；因尚未推送，`origin/main`、`origin/noad`、`origin/HEAD` 仍是旧状态。
+- **远程**：已删除原上游与中转镜像两个 remote，仅保留 `origin`（`https://github.com/yaogjim/cursor-byok`）。`main` 解除了对 `origin/noad` 的旧上游跟踪；因尚未推送，`origin/main`、`origin/noad`、`origin/HEAD` 仍是旧状态。
 - **文档**：`README.md` 分支说明改为 `main`（主线）/`gateway`（开发）/`cli`，并注明不再跟踪上游；`docs/cursor_byok_upstream_merge_requirements.md` 标记为已停用，原上游地址替换为“已解除关联”；`prd_cursor_byok_工作决策基线.md`、`prd_cursor_byok_当前功能与上游差异.md`、`main_gateway_价值功能分析与迁移方案_20260907.md`、`task/todo.md` 中的上游仓库链接与作者标识一并移除。
 - **历史记录口径**：本次按用户要求对文档中的 `0.0.50+` 版本号做了全局重编号，因此下方与历史发布记录中出现的 `v1.x` tag、`1.x` 版本号在重编号之前实际为 `v0.0.x`。涉及“已推送/已发布”的旧记录描述的是重编号前的真实操作，当前仓库尚未以新版本号推送或发布。
 - **验证**：`go build ./...` 退出0；`go test ./... -count=1 -timeout=300s` 全部通过（36 个包 ok，0 FAIL，保留 macOS 目标版本链接 warning）；`go test ./internal/updater ./internal/bridge ./internal/backend` 通过；`gofmt` 无输出。前端未执行 `yarn build`（本轮改动仅删除 UI 入口，且未安装依赖）。**平台构建、GitHub 发布与远程同步均未执行，不得记为已发布。**
