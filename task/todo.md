@@ -5,6 +5,27 @@
 
 ## 当前焦点
 
+### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；local-only）
+
+- 负责人：主会话。目标：把应用名 `Gateway-byok` 改为 `cursor-byok`（含构建应用名、产物名与各文档），并让 GitHub 在 push 后自动构建 macOS/Windows/Linux 安装包，替代本机编译后手工上传；同时修复在 GitHub 上构建可能失败的问题。
+- [completed] `rename-app`：37 个文件完成替换，覆盖 `build/config.yml`、darwin plist、windows info/nsis、nfpm、`Taskfile.yml` 的 `APP_NAME`、`internal/app/runner.go` 的 `appName`、README、release-notes 与 releaselog；`build/linux/desktop` 改名 `build/linux/nfpm/cursor-byok.desktop`。改后执行 `wails3 task common:update:build-assets` 无额外 diff。历史记录中的旧版本路径（`/Applications/Gateway-byok.app`）与旧实例名保持原样。
+- [completed] `ci-workflow`：新增 `.github/workflows/build.yml`，三平台 job（`macos-14` / `windows-latest` / `ubuntu-24.04`）构建 DMG+tar.gz、ZIP+NSIS、tar.gz+deb+rpm；tag 触发的发布 job 校验 tag 与 `build/config.yml` 版本一致、生成 `update.json` 并发布 Release；分支 push 仅上传 Artifacts。
+- [completed] `ci-failure-fixes`：干净检出先执行 `common:generate:proto`；`generate:bindings` 与各平台 `build:native` 移除 `go:mod:tidy` 依赖（原先与 proto 生成并行，`gen/` 缺失会失败）；`generate:proto` 的 include 路径按 OS 选择；Linux 补 webkit/gtk 依赖与 `nfpm`、并校验生成资产与 `build/config.yml` 一致；Windows 补 `nsis`/`zip`/`protoc`，webview2 bootstrapper 已存在时跳过下载。
+- [completed] `packaging-fixes`：修正 nfpm 引用了不存在的 desktop 文件与安装脚本、硬编码版本/维护者、图标尺寸；新增 `postinstall.sh`/`postremove.sh`、`linux:package:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:build:linux:installers`、`release:verify:installers`。
+- [completed] `local-verification`：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`release:prepare:macos` 产出两个 DMG 与两个 tar.gz，DMG 均通过 `hdiutil verify`，arm64 二进制为 Mach-O arm64，`CFBundleName`/`CFBundleExecutable`/版本为 `cursor-byok`/`cursor-byok`/`1.77.0`；`release:build:windows:amd64` 交叉编译出 zip；nfpm 桩二进制产出 deb/rpm 且 deb 字段与路径解包核对正确。
+- [pending] `ci-real-run`：工作流尚未在 GitHub 上真实运行，需推送后确认三平台 job 结论；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 安装行为未在对应实机验证；本机无 Docker daemon，未跑 `release:build:linux:amd64`。
+- [pending] `remote-sync`：沿用上一条任务的推送窗口，按用户确认顺序执行远程分支与 `v1.77.0` tag 同步。
+
+### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
+
+- 负责人：主会话。目标：不再关联原上游代码库；删除原 `main`、`noad` 改名为 `main`、合并 `gateway`；清除所有分支中的上游作者信息与帮助链接；`0.0.50` 之后的版本统一改为 `1.x`；同步文档。用户已确认：先在本地完成并验证再确认推送、删除原上游与中转镜像两个远程、旧 tag 保留并另建 `v1.77.0`、`cli` 保持 `0.0.49.6`、删除作者入口与帮助链接、`LICENSE` 署名改 `yaogjim`。
+- [completed] `restructure-branches`：删除原上游镜像 `main`（`31e9f5c`），`noad@954b7ac` 改名为 `main`，合并 `gateway@96a6d6a`（合并提交 `6f8e9c2`）。仅 `README.md` 下载入口文案冲突，取 gateway 版本；已核对 `b61a4de` 的 Windows 目录 fsync 修复仍在合并结果中。三个 pre-restructure 备份分支保留在本地。
+- [completed] `renumber-versions`：`0.0.N.M`（N≥50）→ `1.N.M`；覆盖 `build/config.yml`、darwin plist、nfpm、windows info/nsis/manifest、README、release-notes、`releaselog/`（26 个改名）、`docs/**`、`task/todo.md` 与 semver 测试 fixture。`go run ./scripts/release version` 输出 `1.77.0`。`0.0.49.x` 保持不变，`cli` 按确认保留 `0.0.49.6`。
+- [completed] `remove-upstream-attribution`：删除 `internal/bridge/window_author.go`，移除 `MainLayout.vue` 作者入口与“使用教程”按钮、`clientApi.js` 对应绑定，`LICENSE` 改为 `Copyright (c) 2026 yaogjim`，updater 负向 fixture 改为中性地址；`main`、`gateway`、`cli` 三分支均无上游作者名残留（`tab.\*`/`ads.\*` 运行时端点配置除外，非署名，未改）。
+- [completed] `update-docs`：`README.md` 分支说明改为 `main`/`gateway`/`cli`；`docs/cursor_byok_upstream_merge_requirements.md` 标记停用；三份 PRD/方案文档的上游仓库链接与作者标识移除；`release-notes.md` 版本小节改写为版本方案变更说明。
+- [completed] `local-verification`：`go build ./...` 退出0；`go test ./... -count=1 -timeout=300s` 36 个包全部通过、0 FAIL（保留 macOS 目标版本链接 warning）；`gofmt` 无输出。前端未跑 `yarn build`，平台构建、release 与推送均未执行。
+- [pending] `remote-sync-and-release`：待用户确认推送窗口后执行：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、`origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0` tag，并重建 `1.77.0` 安装包与 release 资产。**当前远程仍是旧状态，不得记为已完成。**
+
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
 
 - 负责人：主会话；目标为修复主对话出现 `chat context summarized` 后失败，并查明同一聊天 BYOK→官网模型被要求新建聊天的原因。源码基线 `ca4d6ed`；本轮保留既有协作规范修改，不部署、重启、修改 Cursor 安装/真实会话或配置，不 commit/push。
@@ -13,7 +34,15 @@
 - [completed] `077-agent-control-routes`：仅补 `GetNewChatNudgeParameterizedModelPicker`、`UpdateConversationMetadata` 两条已观察404的AgentService接口；官网身份保留凭据原样转发，本地relay不送官网，目录与未知接口边界不放宽。Host入口、分流和竞态回归通过；这项只关闭接口缺失，不等于切换症状已修复。
 - [completed] `077-switch-client-probe`（只读取证）：Cursor 3.15.19实际工作台函数9项合成断言通过。选模禁用由已有历史和会话字段 `applyAgentBackendTypeRestrictions=true` 共同决定（编辑唯一首条消息除外）；nudge失败只记录事件，不设置该字段。构建客户端首次提交分支返回不设限；另存在缺失历史Blob时要求新建聊天的独立错误。当前导出无提示正文/对应客户端状态，不能判定用户命中了哪条分支，也不能归因于nudge 404。
 - [completed] `077-source-validation`：最终7个Go改动后的 `go test -count=1 -timeout=300s ./...` 全部通过；摘要/适配器/分流/配置重建定向race四包通过；本次隔离HOME的四包vet、gofmt及diff检查通过。完整证据归档 `/tmp/cursor-byok-077-closeout.o0DDAt`，详见 `docs/process.md` 同名节。文档首次落盘后四包定向复测再次通过（`closeout-tests.log`），桌面验收仍pending。全仓测试保留macOS目标版本链接warning；未构建新安装包。
-- [pending] `077-real-cursor-acceptance`：摘要修复仍待候选产物的真实桌面验收；同聊天切换根因尚未闭合，须用准确提示截图/同次客户端日志及请求ID区分“选模受限”与“历史内容缺失”，随后只修已证实分支。源码/模拟接口通过不提升为真实BYOK→官网往返通过，不修改安装脚本或真实会话字段绕过限制；原混用兼容专项不随本切片完成。
+- [pending] `077-real-cursor-acceptance`：摘要修复已随原 0.0.77.0（重编号后为 1.77.0）同版本资产重新发布，但真实桌面验收仍未执行：主对话摘要后续接需实机确认；同聊天切换根因尚未闭合，须用准确提示截图/同次客户端日志及请求ID区分“选模受限”与“历史内容缺失”，随后只修已证实分支。源码/模拟接口与资产发布不提升为真实BYOK→官网往返通过，不修改安装脚本或真实会话字段绕过限制；原混用兼容专项不随本切片完成。
+
+### 原 0.0.77.0 同版本发布记录（2026-10-21；重编号后记为 1.77.0）
+
+- 提交与推送：完成情况汇总为 `96a6d6a`（11 文件 +450/-8），`release-notes.md` 追加“主对话摘要思考等级修复”“AgentService 控制接口补齐”两章节并注明同版本更新；推送 `gateway` 分支（`ca4d6ed..96a6d6a`），当时的 `v0.0.77.0` tag 强制移动至新提交并推送；新的 `v1.77.0` tag 尚未推送。
+- macOS 构建：`task release:prepare:macos` 成功，arm64/amd64 归档生成（21310618/22364484 字节），分析器隔离校验“2 archive(s)”通过；SHA256SUMS 与 update.json（仅 macOS 两平台，字段结构与上版一致，release_date 2026-10-21T04:27:39Z）本地生成。
+- GitHub release 更新：PATCH release 419038484 说明与 target；首次上传误用 `api.github.com` 404 后改用 release `upload_url` 重新执行，4 资产（arm64/amd64 tar.gz、SHA256SUMS、update.json）全部删除旧版并上传新版；线上校验：资产摘要与本地构建一致（arm64 `840b4d25…`、amd64 `d8058a83…`），说明正文含“本次更新”章节，当时 tag 指向 `96a6d6a`。
+- 副产物检查：`git status` 干净，构建未产生需提交的副产物。
+- [completed] `077-same-version-release`（2026-10-21）：完成情况汇总为提交说明（`96a6d6a`，11 文件 +450/-8，版本保持当时的 0.0.77.0），推送 `gateway` 分支并强制移动当时的 `v0.0.77.0` tag 至新提交；`task release:prepare:macos` 构建 arm64/amd64 归档成功（分析器隔离校验 2 归档通过），生成 SHA256SUMS 与 update.json（仅 macOS 两平台，与上版一致），PATCH release 说明（含“本次更新”章节）并替换全部 4 个资产；线上校验资产摘要与本地一致。构建与发布无未提交副产物。
 
 ### 官方/BYOK 混用兼容（分段设计与实施；整体 delivery_status=planned）
 

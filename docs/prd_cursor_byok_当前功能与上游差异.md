@@ -20,7 +20,7 @@
 - **当前发布提交**：`93dbae694a1cb0c8d5d312496dea3a115ed0855a`（仍为 `v0.0.48`）
 - **本次合并来源**：本地 `main@305b108e8cb44f68c15672809fc579acc65a9835`（含本地 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
 - **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
-- **原始仓库**：<（原上游仓库地址，已移除）>
+- **原始仓库**：已解除关联（原上游仓库地址已移除）
 - **原始上游核对基线**：本地锁定 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`；最终 `git fetch upstream --prune --no-tags` 已通过，远端仍为此 SHA
 - **原始主线历史基线**：`main@799dbda7e0ca30ab5d0bfe965fd1ab3c5da5c588`
 - **当前工作树**：`0.0.49` 已在隔离 worktree 语义合入并完成可执行门禁；用户已确认创建本地 merge commit 并推进 `noad`；**仍未 push**
@@ -47,10 +47,10 @@
 
 本次核对得到：
 
-- 原始仓库 `（原上游仓库地址，已移除）` 已同步到 `main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`。
-- 上游目标先以真实双父 merge 合入本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`，再以真实双父 merge 合入 `noad@ad50039f5bf83b8df257c5375d6f24b3a16ae31e`。
+- 历史记录：原上游仓库当时已同步到 `main@c55c575a583694e8c25be73b08ac7b3ec496e1d5`；该上游仓库与本仓库的关联现已解除。
+- 上游目标先以真实双父 merge 合入本地 `main@d082e79019bdb5a472003db37f09e23d083de1f2`，再以真实双父 merge 合入当时的 `noad@ad50039f5bf83b8df257c5375d6f24b3a16ae31e`（该分支现已改名为 `main`）。
 - 本地同步前基线为 `noad@869f45f539e416b0fbe2c95c25b33f3c6350615e`；`ad50039` 的两个父提交分别为 `869f45f` 与 `d082e79`。
-- `origin` 是本地 Fork `https://github.com/yaogjim/cursor-byok`；原始上游引用来自 `（原上游仓库地址，已移除）`，没有从 `origin/main` 推断上游状态。
+- `origin` 是本地仓库 `https://github.com/yaogjim/cursor-byok`；上游同步时代码引用来自原上游仓库，没有从 `origin/main` 推断上游状态。当前 `main` 已由原 `noad` 承接并合并 `gateway`，不再跟踪任何上游。
 - 本次仅更新本地分支，没有执行 `git push`。
 
 本次 merge 相对 `noad@869f45f` 的差异为 **23 个文件，258 行新增、1889 行删除**。主要删除来自上游为修复会话消失而回退 blob/checkpoint 同步，不代表本地其他能力被整体移除。

@@ -7,7 +7,7 @@ includes:
   linux: ./build/linux/Taskfile.yml
 
 vars:
-  APP_NAME: "Gateway-byok"
+  APP_NAME: "cursor-byok"
   BIN_DIR: "bin"
   APP_VERSION:
     sh: 'go run ./scripts/release version -config ./build/config.yml'
@@ -274,6 +274,51 @@ tasks:
           ZIP_NAME: 'release/{{.APP_VERSION}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-windows-amd64.zip'
           SCAN: '{{.SCAN}}'
 
+  release:build:macos:installers:
+    summary: 生成 macOS arm64 与 amd64 的 DMG 安装包
+    preconditions:
+      - sh: '[ "{{OS}}" = "darwin" ]'
+        msg: "DMG 安装包只能在 macOS 上生成。"
+    cmds:
+      - task: release:ensure:dir
+      - task: darwin:package:dmg
+        vars:
+          ARCH: arm64
+          BINARY_NAME: cursor-release-macos-arm64
+          OUTPUT: '{{.BIN_DIR}}/cursor-release-macos-arm64'
+          APP_BUNDLE: '{{.APP_NAME}}.app'
+          DMG_NAME: '{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-arm64.dmg'
+          SCAN: '{{.SCAN}}'
+      - mv "{{.BIN_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-arm64.dmg" "{{.RELEASE_DIR}}/"
+      - task: darwin:package:dmg
+        vars:
+          ARCH: amd64
+          BINARY_NAME: cursor-release-macos-amd64
+          OUTPUT: '{{.BIN_DIR}}/cursor-release-macos-amd64'
+          APP_BUNDLE: '{{.APP_NAME}}.app'
+          DMG_NAME: '{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-amd64.dmg'
+          SCAN: '{{.SCAN}}'
+      - mv "{{.BIN_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-amd64.dmg" "{{.RELEASE_DIR}}/"
+
+  release:build:windows:installer:
+    summary: 生成 Windows amd64 NSIS 安装包
+    cmds:
+      - task: release:ensure:dir
+      - task: windows:create:nsis:installer
+        vars:
+          ARCH: amd64
+          SCAN: '{{.SCAN}}'
+      - mv "{{.BIN_DIR}}/{{.APP_NAME}}-amd64-installer.exe" "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-windows-amd64-installer.exe"
+
+  release:build:linux:installers:
+    summary: 生成 Linux amd64 的 deb 与 rpm 安装包
+    preconditions:
+      - sh: '[ "{{OS}}" = "linux" ] || [ "{{OS}}" = "darwin" ]'
+        msg: "Linux 安装包任务仅支持在 Linux 或 macOS 上执行。"
+    cmds:
+      - task: release:ensure:dir
+      - task: linux:package:installers
+
   release:build:linux:amd64:
     cmds:
       - task: linux:package:archive
@@ -302,7 +347,7 @@ tasks:
       - task: '{{if eq OS "darwin"}}release:prepare:darwin{{else}}release:prepare:linux{{end}}'
 
   release:prepare:macos:
-    summary: 在 macOS 上生成 arm64 与 amd64 发布资产
+    summary: 在 macOS 上生成 arm64 与 amd64 发布资产（含 DMG 安装包）
     preconditions:
       - sh: '[ "{{OS}}" = "darwin" ]'
         msg: "release:prepare:macos 仅支持在 macOS 上执行。"
@@ -314,6 +359,7 @@ tasks:
       - task: release:notes
       - task: release:build:macos:arm64
       - task: release:build:macos:amd64
+      - task: release:build:macos:installers
       - task: release:verify:analyzer-isolation
 
   release:prepare:darwin:
@@ -329,12 +375,13 @@ tasks:
       - task: release:notes
       - task: release:build:macos:arm64
       - task: release:build:macos:amd64
+      - task: release:build:macos:installers
       - task: release:build:windows:amd64
       - task: release:build:linux:amd64
       - task: release:verify:analyzer-isolation
 
   release:prepare:linux:
-    summary: 在当前主机上生成 Linux 发布资产
+    summary: 在当前主机上生成 Linux 发布资产（含 deb/rpm 安装包）
     preconditions:
       - sh: '[ "{{OS}}" = "linux" ] || [ "{{OS}}" = "darwin" ]'
         msg: "release:prepare:linux 当前仅支持在 Linux 或 macOS 上执行。"
@@ -345,6 +392,7 @@ tasks:
       - task: common:update:build-assets
       - task: release:notes
       - task: release:build:linux:amd64
+      - task: release:build:linux:installers
       - task: release:verify:analyzer-isolation
 
   release:verify:analyzer-isolation:
@@ -416,6 +464,22 @@ tasks:
     cmds:
       - task: release:verify:analyzer-isolation
       - echo "release assets verified"
+
+  release:verify:installers:
+    summary: 验证 macOS/Windows/Linux 安装包是否齐全（CI 发布前使用）
+    preconditions:
+      - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-arm64.dmg"
+        msg: "缺少 macOS arm64 DMG 安装包。"
+      - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-macos-amd64.dmg"
+        msg: "缺少 macOS amd64 DMG 安装包。"
+      - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-windows-amd64-installer.exe"
+        msg: "缺少 Windows amd64 安装包。"
+      - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.deb"
+        msg: "缺少 Linux amd64 deb 安装包。"
+      - sh: test -f "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.rpm"
+        msg: "缺少 Linux amd64 rpm 安装包。"
+    cmds:
+      - echo "installers verified"
 
   release:sync:readme:
     summary: 同步 README 到公开发布仓库（发布日志来源固定为 release-notes.md）

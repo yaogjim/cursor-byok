@@ -36,7 +36,7 @@ import (
 
 const (
 	// appName 表示当前模块中的 appName 状态值。
-	appName = "Gateway-byok"
+	appName = "cursor-byok"
 	// adRefreshInterval 表示后台广告拉取间隔。
 	adRefreshInterval = 3 * time.Minute
 	// disableWebViewSandboxEnv allows affected VDI users to opt out of the WebView2 sandbox.

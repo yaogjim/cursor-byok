@@ -5,19 +5,19 @@
 !include "FileFunc.nsh"
 
 !ifndef INFO_PROJECTNAME
-    !define INFO_PROJECTNAME "Gateway-byok"
+    !define INFO_PROJECTNAME "cursor-byok"
 !endif
 !ifndef INFO_COMPANYNAME
-    !define INFO_COMPANYNAME "Gateway-byok"
+    !define INFO_COMPANYNAME "cursor-byok"
 !endif
 !ifndef INFO_PRODUCTNAME
-    !define INFO_PRODUCTNAME "Gateway-byok"
+    !define INFO_PRODUCTNAME "cursor-byok"
 !endif
 !ifndef INFO_PRODUCTVERSION
     !define INFO_PRODUCTVERSION "1.77.0"
 !endif
 !ifndef INFO_COPYRIGHT
-    !define INFO_COPYRIGHT "© 2026, Gateway-byok"
+    !define INFO_COPYRIGHT "© 2026, cursor-byok"
 !endif
 !ifndef PRODUCT_EXECUTABLE
     !define PRODUCT_EXECUTABLE "${INFO_PROJECTNAME}.exe"

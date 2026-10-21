@@ -141,7 +141,6 @@
   "3221a042ea3677a8": "",
   "3275d7e70bbdc3d5": "{0}'s {1}",
   "32b3c9a50003f77a": "Output tokens are estimated",
-  "33d2d273e2bd5f88": "Failed to open user guide",
   "3463c5585c246df9": "Total: {0}",
   "35076178fe79a210": "Configuration changed. Please test again.",
   "35dfde5fa82407ab": "Log Collection",
@@ -692,7 +691,6 @@
   "f4d4bae588c4c0ff": "",
   "f4f0ead1116b5b62": "Enable",
   "f51f2971b667fcc2": "Configure →",
-  "f526ab6eff33039a": "Failed to open author page",
   "f5494110cb26d393": "Delete model",
   "f54baedb8cdc7b2e": "{0}: none",
   "f55886a0a1d0f655": "Refresh running status",
@@ -719,7 +717,6 @@
   "fcdd0cb01e3653f9": "",
   "fd309a83a111abe6": "Restart Cursor",
   "feb13629f43aa2c6": "",
-  "fec45092945f8790": "User Guide",
   "ff259ba7c4670919": "",
   "ff69241cfc272aab": "Reset all settings"
 }

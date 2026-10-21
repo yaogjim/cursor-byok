@@ -1,13 +1,13 @@
 [Desktop Entry]
 Version=1.0
-Name=Gateway-byok
-Comment=Gateway-byok
+Name=cursor-byok
+Comment=cursor-byok
 # The Exec line includes %u to pass the URL to the application
-Exec=/usr/local/bin/Gateway-byok %u
+Exec=/usr/local/bin/cursor-byok %u
 Terminal=false
 Type=Application
-Icon=Gateway-byok
+Icon=cursor-byok
 Categories=Utility;
-StartupWMClass=Gateway-byok
+StartupWMClass=cursor-byok
 
  

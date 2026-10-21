@@ -1,0 +1,256 @@
+name: build
+
+# push 到 main/gateway 或发布 tag 时，在 GitHub 托管的 macOS / Windows / Linux 上
+# 自动编译出各平台安装包；打 tag（v*）时额外发布 GitHub Release。
+on:
+  push:
+    branches:
+      - main
+      - gateway
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  WAILS_VERSION: v3.0.0-alpha.74
+  NODE_VERSION: "22"
+  YARN_VERSION: "1.22.22"
+  NFPM_VERSION: v2.46.0
+  PROTOC_GEN_GO_VERSION: v1.36.11
+  PROTOC_GEN_CONNECT_GO_VERSION: v1.19.1
+
+jobs:
+  macos:
+    name: macOS 安装包
+    runs-on: macos-14
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: 安装构建工具链
+        run: |
+          set -euo pipefail
+          npm install --global "yarn@${YARN_VERSION}"
+          brew install protobuf
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+          go install "connectrpc.com/connect/cmd/protoc-gen-connect-go@${PROTOC_GEN_CONNECT_GO_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+
+      - name: 生成 proto 代码
+        run: wails3 task common:generate:proto
+
+      - name: 构建 macOS 发布资产（tar.gz + DMG）
+        run: wails3 task release:prepare:macos
+
+      - name: 上传 macOS 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-assets
+          path: bin/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows 安装包
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: 安装构建工具链
+        run: |
+          set -euo pipefail
+          choco install --yes --no-progress nsis zip protoc
+          npm install --global "yarn@${YARN_VERSION}"
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+          go install "connectrpc.com/connect/cmd/protoc-gen-connect-go@${PROTOC_GEN_CONNECT_GO_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+
+      - name: 生成 proto 代码
+        run: wails3 task common:generate:proto
+
+      - name: 构建 Windows 发布资产（zip + NSIS 安装包）
+        run: |
+          set -euo pipefail
+          wails3 task release:build:windows:amd64
+          wails3 task release:build:windows:installer
+
+      - name: 上传 Windows 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: bin/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux 安装包
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: 安装系统依赖
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            protobuf-compiler \
+            pkg-config \
+            gcc \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libglib2.0-dev
+
+      - name: 安装构建工具链
+        run: |
+          set -euo pipefail
+          npm install --global "yarn@${YARN_VERSION}"
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
+          go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+          go install "connectrpc.com/connect/cmd/protoc-gen-connect-go@${PROTOC_GEN_CONNECT_GO_VERSION}"
+          go install "github.com/goreleaser/nfpm/v2/cmd/nfpm@${NFPM_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+
+      - name: 生成 proto 代码
+        run: wails3 task common:generate:proto
+
+      - name: 校验构建资产与 build/config.yml 一致
+        run: |
+          set -euo pipefail
+          wails3 task common:update:build-assets
+          if ! git diff --exit-code -- build/; then
+            echo "::error::build/ 下的生成资产与 build/config.yml 不一致，请本机执行 wails3 task common:update:build-assets 后提交"
+            exit 1
+          fi
+
+      - name: 构建 Linux 发布资产（tar.gz + deb + rpm）
+        run: |
+          set -euo pipefail
+          wails3 task release:build:linux:amd64
+          wails3 task release:build:linux:installers
+
+      - name: 上传 Linux 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: bin/release/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: 发布 GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - macos
+      - windows
+      - linux
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: 校验 tag 与 build/config.yml 版本一致
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(go run ./scripts/release version -config ./build/config.yml)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 build/config.yml 中的版本 v${version} 不一致"
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: 安装 wails3
+        run: |
+          set -euo pipefail
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+
+      - name: 下载三平台产物
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/release
+          merge-multiple: true
+
+      - name: 生成发布说明与 update.json
+        run: |
+          set -euo pipefail
+          wails3 task release:notes
+          wails3 task release:verify:assets
+          wails3 task release:verify:installers
+          wails3 task release:manifest
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: bin/release/${{ steps.meta.outputs.version }}/.release-notes.md
+          fail_on_unmatched_files: true
+          files: |
+            bin/release/*/*.dmg
+            bin/release/*/*.tar.gz
+            bin/release/*/*.zip
+            bin/release/*/*.deb
+            bin/release/*/*.rpm
+            bin/release/*/update.json

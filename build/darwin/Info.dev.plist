@@ -3,9 +3,9 @@
 <plist version="1.0">
 	<dict>
 		<key>CFBundleExecutable</key>
-		<string>Gateway-byok</string>
+		<string>cursor-byok</string>
 		<key>CFBundleGetInfoString</key>
-		<string>Gateway-byok</string>
+		<string>cursor-byok</string>
 		<key>CFBundleIconFile</key>
 		<string>icons</string>
 		<key>CFBundleIconName</key>
@@ -13,7 +13,7 @@
 		<key>CFBundleIdentifier</key>
 		<string>com.cursor.wuxianxubei</string>
 		<key>CFBundleName</key>
-		<string>Gateway-byok</string>
+		<string>cursor-byok</string>
 		<key>CFBundlePackageType</key>
 		<string>APPL</string>
 		<key>CFBundleShortVersionString</key>
@@ -32,6 +32,6 @@
 		<key>NSHighResolutionCapable</key>
 		<string>true</string>
 		<key>NSHumanReadableCopyright</key>
-		<string>© 2026, Gateway-byok</string>
+		<string>© 2026, cursor-byok</string>
 	</dict>
 </plist>

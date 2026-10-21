@@ -1,12 +1,14 @@
 # Cursor BYOK 上游同步与合并要求
 
+> **状态：已停用（2026-10-20）。** 本仓库已解除与原上游仓库的关联，不再同步上游代码，也不再保留其仓库地址与署名。本文保留为历史操作要求记录，其中的 `upstream` 远程、`noad` 分支和 `git ls-remote`/`git remote add upstream` 等命令仅作历史参考，不再执行。当前分支模型见 `README.md` 的“分支说明”：`main` 为主线，`gateway`、`cli` 为长期分支。
+
 - **文档类型**：上游同步安全策略与冲突要求，不是 PRD
 - **端到端操作手册（推荐入口）**：[`cursor_byok_upstream_sync_release_runbook.md`](cursor_byok_upstream_sync_release_runbook.md)  
   常规流程：`upstream/main` → `main` → `noad` → 窄范围测试 → push origin → 三平台构建（无 Linux）→ 仅发布 `yaogjim/cursor-byok`。  
   **本文件**负责冲突分类、必须保留的本地行为与停止条件；命令级顺序与发版步骤以 Runbook 为准。
-- **原始上游仓库**：<（原上游仓库地址，已移除）>
+- **原始上游仓库**：已解除关联，不再作为同步来源（原上游仓库地址已移除）
 - **本地 Fork（`origin`）**：<https://github.com/yaogjim/cursor-byok>
-- **本地分支**：`noad`
+- **本地分支**：`main`（由原 `noad` 分支承接并合并 `gateway`），`gateway`、`cli` 为长期分支
 - **已提交 `noad` 基线 / 目标**：`9e6936f15fc45a351e9b53e2e99f321aa1b79ac1`
 - **本次合并来源**：本地 `main@305b108e8cb44f68c15672809fc579acc65a9835`（含本地 `upstream/main@564f2bdcaec790863aca86403cedbfc77191bd43`）
 - **共同祖先**：`cbf7cb4030e24ddfbd366c0e87bea969ba5e2421`
@@ -39,7 +41,6 @@ git status --short
 git branch --show-current
 git log --oneline --decorate -20
 git remote -v
-git ls-remote --heads （原上游仓库地址，已移除）
 ```
 
 ## 2. 上游变更分类
@@ -130,30 +131,9 @@ git diff --check
 
 如果工作树有任何未提交修改或未解释的用户文件，立即停止，不得使用会覆盖本地修改的命令。先由维护者决定提交、暂存、导出 patch 或保留工作树。
 
-### 3.1.2 配置并获取原始上游
+### 3.1.2 配置并获取原始上游（已停用）
 
-检查 `upstream` 是否指向原始仓库：
-
-```bash
-git remote get-url upstream
-```
-
-如果不存在才添加：
-
-```bash
-git remote add upstream （原上游仓库地址，已移除）
-```
-
-只获取引用，不修改当前工作树：
-
-```bash
-git fetch upstream --prune
-UPSTREAM_SHA="$(git rev-parse upstream/main)"
-LOCAL_SHA="$(git rev-parse noad)"
-printf 'local=%s upstream=%s\\n' "$LOCAL_SHA" "$UPSTREAM_SHA"
-```
-
-不得使用 `git pull` 代替上述步骤，也不得从 `origin/main` 推断原始上游状态。
+本节流程已随“解除上游关联”一并停用：仓库不再配置 `upstream` 远程，也不再获取上游引用。历史记录中的命令不再执行，日常开发直接在 `main`（原 `noad` 承接并合并 `gateway`）上进行。
 
 ### 3.1.3 建立可恢复引用和独立同步分支
 

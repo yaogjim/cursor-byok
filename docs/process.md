@@ -7,6 +7,32 @@
 
 ## 一、待完成的内容
 
+### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only，未推送）
+
+**已完成本地分支重构、全仓版本重编号与上游署名清理；远程尚未同步。** 负责人：主会话。用户确认的边界：先在本地完成并验证，推送前再确认；删除原上游与中转镜像两个远程；版本按 `0.0.50` 之后统一改为 `1.x`（旧 tag 保留，另建 `v1.77.0`）；`cli` 保持 `0.0.49.6` 不参与新序列；删除作者入口与外部帮助链接；`LICENSE` 署名改为 `yaogjim`。
+
+- **分支**：删除原上游镜像 `main`（原 `31e9f5c`），将 `noad`（原 `954b7ac`）改名为 `main`，再合并 `gateway@96a6d6a`。合并仅 `README.md` 一处内容冲突（下载入口文案），取 `gateway` 版本；`internal/backend/forwarder/subagent_store.go` 自动合并，已核对 `b61a4de` 的 Windows 目录 fsync 修复仍在。合并提交 `6f8e9c2`。
+- **版本重编号**：`0.0.N.M`（N≥50）→ `1.N.M`，如 `0.0.51.0`→`1.51.0`、`0.0.77.0`→`1.77.0`；`0.0.49.x` 及更早保持不变。覆盖 `build/config.yml`、`build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/linux/nfpm/nfpm.yaml`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/windows/wails.exe.manifest`、`README.md`、`release-notes.md`、`releaselog/`（26 个文件改名）、`docs/**`、`task/todo.md`、`internal/updater/semver_test.go` 中的版本 fixture。`go run ./scripts/release version -config ./build/config.yml` 输出 `1.77.0`。
+- **署名清理**：删除 `internal/bridge/window_author.go`（`GetFooterAuthorInfo`/`OpenFooterAuthorHome`），移除 `MainLayout.vue` 的作者入口、“使用教程”按钮及对应 handler/常量，清理 `clientApi.js` 的绑定导出，`LICENSE` 版权行改为 `Copyright (c) 2026 yaogjim`，updater 负向 fixture 改用中性外部仓库地址。`tab.leokun.cn`、`ads.leokun.cn` 属运行时中继/广告端点配置，不是仓库署名，未改动。
+- **远程**：已删除原上游与中转镜像两个 remote，仅保留 `origin`（`https://github.com/yaogjim/cursor-byok`）。`main` 解除了对 `origin/noad` 的旧上游跟踪；因尚未推送，`origin/main`、`origin/noad`、`origin/HEAD` 仍是旧状态。
+- **文档**：`README.md` 分支说明改为 `main`（主线）/`gateway`（开发）/`cli`，并注明不再跟踪上游；`docs/cursor_byok_upstream_merge_requirements.md` 标记为已停用，原上游地址替换为“已解除关联”；`prd_cursor_byok_工作决策基线.md`、`prd_cursor_byok_当前功能与上游差异.md`、`main_gateway_价值功能分析与迁移方案_20260907.md`、`task/todo.md` 中的上游仓库链接与作者标识一并移除。
+- **历史记录口径**：本次按用户要求对文档中的 `0.0.50+` 版本号做了全局重编号，因此下方与历史发布记录中出现的 `v1.x` tag、`1.x` 版本号在重编号之前实际为 `v0.0.x`。涉及“已推送/已发布”的旧记录描述的是重编号前的真实操作，当前仓库尚未以新版本号推送或发布。
+- **验证**：`go build ./...` 退出0；`go test ./... -count=1 -timeout=300s` 全部通过（36 个包 ok，0 FAIL，保留 macOS 目标版本链接 warning）；`go test ./internal/updater ./internal/bridge ./internal/backend` 通过；`gofmt` 无输出。前端未执行 `yarn build`（本轮改动仅删除 UI 入口，且未安装依赖）。**平台构建、GitHub 发布与远程同步均未执行，不得记为已发布。**
+- **待办**：按用户确认后在推送窗口执行：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、把 `origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0` tag；并重新构建 `1.77.0` 安装包与 release 资产。
+
+### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；local-only，未推送）
+
+**应用名、构建产物名与文档已统一改为 `cursor-byok`，安装包改由 GitHub Actions 三平台自动构建；工作流尚未在 GitHub 上真实运行，远程未推送。** 负责人：主会话。用户要求：把 `Gateway-byok` 改为 `cursor-byok`（含构建应用名与各文档），push 后由 GitHub 自动构建 macOS/Windows/Linux 安装包，并一并修复在 GitHub 上构建可能失败的问题。
+
+- **改名范围**：37 个文件中的 `Gateway-byok` 替换为 `cursor-byok`，包括 `build/config.yml`（companyName/productName/description/copyright/comments）、`build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/linux/nfpm/nfpm.yaml`、`Taskfile.yml` 的 `APP_NAME`、`internal/app/runner.go` 的 `appName`、`README.md`、`release-notes.md`、`releaselog/*.md`；`build/linux/desktop` 随 `git mv` 改名为 `build/linux/nfpm/cursor-byok.desktop`。改完执行 `wails3 task common:update:build-assets`，`git diff` 未产生额外差异，说明手工改名与 wails 生成结果一致。
+- **历史记录口径**：`docs/process.md`、`task/todo.md`、`releaselog/1.57.0.md` 中记录旧版本真实文件系统路径（`/Applications/Gateway-byok.app`）与旧运行实例名的语句保持原样，不改写当时的验证证据；正文其余品牌表述按用户要求改名。
+- **CI 工作流**：新增 `.github/workflows/build.yml`。push `main` / `gateway` / `v*` tag、PR 到 `main`、手工触发都会跑三平台：macOS（`macos-14`，arm64 与 amd64 的 DMG 与 updater tar.gz）、Windows（`windows-latest`，ZIP 与 NSIS 安装包）、Linux（`ubuntu-24.04`，updater tar.gz 与 deb/rpm）。tag 触发的第四个 job 汇总三平台产物、校验 tag 与 `build/config.yml` 版本一致、生成 `update.json` 后发布 Release；分支 push 只上传 Actions Artifacts。
+- **CI 失败点修复**：`gen/` 与 `frontend/bindings` 未入库，干净检出必须先执行 `wails3 task common:generate:proto`，工作流已显式加入该步骤；`generate:bindings` 与三平台 `build:native` 不再依赖 `go:mod:tidy`（原先与 proto 生成并行执行，干净检出时 `gen/` 缺失会直接失败）；`generate:proto` 的 `-I /opt/homebrew/include` 改为按操作系统选择（Linux 用 `/usr/include`，Windows 不追加）；Linux job 安装 `libgtk-3-dev`、`libwebkit2gtk-4.1-dev`、`protobuf-compiler`、`nfpm`，并在构建前用 `common:update:build-assets` + `git diff --exit-code` 校验生成资产与 `build/config.yml` 一致；Windows job 安装 `nsis`、`zip`、`protoc`，`create:nsis:installer` 的 webview2 bootstrapper 改为文件已存在时跳过下载。
+- **打包缺陷修复**：`build/linux/nfpm/nfpm.yaml` 原先引用不存在的 `build/linux/Gateway-byok.desktop` 与 `scripts/postinstall.sh`，版本与维护者硬编码（CI 无 `GIT_COMMITTER_NAME`）；现改为仓库根目录相对路径、`VERSION`/`ARCH` 由调用方注入、维护者固定、512×512 应用图标，并新增 `postinstall.sh` / `postremove.sh`。新增 `linux:package:installers`（一次编译产出 deb 与 rpm）、根任务 `release:build:linux:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:verify:installers`，并把安装包纳入 `release:prepare:macos` / `:darwin` / `:linux`。
+- **本地验证**：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`wails3 task release:prepare:macos` 成功，产出 `cursor-byok-1.77.0-macos-arm64.dmg`（24,343,468 字节）、`cursor-byok-1.77.0-macos-amd64.dmg`（25,665,638 字节）与两个同名 tar.gz（21,309,616 / 22,363,677 字节），两个 DMG 均通过 `hdiutil verify`；arm64 包内二进制为 `Mach-O 64-bit executable arm64`，`Info.plist` 的 `CFBundleName`、`CFBundleExecutable` 与 `CFBundleShortVersionString` 分别为 `cursor-byok`、`cursor-byok`、`1.77.0`；`release:build:windows:amd64` 在 macOS 上交叉编译成功并产出 `cursor-byok-1.77.0-windows-amd64.zip`；`nfpm` 用桩二进制产出 deb/rpm，解包核对 deb 的 `Package`、`Version`、`Depends`、维护者与安装路径均正确。
+- **未验证/受阻**：GitHub Actions 尚未真实运行（需要推送后观察）；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 的安装运行行为未在对应实机验证；本机无 Docker daemon，未执行 `release:build:linux:amd64`。
+- **待办**：推送后在 Actions 页面确认首次三平台运行结果；按用户确认的顺序同步远程分支与 `v1.77.0` tag。
+
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
 
 **主对话摘要参数缺陷已修复并通过源码回归；两条缺失控制接口已补齐；同聊天BYOK→官网模型要求新建聊天的现场症状仍未关闭。** 主会话持续负责整合；基线 `ca4d6ed`，修改未提交。当前保留工作区原有协作规范修改；未替换运行实例、构建发布、部署/重启、修改Cursor安装/真实会话/配置或commit/push。
@@ -34,6 +60,16 @@
 - 文档首次落盘后的定向复测：沿用上述隔离环境及race相同包/筛选式（去掉 `-race`，`-timeout=90s`），四包再次通过，forwarder 2.492s、model 0.906s、upstream 0.578s、backend 1.728s；实际输出为同目录 `closeout-tests.log`。该记录只补充源码与隔离接口证据，桌面验收状态不变。
 
 源码/模拟接口交付为 `verified-partial`。下一步须在获准候选窗口验收主对话摘要后续接，并取得同聊天切换的准确提示截图或同次客户端日志/请求ID，先区分客户端限制与历史Blob缺失，再针对已证实分支修复。缺少现场证据时保留会话和内容，不改安装JS、真实数据库或会话限制字段绕过门禁，不把两个症状合并称为已解决；原官方/BYOK混用专项仍维持自身状态。
+
+#### 原 0.0.77.0 同版本发布（2026-10-21；重编号后记为 1.77.0）
+
+用户授权按当时的原版本号 `0.0.77.0`（重编号后写作 1.77.0）发布本轮修复。**提交、推送、macOS 构建与 GitHub release 资产更新均已完成并经线上校验；真实桌面验收仍待执行。** 本节记录的是重编号之前、以 `v0.0.77.0` 为 tag 的真实操作；新的 `v1.77.0` tag 与改名后的 `main` 尚未推送。
+
+- **提交与推送**：完成情况汇总为提交说明，`96a6d6a`（11 文件 +450/-8）含修复源码/测试、release-notes、task/process 与协作规范修改；`release-notes.md` 追加“主对话摘要思考等级修复”“AgentService 控制接口补齐”两章节，验证小节补充四包定向与竞态回归，版本小节注明同版本更新。`gateway` 分支推送 `ca4d6ed..96a6d6a`；当时的 `v0.0.77.0` tag 强制移动至 `96a6d6a` 并推送（旧指向 `5240bed`，非上版源码提交 `f9503e9`）。
+- **macOS 构建**：`wails3` 位于 `~/go/bin`（alpha.74）。`task release:prepare:macos` 完整执行：清理发布目录、更新构建资产、生成绑定与发布说明、arm64/amd64 归档打包（21310618/22364484 字节，ad-hoc 签名），分析器/CLI池隔离校验“2 archive(s)”通过。
+- **清单与资产**：`SHA256SUMS` 与 `update.json` 按 `release:github` 同款字段结构本地生成（仅 macOS 两平台，与上版线上 update.json 一致；Windows/Linux 本次不编译故不进入清单）。manifest 脚本会因缺失全平台资产失败，且 `release:github` 资产校验要求四平台，因此发布采用与上版相同的手动 PATCH+资产替换流程。
+- **GitHub release 更新**：PATCH release 419038484 更新说明正文（线上确认含 4 处“本次更新”标记）与 target_commitish。首次资产上传误用 `api.github.com` 主机 404（arm64 旧资产已删、未上传成功）；改用 release `upload_url` 后 4 资产（arm64/amd64 tar.gz、SHA256SUMS、update.json）全部完成旧删新传。线上校验：各资产 digest 与本地构建摘要一致（arm64 `sha256:840b4d25…`、amd64 `sha256:d8058a83…`），tag 远端指向 `96a6d6a`。README 同步任务为 internal 且直接调用时无变更输出，未产生额外提交。
+- **副产物**：发布后 `git status` 干净；本段归档为未提交的工作区修改，随下次提交入库。
 
 ### 官方/BYOK 混用兼容：分段设计与实施（整体 delivery_status=planned）
 
