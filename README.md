@@ -1,55 +1,87 @@
-# cursor-byok
+# cursor-byok ：**在 Cursor 中接入任意模型（via** BYOK）
 
-> 让 Cursor 用上你自己的模型 API，同时保留 Cursor 官方模型；再把同一个模型池通过本机 OpenAI 兼容入口，共享给 Codex、Grok、脚本和其他 AI 客户端。
+简体中文 · [English](./README_EN.md)
+
+> **在 Cursor 中接入任意模型，任意供应商、无限畅用。**
 >
-> 当前最新版本：**[v1.77.0](https://github.com/yaogjim/cursor-byok/releases/tag/v1.77.0)**
-
-[下载最新版](https://github.com/yaogjim/cursor-byok/releases/latest) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues) · [历史版本](https://github.com/yaogjim/cursor-byok/releases)
-
-![总览：Cursor 与共享入口可以同时运行](docs/images/gateway/overview.png)
+> 模型由你选，供应商由你定。把自己的模型 API 或 Codex / Grok 订阅接入 Cursor Chat 与 Agent，继续使用熟悉的编程工作流，同时保留 Cursor 官方模型；一套本地模型池，还能共享给其他 AI 客户端和脚本。
+>
+> 接入以协议兼容为前提；“无限畅用”强调模型与供应商的选择自由，不代表免费或免除供应商的额度、速率及服务条款限制。
 
 ## 30 秒读懂
 
-cursor-byok 不是简单地“把 Cursor 的地址改掉”，而是在本机做一层**模型路由器**：
+**cursor-byok 让你在 Cursor 中自由接入不同供应商的兼容模型，在本机统一路由与管理。** BYOK（Bring Your Own Key）就是使用你自己的模型 API Key；这里还支持接入 Codex / Grok 订阅账号。
 
-- **Cursor 的请求可以分流**：BYOK 模型走你自己的 API，官方模型继续走 Cursor 官方，两边可以同时存在。
-- **一个模型池可以多处复用**：除了 Cursor，还能通过 `http://127.0.0.1:18091/v1` 这个 OpenAI 兼容入口给 Codex、Grok、脚本或其他客户端使用。
-- **切换有边界**：只有当前请求“还没有输出、还没有执行工具”时，才允许换渠道；已经开始干活的任务不会被悄悄重跑。
-- **长会话更抗断**：上下文超限会自动压缩并重试，流断开会续写，子任务结果会持久化并在后续请求里接着用。
+- **模型与供应商由你选**：通过兼容 API 接入你想用的模型，在熟悉的 Cursor 里继续使用 Agent 的工具调用、Skills 和 MCP（模型上下文协议）等能力；具体效果取决于上游模型的能力与协议兼容性。
+- **官方与自有模型，可以同时保留**：日常用自己的 API，特定任务选官方模型，或反过来；按模型精确路由，不必二选一。
+- **配置一次，多处使用**：把本地模型池通过 OpenAI 兼容入口，共享给 Codex、Grok、脚本或其他兼容客户端，减少重复维护地址、Key 和模型列表。
+- **长任务有恢复机制，渠道切换有边界**：上下文超限可自动压缩重试，流中断可续写；备用渠道只在零输出、零工具执行、零副作用的安全窗口内切换，避免已执行的操作被重复执行。
 
-一句话：**把“官方额度 + 自己的 API + 订阅账号”放在同一个本地入口后面，按模型精确路由，而不是二选一。**
+一句话：**在 Cursor 里自由选模型、选供应商，用自己的 API 和订阅开展编程工作，再把同一套本地模型池复用到其他工具。**
 
-## 它解决什么问题
+![数据概览：Token 用量、缓存命中率与使用趋势](docs/images/screenshots/zh/overview.png)
 
-| 常见困扰 | cursor-byok 的做法 |
-| --- | --- |
-| 官方模型不够用，或想用自己熟悉的模型 | 接入任意 OpenAI / Anthropic 兼容 API，模型参数、Header、推理强度都可配 |
-| 既想保留官方模型，又想用 BYOK | 官方与本地目录共存，模型来源标 `[官方]` / `[BYOK]`；同名冲突时本地渠道优先，其余走官方 |
-| 每个客户端都要重复填地址和 key | 一个共享入口、一套模型池，Cursor / Codex / Grok / 脚本共用 |
-| 某个渠道超时或限流，任务直接失败 | 主渠道之外最多再配 4 个物理候选渠道，只在安全窗口内切换 |
-| 上下文太长，会话突然报错 | 自动压缩上下文，并在同一次运行里重试一次 |
-| 长任务、子任务、流式输出容易中断 | 流续写、终态只落一次、检查点确认、子任务结果跨请求恢复 |
-| 想看用量，又担心日志泄露内容 | 展示 Token、缓存命中率、价值估算；审计默认关闭，普通日志不写正文和密钥 |
+## 为什么值得用
 
-## 分支定位
+- **模型自由选**：接入 OpenAI / Anthropic 兼容 API，继续在熟悉的 Cursor 中使用 Chat 与 Agent。
+- **官方、API、订阅共存**：按任务选择 Cursor 官方模型、自有 API 或 Codex / Grok 订阅。
+- **配置一次，多处复用**：同一套本地模型池共享给其他兼容客户端和脚本。
+- **减少任务中断影响**：上下文压缩、流续写与安全渠道切换，为长任务提供恢复机制。
+- **用量看得清**：集中查看 Token 消耗、缓存命中率与价值估算。
 
-`main` 是当前主线：由原 `noad` 分支承接并合并 `gateway`，包含全部最新能力。
+## 快速开始
 
-| 你想做的事 | 应该去的分支 |
-| --- | --- |
-| 使用最新功能：本地路由、共享入口、Codex / Grok 订阅账号、CLI | [`main`](https://github.com/yaogjim/cursor-byok/tree/main) |
-| 参与功能开发 | [`gateway`](https://github.com/yaogjim/cursor-byok/tree/gateway) |
-| 使用带 Docker CLI 的版本 | [`cli`](https://github.com/yaogjim/cursor-byok/tree/cli) |
+1. **下载安装**：从 [Releases](https://github.com/yaogjim/cursor-byok/releases/latest) 下载适合你的 macOS / Windows / Linux 安装包。
+2. **接入模型**：在「上游模型」填写 API 地址、Key 和模型 ID；或在「接入中心」授权 Codex / Grok 订阅，再添加对应模型。保存并测试模型。
+3. **开始使用**：在「接入中心」配置 Cursor、启动本地服务，按提示完成代理配置；打开 Cursor，选模型即可开始 Chat 或 Agent 任务。
 
-`main` 不再跟踪任何上游仓库；新功能和修复直接进入 `main`，较大改动可先在 `gateway` 开发后合入。
+**其他客户端（可选）**：在「接入中心」启用并保存共享入口（Gateway），选择公开模型及别名后启动；客户端填写 `http://127.0.0.1:18091/v1`、入口令牌和公开模型别名。入口令牌用于客户端的 API Key 字段，无需填写上游 Key。
+
+模型费用、额度及使用权限以对应服务商为准。
+
+## 界面
+
+### 接入中心
+
+一个页面管理共享入口、Cursor、Codex、Grok 四类接入，每个入口独立启停、配置和保存。
+
+![接入中心 · 共享入口：地址、令牌与公开模型](docs/images/screenshots/zh/access-gateway.png)
+
+![接入中心 · Cursor 深度集成](docs/images/screenshots/zh/access-cursor.png)
+
+![接入中心 · Codex 订阅账号：设备码授权、用量与账号列表](docs/images/screenshots/zh/access-codex.png)
+
+![接入中心 · Grok 订阅账号](docs/images/screenshots/zh/access-grok.png)
+
+### 模型管理
+
+在同一列表中管理自有 API、Codex、Grok 与官方模型，支持启停、搜索、筛选、连接测试和导入导出。
+
+![模型管理 · 列表、筛选与测试状态](docs/images/screenshots/zh/models.png)
+
+![模型配置 · 渠道参数、上下文窗口与保存并测试](docs/images/screenshots/zh/model-editor.png)
+
+### 系统设置
+
+集中配置界面语言、主题、启动与窗口行为、广告、更新检查、网络代理和日志。
+
+![系统设置 · 基本设置](docs/images/screenshots/zh/settings.png)
+
+![系统设置 · 会话与日志：采集级别、保留策略与日志维护](docs/images/screenshots/zh/settings-logs.png)
+
+![系统设置 · 网络与请求：出站代理、超时与 TLS 校验](docs/images/screenshots/zh/settings-network.png)
+
+*截图为界面示意，数据仅用于展示。*
 
 ## 核心能力
+
+
 
 ### 1. 本地分流：官方和 BYOK 可以同时用
 
 客户端请求先到本机，再按模型精确决定去向：
 
-- 能识别的 BYOK 模型走本地渠道；
+- 能识别的 BYOK 模型走本地渠道，同名冲突时本地渠道优先；
 - 其余模型（包括自动选择）保持 Cursor 官方身份；
 - 本地渠道失败时**不会隐式切到官方**，避免把一次请求悄悄变成另一种计费或另一种上下文；
 - 官方与 BYOK 两条链路互不替代，一个失败不会自动换到另一个。
@@ -81,7 +113,7 @@ Base URL: http://127.0.0.1:18091/v1
 - **Grok**：xAI 订阅授权；
 - 支持多账号、用量刷新、额度耗尽识别、账号亲和（同一会话尽量落在同一账号）；
 - 支持从 sub2api 文件导入账号；
-- Anthropic 目前是接入位，深度集成仍在计划中。
+- Anthropic 订阅目前是接入占位，深度集成仍在计划中；这与已支持的 Anthropic 兼容 API 接入是两回事。
 
 这样同一套模型目录里可以同时出现：自己的 API、Codex 订阅、Grok 订阅。
 
@@ -101,6 +133,8 @@ Base URL: http://127.0.0.1:18091/v1
 - Provider 400 错误只保留脱敏摘要；
 - 托管 Codex 渠道遵守它自己的请求字段白名单，不强行塞不支持的参数。
 
+
+
 ### 5. Agent 能力保留
 
 接入 BYOK 后，Cursor 的 Agent 能力仍然可用：
@@ -112,6 +146,8 @@ Base URL: http://127.0.0.1:18091/v1
 - 子代理（subagent）任务；
 - 编辑类任务的完成校验：必须有一次成功修改，以及一次**晚于该修改**的成功验证；口头说“改好了”不算完成。
 
+
+
 ### 6. 长会话和流式输出更稳
 
 - 上下文溢出时自动压缩，并在同一次运行里重试一次；
@@ -120,6 +156,8 @@ Base URL: http://127.0.0.1:18091/v1
 - 终态只提交一次，避免重复消息；
 - 检查点 Blob 校验通过并收到客户端确认后才发布；
 - 已派发的子任务结果会持久化；旧请求结束、后端重启或新请求没有内存等待记录时，只要身份和父会话能精确匹配，迟到的结果仍可落盘。
+
+
 
 ### 7. 可观测、默认克制
 
@@ -131,95 +169,47 @@ Base URL: http://127.0.0.1:18091/v1
 - 默认浅色主题；
 - 更新检查、下载、安装分三个阶段，未确认不会自动下载或安装。
 
+
+
 ### 8. CLI 也能用
 
 同一个模型池可以给 Cursor CLI 使用：
 
-- [`cursor-cli-docker/`](./cursor-cli-docker/README.md)：Docker 内运行 Cursor CLI，并提供 WeTTY 浏览器终端；
-- [`tools/cursor-cli-model-pool/`](./tools/cursor-cli-model-pool/README.md)：按顺序切换物理模型的独立控制器，只在零输出、零副作用窗口切换；
+- `[cursor-cli-docker/](./cursor-cli-docker/README.md)`：Docker 内运行 Cursor CLI，并提供 WeTTY 浏览器终端；
+- `[tools/cursor-cli-model-pool/](./tools/cursor-cli-model-pool/README.md)`：按顺序切换物理模型的独立控制器，只在零输出、零副作用窗口切换；
 - CLI 指向本机后端 `http://127.0.0.1:18090`，不需要把真实 API Key 写进 CLI 配置。
 
-## 界面
-
-### 接入中心
-
-一个页面管理四类接入：共享入口、Cursor、Codex、Grok。每个入口独立启停、独立配置、独立保存。
-
-![接入中心](docs/images/gateway/access.png)
-
-### 模型管理
-
-同一个列表里管理 BYOK、Codex、Grok 和官方模型；可以启停、搜索、筛选、测试和导入导出。
-
-![模型管理](docs/images/gateway/models.png)
-
-## 快速开始
-
-1. 从 [Releases](https://github.com/yaogjim/cursor-byok/releases/latest) 下载对应平台的安装包：
-
-   | 平台 | 安装包 | 免安装归档（自动更新使用） |
-   | --- | --- | --- |
-   | macOS（Apple Silicon / Intel） | `cursor-byok-<版本>-macos-arm64.dmg`、`cursor-byok-<版本>-macos-amd64.dmg` | `*-macos-arm64.tar.gz`、`*-macos-amd64.tar.gz` |
-   | Windows（x64） | `cursor-byok-<版本>-windows-amd64-installer.exe` | `*-windows-amd64.zip` |
-   | Linux（x64） | `cursor-byok-<版本>-linux-amd64.deb`、`*.rpm` | `*-linux-amd64.tar.gz` |
-
-2. 打开 cursor-byok，在「上游模型」里添加你的 API：填写接口地址、API Key、模型 ID，并选择 `/v1/chat/completions`、`/v1/responses` 或自定义路径。
-3. 在「接入中心」按需要选择一种或两种用法：
-   - **Cursor 深度集成**：启动本地服务，按页面提示让 Cursor 走本机代理；
-   - **共享入口**：启用 Gateway，复制 `http://127.0.0.1:18091/v1` 和 Bearer Token 到其他客户端。
-4. 需要 Codex / Grok 时，在对应面板完成订阅授权，再把它们加入模型列表。
-5. 打开 Cursor，选择模型开始使用 Chat 或 Agent。
 
 ## 工作原理
 
 ```text
-Cursor / Codex / Grok / 其他客户端
-                 │
-        ┌────────┴─────────┐
-        │                  │
-  Cursor 本地代理      共享入口
-  127.0.0.1:18080    127.0.0.1:18091/v1
-        │                  │
-        └────────┬─────────┘
-                 │
-          精确路由 / 渠道选择
-                 │
-     ┌───────────┼────────────┐
-     │           │            │
-  BYOK API   订阅账号池     Cursor 官方
+Cursor
+  └─ 本地代理 127.0.0.1:18080
+       ├─ 官方模型 → Cursor 官方
+       └─ BYOK 模型 → 本地模型池
+
+其他兼容客户端 / 脚本
+  └─ 共享入口 127.0.0.1:18091/v1 → 本地模型池
+
+本地模型池 / 渠道选择
+  ├─ 自有模型 API
+  └─ Codex / Grok 订阅账号池
 ```
 
-## 分支说明
-
-本仓库只保留三个长期分支，各自定位如下：
-
-| 分支 | 定位 | 说明 |
-| --- | --- | --- |
-| `main` | **主线（默认分支）** | 由原 `noad` 分支承接并合并 `gateway`，路由、官方/BYOK 共存、共享入口、订阅账号、CLI 全量能力，版本最新 |
-| `gateway` | 功能开发分支 | 路由、官方/BYOK 共存、共享入口、订阅账号、CLI 的持续开发线 |
-| `cli` | CLI 功能版 | 在 noad 基础上加入 Docker CLI、WeTTY 和 CLI 模型池，停留在 v0.0.49.x |
-
-本仓库已不再与原上游仓库保持同步，`main` 只承载本项目自己的改动。
-
-`main` 已包含 `gateway` 的全部能力，日常使用请以 `main` 为准；`gateway` 只作为并行开发线保留。
-
-## 构建与发布
-
-安装包统一由 [GitHub Actions](.github/workflows/build.yml) 在托管的 macOS / Windows / Linux 机器上构建，不再手工上传本机构建成果：
-
-- push 到 `main` 或 `gateway`：自动构建 macOS（DMG + tar.gz）、Windows（ZIP + NSIS 安装包）、Linux（tar.gz + deb + rpm），产物保留在 Actions 的 Artifacts 中；
-- push `v*` tag：三平台构建通过后生成 `update.json` 一并发到 Releases；tag 必须等于 `v` + `build/config.yml` 的 `info.version`。
-
-需要在本机只验证单个平台时，可用 `task release:prepare:macos`、`task release:build:windows:amd64`、`task release:build:windows:installer`、`task release:build:linux:amd64`、`task release:build:linux:installers`。完整说明见 [`CONTRIBUTING.md`](./CONTRIBUTING.md) 的“构建与发布”。
+Cursor 官方模型保留在 Cursor 链路中；共享入口只公开你选择的本地模型。
 
 ## 兼容与边界
 
-- 本项目是独立的本地工具，与 Cursor 官方无隶属或背书关系；使用官方模型仍需遵守 Cursor 的服务条款。
-- 共享入口只监听回环地址，定位是本机多客户端复用，不是公网网关。
-- Anthropic 深度集成仍在计划中，当前只提供接入位。
+- 本项目是独立的本地工具，与 Cursor 官方无隶属或背书关系；使用官方模型仍需遵守 Cursor 的服务条款，使用 API 和订阅账号也需遵守对应服务商的条款。
+- Agent 的可用性与效果取决于上游模型的工具调用能力、协议兼容性及 Cursor 版本，接入后请先测试实际任务。
+- 本地运行的是路由与管理服务，不等于离线推理；请求仍会发往你选择的上游服务。
+- 共享入口只监听回环地址，定位是本机多客户端复用，不是公网网关，也不转供 Cursor 官方额度。
+- Anthropic 订阅深度集成仍在计划中，当前只提供接入占位；Anthropic 兼容 API 可按 API 渠道接入。
 - 子任务恢复只接管能够验证派发身份和父会话关联的结果，不自动重启已取消任务。
 - 本地渠道与官方渠道失败时不会自动互换；Provider fallback 也只在零输出、零副作用窗口生效。
 - 日志默认不记录正文和凭据，但任何“未观察到泄露”都不能单独等同于“绝对没有泄露”；敏感环境请自行做网络与权限隔离。
+
+
 
 ## 许可证
 
