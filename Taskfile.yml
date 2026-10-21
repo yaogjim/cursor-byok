@@ -244,6 +244,7 @@ tasks:
 
   release:build:macos:arm64:
     cmds:
+      - task: release:ensure:dir
       - task: darwin:package:archive
         vars:
           ARCH: arm64
@@ -256,6 +257,7 @@ tasks:
   release:build:macos:amd64:
     internal: true
     cmds:
+      - task: release:ensure:dir
       - task: darwin:package:archive
         vars:
           ARCH: amd64
@@ -267,6 +269,7 @@ tasks:
 
   release:build:windows:amd64:
     cmds:
+      - task: release:ensure:dir
       - task: windows:create:zip
         vars:
           ARCH: amd64
@@ -321,6 +324,7 @@ tasks:
 
   release:build:linux:amd64:
     cmds:
+      - task: release:ensure:dir
       - task: linux:package:archive
         vars:
           ARCH: amd64
