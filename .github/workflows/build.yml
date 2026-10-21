@@ -231,6 +231,18 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
+      # wails3 CLI 依赖 cgo 链接 GTK/WebKit，缺失时 go install 会链接失败
+      - name: 安装系统依赖
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes \
+            pkg-config \
+            gcc \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libglib2.0-dev
+
       - name: 安装 wails3
         run: |
           set -euo pipefail
