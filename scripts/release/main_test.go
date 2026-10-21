@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,5 +48,50 @@ func TestReleaseManifestUsesForkRepository(t *testing.T) {
 	}
 	if asset.Size != int64(len(payload)) {
 		t.Fatalf("manifest asset size = %d, want %d", asset.Size, len(payload))
+	}
+}
+
+func TestWriteZipDirArchivesDirectoryContents(t *testing.T) {
+	root := t.TempDir()
+	staging := filepath.Join(root, "bin", ".zip-amd64")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatalf("create staging dir: %v", err)
+	}
+	payload := []byte("windows binary")
+	binaryName := "cursor-byok.exe"
+	if err := os.WriteFile(filepath.Join(staging, binaryName), payload, 0o755); err != nil {
+		t.Fatalf("write staging binary: %v", err)
+	}
+
+	outPath := filepath.Join(root, "bin", "release", "1.77.0", "cursor-byok-1.77.0-windows-amd64.zip")
+	if err := writeZipDir(staging, outPath); err != nil {
+		t.Fatalf("write zip: %v", err)
+	}
+
+	reader, err := zip.OpenReader(outPath)
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	defer reader.Close()
+
+	if len(reader.File) != 1 {
+		t.Fatalf("zip entry count = %d, want 1", len(reader.File))
+	}
+	// 归档根目录应为暂存目录内容，例如 cursor-byok.exe，不带 bin/.zip-amd64 前缀。
+	if got := reader.File[0].Name; got != binaryName {
+		t.Fatalf("zip entry name = %q, want %q", got, binaryName)
+	}
+
+	entry, err := reader.File[0].Open()
+	if err != nil {
+		t.Fatalf("open zip entry: %v", err)
+	}
+	defer entry.Close()
+	content, err := io.ReadAll(entry)
+	if err != nil {
+		t.Fatalf("read zip entry: %v", err)
+	}
+	if string(content) != string(payload) {
+		t.Fatalf("zip entry content = %q, want %q", content, payload)
 	}
 }

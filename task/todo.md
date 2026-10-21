@@ -5,7 +5,7 @@
 
 ## 当前焦点
 
-### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；local-only）
+### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；已推送）
 
 - 负责人：主会话。目标：把应用名 `Gateway-byok` 改为 `cursor-byok`（含构建应用名、产物名与各文档），并让 GitHub 在 push 后自动构建 macOS/Windows/Linux 安装包，替代本机编译后手工上传；同时修复在 GitHub 上构建可能失败的问题。
 - [completed] `rename-app`：37 个文件完成替换，覆盖 `build/config.yml`、darwin plist、windows info/nsis、nfpm、`Taskfile.yml` 的 `APP_NAME`、`internal/app/runner.go` 的 `appName`、README、release-notes 与 releaselog；`build/linux/desktop` 改名 `build/linux/nfpm/cursor-byok.desktop`。改后执行 `wails3 task common:update:build-assets` 无额外 diff。历史记录中的旧版本路径（`/Applications/Gateway-byok.app`）与旧实例名保持原样。
@@ -13,9 +13,19 @@
 - [completed] `ci-failure-fixes`：干净检出先执行 `common:generate:proto`；`generate:bindings` 与各平台 `build:native` 移除 `go:mod:tidy` 依赖（原先与 proto 生成并行，`gen/` 缺失会失败）；`generate:proto` 的 include 路径按 OS 选择；Linux 补 webkit/gtk 依赖与 `nfpm`、并校验生成资产与 `build/config.yml` 一致；Windows 补 `nsis`/`zip`/`protoc`，webview2 bootstrapper 已存在时跳过下载。
 - [completed] `packaging-fixes`：修正 nfpm 引用了不存在的 desktop 文件与安装脚本、硬编码版本/维护者、图标尺寸；新增 `postinstall.sh`/`postremove.sh`、`linux:package:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:build:linux:installers`、`release:verify:installers`。
 - [completed] `local-verification`：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`release:prepare:macos` 产出两个 DMG 与两个 tar.gz，DMG 均通过 `hdiutil verify`，arm64 二进制为 Mach-O arm64，`CFBundleName`/`CFBundleExecutable`/版本为 `cursor-byok`/`cursor-byok`/`1.77.0`；`release:build:windows:amd64` 交叉编译出 zip；nfpm 桩二进制产出 deb/rpm 且 deb 字段与路径解包核对正确。
-- [pending] `ci-real-run`：工作流尚未在 GitHub 上真实运行，需推送后确认三平台 job 结论；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 安装行为未在对应实机验证；本机无 Docker daemon，未跑 `release:build:linux:amd64`。
+- [completed] `ci-real-run`：工作流已在 GitHub 真实运行。`v1.77.0@5ec8065` 的 run 39557893089 中 macOS job 成功并上传 artifact；Linux job 因 nfpm 引用不存在的 desktop 文件失败，Windows job 因 `zip -qry` 不支持 `-y` 失败。详见下一节。
 - [completed] `commits`：`main` 改名为 `6a0e370`，CI 触发条件收敛为 `739dc6d`；`gateway` 用合并提交 `398d50e` 同步且内容与 `main` 一致；`v1.77.0` 指向 `main@739dc6d`。
-- [pending] `remote-sync`：沿用上一条任务的推送窗口，按用户确认顺序执行远程分支与 `v1.77.0` tag 同步。
+- [completed] `remote-sync`：已按确认顺序完成：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、`origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0`。修复前 `origin/main` 为 `5ec8065`，`origin/gateway` 为 `79dc686`。
+
+### CI 构建 Windows/Linux 失败修复（2026-10-21；本地已验证，待真实运行复核）
+
+- 负责人：主会话。目标：修复 GitHub Actions 上 Windows 与 Linux 安装包 job 的失败，使三平台安装包与 tag 触发的一致。
+- [completed] `linux-nfpm-paths`：`build/linux/nfpm/nfpm.yaml` 的 desktop 源改为 `./build/linux/nfpm/cursor-byok.desktop`；图标按 1024×1024 真实尺寸安装并追加 `/usr/share/pixmaps`；`version`/`arch` 改用任务注入的 `${VERSION}`/`${ARCH}`；维护者与 homepage 固定；启用 `postremove`。
+- [completed] `linux-nfpm-scripts-tracked`：`postinstall.sh`、`postremove.sh` 因 `.gitignore` 的 `build/` 规则从未入库，已 `git add -f` 纳入版本控制；否则 nfpm 在修好 desktop 后仍会因脚本缺失失败。
+- [completed] `windows-zip-cross-platform`：`scripts/release` 新增 `zip` 子命令（`archive/zip`），`windows:create:zip` 改用 `go run ./scripts/release zip -src ... -out ...`，去掉对平台 `zip` 命令 `-y` 选项的依赖；Windows job 的 `choco install` 移除 `zip`。
+- [completed] `release-assets-glob`：发布 job 的 `files` 增加 `bin/release/*/*installer.exe`，Windows NSIS 安装包此前不会上传到 Release。
+- [completed] `local-verification`：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok（新增 zip 回归测试）；`release:build:windows:amd64` 完整跑通，zip 根目录为 `cursor-byok-windows-amd64.exe`，解包为 `PE32+ executable (GUI) x86-64`；nfpm 桩二进制重打 deb/rpm，deb 的 control、postinst/postrm、desktop 与图标路径均核对正确；相关 YAML 全部通过解析。
+- [pending] `ci-recheck`：修复未推送，尚无新的 CI 结论。Windows NSIS 实际编译与 Linux 真实二进制/deb/rpm 安装行为仍需在对应 runner 或实机确认。
 
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
 

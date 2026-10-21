@@ -135,6 +135,7 @@ tasks:
       ARCH: '{{.ARCH | default ARCH}}'
       OUTPUT: '{{.OUTPUT | default (printf "%s/%s.exe" .BIN_DIR .APP_NAME)}}'
       ZIP_NAME: '{{.ZIP_NAME | default (printf "%s-windows-%s.zip" .APP_NAME .ARCH)}}'
+      ZIP_PATH: '{{.BIN_DIR}}/{{.ZIP_NAME}}'
       STAGING_DIR: '{{.BIN_DIR}}/.zip-{{.ARCH}}'
     cmds:
       - task: build
@@ -154,7 +155,8 @@ tasks:
       - rm -rf "{{.STAGING_DIR}}"
       - mkdir -p "{{.STAGING_DIR}}"
       - cp "{{.OUTPUT}}" "{{.STAGING_DIR}}/"
-      - (cd "{{.STAGING_DIR}}" && zip -qry "../{{.ZIP_NAME}}" .)
+      # 使用 Go 实现的打包命令，避免依赖各平台参数不一致的 zip 命令行工具
+      - go run ./scripts/release zip -src "{{.STAGING_DIR}}" -out "{{.ZIP_PATH}}"
       - rm -rf "{{.STAGING_DIR}}"
       - rm -f "{{.OUTPUT}}"
 

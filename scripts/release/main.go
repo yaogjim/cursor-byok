@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -50,7 +51,7 @@ var releaseAssets = []assetSpec{
 
 func main() {
 	if len(os.Args) < 2 {
-		exitf("usage: go run ./scripts/release <version|notes|manifest> [flags]")
+		exitf("usage: go run ./scripts/release <version|notes|manifest|zip> [flags]")
 	}
 
 	switch os.Args[1] {
@@ -60,6 +61,8 @@ func main() {
 		runNotes(os.Args[2:])
 	case "manifest":
 		runManifest(os.Args[2:])
+	case "zip":
+		runZip(os.Args[2:])
 	default:
 		exitf("unknown subcommand: %s", os.Args[1])
 	}
@@ -76,6 +79,80 @@ func runVersion(args []string) {
 	}
 
 	fmt.Print(version)
+}
+
+// runZip 把目录内容打包成 zip 归档，供发布流程生成 Windows ZIP 包。
+// CI 的 Windows 运行器上 zip 命令行为不一致（例如不支持 -y 选项），
+// 因此改用 Go 实现，保证各平台产物一致。
+func runZip(args []string) {
+	flags := flag.NewFlagSet("zip", flag.ExitOnError)
+	srcDir := flags.String("src", "", "directory whose contents become the archive root")
+	outPath := flags.String("out", "", "path of the zip archive to write")
+	_ = flags.Parse(args)
+
+	if *srcDir == "" || *outPath == "" {
+		exitf("zip requires both -src and -out")
+	}
+	if err := writeZipDir(*srcDir, *outPath); err != nil {
+		exitErr(err)
+	}
+}
+
+func writeZipDir(srcDir, outPath string) error {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("create zip parent dir: %w", err)
+	}
+	file, err := os.Create(outPath)
+	if err != nil {
+		return fmt.Errorf("create zip file: %w", err)
+	}
+	writer := zip.NewWriter(file)
+	base := filepath.Clean(srcDir)
+	walkErr := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(base, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." {
+			return nil
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(relative)
+		if info.IsDir() {
+			header.Name += "/"
+			header.Method = zip.Store
+			_, err := writer.CreateHeader(header)
+			return err
+		}
+		header.Method = zip.Deflate
+		entry, err := writer.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		source, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer source.Close()
+		_, err = io.Copy(entry, source)
+		return err
+	})
+	if walkErr != nil {
+		_ = writer.Close()
+		_ = file.Close()
+		return walkErr
+	}
+	if err := writer.Close(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("finalize zip: %w", err)
+	}
+	return file.Close()
 }
 
 func runNotes(args []string) {
