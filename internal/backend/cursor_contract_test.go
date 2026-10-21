@@ -66,7 +66,7 @@ func TestCursorBackendContractHealthzTracesAndProcedures(t *testing.T) {
 }
 
 func TestHostAgentModelSwitchNudgeForwardsOfficial(t *testing.T) {
-	// 0.0.77 日志中模型选择提示接口被送到本地后返回 404。
+	// 1.77 日志中模型选择提示接口被送到本地后返回 404。
 	// 官方身份应保留原始凭据并转发；这只验证缺失接口修复，
 	// 不将该 404 与客户端新建对话提示之间的相关性当作已证实因果。
 	manager := newHostConfigTestManager(t)

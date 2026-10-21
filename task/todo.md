@@ -5,7 +5,7 @@
 
 ## 当前焦点
 
-### 0.0.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
+### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
 
 - 负责人：主会话；目标为修复主对话出现 `chat context summarized` 后失败，并查明同一聊天 BYOK→官网模型被要求新建聊天的原因。源码基线 `ca4d6ed`；本轮保留既有协作规范修改，不部署、重启、修改 Cursor 安装/真实会话或配置，不 commit/push。
 - [completed] `077-summary-parameter-fix`：真实上游最小对照确认 `gpt-6.1-sol` 拒绝 `reasoning.effort=none`（400）；相同输入和4096输出预算仅改 `low` 后200且完成。摘要关闭思考的适配只对精确 `gpt-6.1-sol` / `gpt-6.1-sol-*` 映射最低合法 `low`，普通gpt-6与显式high保持原行为。现场未保留错误正文，因此对照证明参数缺陷及其摘要失败链，不冒充原请求完整重放。
@@ -33,7 +33,7 @@
   - 验收：原生格式、同步规则、参数承载、失败/取消/幂等、回滚边界均可核实；未知项按影响阻塞相关工作包，不宣称可直接实施。验证仅源码核查和必要合成协议探针，不运行真实模型或无关套件。
   - 阻塞分类：fact/design gap=异步读取预算/取消、历史对齐/持久恢复及子模型替代承载；product-decision gap=具体替代承载设计尚未批准（完整参数目标已确认）；test/env gap=真实官方端到端。检查点写出改按 §19.3c 数据域分别治理：C0-W1 文本/可无损完整工具批次的输出与回滚合同已闭合，structured/压缩/其他内容/数值与结果类型/导入引用图/32字节歧义只阻塞对应切片。本轮没有启用异步读取、新写出或子请求改写；C0-P1 仅修复内存参数快照，已完成读取切片回退无需迁移。
   - 早期取证证据：参数 `SUMMARY pass=11 fail=0`；主会话 `PRIMARY_NATIVE_PARTS_PASS`、`PRIMARY_NATIVE_REFERENCES_PASS`，原始引用恢复2条、旧内联恢复0条，工具关联/推理/图片文件字节通过。仅合成契约探针，不是修复验收；本轮参数永久回归和代码证据见 `docs/process.md` 本专项续办条目。
-- 真实日志差距核对（0.0.75.0，日志窗口2026-10-12 UTC；本轮只读诊断完成）：`/Users/yaogj/Downloads/logs`为basic模式，2324条连续events，171条diagnostics均为副本。BYOK主请求前4次模型调用成功，第5次在明确收到客户端cancel后取消；派发3个子任务，随后请求存在官方HTTP200，但缺正文/业务终态，不能据此认定子任务成功或结果唯一回流。39次检查点Blob均ACK，无超时证据；87次TLS拒绝及控制面404/502独立保留，未确证为混用根因。当前源码及0.0.75.0发布说明再次确认：缺失Blob异步读取、原生检查点写出、非空本地历史增量同步及完整子模型参数链是尚未交付的feature gap，而非仅缺实机验收。下一步先建立合成父Task→客户端子请求→模拟官方业务终态→父结果唯一追加的失败判据；basic材料不足以重放具体现场失败，不据猜测改运行配置或功能代码。既定缺失内容恢复优先级及设计门禁不变；完整证据与复用教训见`docs/process.md`同名节，整链状态不提升。
+- 真实日志差距核对（1.75.0，日志窗口2026-10-12 UTC；本轮只读诊断完成）：`/Users/yaogj/Downloads/logs`为basic模式，2324条连续events，171条diagnostics均为副本。BYOK主请求前4次模型调用成功，第5次在明确收到客户端cancel后取消；派发3个子任务，随后请求存在官方HTTP200，但缺正文/业务终态，不能据此认定子任务成功或结果唯一回流。39次检查点Blob均ACK，无超时证据；87次TLS拒绝及控制面404/502独立保留，未确证为混用根因。当前源码及1.75.0发布说明再次确认：缺失Blob异步读取、原生检查点写出、非空本地历史增量同步及完整子模型参数链是尚未交付的feature gap，而非仅缺实机验收。下一步先建立合成父Task→客户端子请求→模拟官方业务终态→父结果唯一追加的失败判据；basic材料不足以重放具体现场失败，不据猜测改运行配置或功能代码。既定缺失内容恢复优先级及设计门禁不变；完整证据与复用教训见`docs/process.md`同名节，整链状态不提升。
 - 界面截图续证（诊断完成，未修复）：用户截图明确三个子任务均`Stopped with error`，继续时官方选模界面出现`Conversation data missing / 19 missing blobs`；缺失标识前缀`7b22636f6e74`解码为`{"cont`。真实检查点投影的隔离Go overlay复现两条root为内联JSON（95/49字节、同前缀），按原生内容引用查找均缺失；既有本地回放对照通过、原生引用断言预期RED，证据`/tmp/byok-screenshot-probe.gckLUP/result.log`。因此阶段2B原生写出是已复现且与现场特征一致的用户可见阻塞，不仅是test/env gap。截图请求ID不在导出中，三个子任务具体错误、Git仓库识别失败与会话恢复错误是否同源仍待核实；不据此修改工作目录/证书或删除历史。应以原生消费者可解析全部root为写出修复验收标准，遵守对应设计门禁；不提升整体状态。详细更正与复用教训见`docs/process.md`截图续证节。
 - 已完成前置切片 `mixed-parameter-snapshot`：Design Readiness=approved（仅系统 Design §19.4b C0-P1）；真实解析入口 low/high 的永久回归先退出1，再修复转绿。参数序列与 protobuf 未知字段保留，源/克隆/lookup/Task桥隔离、既有选择规则和日志摘要均有测试；相关三包测试/vet、定向 race 验收批次退出0。详细完成记录已转 `docs/process.md`；不代表完整 C1/C4 或客户端最终参数传通。
 - 已完成前置切片 `mixed-native-read-fix`：系统 Design §19.3a C0-H1；已预取原生文本 root 的永久回归 RED→GREEN，HTTP BidiAppend→实际保存/编译/provider gateway→模拟模型输入接线通过。顺序/重复实例、root 优先、32字节内联兼容、部分缺失与解码失败完整会话保全均有回归；forwarder/prompt 两包测试、历史定向 race、vet 验收批次退出0。证据转 `docs/process.md` 最新续办条目，切片 delivery_status=verified-partial；后续文本/工具数组读取已完成，其余内容类型、异步 GetBlob、新检查点及增量同步仍未实现，不能标记完整 C2A 已完成。
@@ -70,23 +70,23 @@
 - [completed] `checkpoint-reverify-20260921`：独立验证以临时 Go overlay 还原旧逻辑、保持工作区不变，目标回归预期失败 `stale timer skipped B pending=false writes=0`（退出 1，0.991s）；当前实现同一测试通过（0.447s），9 个检查点相关 race 用例通过（1.715s）。隔离 HOME、复用缓存、禁止下载依赖；主控已读取实际输出，未重跑无关全量检查。临时证据 `/tmp/ckpt-overlay.tw2xLv/{red,green,race}.stdout.txt`。
 - [pending] `checkpoint-runtime-acceptance-20260921`（test/env gap）：尚未构建、替换或重启真实 Gateway；需另行确认部署窗口，观察同一请求中 dispatch→ACK/timeout，并确认无过早超时且正常超时仍降级。当前仅源码与隔离回归验证完成，整体 `verified-partial`。
 
-### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+### 1.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 - 范围：用户提供 `/Users/yaogj/Downloads/logs 2`，要求定位同一 Agent 会话从模型 A 切换到高级模型后出现 `decode imported replay messages: invalid character ...` 的问题；只修复 replay 导入格式误判，不处理独立 provider 502，不部署、不重启、不 commit/push。
 - [completed] `log-and-code-triage`：请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e` 在约 7.77 MiB `run_request` 解码后 0.5ms 内进入 `dispatch_error` 并返回 500，未到 provider 调用；另外三个用户列出的请求 ID 不在本次导出中。Cursor 本机运行时代码确认 `rootPromptMessagesJson` 元素会作为 Blob ID 调用 `getBlob`，再反序列化为 `coreMessage`；网关原实现却直接交给 JSON 解码，因此随机 SHA-256 首字节被报告为 `>`、`h` 或其他非法字符。
 - [completed] `minimal-fix`：仅当全部非空 `root_prompt_messages_json` 元素均为 32 字节 Blob 引用且存在 `turns` 回退数据时，跳过 JSON replay 分支并复用既有 Blob-aware turns 导入；混合/普通非 JSON 数据及缺少 turns 的 Blob 引用继续报错，避免静默丢失历史。
 - [completed] `regression-and-verification`：新增 Blob root prompts→turns 回退、普通非法 replay 拒绝、无 turns 的 Blob replay 拒绝用例。目标回归在修复前稳定失败：`invalid character '\u008b' looking for beginning of value`；修复后目标四例通过，`go test ./internal/backend/forwarder -count=1` 与 `go vet ./internal/backend/forwarder` 通过，`git diff --check` 通过。
-- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.2`；代码修复与版本元数据已提交并推送。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `1.72.2`；代码修复与版本元数据已提交并推送。
 - [pending] `runtime-acceptance`：未安装或替换当前 Gateway，未在真实 Cursor 会话执行“模型 A 完成任务→切换高级模型分析”的桌面实机验收；交付状态为 `verified-partial`。独立的 `server_5xx status=502` 属于 provider/上游问题，本轮只报告、不修改。
 
-### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
+### 1.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
 
 - [completed] `responses-done-fallback`：`streamResponses` 的 `[DONE]` 兜底路径仿照 Chat 路径补发 `TurnFinished`（无工具普通成功默认 `stop`，已发工具完成保留空值交由 `effectiveFinishReason` 归一为 `tool_calls`）；`completeTool` 参数不完整改为返回 `StreamTruncatedError` fail-closed，不再静默跳过；`[DONE]` 兜底先复查全部 `tools` 累加器，任一参数未收口即按流截断 fail。正常 `response.completed` 终态路径与 Chat 路径行为不变。
 - [completed] `regression-tests`：新增 `TestOpenAIResponsesDoneWithoutCompletedEmitsTurnFinished` 与 `TestOpenAIResponsesDoneWithIncompleteFunctionCallTruncates`；`go test ./internal/backend/agent/model/ -run 'TestOpenAIResponses' -count=1` 通过。
-- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `0.0.72.1`。
+- [completed] `version-bump`：构建元数据（build/config.yml、darwin Info.plist/Info.dev.plist、windows info.json/wails_tools.nsh/wails.exe.manifest、linux nfpm.yaml）与 release-notes/releaselog 对齐 `1.72.1`。
 - [pending] `runtime-evidence`：真实上游 Responses 截断/正常混合流实机验收待后续窗口。
 
-### 0.0.71.2 日志增强与异常保留（2026-09-10；verified-partial）
+### 1.71.2 日志增强与异常保留（2026-09-10；verified-partial）
 
 - **本次复核更正**：此前“全部完成”证据不足；旧复核中的 manifest 准入返回值被忽略、异常预检查阻断轮转、队列无异常预留等问题已由本次回归复现并修复。以下历史构建记录不代表当前源码已重新打包；现有 `79ce4e99…` DMG **不包含本次复核修复**。
 - [completed] `review-repair-storage`：manifest 真正拒绝超额写入，临时文件失败清理与计量失效重扫、关闭失败可查询且返回错误；app/event/payload 保留普通分区内既有 1 MiB 供元数据及原子替换使用。异常写满先回收封存分片、必要时封存自己的分片后再准入，保护其他写入器的活跃分片；超大单条不先删除历史。未知 schema/mode/身份 manifest 保留，已知 v1/v2 正常回收。
@@ -105,23 +105,23 @@
 - [completed] `verify-log-scope`：隔离 HOME 下根模块相关测试、observability/logger race、受影响包 vet；分析器 `./internal/...` test/vet；主前端配置投影和 production build、分析器 GUI build、`git diff --check` 均通过。一次 forwarder 全包测试暴露通用 `result` 白名单泄露，已改为专用 `checkpoint_result` 并重跑全包通过。
 - [completed] `review-final-diff` / `fix-integration`：独立只读复核在批准范围内发现三处缺陷并已修复——普通分区回收把 closed/basic trace 与旧 app 分片合并为按时间（同时间按路径）排序的单一层级；诊断分区改为在共享预算锁内按磁盘实际用量准入，达到 D 时丢弃并报告 `diagnostic_reserve_exceeded`；manifest 写入纳入普通分区准入与计量。删除死代码 `diagnosticUsageBytes`，补齐对应回归测试；锁序保持 sink → budget → RotatingFile，无反转。
 - [completed] `validate`：修复后于隔离 HOME 重跑 gofmt、`internal/observability|logger|logsink` 测试、observability/logsink race、forwarder 与 upstream 测试、受影响包 vet、分析器 `./internal/...` test/vet、前端配置投影和 `git diff --check`，全部退出 0。
-- [completed] `build-macos-arm64`：修复后在隔离 HOME 下重跑 `task build`，重新归档 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`（24292111 bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`）；版本 `0.0.71.2`、arm64、adhoc 签名、DMG 与深度签名校验通过。此前 `988e92b9…` 的产物早于上述修复，已被本次重建取代。未安装/重启、未做 notarization 或其他平台构建，未 commit/push。
+- [completed] `build-macos-arm64`：修复后在隔离 HOME 下重跑 `task build`，重新归档 `bin/release/1.71.2/cursor-byok-1.71.2-macos-arm64.dmg`（24292111 bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`）；版本 `1.71.2`、arm64、adhoc 签名、DMG 与深度签名校验通过。此前 `988e92b9…` 的产物早于上述修复，已被本次重建取代。未安装/重启、未做 notarization 或其他平台构建，未 commit/push。
 - [pending] `runtime-failure-evidence`：部署后的真实 checkpoint ACK/timeout、客户端 CA 具体信任来源、上游中断精确断点仍待新日志；不同请求后续成功不作为原失败恢复。当前未部署、未重启、未改真实日志/配置，未 commit/push。
 
-### 0.0.71.1 下载日志异常诊断与最小修复（2026-09-09）
+### 1.71.1 下载日志异常诊断与最小修复（2026-09-09）
 
 - 范围：用户要求主控安排取证、根因分析、review、验证及必要修复；读取 `/Users/yaogj/Downloads/logs` 六份 app 日志和两个 trace 会话，对照 `5926cc4`。不改真实模型/账号/CA/代理配置，不重启或部署，不 commit/push；未启动产品级自动恢复能力。
-- [completed] `log-triage`：旧版 0.0.71.0 当前样本 848 事件，新版 0.0.71.1 为 183889 事件；序号连续，JSON 解析无错误。新版 183 个唯一模型终态为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra-211` 是 7 失败加 1 取消，不能表述成 8 次故障。
+- [completed] `log-triage`：旧版 1.71.0 当前样本 848 事件，新版 1.71.1 为 183889 事件；序号连续，JSON 解析无错误。新版 183 个唯一模型终态为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra-211` 是 7 失败加 1 取消，不能表述成 8 次故障。
 - [completed] `root-cause`：5 次 500 的上游摘要为 Codex TLS handshake EOF；1 次 503 为 auth_unavailable 并附 198.18.0.49 连接超时。六次均已有两次 HTTP attempt，候选耗尽；三条 Grok 流同时 unexpected_eof 支持共享链路中断，但具体网络节点未知。另有 1403 次客户端 CA 握手拒绝、默认模型 48 次本地 502、插件/MCP 本地 404、遥测 Batch 缺路由。
 - [completed] `managed-skills-fix`：Host 实际入口先复现未登录 GetManagedSkills fallback 在 proto/JSON Content-Type 下都返回 502；只补 `newProtoMessage` 的现有 `GetManagedSkillsResponse` 类型注册，两例转为 200、protobuf 可解码且 skills 为空。生产改动 2 行、既有测试增加 40 行；JSON 入站使用合法 `{}` 正文，保留其他控制面与身份语义。
 - [completed] `review-verify`：独立只读 review 未发现具体缺陷；主控复核 diff、原始日志统计、RED/GREEN，并运行相关两个包的定向契约测试与 vet，均通过。修正“gzip 已完全排除”“确定共用物理连接”“默认接口耗时证明上游成功”等过强诊断，详见 `docs/process.md` 最新节。
 - [completed] `closeout`：分析与源码最小修复完成；交付状态 `verified-partial`，真实现场、上游服务和证书尚未验收。下一步为失败渠道出站/DNS/账号取证、Grok 同时断流关联及默认接口脱敏错误阶段取证；404 的回源/空响应策略属于待确认建议，不擅自实施。
 - 恢复规则：本轮执行及 review 未发生服务中断，无需退避重试；若发生则在原 ID 按 20/40/80/160/320 秒最多五次恢复，持续失败暂停。测试环境的首次依赖缓存路径缺失已修正，不属于执行服务中断。
 
-### 0.0.71.0 对话连接回归取证（2026-09-08；日志 UTC 日期 09-09）
+### 1.71.0 对话连接回归取证（2026-09-08；日志 UTC 日期 09-09）
 
-- 范围：分析用户提供的 `/Users/yaogj/Downloads/logs`、本机应用和 Cursor 日志，对照 `4e4f2f1`（0.0.61.1）与 `818e293`（0.0.71.0）；保留用户已回退的实例，不改账号、证书、配置或服务。
-- [completed] `connection-log-triage`：下载样本 841 条事件，56 次后端 `bidi_append` 完成全部为 502；7 次已结束 `run_sse` 均约 60 秒后 canceled。本机 0.0.71.0 会话有同型 8 次 502，未见模型调用事件；回退 0.0.61.1 的读取快照已有 226 次 BidiAppend 200，较早快照有 6 次 provider request/response 和 521 条回复 chunk。
+- 范围：分析用户提供的 `/Users/yaogj/Downloads/logs`、本机应用和 Cursor 日志，对照 `4e4f2f1`（1.61.1）与 `818e293`（1.71.0）；保留用户已回退的实例，不改账号、证书、配置或服务。
+- [completed] `connection-log-triage`：下载样本 841 条事件，56 次后端 `bidi_append` 完成全部为 502；7 次已结束 `run_sse` 均约 60 秒后 canceled。本机 1.71.0 会话有同型 8 次 502，未见模型调用事件；回退 1.61.1 的读取快照已有 226 次 BidiAppend 200，较早快照有 6 次 provider request/response 和 521 条回复 chunk。
 - [completed] `connection-wire-probe`：继续分析时使用 `/tmp/gateway-wire-probe.d2P9ex` 的 Go overlay 与隔离 HOME，在原始 AgentRouteAction 上复现 gzip Protobuf / JSON 解码失败、502 与 RunSSE 等待；四种身份/选模×三种编码共 12 例，原源码 8 失败、4 通过。临时修正传入 Content-Encoding 并区分 JSON/Protobuf 后 12 例通过，转发 body/encoding 保持不变，相关分流与 Host 定向契约测试通过。不是实际官方/模型端到端验证。
 - [completed] `connection-root-cause-and-fix`（源码与隔离验证）：按批准计划修复 agent_action.go/agent_route.go 的 Content-Encoding 接线和 protobuf/JSON 解码；原始请求与分流规则不变。既有测试固化 12 组合、Connect 真解码、损坏/不支持编码及 Host gzip→模拟 provider 回复。最终两个包测试、定向 race、vet 通过；真实 Cursor 实机未执行，整体仍为 verified-partial。
 - 执行结果：`wire-regression` completed（分流 gzip/JSON RED；Host 普通请求成功、gzip 502）；`fix-wire-decoding` completed；`verify-and-record` completed；`runtime-acceptance` pending（需另行确认窗口）。独立 Spec 复审未发现生产缺陷；Standards 复审发现 Host 测试超时后接收协程收尾不可靠，主控移除不必要协程并检查 stream.Err，复审确认关闭，随后重跑全部计划内验证通过。
@@ -201,8 +201,8 @@
   - [completed] `review-r4-cli-evidence`（CLI-1，合成部分）：补实际 Codex/Grok resolver 和 fake HTTP 请求，目录不刷新凭据；真实 CLI 部分转入授权省略的 test-gap。
 - 验收与回退：逐切片 RED→GREEN→REFACTOR；命令与场景按方案 §11，回退按 §10.3；fixture 不替代真实 CLI/Cursor/代理证据，任何数据完整性、真实凭据或共享服务所有权反例立即暂停相应工作包。
 
-**upstream-leookun-99d527d-review-20260906** (in_progress, verified-partial)
-- 同步边界已冻结：本地 `main` 在隔离 worktree 中快进到 `leookun/main@99d527d`，比较范围为 `543f618..99d527d`；不合并或改写 `gateway`，不 push。
+**upstream-review-99d527d-20260906** (in_progress, verified-partial)
+- 同步边界已冻结：本地 `main` 在隔离 worktree 中快进到 `原上游 main@99d527d`，比较范围为 `543f618..99d527d`；不合并或改写 `gateway`，不 push。
 - 迁移纪律：P0 只移植行为规格、失败用例和状态不变量；只有新增 Go P0 测试失败后，才允许实施对应的最小局部 P1。禁止复制、重写或 cherry-pick Rust 业务实现。
 - 32 个非 merge 提交已按完整 diff 初分：
   - P0 行为测试候选：`b6fc732`/`aa47152`（OpenAI terminal/tool-call 一致性与 content filter 安全拒绝）、`24c41d0`/`0f564c0`/`c3951a4`（Grep/MCP 截断预算、终止性、准确提示）、`ab4d3ad`（稀疏 usage 字段累加不擦除）、`a42f84c`（跨模型调用复用 tool-call ID 不挂起或串联）、`fdae9c4`（context overflow→压缩→重试、摘要输入边界及恢复不变量）。
@@ -223,7 +223,7 @@
 - 安全门：任意 raw byte / 模型事件 / 副作用后禁止重试和切换。删除全局 `providerStreamIdleTimeout`，只保留模型级活性。单渠道计划仍注入 RecoverySettings + liveness。
 - 排除：熔断、按供应商拆网络、partial-output continuation、OpenAI/Anthropic 跨协议混排。
 - 保留未提交的原生图片生成改动，不 stash/reset。
-- 2026-09-03/04 构建安装门禁已闭合：目标仓库 `workspace-gateway-native-fix` 的 `bin/macos-arm64.dmg` 校验有效；DMG 与 `/Applications/Gateway-byok.app` 均为 `0.0.56.0`、arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。运行进程监听 `127.0.0.1:18080` / `127.0.0.1:18090`，`/healthz` 返回 `200 ok`；启动日志无配置归一化、panic 或 fatal 错误。
+- 2026-09-03/04 构建安装门禁已闭合：目标仓库 `workspace-gateway-native-fix` 的 `bin/macos-arm64.dmg` 校验有效；DMG 与 `/Applications/Gateway-byok.app` 均为 `1.56.0`、arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。运行进程监听 `127.0.0.1:18080` / `127.0.0.1:18090`，`/healthz` 返回 `200 ok`；启动日志无配置归一化、panic 或 fatal 错误。
 - 真实 Cursor 正常流量冒烟已闭合：同一 Cursor request 只观察到 1 次 RunSSE 入站/转发，内部多个 model call 均成功，未产生 terminal provider error。结构化事件已包含 failure/action、链级及渠道级 attempt/wait、安全门和最终动作字段；对最新 trace 的敏感 key 与常见 Bearer/API key 值模式扫描均为 0。
 - 已安装应用的本机 Gateway 受控故障验收已闭合：HTTP 500 与 503 场景均在主渠道恰好失败 2 次后切备用并成功；TLS 握手阶段 accept-then-close 场景在客户端表现为 transport reset，主渠道 2 次后切备用并成功；partial-output 场景只命中主渠道 1 次，发布 `PARTIAL-CANARY` 后以 `output_observed` 关闭安全门，未请求备用；预算耗尽场景按主渠道 500×2、备用 503×2 消费全链 4 attempts，SSE 流体只有 1 个 `provider_error` terminal。五条 trace 的恢复字段完整，临时 key、Authorization/正文类字段和 canary/成功正文命中均为 0。
 - 临时在线配置已完整回滚：`config.yaml` SHA-256 与原始备份同为 `a324d89d9b6eaf30b387e85a51924a03f6c13bcef1e2df1cef194d3a022e9d37`，模型数回到 32，临时模型为 0，`18091` 与 `18180–18183` 均已释放；正常应用继续监听 `18080/18090`，`/healthz` 返回 200。
@@ -279,12 +279,12 @@
 - 已确认无需重复移植官方/BYOK 切换、双向子代理、普通 OpenAI/Anthropic cache、Provider 空闲超时、Codex/Grok 主链路、额度与账号轮换；拒绝整体移植 Deno 插件、Rust provider/router 和 conversation runtime。
 - 上游性能、内存和缓存命中宣传缺少可复现 benchmark；完整审阅、最小移植单元和验证口径已写入 `docs/prd_cursor_byok_当前功能与上游差异.md` §16。
 
-**macos-build-0.0.52.5-20260830** (completed, verified)
-- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.5`。
-- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.5.md` 对齐到 `0.0.52.5`；保留构建前已有的工作树改动。
+**macos-build-1.52.5-20260830** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `1.52.5`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.5.md` 对齐到 `1.52.5`；保留构建前已有的工作树改动。
 - 本版本包含共享 Provider 流截断第一阶段治理：OpenAI/Anthropic 终态收口、零输出安全恢复、最终 attempt 观测字段、`CURSOR_BYOK_PROVIDER_TRANSPORT_PROFILE` Transport 单变量实验。
-- 首次尝试误用 Go 1.26.3 且缓存被清空，在 8GB 内存/swap 压力下大文件编译停滞；改用 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后完成 `task build`，产物 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.5`；二进制注入版本 `0.0.52.5`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`；`SHA256SUMS` 校验通过。
+- 首次尝试误用 Go 1.26.3 且缓存被清空，在 8GB 内存/swap 压力下大文件编译停滞；改用 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后完成 `task build`，产物 `bin/release/1.52.5/cursor-byok-1.52.5-macos-arm64.dmg`（24,031,370 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `1.52.5`；二进制注入版本 `1.52.5`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`；`SHA256SUMS` 校验通过。
 - 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
 
 **access-ui-screenshot-feedback-20260830** (completed, verified-partial)
@@ -293,12 +293,12 @@
 - 修复独立 Vite 预览空白页：平台检测缺少 Wails 后端时回退为非 Windows，避免顶层导入失败阻断 Vue 挂载；桌面后端能力在独立预览中仍不可用。
 - 验证：前端配置投影门禁和生产构建通过；Playwright 在 `http://127.0.0.1:4173/#/access?client=codex` 确认页面可挂载并显示调整后的授权布局。独立 Vite 预览仍会因没有 Wails 后端产生 `/wails/runtime` 404 和业务调用错误，未做真实 Wails 桌面窗口点击。
 
-**macos-build-0.0.52.4-20260829** (completed, verified)
-- 用户要求汇总更新情况作为 git 提交说明（版本号 `0.0.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
-- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.4.md` 对齐到 `0.0.52.4`；保留构建前已有的工作树改动。
+**macos-build-1.52.4-20260829** (completed, verified)
+- 用户要求汇总更新情况作为 git 提交说明（版本号 `1.52.4`）、提交并 push，然后编译 Apple Silicon macOS 版本。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.4.md` 对齐到 `1.52.4`；保留构建前已有的工作树改动。
 - 本版本新增 Gateway 可用性测试（启动后自动本机 HTTP 探测 `/v1/models`，卡片展示入口状态、模型数量与延迟）、token 复制/轮换改用 Wails 原生剪贴板、极简使用引导；managed Codex 请求体白名单 fail-closed 剥离 `previous_response_id`，static OpenAI 保留原请求体。
-- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效（`codesign --verify --deep --strict` OK）；`hdiutil verify` VALID；SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`；`SHA256SUMS` 校验通过。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/1.52.4/cursor-byok-1.52.4-macos-arm64.dmg`（24,015,566 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `1.52.4`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效（`codesign --verify --deep --strict` OK）；`hdiutil verify` VALID；SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`；`SHA256SUMS` 校验通过。
 - 已提交并 push（提交 `9c4db4f`）；未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release。
 
 **subscription-account-list-modal-fix-20260829** (completed, verified-partial)
@@ -306,11 +306,11 @@
 - 修复 sub2api 确认导入后选择弹窗未关闭的问题：成功路径不再调用受 `busy` 状态保护的手动关闭函数，而是直接重置并关闭弹窗状态。
 - 验证：前端配置投影门禁覆盖滚动容器和成功关闭路径，生产构建与 `git diff --check` 通过；未做真实 Wails 窗口点击，未重新打包 DMG。
 
-**macos-build-0.0.52.3-20260829** (completed, verified)
-- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.3`。
-- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.3.md` 对齐到 `0.0.52.3`；保留构建前已有的工作树改动。
-- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.3/cursor-byok-0.0.52.3-macos-arm64.dmg`（24,019,575 bytes）。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.3`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`；`SHA256SUMS` 校验通过。
+**macos-build-1.52.3-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `1.52.3`。
+- 已将 `build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.3.md` 对齐到 `1.52.3`；保留构建前已有的工作树改动。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/1.52.3/cursor-byok-1.52.3-macos-arm64.dmg`（24,019,575 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `1.52.3`；最低 macOS `10.15.0`；Mach-O arm64；codesign 有效；`hdiutil verify` VALID；SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`；`SHA256SUMS` 校验通过。
 - 本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。
 - 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
 
@@ -328,13 +328,13 @@
 - Codex 已升级为兼容旧单账户文件的多账户池；模型配置仍只保存 `credentialSource=codex`，第一个账户自动激活，后续账户作为备用，重复导入更新原账户。
 - 已实现逐账户激活、删除、双窗口用量、401 定向刷新和零输出明确配额错误下的幂等轮换；并发重复失败不会连续跳过备用账户。
 - 验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、前端配置投影测试和生产构建。
-- 已重新生成并核验包含本功能的 Apple Silicon macOS `0.0.52.2` DMG：23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`；未使用真实 Codex token，未做 Wails 窗口点击，未创建提交。
+- 已重新生成并核验包含本功能的 Apple Silicon macOS `1.52.2` DMG：23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`；未使用真实 Codex token，未做 Wails 窗口点击，未创建提交。
 
-**macos-build-0.0.52.2-20260829** (completed, superseded)
-- 用户要求编译 Apple Silicon macOS `0.0.52.2`。
-- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.2.md` 对齐到 `0.0.52.2`，发布说明补充订阅模型测试端点修复；保留构建前已有的工作树改动。
-- 已重新生成包含当前 Codex 多账户功能的安装包，旧产物校验已被新产物取代：`bin/release/0.0.52.2/cursor-byok-0.0.52.2-macos-arm64.dmg`（23,070,403 bytes），SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.2`；最低 macOS `10.15.0`；Mach-O arm64；codesign 校验有效；`hdiutil verify` VALID；`SHA256SUMS` 校验通过。
+**macos-build-1.52.2-20260829** (completed, superseded)
+- 用户要求编译 Apple Silicon macOS `1.52.2`。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.2.md` 对齐到 `1.52.2`，发布说明补充订阅模型测试端点修复；保留构建前已有的工作树改动。
+- 已重新生成包含当前 Codex 多账户功能的安装包，旧产物校验已被新产物取代：`bin/release/1.52.2/cursor-byok-1.52.2-macos-arm64.dmg`（23,070,403 bytes），SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。
+- 校验：应用短版本与 bundle 版本均为 `1.52.2`；最低 macOS `10.15.0`；Mach-O arm64；codesign 校验有效；`hdiutil verify` VALID；`SHA256SUMS` 校验通过。
 - 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
 
 **subscription-model-endpoint-normalization-20260829** (completed, verified-partial)
@@ -342,11 +342,11 @@
 - 修复：OpenAI 类型的 Codex 订阅固定归一化为 `https://chatgpt.com/backend-api/codex/responses` + `/v1/responses`；Grok 订阅固定归一化为 `https://api.x.ai/v1` + `/v1/chat/completions`。前后端保存、重载和测试使用同一规则，订阅模式下接口地址和端点不再允许编辑；静态 API key 配置保持自定义地址行为。
 - 验证：后端 Codex/Grok 端点归一化测试、Codex Responses 请求头/请求体测试、客户端订阅模型测试链路、前端配置投影和生产构建通过；未使用用户真实 token 请求外部上游，未重新打包 macOS 安装包。
 
-**macos-build-0.0.52.1-20260829** (completed, verified)
-- 用户要求编译 Apple Silicon macOS `0.0.52.1`，并直接在 `bin/release` 下创建版本目录和带版本号的产物。
-- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.1.md` 对齐到 `0.0.52.1`；保留构建前已有的工作树改动。
-- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成构建，产物为 `bin/release/0.0.52.1/cursor-byok-0.0.52.1-macos-arm64.dmg`（24,001,624 bytes）。
-- 校验：应用短版本与 bundle 版本均为 `0.0.52.1`；最低 macOS `10.15.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `6de50cd36b295e7a31d6c58af4d7bfd93dfd3d18e80981874d286aae7ccb8271`。
+**macos-build-1.52.1-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS `1.52.1`，并直接在 `bin/release` 下创建版本目录和带版本号的产物。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.1.md` 对齐到 `1.52.1`；保留构建前已有的工作树改动。
+- 使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成构建，产物为 `bin/release/1.52.1/cursor-byok-1.52.1-macos-arm64.dmg`（24,001,624 bytes）。
+- 校验：应用短版本与 bundle 版本均为 `1.52.1`；最低 macOS `10.15.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `6de50cd36b295e7a31d6c58af4d7bfd93dfd3d18e80981874d286aae7ccb8271`。
 - 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未创建提交。
 
 **subscription-auth-access-layout-20260829** (completed, verified-partial)
@@ -355,11 +355,11 @@
 - 更新模型页提示、Grok/Anthropic 品牌样式、四套语言目录和前端结构门禁；未修改认证协议、凭据存储或请求链路。
 - 验证：前端生产构建、配置投影测试、接入路由测试 5/5 和全局补丁格式检查通过；已重新打包并核验包含本次布局修复的 macOS DMG，未做真实 Wails 窗口点击。
 
-**macos-build-0.0.52.0-20260829** (completed, verified)
-- 用户要求编译 Apple Silicon macOS 版本，版本号 `0.0.52.0`。
-- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.0.md` 对齐到 `0.0.52.0`，并保留构建前已有的跨平台元数据改动。
+**macos-build-1.52.0-20260829** (completed, verified)
+- 用户要求编译 Apple Silicon macOS 版本，版本号 `1.52.0`。
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.0.md` 对齐到 `1.52.0`，并保留构建前已有的跨平台元数据改动。
 - 本机使用项目现有 Go 1.25.0 工具链和低并发参数完成 `task build`；布局修复后重新打包的 `bin/macos-arm64.dmg` 为 24,002,569 bytes。
-- 校验：Info.plist 版本为 `0.0.52.0`；最低 macOS `12.0.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `8cfa4d7c6797d8bae83603e24012b24513288d23c536d016388e493b0981511a`。
+- 校验：Info.plist 版本为 `1.52.0`；最低 macOS `12.0.0`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `8cfa4d7c6797d8bae83603e24012b24513288d23c536d016388e493b0981511a`。
 - 未做 Developer ID 签名或 notarization；未构建 Intel 包，未发布 GitHub Release，未更新 README 当前稳定发布。
 
 **gateway-subscription-auth-20260828** (completed, verified-partial)
@@ -369,12 +369,12 @@
 - 完整 internal 回归唯一失败是本机 OpenCode CLI 数据库缺少 `name` 列，属于外部安装环境问题；未修改产品代码绕过。
 - 已确认 `/Applications/Gateway-byok.app` 正在运行并监听 `127.0.0.1:18080`、`127.0.0.1:18090`，因此未重复启动 `task dev` 或替换现有实例。
 
-**macos-build-0.0.50.3-20260828** (completed, verified-partial)
-- 用户要求编译 macOS 版本，版本号 `0.0.50.3`
-- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.50.3.md` 对齐到 `0.0.50.3`
+**macos-build-1.50.3-20260828** (completed, verified-partial)
+- 用户要求编译 macOS 版本，版本号 `1.50.3`
+- 已将 `build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.50.3.md` 对齐到 `1.50.3`
 - 本机 Apple Silicon 执行 `PATH=/Users/yaogj/go/bin:$PATH task build`，产出 `bin/macos-arm64.dmg`（约 22 MiB）
-- 校验：Info.plist `CFBundleShortVersionString`/`CFBundleVersion` = `0.0.50.3`；二进制注入版本 `0.0.50.3`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`
-- 未做 Developer ID 签名或 notarization；未发布 GitHub Release；未更新 README 当前稳定发布（仍为已发布的 v0.0.50.1）
+- 校验：Info.plist `CFBundleShortVersionString`/`CFBundleVersion` = `1.50.3`；二进制注入版本 `1.50.3`；Mach-O arm64；adhoc codesign；`hdiutil verify` VALID；SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`
+- 未做 Developer ID 签名或 notarization；未发布 GitHub Release；未更新 README 当前稳定发布（仍为已发布的 v1.50.1）
 
 **ui-brand-icons-light-default-20260828** (completed, verified-partial)
 - 用户确认三张附件区域的 UI 设计，并批准应用到真实系统；范围仅限 Codex 接入详情、Claude Code 接入详情和模型管理主体

@@ -20,7 +20,7 @@ description: 本地模式实现指南
 本地模式协议需要优先核对这些文件：
 - proto/agent_v1.proto
 - proto/aiserver_v1.proto
-客户端是：/Users/leokun/Library/Application\ Support/Cursor 
+客户端是：`~/Library/Application Support/Cursor`
 客户端 bundle 是：/Applications/Cursor.app/Contents/Resources/app/extensions/cursor-always-local/dist/main.js
 
 ## 可选抓包调试工具

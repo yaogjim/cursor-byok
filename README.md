@@ -2,7 +2,7 @@
 
 > 让 Cursor 用上你自己的模型 API，同时保留 Cursor 官方模型；再把同一个模型池通过本机 OpenAI 兼容入口，共享给 Codex、Grok、脚本和其他 AI 客户端。
 >
-> 当前最新版本：**[v0.0.77.0](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.77.0)**
+> 当前最新版本：**[v1.77.0](https://github.com/yaogjim/cursor-byok/releases/tag/v1.77.0)**
 
 [下载最新版](https://github.com/yaogjim/cursor-byok/releases/latest) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues) · [历史版本](https://github.com/yaogjim/cursor-byok/releases)
 
@@ -30,6 +30,18 @@ Gateway-byok 不是简单地“把 Cursor 的地址改掉”，而是在本机�
 | 上下文太长，会话突然报错 | 自动压缩上下文，并在同一次运行里重试一次 |
 | 长任务、子任务、流式输出容易中断 | 流续写、终态只落一次、检查点确认、子任务结果跨请求恢复 |
 | 想看用量，又担心日志泄露内容 | 展示 Token、缓存命中率、价值估算；审计默认关闭，普通日志不写正文和密钥 |
+
+## 分支定位
+
+`main` 是当前主线：由原 `noad` 分支承接并合并 `gateway`，包含全部最新能力。
+
+| 你想做的事 | 应该去的分支 |
+| --- | --- |
+| 使用最新功能：本地路由、共享入口、Codex / Grok 订阅账号、CLI | [`main`](https://github.com/yaogjim/cursor-byok/tree/main) |
+| 参与功能开发 | [`gateway`](https://github.com/yaogjim/cursor-byok/tree/gateway) |
+| 使用带 Docker CLI 的版本 | [`cli`](https://github.com/yaogjim/cursor-byok/tree/cli) |
+
+`main` 不再跟踪任何上游仓库；新功能和修复直接进入 `main`，较大改动可先在 `gateway` 开发后合入。
 
 ## 核心能力
 
@@ -172,14 +184,15 @@ Cursor / Codex / Grok / 其他客户端
 
 ## 分支说明
 
-本仓库只保留四个长期分支，各自定位如下：
+本仓库只保留三个长期分支，各自定位如下：
 
 | 分支 | 定位 | 说明 |
 | --- | --- | --- |
-| `gateway` | **当前主线（默认分支）** | 路由、官方/BYOK 共存、共享入口、订阅账号、CLI，版本最新 |
-| `main` | 上游镜像 | 与 [leookun/cursor-byok](https://github.com/leookun/cursor-byok) 的 `main` 保持一致，不承载本项目改动 |
-| `noad` | 早期无广告版 | 默认关广告、关自动更新、浅色主题，停留在 v0.0.49.x |
+| `main` | **主线（默认分支）** | 由原 `noad` 分支承接并合并 `gateway`，路由、官方/BYOK 共存、共享入口、订阅账号、CLI 全量能力，版本最新 |
+| `gateway` | 功能开发分支 | 路由、官方/BYOK 共存、共享入口、订阅账号、CLI 的持续开发线 |
 | `cli` | CLI 功能版 | 在 noad 基础上加入 Docker CLI、WeTTY 和 CLI 模型池，停留在 v0.0.49.x |
+
+本仓库已不再与原上游仓库保持同步，`main` 只承载本项目自己的改动。
 
 需要最新功能、共享入口或订阅账号，请使用 `gateway`。
 

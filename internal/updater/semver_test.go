@@ -17,8 +17,8 @@ func TestCompareVersionsTreatsFourPartReleaseAsNewer(t *testing.T) {
 	if got := compareVersions("0.0.49.0", "0.0.49"); got != 0 {
 		t.Fatalf("compareVersions(0.0.49.0, 0.0.49) = %d, want 0", got)
 	}
-	if got := compareVersions("0.0.50", "0.0.49.1"); got <= 0 {
-		t.Fatalf("compareVersions(0.0.50, 0.0.49.1) = %d, want > 0", got)
+	if got := compareVersions("1.50", "0.0.49.1"); got <= 0 {
+		t.Fatalf("compareVersions(1.50, 0.0.49.1) = %d, want > 0", got)
 	}
 	if got := compareVersions("v0.0.49.1", "v0.0.49"); got <= 0 {
 		t.Fatalf("compareVersions(v0.0.49.1, v0.0.49) = %d, want > 0", got)

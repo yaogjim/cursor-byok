@@ -990,7 +990,7 @@ new → triaged → exported → analyzed → fix_linked → verifying
 
 - 隔离 HOME 下，根模块相关 Go 包测试、observability/logsink race、受影响包 vet 通过（收口输出 `FINAL_ROOT_REVIEW_PASS`）；分析器 load/report/gui/analyze/project 测试与 vet、分析器 GUI 前端 production build 通过。完整命令、回归用例清单与一次字段白名单回归见 `docs/process.md`。
 - 未读取或修改真实日志、运行配置和运行实例；未发真实上游请求、部署、重启、commit 或 push。GLM、checkpoint 恢复业务逻辑、证书信任、上游请求/重试/fallback 行为均未改变。
-- `delivery_status=verified-partial`：待增强版本实际运行后复验 checkpoint ACK/timeout、客户端 CA 来源和上游断点；不同请求后续成功仍不能作为原请求恢复证据。现有 `0.0.71.2` 本机构建产物早于本轮复核修复，不作为本次修复的验收证据；重新构建须另行安排。
+- `delivery_status=verified-partial`：待增强版本实际运行后复验 checkpoint ACK/timeout、客户端 CA 来源和上游断点；不同请求后续成功仍不能作为原请求恢复证据。现有 `1.71.2` 本机构建产物早于本轮复核修复，不作为本次修复的验收证据；重新构建须另行安排。
 - 回退边界：仅撤销本轮代码；不改写历史事件，不删除已产生的 diagnostics 分片冒充回退，不改变业务恢复策略。自动淘汰不可恢复，因此仅删除上述明确受管且可回收的分片。
 
 ### 14.5 DESIGN-PROVIDER-DISCONNECT-001：Provider 断连终态与安全恢复
@@ -2064,7 +2064,7 @@ Tab/Cpp/FileSync/Git RPC 可能包含当前文件全文、路径、diff、worksp
 
 复用内存 AgentSessionStore，request_id 首次 Local/Official 决策保持。存储归属 Host 生命周期，在既有 runMu 保护下初始化并跨配置重建复用，使旧 mux 的等待流与新 mux 的上行共享路由事实。后续工具/心跳/取消先读已决策路由，不因无模型重新默认；必须区分空模型 run/prewarm 与不携带选模的后续消息。未知后续请求报错不猜。RunSSE 先到等待 BidiAppend，取消清理等待；保留来源清理机制，不新增持久化或调度器，重启需新运行请求建立归属。官方目标只来自现有原始 URL，缺失报错不猜地址。
 
-### D2.1 分流前请求编码兼容（0.0.71.0 回归修复，已批准）
+### D2.1 分流前请求编码兼容（1.71.0 回归修复，已批准）
 
 BidiAppend 与 RunSSE 的分流解析显式接收 Content-Type、HTTP Content-Encoding 和原始 body；在只读解码副本上按 HTTP 整体解压 → Connect 帧解析（若适用）→ protobuf/JSON codec 顺序处理。支持本次 Cursor Connect 路径使用的 unary application/proto、application/json 和流式 application/connect+proto、application/connect+json；HTTP 空/identity 与 gzip 按实际含义处理，已有帧内 gzip 与 HTTP gzip 区分，复用现有有界解压，不新增协议栈或配置。JSON 未知字段与既有 Connect codec 一致忽略；媒体类型参数不得影响格式识别。损坏/不支持的编码使用现有错误链路，不猜渠道、不新增错误协议。
 
@@ -2126,7 +2126,7 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 本切片承接 PRD §17 HISTORY/CONFLICT 和阶段2A 的输入恢复前置；用户已要求在现有事实基础上继续实施。范围仅为原生 root 内容已经由 `PreFetchedBlob` 提供时的读取，以及导入失败时不修改调用者会话；不新增 GetBlob 消息、检查点写出、同步身份字段或持久化事务。
 
 - **问题与接线**：当前 `importedConversationStateModelMessagesWithBlobs` 只按引用长度跳过 root，完全不读取已有 root Blob；无 turns 时则把引用当 JSON。读取先复用 `newImportedBlobStore` 的 SHA-256 校验，将 root 每个引用解析为单条 JSON 后解码；顺序和相同引用的重复实例保留，不按哈希去重。root 完整时作为模型消息来源，turns 仅保留既有回合引用元数据，不能再拼接一次历史。
-- **兼容判定**：有效内联 JSON 优先按旧 replay 读取（包括恰为32字节的旧 JSON）；其余非空32字节项才按引用识别。内联与引用混合仍明确失败。全部引用都未提供且有 turns 时保留0.0.72.2的旧回退；一旦任意 root 内容可用，则要求全部引用齐全，部分缺失或可用内容损坏必须停止，不改用 turns 掩盖问题。异步读取接线后再替换这一旧回退，不从本切片推导缺失内容已经恢复。
+- **兼容判定**：有效内联 JSON 优先按旧 replay 读取（包括恰为32字节的旧 JSON）；其余非空32字节项才按引用识别。内联与引用混合仍明确失败。全部引用都未提供且有 turns 时保留1.72.2的旧回退；一旦任意 root 内容可用，则要求全部引用齐全，部分缺失或可用内容损坏必须停止，不改用 turns 掩盖问题。异步读取接线后再替换这一旧回退，不从本切片推导缺失内容已经恢复。
 - **可表达内容与停止边界**：本切片只接通原生 user/assistant 的字符串 content；原生 system 字符串只校验、不导入，系统提示采用本轮请求。原生内容数组、未知角色、空/无效对象继续明确报错，不能丢掉内容块后继续。工具、推理、图片/文件的数组转换保留在后续原生 codec 工作包；旧 replay 的工具/图片等既有字段及过滤/规范化不改变。不宣称已实现完整 CoreMessage serde。
 - **失败保全**：先在临时变量中完成 blobs、turn IDs、消息、summary 和 runtime-state 解码及所有 entry 编码；只有全成功时才更新 `TokenDetailsUsedTokens`、`ImportedTurnIDs` 和 `NextTurnSeq`。任何错误返回 nil entries，调用者会话保持逐字段不变。本切片没有磁盘事务、异步状态、重试或新日志字段；沿用同步调用及会话所有权，不修改两文件提交合同。
 - **验证与回滚**：永久测试从 `importConversationState` 验证带齐 root 且无 turns 的文本历史；另验证 root 优先、重复实例、部分缺失、损坏/哈希、混合格式、32字节内联、数组拒绝和失败前后完整会话一致。入口接线测试沿 `AgentRunRequest`→消息处理→导入/保存→provider 捕获模型输入，禁止真实模型及配置；相关 forwarder/prompt 测试、定向 race、vet 和差异检查验收。仅撤销切片代码即可回退，无新数据格式或客户端检查点需要撤回。
@@ -2169,7 +2169,7 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 
 #### 兼容读取与回滚合同
 
-- 写入与读取分离：保留旧内联 replay 读取，包括恰为32字节的合法 JSON；新输出统一 raw32 引用，不能双写“原生引用+旧内联”到同一 root 数组。源码基线 `07aa83f`（0.0.75.0）的 §19.3a/b 读取可以在所有必需 Blob 预取齐全时还原 W1 文本/完整工具批次；这一能力不等于无预取读取、完整结构化状态或旧于该基线的版本兼容。
+- 写入与读取分离：保留旧内联 replay 读取，包括恰为32字节的合法 JSON；新输出统一 raw32 引用，不能双写“原生引用+旧内联”到同一 root 数组。源码基线 `07aa83f`（1.75.0）的 §19.3a/b 读取可以在所有必需 Blob 预取齐全时还原 W1 文本/完整工具批次；这一能力不等于无预取读取、完整结构化状态或旧于该基线的版本兼容。
 - 最低回滚目标限定为经过 W1 双读回归的 `07aa83f` 源码基线或保留等价读能力的版本。不能仅凭版本号认定某个安装包包含它；部署前须核对实际产物与源码。早于 C0-H1 的读取会跳过引用式 root/依赖 turns，不能保证新格式完整回放，不列为无条件回滚目标。合法 JSON 的 raw32 哈希会与该基线的 JSON 优先检测产生歧义，属于 `W-ID-AMBIGUITY`；W1 验证在编码后检查该歧义，命中则明确失败，不篡改内容或哈希掩盖问题，兼容读修复独立设计。
 - 回滚前先停止产生新检查点（须另行授权运行窗口），等待在途写入收尾或明确取消；保留现有 context/state 和全部内容 Blob，不恢复旧磁盘快照、不 reset 存量会话。随后换回上述可读取基线，使用同一合成新旧检查点和预取集合验证恢复与再投影；输入缺必要内容时保留停止，不靠旧 turns 的偶然回退承诺无损。服务重建必须重新确认本流所需内容。
 - **发布是不可撤回边界**：SetBlob 成功而状态尚未发布时，回滚只留下未引用 Blob；状态发布后客户端持有新引用，撤销服务端代码不会撤回该状态。若目标读能力/必要内容不满足，停止受影响会话的继续运行，保留现有记录和读取能力，补齐内容恢复或兼容读取后再继续；不得删除历史、覆盖为旧检查点或让用户重建聊天来假装回滚成功。发布后的新增回合始终保留，不从部署前备份覆盖回来。

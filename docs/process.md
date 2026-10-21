@@ -7,7 +7,7 @@
 
 ## 一、待完成的内容
 
-### 0.0.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
+### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
 
 **主对话摘要参数缺陷已修复并通过源码回归；两条缺失控制接口已补齐；同聊天BYOK→官网模型要求新建聊天的现场症状仍未关闭。** 主会话持续负责整合；基线 `ca4d6ed`，修改未提交。当前保留工作区原有协作规范修改；未替换运行实例、构建发布、部署/重启、修改Cursor安装/真实会话/配置或commit/push。
 
@@ -146,7 +146,7 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 - **交付对象**：系统 Design §19.3c C0-W1 v1 闭合文本/可无损完整工具批次的原生消息编码、raw32 内容引用、完整可达 Blob 图、确认发布顺序、5秒写降级、错误/取消/重复/并发与回滚合同。W1 的 Design Readiness=approved、delivery_status=contract-ready；整体仍 planned，完整 C0/C2B 未通过。作者完成正向/失败/回滚模拟，未做独立评审，不将自审冒充外部复核。
 - **新核实的兼容事实**：实际 Cursor 3.15.19 exec serde/构造器把 plan/todos/summary/archive 作为引用读取；当前后端 plan/todo 读写仍是内联 protobuf，archive 投影还误用 summary schema。原生 JavaScript 会舍入超安全整数，工具结果字符串正文是合法 JSON 时 `pi/hi` 会改变其类型；工作台单条 root 超过5,000,000字节会被省略。这些限制记为具体数据域门禁，不凭 Go 内部回放成功承诺完整客户端无损。
 - **局部阻塞**：W-STRUCTURED、W-COMPACTION、W-CONTENT、W-NUMERIC、W-RESULT-TYPE、W-IMPORTED 与 W-ID-AMBIGUITY 只约束各自载荷；异步 GetBlob/历史增量/子模型承载未知不成为 W1 的整体前置。没有缩减完整产品目标，没有授权静默删块、数值转字符串、全局 writer 切换或新配置门禁。后续 `mixed-checkpoint-codec` 可先按此锚点拆永久回归及有界实现，完整链路仍按原依赖推进。
-- **回滚闭合**：回滚目标按读能力限定为经相同样本验证的 `07aa83f`（0.0.75.0）源码基线或等价版本；W1 恢复仍要求必需 Blob 完整预取，不能保证无预取/复杂状态/更早版本。SetBlob 已写而状态未发布只会留下不可变孤立内容；状态发布后客户端引用不可因代码回退撤回。保留 context/state、全部 Blob 与切换后新增历史，不恢复旧磁盘快照、不删除会话；内容或读能力不足时保留停止。真实产物/部署窗口需另行授权，本轮无此操作。
+- **回滚闭合**：回滚目标按读能力限定为经相同样本验证的 `07aa83f`（1.75.0）源码基线或等价版本；W1 恢复仍要求必需 Blob 完整预取，不能保证无预取/复杂状态/更早版本。SetBlob 已写而状态未发布只会留下不可变孤立内容；状态发布后客户端引用不可因代码回退撤回。保留 context/state、全部 Blob 与切换后新增历史，不恢复旧磁盘快照、不删除会话；内容或读能力不足时保留停止。真实产物/部署窗口需另行授权，本轮无此操作。
 - **本轮合成客户端证据**：运行 `node --input-type=module`，按源码摘要和函数界限动态提取实际 exec `pi/hi` 及工作台 `YMs`，隐私值容器、内容仓库和 JSON serde 的外部依赖用合成替身。5条消息（含重复用户消息、完整工具调用/结果）保存为4个不同 Blob，引用加载恢复5条、旧内联加载0条；实际转换断言角色/文本/ID/名称/参数/结果相等，并断言数字/JSON字符串结果限制。退出0，输出 `NATIVE_CHECKPOINT_CONTRACT_PROBE_PASS messages=5 distinct_blobs=4 inline_restored=0`、`NATIVE_JSON_COMPAT_LIMIT_CONFIRMED unsafe_integer_and_json_string_result`、`STRUCTURED_REFERENCES_CONFIRMED plan_todos_summary_archives limit_bytes=5000000`。此为函数级合成合同取证，不是完整 Cursor/官方运行验收。
 - **文档修改后的源码基线验证**：隔离临时 HOME、固定已安装 GOPATH/GOMODCACHE/GOCACHE、`GOENV=off GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off` 下执行 `go test ./internal/backend/forwarder -run '^(TestCheckpoint|TestCancellationDiscardsUnpublishedCheckpoint|TestProjectCheckpointProjection|TestContentBlobStore|TestImportedConversationState)' -count=1 -timeout=90s`，退出0，包耗时1.033s。只验证现有确认/取消/旧timer、投影、内容存储及已预取读取基线，不证明新 writer 已实现；没有改业务代码，未重跑无关全仓/前端/race/vet。
 - **设计缺陷仍为预期 RED**：复用现有临时 Go overlay，执行 `go test -overlay=/tmp/byok-screenshot-probe.gckLUP/overlay.json ./internal/backend/forwarder -run '^(TestScreenshotNativeRootReferencesResolve|TestProjectCheckpointProjectionBuildsResolvableForkState)$' -count=1 -v -timeout=90s`。Go测试预期退出1、0.467s：既有本地回放对照通过，原生断言仍为 `native root content lookup: missing blobs=2, want 0`（root 95/49字节内联 JSON）。外层明确核验指定失败原因，未把 RED 写成修复通过。两份本轮输出在 `/tmp/mixed-checkpoint-contract.nGTHG5/{baseline.log,native-red.log}`。
@@ -154,15 +154,15 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **收口**：本设计任务完成并从活动认领项移入完成索引；后续功能仍有 feature gap（原生 writer/复杂状态/缺失读取/增量/完整子参数）及 test/env gap（真实官方兼容），不能宣称用户现有 `missing blobs` 已被修复。未部署、重启、改真实凭据/配置/业务数据、commit 或 push。
 
-#### 0.0.75.0 真实日志与设计差距核对（日志窗口：2026-10-12 UTC）
+#### 1.75.0 真实日志与设计差距核对（日志窗口：2026-10-12 UTC）
 
 用户提供 `/Users/yaogj/Downloads/logs`，反馈最新版本的实际效果与专项计划相差甚远。本轮仅分析日志和当前源码，记录已核实事实与缺口，不实现未闭合设计，不修改运行配置、证书、业务历史或原日志，不部署/重启/commit/push。
 
-- **材料与去重**：manifest 为 `app_version=0.0.75.0`、`mode=basic`，会话 `20261012T003841.157486000Z-a69604a34ce5`。events 共2324条，sequence 1–2324连续；diagnostics 171条逐条等于 events 对应 sequence 的副本，不能累加成独立故障。当前仓库 HEAD 为 `07aa83f`，构建版本同为0.0.75.0；manifest 无构建 commit，不能仅凭版本号证明运行二进制与 HEAD 完全相同。
+- **材料与去重**：manifest 为 `app_version=1.75.0`、`mode=basic`，会话 `20261012T003841.157486000Z-a69604a34ce5`。events 共2324条，sequence 1–2324连续；diagnostics 171条逐条等于 events 对应 sequence 的副本，不能累加成独立故障。当前仓库 HEAD 为 `07aa83f`，构建版本同为1.75.0；manifest 无构建 commit，不能仅凭版本号证明运行二进制与 HEAD 完全相同。
 - **现场主链事实**：本地主请求 `aa9dc247…` 自00:38:56运行，5次模型调用均收到 provider HTTP 200；前4次 `model_call_final=succeeded`，结束原因为工具调用，第5次被取消。00:39:38.389–38.599派发3个不同 subagent_run_id；随后3个 RunSSE 请求及两次后续 RunSSE 请求存在 `execution_target=official_upstream` 的HTTP完成事件，状态200。外层后端 RunSSE的 `local_runtime` 标签不能否定内层官方透传；HTTP成功不能证明官方业务成功，也不能仅按时间推断全部请求与子任务的一一关系。
 - **结果与取消边界**：00:39:46.580、47.773主请求收到两条 `exec_client_message`，47.969之后再次调用模型；basic模式不包含工具结果正文，不能认定两个结果均成功或第三个结果丢失。00:39:50.690收到 `conversation_action`，50.730派发 `kind=cancel`，随后流取消、terminal_error及退订；不能反推取消由用户主动点击，或用最后的取消解释此前异常。
 - **检查点与独立噪声**：39次checkpoint Blob派发对应39次ACK，未出现timeout/reject/unmatched；这证明内容确认链有进展，不证明官方能解码完整检查点。TLS握手拒绝87次（api3 55、metrics 27、api2 5）；默认模型接口2次本地502，另有插件/MCP等404。尚无证据把这些独立事件认定为混用异常的唯一根因。
-- **实现差距已核实**：`runtime_summary.go:51–57`仍仅在本地Entries为空时导入客户端状态；`projector.go:616–622`仍把本地replay编码直接放入root字段，未切原生内容引用写出；`exec/bridge.go:803–833`选取并发送ModelId，未承载完整参数/独立Max Mode；缺失Blob异步读取尚未接线。任务真值与`releaselog/0.0.75.0.md`同样明确整链未交付。差距首先属于feature gap，不能以“缺实机验收”概括，更不能把参数快照/预取文本工具读取的隔离PASS当作混用完成。
+- **实现差距已核实**：`runtime_summary.go:51–57`仍仅在本地Entries为空时导入客户端状态；`projector.go:616–622`仍把本地replay编码直接放入root字段，未切原生内容引用写出；`exec/bridge.go:803–833`选取并发送ModelId，未承载完整参数/独立Max Mode；缺失Blob异步读取尚未接线。任务真值与`releaselog/1.75.0.md`同样明确整链未交付。差距首先属于feature gap，不能以“缺实机验收”概括，更不能把参数快照/预取文本工具读取的隔离PASS当作混用完成。
 - **验证与停止条件**：本轮已运行Python日志解析、事件关联、sequence/副本一致性核对及源码/版本只读定位；未重放官方响应或运行修复测试。basic日志缺失入出站正文、子模型参数及业务终态，尚不能建立捕获现场具体业务失败的可重放RED→GREEN回路，因此不猜测具体子任务失败原因并修改代码。下一步先用合成协议链补“父Task→客户端子请求→模拟官方终态→父结果唯一追加”的可观察断言；需要现场对应时仅补最小脱敏错误/终态证据，不要求整份真实prompt或凭据。既定实现顺序仍优先缺失内容异步恢复，再原生写出与增量同步，各切片遵守对应设计门禁。
 
 - **记录落盘验证**：本轮已在文档修改后运行日志事实断言与 `git diff --check`，均通过；只修改 `docs/process.md` 与 `task/todo.md`。本轮未运行 Go 测试，不将日志诊断记为代码修复验收。
@@ -279,7 +279,7 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **复用教训**：日志级别不是业务结果；字段值出现次数不是独立故障数；fallback 事件不证明切换成功；502 必须区分上游响应与本地映射；WARN/ERROR 分片缺少成功事件不能据此推断零成功；`open` 与累计 dropped 字段必须结合运行进程及生产端口径解释。
 
-### 0.0.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
+### 1.72.2 模型切换 imported replay Blob 兼容修复（2026-09-11；verified-partial）
 
 **触发与日志证据**：用户提供 `/Users/yaogj/Downloads/logs 2`，现象为同一 Agent 会话先使用模型 A 完成讨论和任务，再切换高级模型分析时出现 `[internal] decode imported replay messages: invalid character '>'/'h' looking for beginning of value`。导出中找到请求 `d97857ea-9374-4ad2-8f81-74c2133ac34e`：`run_request` 的原始 Bidi 数据长 7,773,530 字节，解码成功后约 0.5ms 即进入 `dispatch_error(kind=run)` 并返回 500，随后 heartbeat 仍为 200；该请求没有进入 provider 调用。用户列出的另外三个请求 ID 不在本次导出中，payload 因配额降级未保留正文，所以无法从日志直接恢复报错字节。
 
@@ -289,9 +289,9 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **回归与验证**：新增 `TestImportedConversationStateFallsBackFromBlobRootPromptsToTurns`，修复前稳定失败并复现同型错误：`decode imported replay messages: invalid character '\u008b' looking for beginning of value`；修复后恢复父会话 user/assistant 两条消息。另增加普通非法 replay 和无 turns Blob 引用继续拒绝的边界用例。最终 `go test ./internal/backend/forwarder -count=1` 通过（18.388s），`go vet ./internal/backend/forwarder` 与 `git diff --check` 退出 0。
 
-**边界与交付状态**：交付状态 `verified-partial`。本轮未安装、部署或重启 Gateway/Cursor，未执行真实桌面“模型 A→高级模型”切换验收，未修改用户日志/配置；代码与文档已提交并推送（版本 0.0.72.2）。范围外的 provider 502 只记录，不处理。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `0.0.72.2`，发布说明见 `releaselog/0.0.72.2.md`。
+**边界与交付状态**：交付状态 `verified-partial`。本轮未安装、部署或重启 Gateway/Cursor，未执行真实桌面“模型 A→高级模型”切换验收，未修改用户日志/配置；代码与文档已提交并推送（版本 1.72.2）。范围外的 provider 502 只记录，不处理。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `1.72.2`，发布说明见 `releaselog/1.72.2.md`。
 
-### 0.0.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
+### 1.72.1 OpenAI Responses 流式 [DONE] 兜底收口修复（2026-09-10；verified-partial）
 
 **触发与结论**：修复 Responses 流仅收到 `[DONE]`（缺 `response.completed`）时的两条缺陷路径：普通成功收尾不补发 `TurnFinished` 导致客户端等待终态直到超时；`completeTool` 因参数非法 JSON 静默跳过后，`[DONE]` 兜底路径不再复查工具累加器，截断的 `function_call` 参数流被误判为普通成功收尾。
 
@@ -301,9 +301,9 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **验证证据**：`go test ./internal/backend/agent/model/ -run 'TestOpenAIResponses' -count=1` 通过。证据边界：Host 本地模拟上游证明两条兜底路径行为；真实上游截断/正常混合实机验收待后续窗口。
 
-**边界与交付状态**：交付状态 `verified-partial`。未改变 Chat 路径、Anthropic 适配器、重试/fallback、证书与账号业务逻辑。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `0.0.72.1`，发布说明见 `releaselog/0.0.72.1.md`。
+**边界与交付状态**：交付状态 `verified-partial`。未改变 Chat 路径、Anthropic 适配器、重试/fallback、证书与账号业务逻辑。版本元数据（config.yml、darwin Info.plist、Windows/Linux 构建资产）对齐 `1.72.1`，发布说明见 `releaselog/1.72.1.md`。
 
-### 0.0.71.2 日志增强复核与范围内部署缺陷修复（2026-09-10；verified-partial）
+### 1.71.2 日志增强复核与范围内部署缺陷修复（2026-09-10；verified-partial）
 
 **复核触发与结论**：用户要求复核完成情况并修复问题。本次对已实施的日志增强做独立只读复核，确认“已全部完成”的表述证据不足：先前收口只跑了定向测试与构建，未覆盖配额拒绝、持续轮转、异常队列预留和逐条追踪到真实入口的边界。复核确认并修复以下范围内缺陷。
 
@@ -316,9 +316,9 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **验证证据**：隔离 HOME 下运行根模块定向测试、共享状态 race 与 vet，最终收口输出 `FINAL_ROOT_REVIEW_PASS`：`go test -count=1 -timeout=3m ./internal/observability ./internal/logsink ./internal/logger ./internal/backend/forwarder ./internal/client` 五包 `ok`；`go test -race -count=1 -timeout=3m ./internal/observability ./internal/logsink` 两包 `ok`；`go vet ./internal/observability ./internal/logsink ./internal/backend/forwarder` 退出 0。分析器侧运行 `go test -count=1 -timeout=3m ./internal/load ./internal/report ./internal/gui ./internal/analyze ./internal/project`、`go vet ./internal/load ./internal/report ./internal/gui ./internal/analyze` 与 GUI 前端 `npm run build`，均通过。新增回归包括：`TestReservedHeadroomKeepsTerminalManifestWritable`、`TestManifestRewriteRemovesTempAfterFailedRename`、`TestManifestRewriteCountsLeftoverTempAtNextAdmission`、`TestClosedWriterRewriteDoesNotReclaimOwnSession`、`TestReclaimableManifestAcceptsKnownSchemaVersions`、`TestNormalReclaimRemovesKnownV1Session`、`TestDiagnosticsReclaimsSealedShardsInsteadOfFreezing`、`TestDiagnosticsOverlappingWriterActiveShardSurvives`、`TestDiagnosticsSealOwnActiveShard`、`TestNormalReclaimProtectsUnknownManifests`、`TestRotatingFileCleanupKeepsProtectedShards`、`TestRotatingFileCleanupSkipsSymlinkedShards`、`TestRecorderQueueReservesDiagnosticSlots`、`TestRecorderQueueReserveClampsWithTinyQueue`、`TestRecorderQueueReserveDisabledInOffMode`，以及分析器的跨输入顺序、原始字段冲突和材料不完整用例。修复 ACK 泄露时先以 `TestCheckpointBlobEventsDistinguishRejectAndUnmatchedAck` 复现失败（断言拒绝 ACK 只能记录固定类别），再改为固定类别使该用例通过。
 
-**边界与交付状态**：交付状态保持 `verified-partial`。本轮未重新打包，现有 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`（`79ce4e99…`）早于本次修复，不能作为本次修复的验收产物。未安装或替换运行实例、未重启、未读取或修改真实日志与配置、未 commit/push。真实 checkpoint ACK/超时、客户端 CA 信任来源、上游中断断点以及桌面/浏览器交互仍未验证。范围外问题仅在复核中记录，未做修改。
+**边界与交付状态**：交付状态保持 `verified-partial`。本轮未重新打包，现有 `bin/release/1.71.2/cursor-byok-1.71.2-macos-arm64.dmg`（`79ce4e99…`）早于本次修复，不能作为本次修复的验收产物。未安装或替换运行实例、未重启、未读取或修改真实日志与配置、未 commit/push。真实 checkpoint ACK/超时、客户端 CA 信任来源、上游中断断点以及桌面/浏览器交互仍未验证。范围外问题仅在复核中记录，未做修改。
 
-### 0.0.71.2 日志增强实施收口与本机构建（2026-09-10；verified-partial）
+### 1.71.2 日志增强实施收口与本机构建（2026-09-10；verified-partial）
 
 **实施结果**：已按工作决策基线 §5.5 / LOG-ENH-1–4 和系统架构 §14.4 / DESIGN-LOG-ENHANCEMENT-20260910 完成计划内日志增强。异常诊断副本纳入现有总额度 B 并预留 `floor(B/8)`；app、trace/payload、diagnostics 共用预算协调和降级状态链。WARN/ERROR 副本写入受管 diagnostics 分片；普通分区按过期受管日志、closed/full trace、closed/basic trace、旧 app 分片回收，保护活跃分片、未知或损坏 manifest、归属不明文件和 symlink。分析器按 `(app_session_id, sequence)` 稳定合并副本，优先保留 full trace 的 `payload_ref`，真实内容冲突仍报错；checkpoint 使用专用安全字段 `checkpoint_result`，生产端 human sink 与分析器端均执行白名单和脱敏。GLM、checkpoint 恢复业务逻辑、证书信任及上游请求、重试、fallback 行为未改变。
 
@@ -326,13 +326,13 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **只读复核与修复**：收口前对本轮 diff 做独立只读复核，发现三处范围内部署缺陷并已修复：普通分区回收原先按 closed/full、closed/basic、旧 app 分片三个独立层级删除，与批准的“closed/basic 与旧 app 分片合并为按时间排序的单一层级”不符，已改为 `fullCandidates` + `mergedCandidates` 两级并补双向时间顺序用例；诊断预留 D 原先只由各 `RotatingFile` 自身限额约束，配置重载期间新旧 sink 并存时 `logs/diagnostics` 可接近 2D，已改为在共享预算锁内按磁盘实际用量准入并在达到 D 时丢弃、以 `diagnostic_reserve_exceeded` 进入既有降级状态链，同时删除死代码 `diagnosticUsageBytes`；manifest 原先直接写盘但字节被计入普通分区用量，现已与事件、payload 同样经过 `admitNormalLocked` 准入与计量（保留临时文件加 rename 与 `0o600`）。复核同时确认锁序恒为 sink → budget → RotatingFile、无反转，活跃 app 分片与未结束 trace 受保护，配置重载失败恢复旧预算，`checkpoint_result` 在生产端、human sink、host 白名单和分析器白名单四处一致且通用 `result` 已不在任何白名单。修复后上述全部验证命令重跑通过。
 
-**构建结果**：使用 Go `1.26.1`、Task `3.53.1`、Wails `v3.0.0-alpha.74`，并在隔离临时 `HOME`、既有 Go 缓存、`GOPROXY=off GOSUMDB=off GOGC=20` 环境中执行 `task build`，成功生成本机 Apple Silicon DMG，并归档为 `bin/release/0.0.71.2/cursor-byok-0.0.71.2-macos-arm64.dmg`。修复后重新构建，产物大小 `24292111` bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`；`hdiutil verify`、`codesign --verify --deep --strict` 通过，bundle short/build version 均为 `0.0.71.2`，Mach-O 为 arm64，签名为 adhoc。较早一次构建的产物 `988e92b9c51a0f06a767f666b829c8b34d261b138dde66c1b0246d8f41b375ee` 早于上述修复，已由本次重建取代，不再作为交付产物。构建没有改动 `go.mod`、`go.sum` 或 `build/` 受管文件；产物位于被忽略的 `bin/` 下。
+**构建结果**：使用 Go `1.26.1`、Task `3.53.1`、Wails `v3.0.0-alpha.74`，并在隔离临时 `HOME`、既有 Go 缓存、`GOPROXY=off GOSUMDB=off GOGC=20` 环境中执行 `task build`，成功生成本机 Apple Silicon DMG，并归档为 `bin/release/1.71.2/cursor-byok-1.71.2-macos-arm64.dmg`。修复后重新构建，产物大小 `24292111` bytes，SHA-256 `79ce4e99204567ad63b969e428b8ff87a765ed36f330e603536bfdf1a4256367`；`hdiutil verify`、`codesign --verify --deep --strict` 通过，bundle short/build version 均为 `1.71.2`，Mach-O 为 arm64，签名为 adhoc。较早一次构建的产物 `988e92b9c51a0f06a767f666b829c8b34d261b138dde66c1b0246d8f41b375ee` 早于上述修复，已由本次重建取代，不再作为交付产物。构建没有改动 `go.mod`、`go.sum` 或 `build/` 受管文件；产物位于被忽略的 `bin/` 下。
 
 **剩余边界**：交付状态保持 `verified-partial`。尚未安装或替换运行实例，未重启、未读取或修改真实日志/配置，未执行 Developer ID 签名、notarization、Intel/Windows/Linux 构建或 GitHub 发布，也未 commit/push。增强版本部署后的真实 checkpoint ACK/timeout、客户端 CA 信任来源和上游中断断点仍待后续运行证据。
 
-### 0.0.71.2 日志增强授权同步与配额现实校准（2026-09-10；planned）
+### 1.71.2 日志增强授权同步与配额现实校准（2026-09-10；planned）
 
-> **已被取代**：本文件上方的《0.0.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
+> **已被取代**：本文件上方的《1.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
 
 **授权与范围**：用户已选异常独立保留本轮实现（implement），并明确纳入现有总额度（inside）；本次“继续”推进设计闭合，不重复询问这两个已确认决定。PRD §5.5 已同步为日志增强实施范围；GLM 及恢复点/证书/上游行为修复仍排除。开场“已确认优先保留分配方案”措辞过宽，随后已明确纠正为仅确认独立保留和总预算约束，比例/淘汰尚未批准。
 
@@ -342,13 +342,13 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **验证与边界**：本次只读源码及现有文档，没有重新扫描运行日志或更改日志文件；只修改 PRD、系统架构、活动任务和本过程记录。文档范围/决策状态 Python 断言退出 0（`DOC_SCOPE_AND_DECISIONS_OK`），`git diff --check` 退出 0；无源码改动，不重复运行旧功能测试冒充新功能验收。下一步请用户确认预留与淘汰取舍，之后形成可执行计划。复用教训：inside 只确定预算来源，不自动批准比例和删除范围；保留能力须沿队列、写入顺序、配额协调和消费展示逐段核实。
 
-### 0.0.71.2 本机日志复核与日志改造讨论（2026-09-10；分析完成，设计未批准）
+### 1.71.2 本机日志复核与日志改造讨论（2026-09-10；分析完成，设计未批准）
 
-> **已被取代**：本文件上方的《0.0.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
+> **已被取代**：本文件上方的《1.71.2 日志增强实施收口与本机构建》取代本节：比例 `floor(B/8)`、淘汰顺序和消费端行为均已确认并实施。以下内容仅作历史记录。
 
 **已确认范围**：用户明确暂缓 GLM thinking 兼容性；恢复点写入超时、客户端证书信任保留为待排查方向；上游稳定性与“日志改造”不能缩减为“日志减量”，须同时评估诊断增强、异常分级与普通日志区分。范围已登记工作决策基线 §5.5，未批准运行行为修改。
 
-**既有日志证据**：本机 `~/.cursor-local-assistant-v2/logs/traces/20260909T093558.146710000Z-f2d4c7ca7972/events.jsonl`，版本 0.0.71.2，固定窗口至 `2026-09-10T09:48:28.489566Z`。此前逐行复核为 1532 个唯一 model_call_id：1522 succeeded、3 failed、4 partial、3 canceled；164 次 checkpoint blob 写入超时涉及 20 个不同请求；10076 个不同连接 client_unknown_ca。不同层日志不重复累加，取消不计为已证实故障，后续其他请求成功不证明原请求已恢复。本次复读关键行 8293、111725、405296、1189968、1190028–1190030、1323849，未刷新或混入后续运行窗口。
+**既有日志证据**：本机 `~/.cursor-local-assistant-v2/logs/traces/20260909T093558.146710000Z-f2d4c7ca7972/events.jsonl`，版本 1.71.2，固定窗口至 `2026-09-10T09:48:28.489566Z`。此前逐行复核为 1532 个唯一 model_call_id：1522 succeeded、3 failed、4 partial、3 canceled；164 次 checkpoint blob 写入超时涉及 20 个不同请求；10076 个不同连接 client_unknown_ca。不同层日志不重复累加，取消不计为已证实故障，后续其他请求成功不证明原请求已恢复。本次复读关键行 8293、111725、405296、1189968、1190028–1190030、1323849，未刷新或混入后续运行窗口。
 
 **本轮核实的现状与缺口**：
 
@@ -367,11 +367,11 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **证据与边界**：本轮只读源码/原始 trace；更新 PRD 范围、活动任务、过程记录与既有辅助报告。未修改业务源码/配置/原始日志，未发真实上游请求、部署、重启或 commit/push。收尾核验限定为现有 severity 与分析器字段过滤测试、文档一致性及 `git diff --check`，不替代真实 CA、客户端恢复或上游稳定性验收。当前是分析结论，`Design Readiness=not-ready`：异常投影和保留合同未确认，运行故障原因仍有事实缺口。复用教训：日志改造必须同时考虑内容、分类、关联、保留与消费端；分级不能替代终态，增强字段不能在下游白名单中再次丢失。
 
-### 0.0.71.1 下载日志异常诊断与 GetManagedSkills 修复（2026-09-09；verified-partial）
+### 1.71.1 下载日志异常诊断与 GetManagedSkills 修复（2026-09-09；verified-partial）
 
 用户要求分析 `/Users/yaogj/Downloads/logs`、根因和最小方案，由主控安排执行、review、验证与必要修复。开工 `gateway@5926cc4` 工作区干净。三个有界工作流分别负责日志取证、模型故障链、控制接口/TLS；主控独立复核原始数据、源码 diff 和验证。以下 UTC 时间均指日志事件日期，不混用本机时区。
 
-**覆盖及计数口径**：六份 app 日志；旧会话 `20260909T035825.861070000Z-4041ee8bee13` 为 0.0.71.0，当前 848 事件（03:58:26–06:33:37Z）；新会话 `20260909T064243.292774000Z-09262a3c9dde` 为 0.0.71.1，183889 事件（06:42:43–08:34:09Z）。两份 JSONL 均完整解析且序号连续；新 manifest 仍 open、basic，无失败正文重放材料，结论限定于这个导出快照。旧版 56 次 BidiAppend 502 是历史问题；新版为 9495 个 200 完成事件、1 个 502，唯一失败已走到官方上游且传输失败，不是已修的入站 gzip/JSON 分流故障。请求 ID 会被多次 BidiAppend/RunSSE 复用，不跨层加总为独立故障次数。
+**覆盖及计数口径**：六份 app 日志；旧会话 `20260909T035825.861070000Z-4041ee8bee13` 为 1.71.0，当前 848 事件（03:58:26–06:33:37Z）；新会话 `20260909T064243.292774000Z-09262a3c9dde` 为 1.71.1，183889 事件（06:42:43–08:34:09Z）。两份 JSONL 均完整解析且序号连续；新 manifest 仍 open、basic，无失败正文重放材料，结论限定于这个导出快照。旧版 56 次 BidiAppend 502 是历史问题；新版为 9495 个 200 完成事件、1 个 502，唯一失败已走到官方上游且传输失败，不是已修的入站 gzip/JSON 分流故障。请求 ID 会被多次 BidiAppend/RunSSE 复用，不跨层加总为独立故障次数。
 
 **已核实模型事实**：新版 183 个不同 `model_call_id` 的最终事件为 171 succeeded、8 failed、3 partial、1 canceled；`gpt-6-astra` 82/82 成功，`grok-4.6` 89 成功/3 partial，`gpt-6-astra-211` 7 failed/1 canceled，`gpt-6-astra-local` 1 transport EOF。取消不计为已证实服务故障。这是调用终态统计，不等于用户任务或子任务成功率；8 个 subagent_run_id 无 attempt ID，不能据此还原五次续跑或副作用完整性。
 
@@ -399,7 +399,7 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 **交付边界与下一步**：分析/复核/定向验证完成，最小修复在工作区；整体 `verified-partial`。上游根因精确断点、默认模型实际失败阶段和证书进程信任为 data/env gap，404 空响应/官方回源为待确认语义。没有部署/重启实例、修改用户日志和配置、调用真实模型、commit/push。执行与 review 无服务中断，未触发 20/40/80/160/320 秒恢复策略；该策略仅用于本轮协作任务，不引入产品自动重调度功能。教训：分开统计请求完成、模型终态、TLS 握手和任务结果；统一 502 不能代替上游错误证据；已有字节不代表完整压缩流成功，微秒级同时断流不代表已确认物理连接复用。
 
-### 0.0.71.0 连接回归修复收口（源码与隔离验证完成；实机待验收）
+### 1.71.0 连接回归修复收口（源码与隔离验证完成；实机待验收）
 
 用户批准计划并要求主控协调执行、独立 review、验证及修复。按系统架构 §18 D2.1 完成最小改动：`agent_action.go` 将 HTTP Content-Encoding 传入 BidiAppend/RunSSE 解析；`agent_route.go` 依次处理 HTTP 压缩、Connect 帧和 protobuf/JSON。只读取解码结果用于路由，原始 body、媒体类型、编码与身份仍用于后续转发；选模、会话归属、超时、账号和证书逻辑不变。下两节保留首次取证与临时实验的历史状态，以本节为最新执行结果。
 
@@ -418,22 +418,22 @@ W2 收尾后推进 `mixed-checkpoint-compaction-contract` 的有限只读取证�
 
 证据边界：Host 本地链可证明实际后端入口→模拟 provider→流中指定文本；官方/Auto 的 Host 替身只证明路由和原始请求保留，不是官方服务真实解码/回复。checkpoint blob 测试中仍有约 5 秒等待后跳过，不代表完整 checkpoint 验收。gzip 是现场首要触发判断，basic 日志缺失败首包，不能对全部 502 逐条归因。源码修复、review 与计划内隔离验证完成，整体保持 `verified-partial`；官方、Auto、官方身份下 BYOK 的实机首段回复、后续工具/取消仍待另行确认窗口。
 
-本轮没有打包、安装、替换或重启当前 0.0.61.1，没有改真实配置/账号，也未 commit/push。未增加重试、等待状态机、安全门禁或无关前端/独立模块验证。复用教训：前置分流必须覆盖原 Connect 入口接受的真实编码，模型成功须断言实际回复，测试异步收尾能同步实现时优先保持简单。
+本轮没有打包、安装、替换或重启当前 1.61.1，没有改真实配置/账号，也未 commit/push。未增加重试、等待状态机、安全门禁或无关前端/独立模块验证。复用教训：前置分流必须覆盖原 Connect 入口接受的真实编码，模型成功须断言实际回复，测试异步收尾能同步实现时优先保持简单。
 
-### 0.0.71.0 对话连接回归：日志取证（2026-09-08；当时未修复）
+### 1.71.0 对话连接回归：日志取证（2026-09-08；当时未修复）
 
-用户报告官方账号模型、Auto、本地 BYOK 均持续连接，已自行回退 0.0.61.1。本轮仅检查既有日志与版本代码差异，并记录结论；未切换运行实例、修改真实配置/身份/证书或调用模型。
+用户报告官方账号模型、Auto、本地 BYOK 均持续连接，已自行回退 1.61.1。本轮仅检查既有日志与版本代码差异，并记录结论；未切换运行实例、修改真实配置/身份/证书或调用模型。
 
-- 下载证据：`/Users/yaogj/Downloads/logs/traces/20260909T035825.861070000Z-4041ee8bee13/{manifest.json,events.jsonl}`，版本 0.0.71.0、basic、darwin-arm64，共 841 条事件。按 `layer=backend / event=request_finished / route=bidi_append` 聚合，56 次均为 502、handler_error；7 次已结束 RunSSE 均在 60000～60002 ms 后 canceled。没有 upstream 或 provider 调用事件。应用日志显示本地后端健康检查和代理启动成功，首次 BidiAppend 11:58:37 +08:00 失败，随后重复请求。
-- 本机交叉证据：`~/.cursor-local-assistant-v2/logs/traces/20260909T035041.036672000Z-8ecec8326698`（0.0.71.0）8 次 BidiAppend 502、两次 RunSSE 60001 ms 后 canceled；`20260909T040419.301580000Z-2e2c6bad54f0`（0.0.61.1）读取快照已有 226 次 BidiAppend 200，前一次读取有 6 次 provider request/response、521 条 llm_response_chunk。旧版会话仍在增长，数量是读取时快照，不是固定最终总量。Cursor 3.15.19 同期日志另有 stream_stall、等待流活动超过 30 秒的记录。
+- 下载证据：`/Users/yaogj/Downloads/logs/traces/20260909T035825.861070000Z-4041ee8bee13/{manifest.json,events.jsonl}`，版本 1.71.0、basic、darwin-arm64，共 841 条事件。按 `layer=backend / event=request_finished / route=bidi_append` 聚合，56 次均为 502、handler_error；7 次已结束 RunSSE 均在 60000～60002 ms 后 canceled。没有 upstream 或 provider 调用事件。应用日志显示本地后端健康检查和代理启动成功，首次 BidiAppend 11:58:37 +08:00 失败，随后重复请求。
+- 本机交叉证据：`~/.cursor-local-assistant-v2/logs/traces/20260909T035041.036672000Z-8ecec8326698`（1.71.0）8 次 BidiAppend 502、两次 RunSSE 60001 ms 后 canceled；`20260909T040419.301580000Z-2e2c6bad54f0`（1.61.1）读取快照已有 226 次 BidiAppend 200，前一次读取有 6 次 provider request/response、521 条 llm_response_chunk。旧版会话仍在增长，数量是读取时快照，不是固定最终总量。Cursor 3.15.19 同期日志另有 stream_stall、等待流活动超过 30 秒的记录。
 - 定位边界：`git log` 确认两版相邻提交为 `4e4f2f1` 与 `818e293`。新增 `AgentRouteAction` 在 BidiAppend 分流前解析请求；解析或未知渠道错误直接返回，`writeServerError` 默认统一编码为 12 字节的 `bad gateway\n`；RunSSE 则等待同 request_id 的渠道决策。这与现场现象一致，但不是具体异常的证明。basic 记录只保留 handler_error，无原始异常/请求体，尚未建立可重放失败回归。
 - 证书问题单独处理：下载样本有 24 次 client_unknown_ca，本机新版与已产生模型输出的旧版也均有该告警，不能把它直接认定为本轮共同主因。下载与本机日志来自不同用户路径，按 UTC 时间核对，不混用本地时区。
 - 本轮命令证据：使用 Python 标准库逐行解析 JSONL，以 event/route/status_code 聚合并关联 RunSSE；读取应用与 Cursor 结构化日志；`git diff --stat 4e4f2f1 HEAD` 和分流/错误编码源码检查。未运行 Go 测试或真实请求重放，没有修复完成声明。
 - 记录核验：诊断结论已写入本节与 `task/todo.md`，文件内容断言及 `git diff --check` 已通过；该结果仅证明文档记录，不证明连接故障已修复。
 
-结论：0.0.71.0 实机对话已有阻塞回归证据，双渠道交付仍为 verified-partial，真实对话验收失败。下一步需要脱敏失败请求样本或受控诊断获取底层错误，先建立能复现 502 与等待现象的入口测试，再修复并覆盖官方、Auto、BYOK；继续保留用户当前回退状态。复用教训：模拟封装的路由测试通过不能替代真实 Cursor 请求编码与首包时序验证；通用错误类别不足以定位解析失败，不把猜测登记为现场根因。
+结论：1.71.0 实机对话已有阻塞回归证据，双渠道交付仍为 verified-partial，真实对话验收失败。下一步需要脱敏失败请求样本或受控诊断获取底层错误，先建立能复现 502 与等待现象的入口测试，再修复并覆盖官方、Auto、BYOK；继续保留用户当前回退状态。复用教训：模拟封装的路由测试通过不能替代真实 Cursor 请求编码与首包时序验证；通用错误类别不足以定位解析失败，不把猜测登记为现场根因。
 
-### 0.0.71.0 编码回归：隔离复现与修复建议（续查；生产源码未修改）
+### 1.71.0 编码回归：隔离复现与修复建议（续查；生产源码未修改）
 
 以下证据更新前节首次取证时的“未复现”状态。用户要求继续分析并给出方案；实验只在 `/tmp/gateway-wire-probe.d2P9ex` 创建诊断测试、候选源码和 Go overlay，未替换仓库 Go 文件或真实代理实例。
 
@@ -603,7 +603,7 @@ review 与修复：
 
 2026-09-03 冻结并实施预算化恢复合同，覆盖旧的“HTTP 500 禁止 fallback 切换”。Cursor 只见一个逻辑模型 / 一个 RunSSE；网关内部吸收 500/503，耗尽后至多一次 terminal 且 `IsRetryable=false`。默认全链 5 attempts、每渠道 2、累计退避 8s、建连 30s、首事件 600s、流空闲 240s、整呼 7200s。`maxWaitSeconds` 只累计实际退避 sleep，退避期间暂停整呼时钟。500/502/503/504/524、可恢复 transport、TLS handshake EOF、建连/首事件超时：同渠道 2 次后可安全切换。429 遵守可容纳的 Retry-After，否则跳过等待并切换。403/其他 4xx/529/父取消/证书校验/永久 DNS/请求构建/协议解析/provider terminal 快速失败。任意 raw byte / 模型事件 / 副作用关闭窗口。删除全局 `providerStreamIdleTimeout`。单渠道计划仍注入 RecoverySettings。不实施熔断、供应商网络分流、partial-output continuation 或 OpenAI/Anthropic 混排。回滚关闭该模型 `providerFallback.enabled` 或恢复安装前 `.app`。
 
-2026-09-03/04 已完成目标仓库产物安装与在线正常流量冒烟。`workspace-gateway-native-fix/bin/macos-arm64.dmg` 通过 `hdiutil verify`；DMG 内应用与 `/Applications/Gateway-byok.app` 均为 `0.0.56.0`、Mach-O arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。安装实例监听 `127.0.0.1:18080` 与 `127.0.0.1:18090`，`GET /healthz` 返回 `200 ok`；最新启动日志显示 backend、MITM 和 Cursor 代理设置均成功，无配置归一化、panic 或 fatal 错误。真实 Cursor 正常请求只观察到一次 RunSSE 入站/转发，内部 model call 均成功且无 terminal provider error。
+2026-09-03/04 已完成目标仓库产物安装与在线正常流量冒烟。`workspace-gateway-native-fix/bin/macos-arm64.dmg` 通过 `hdiutil verify`；DMG 内应用与 `/Applications/Gateway-byok.app` 均为 `1.56.0`、Mach-O arm64，主二进制 SHA-256 同为 `001bc8db1b85fdeec7db82a7d5f92faf739f0690d093b4532f35eed94c87baf3`，应用签名校验通过。安装实例监听 `127.0.0.1:18080` 与 `127.0.0.1:18090`，`GET /healthz` 返回 `200 ok`；最新启动日志显示 backend、MITM 和 Cursor 代理设置均成功，无配置归一化、panic 或 fatal 错误。真实 Cursor 正常请求只观察到一次 RunSSE 入站/转发，内部 model call 均成功且无 terminal provider error。
 
 2026-09-04 已完成直接经过本机 Gateway 的五类受控故障验收。HTTP 500 与 503 均在主渠道恰好失败 2 次后切备用成功；TLS 握手阶段 accept-then-close 在客户端表现为 transport reset，主渠道 2 次后切备用成功；partial-output 只请求主渠道 1 次，发布 `PARTIAL-CANARY` 后以 `output_observed` 关闭安全门，未重放到备用；预算耗尽按主渠道 500×2、备用 503×2 消费 4 个全链 attempts，已建立 HTTP 200 SSE 后仅在流体内输出 1 个 `provider_error` terminal。关联 trace 分别为 `65dee066553eddeb1b85bfe5470aadcf`、`4a4cd69e021a2eeef8ea9ae9b2a45ed6`、`ae2bdb7a6ff108b59d54935240e213e5`、`a5da9e5289d962eebbc41e1459d67f95`、`db10b4e26be085ed9a34d10130fda209`；failure/action、逻辑模型、渠道/provider、链级与渠道级 attempt、累计等待/退避、fallback 原因、安全门和最终动作字段均存在。临时 key、Authorization/请求响应正文类字段及 canary/成功正文扫描命中均为 0。
 
@@ -726,11 +726,11 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 验证：`npm run build --prefix frontend`；`npm run test:config-projection --prefix frontend`；`node --test frontend/src/router/access.test.js`；相关文件 `git diff --check`。配置投影测试已对齐禁用「添加授权」空态和完整提供商 Tab。本机没有可用 Wails runtime，未做真实窗口视觉点击，故不得标 accepted。
 
-### 0.13 本地编译 macOS v0.0.50.3
+### 0.13 本地编译 macOS v1.50.3
 
-2026-08-28 按用户要求将版本号升到 `0.0.50.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.50.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布（仍为已发布的 v0.0.50.1）。
+2026-08-28 按用户要求将版本号升到 `1.50.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.50.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布（仍为已发布的 v1.50.1）。
 
-验证：`PATH=/Users/yaogj/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（约 22 MiB）。挂载后 Info.plist 版本为 `0.0.50.3`，可执行文件为 Mach-O arm64 且包含注入版本 `0.0.50.3`，adhoc codesign，`hdiutil verify` VALID，SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+验证：`PATH=/Users/yaogj/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（约 22 MiB）。挂载后 Info.plist 版本为 `1.50.3`，可执行文件为 Mach-O arm64 且包含注入版本 `1.50.3`，adhoc codesign，`hdiutil verify` VALID，SHA-256 `ecf330bd61fbcac3133028dfb518df56722d57f6d075c573f22608889ba89ef9`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
 
 ### 0.14 Cursor 设置清理所有权隔离
 
@@ -738,15 +738,15 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 验证通过：`go test ./internal/cursor -count=1`；`GOMAXPROCS=2 go test ./internal/client -count=1 -timeout 180s`。完整 client 测试前后真实 `~/Library/Application Support/Cursor/User/settings.json` 的 SHA-256 一致；未启动、停止或替换运行中的 18080/18090。
 
-### 0.15 本地编译 macOS v0.0.52.0
+### 0.15 本地编译 macOS v1.52.0
 
-2026-08-29 按用户要求将版本号升到 `0.0.52.0` 并编译 Apple Silicon macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.0.md` 已对齐；构建资产生成后恢复并保留工作树原有的 macOS 最低版本、Linux GTK/WebKit 和 Windows 安装范围改动。未发布 GitHub Release，未更新 README 当前稳定发布。
+2026-08-29 按用户要求将版本号升到 `1.52.0` 并编译 Apple Silicon macOS 包。`build/config.yml`、darwin Info.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.0.md` 已对齐；构建资产生成后恢复并保留工作树原有的 macOS 最低版本、Linux GTK/WebKit 和 Windows 安装范围改动。未发布 GitHub Release，未更新 README 当前稳定发布。
 
-首次使用 Go 1.26.3 构建时，大型生成文件 `aiserver_v1.connect.go` 的编译进程被系统终止；切换项目现有 Go 1.25.0 后定位到剩余磁盘空间不足。清理失败构建临时目录和 Go build cache 后，以 `GOMAXPROCS=2 GOFLAGS=-p=1 task build` 成功生成 `bin/macos-arm64.dmg`（24,000,981 bytes）。挂载验证 Info.plist 与二进制注入版本均为 `0.0.52.0`，可执行文件为 Mach-O arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `0adcb0b3a32c5d581169642c1b530b819380f200f027d15017db4d8f8bfcf365`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+首次使用 Go 1.26.3 构建时，大型生成文件 `aiserver_v1.connect.go` 的编译进程被系统终止；切换项目现有 Go 1.25.0 后定位到剩余磁盘空间不足。清理失败构建临时目录和 Go build cache 后，以 `GOMAXPROCS=2 GOFLAGS=-p=1 task build` 成功生成 `bin/macos-arm64.dmg`（24,000,981 bytes）。挂载验证 Info.plist 与二进制注入版本均为 `1.52.0`，可执行文件为 Mach-O arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `0adcb0b3a32c5d581169642c1b530b819380f200f027d15017db4d8f8bfcf365`。未做 Developer ID 签名或 notarization，未构建 Intel 包。
 
 ### 0.16 Codex/Grok 授权接入页拆分
 
-2026-08-29 根据用户启动 `0.0.52.0` 后的截图反馈，移除接入中心底部混合展示的全局“上游订阅认证”区域。Codex 的 `auth.json` 导入、设备码授权、状态、用量和清除副本全部进入 Codex 接入详情；Grok 的设备码授权、账号列表、激活、删除和用量进入独立 Grok 接入详情。左侧顺序固定为共享入口、Cursor、Codex、Grok、Anthropic；Anthropic 保留计划中占位，旧 `client=claude` 查询兼容归一化到 `anthropic`。
+2026-08-29 根据用户启动 `1.52.0` 后的截图反馈，移除接入中心底部混合展示的全局“上游订阅认证”区域。Codex 的 `auth.json` 导入、设备码授权、状态、用量和清除副本全部进入 Codex 接入详情；Grok 的设备码授权、账号列表、激活、删除和用量进入独立 Grok 接入详情。左侧顺序固定为共享入口、Cursor、Codex、Grok、Anthropic；Anthropic 保留计划中占位，旧 `client=claude` 查询兼容归一化到 `anthropic`。
 
 本轮只调整前端信息架构、提示、品牌样式、语言目录和路由门禁，不修改认证协议、凭据存储或模型请求链路。验证通过：`npm run build --prefix frontend`、`node frontend/scripts/test-config-projection.mjs`、`node --test frontend/src/router/access.test.js`（5/5）。构建只有既有 chunk-size warning；未重新打包 macOS DMG，未做真实 Wails 窗口点击，因此状态为 `verified-partial`。
 
@@ -756,31 +756,31 @@ Fallback 链上限从 1 primary + 2 candidates 扩展为 1 primary + 4 candidate
 
 运行时 401 定向刷新原请求账户；刷新确认失效后只将该账户标记为需要重新授权，再选择备用账户。明确 quota 错误只在零模型输出、非模型测试且共享 retry budget 可用时幂等标记失败账户、切换下一可用账户并重试一次；同一旧账户的并发重复信号不会把 active 从 B 继续推进到 C。已知额度重置时间到达后账户恢复候选资格。固定 Codex 上游、`ChatGPT-Account-Id`、请求体白名单和 token 不写配置的边界保持不变。
 
-验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、`node frontend/scripts/test-config-projection.mjs` 和 `npm run build --prefix frontend`。已重新生成并核验包含本功能的 Apple Silicon macOS `0.0.52.2` DMG：应用版本 `0.0.52.2`、Mach-O arm64、最低 macOS `10.15.0`、codesign 有效、`hdiutil verify` VALID；产物 23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。未使用真实订阅 token 请求外部 Codex，未做 Wails 窗口视觉点击，因此交付保持 `verified-partial`。
+验证通过：`go test ./internal/subscriptionauth -count=1`、`go test ./internal/backend/agent/model -count=1`、`go test ./internal/backend/server/config -count=1`、`node frontend/scripts/test-config-projection.mjs` 和 `npm run build --prefix frontend`。已重新生成并核验包含本功能的 Apple Silicon macOS `1.52.2` DMG：应用版本 `1.52.2`、Mach-O arm64、最低 macOS `10.15.0`、codesign 有效、`hdiutil verify` VALID；产物 23,070,403 bytes，SHA-256 `467bb52b1a04ef421f7df6ae1cf09e2e15cf5cf8346e594a6f38336c956d7f7d`。未使用真实订阅 token 请求外部 Codex，未做 Wails 窗口视觉点击，因此交付保持 `verified-partial`。
 ### 0.18 sub2api 账号选择导入与用量刷新桥接
 
 2026-08-29 根据 Codex 接入页运行截图修复逐账户用量刷新绑定缺失，并为 Codex/Grok 接入页增加 sub2api JSON 导入。导入流程先在后端按当前页面 provider 过滤：Codex 接受 `openai/codex + oauth`，Grok 接受 `grok/xai/x.ai + oauth`，同时要求 access token 与 refresh token；随后前端弹出候选账号列表供多选，只导入用户选择且属于当前页面类型的账号。源文件保持只读，凭据只进入应用私有账号池，重复账号更新原记录且后续导入不抢占当前激活账号。
 
 验证通过：订阅认证 Go 测试（包含用户提供 sub2api 文件的只读解析、provider 过滤、选择导入和源文件不变）、Wails bindings 生成、前端配置投影和生产构建。Wails 生成结果确认公开了 `RefreshSubscriptionAccountUsage`、`PreviewSub2APIImport` 与 `ImportSub2APIAccounts`；桥接包完整测试因大型生成文件编译超过两分钟后终止。未使用真实外部订阅请求，未做 Wails 窗口点击，因此状态为 `verified-partial`。
 
-### 0.19 本地编译 macOS v0.0.52.3
+### 0.19 本地编译 macOS v1.52.3
 
-2026-08-29 按用户要求将版本号升到 `0.0.52.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/0.0.52.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布。
+2026-08-29 按用户要求将版本号升到 `1.52.3` 并编译本机 macOS 包。`build/config.yml`、darwin Info.plist/Info.dev.plist、Windows/Linux 构建元数据、`release-notes.md` 与 `releaselog/1.52.3.md` 已对齐。未发布 GitHub Release，未改 README 当前稳定发布。
 
-使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物为 `bin/release/0.0.52.3/cursor-byok-0.0.52.3-macos-arm64.dmg`（24,019,575 bytes）。挂载后 Info.plist 版本为 `0.0.52.3`，可执行文件为 Mach-O arm64 且最低 macOS `10.15.0`，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`。本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。未做 Developer ID 签名或 notarization，未构建 Intel 包。
+使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物为 `bin/release/1.52.3/cursor-byok-1.52.3-macos-arm64.dmg`（24,019,575 bytes）。挂载后 Info.plist 版本为 `1.52.3`，可执行文件为 Mach-O arm64 且最低 macOS `10.15.0`，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `1b63be249e0bafb6955d2deedf1e29d81d17309123b4597d489ddbcd9c11f635`。本版本包含 Codex 多账户池、sub2api JSON 多选导入和逐账户用量刷新桥接修复。未做 Developer ID 签名或 notarization，未构建 Intel 包。
 ### 0.20 订阅账号列表滚动与 sub2api 弹窗关闭修复
 
-2026-08-29 根据 `0.0.52.3` 运行截图修复两个前端问题：Codex/Grok 账号列表在固定高度授权卡片中改为独立纵向滚动区，标题和底部操作栏保持可见；sub2api 确认导入成功后直接重置并关闭选择弹窗，不再调用会被 `busy=true` 拦截的手动关闭函数。验证结果以 `task/todo.md` 的 `subscription-account-list-modal-fix-20260829` 为准；未重新打包 macOS DMG。
+2026-08-29 根据 `1.52.3` 运行截图修复两个前端问题：Codex/Grok 账号列表在固定高度授权卡片中改为独立纵向滚动区，标题和底部操作栏保持可见；sub2api 确认导入成功后直接重置并关闭选择弹窗，不再调用会被 `busy=true` 拦截的手动关闭函数。验证结果以 `task/todo.md` 的 `subscription-account-list-modal-fix-20260829` 为准；未重新打包 macOS DMG。
 
 ### 0.21 Gateway 可用性测试与 managed Codex 请求体边界
 
-2026-08-29 本轮在上一轮 0.0.52.3 功能基础上补齐两处改动，随 0.0.52.4 提交。
+2026-08-29 本轮在上一轮 1.52.3 功能基础上补齐两处改动，随 1.52.4 提交。
 
 Gateway 接入卡片新增「测试可用性」：启动 Gateway 后自动对本机入口执行一次真实 HTTP 探测（`GET /v1/models`，带 Bearer token），返回监听地址、公开模型数量与毫秒延迟；卡片状态区实时显示入口可用性与极简使用引导，token 复制/轮换改走 Wails 原生剪贴板 `Clipboard.SetText` 并等待写入结果，失败给出可读错误。桥接层新增 `TestGateway`、`RefreshSubscriptionAccountUsage`、`PreviewSub2APIImport` 与 `ImportSub2APIAccounts` 绑定。
 
 managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_response_id`：该 ID 与签发它的 ChatGPT 账号绑定，托管场景无法验证归属，按 fail-closed 剥离；static OpenAI Responses 保持原请求体不变。回归覆盖 managed 剥离与 static 保留两条路径。订阅模型测试改为可注入的 stream 函数，验证 Codex/Grok 固定上游归一化后凭据元数据正确注入且不写回原 adapter。
 
-验证结果以 `task/todo.md` 的 `macos-build-0.0.52.4-20260829` 为准。使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/0.0.52.4/cursor-byok-0.0.52.4-macos-arm64.dmg`（24,015,566 bytes）；应用短版本与 bundle 版本均为 `0.0.52.4`，最低 macOS `10.15.0`，Mach-O arm64，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`，`SHA256SUMS` 校验通过。已提交（`9c4db4f`）并 push 到 `gateway` 分支。未做 Developer ID 签名或 notarization，未构建 Intel 包，未发布 GitHub Release。
+验证结果以 `task/todo.md` 的 `macos-build-1.52.4-20260829` 为准。使用 Go 1.25.0、`GOMAXPROCS=2` 和 `GOFLAGS=-p=1` 完成 `task build`，产物归档为 `bin/release/1.52.4/cursor-byok-1.52.4-macos-arm64.dmg`（24,015,566 bytes）；应用短版本与 bundle 版本均为 `1.52.4`，最低 macOS `10.15.0`，Mach-O arm64，codesign 校验有效，`hdiutil verify` VALID，SHA-256 `ba3321f551a74127dd760a9a40703e22492a5c6a93b5887eaf64ac41185c6a62`，`SHA256SUMS` 校验通过。已提交（`9c4db4f`）并 push 到 `gateway` 分支。未做 Developer ID 签名或 notarization，未构建 Intel 包，未发布 GitHub Release。
 
 ### 0.22 上游 `v0.1.5` 深度审阅与同步安全中止
 
@@ -809,9 +809,9 @@ managed Codex ChatGPT Responses 请求体白名单不再透传 `previous_respons
 
 阶段状态、命令和缺口以 [`task/todo.md`](../task/todo.md) 的 `agent-governance-completion-20260822` 为准；治理包当前 `DELIVERY_STATUS=accepted`，但尚未 commit、push、tag 或发布，后续发布必须等待单独批准。
 
-### 0.24 本地编译 macOS v0.0.60.0
+### 0.24 本地编译 macOS v1.60.0
 
-2026-09-07 完成 `v0.0.60.0` Apple Silicon macOS 本地构建。版本号统一为 `0.0.60.0`（纠正提交 `f6ce0b0` 中 `0.060.0` 的写法，与历史 `0.0.x.y` 四段格式一致），`releaselog/0.060.0.md` 重命名为 `0.0.60.0.md`。使用 Go 1.26.1、Task 3.53.1、`PATH=~/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（24,225,414 bytes），并归档为 `bin/release/0.0.60.0/cursor-byok-0.0.60.0-macos-arm64.dmg`。挂载核验：Info.plist 短版本与 bundle 版本均为 `0.0.60.0`，二进制注入版本 `0.0.60.0`，Mach-O 64-bit arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `7e0d86254c84e9f8211337e5feb96866e0343a083b751c3e6fa083e8325d641f`，`SHA256SUMS` 复核通过。构建同时再生成 i18n catalog 行号引用（97 处 line 值刷新，无文案变化）。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布；版本号修正与构建证据未提交，待用户确认。
+2026-09-07 完成 `v1.60.0` Apple Silicon macOS 本地构建。版本号统一为 `1.60.0`（纠正提交 `f6ce0b0` 中 `0.060.0` 的写法，与历史 `0.0.x.y` 四段格式一致），`releaselog/0.060.0.md` 重命名为 `1.60.0.md`。使用 Go 1.26.1、Task 3.53.1、`PATH=~/go/bin:$PATH task build` 生成 `bin/macos-arm64.dmg`（24,225,414 bytes），并归档为 `bin/release/1.60.0/cursor-byok-1.60.0-macos-arm64.dmg`。挂载核验：Info.plist 短版本与 bundle 版本均为 `1.60.0`，二进制注入版本 `1.60.0`，Mach-O 64-bit arm64，adhoc codesign 有效；`hdiutil verify` VALID；SHA-256 `7e0d86254c84e9f8211337e5feb96866e0343a083b751c3e6fa083e8325d641f`，`SHA256SUMS` 复核通过。构建同时再生成 i18n catalog 行号引用（97 处 line 值刷新，无文案变化）。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布；版本号修正与构建证据未提交，待用户确认。
 
 ### 1. 版本发布与交付
 
@@ -984,17 +984,17 @@ Release：<https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.2>
 
 - **2026-08-30**：完成上游 `v0.1.5@b807608` 与最新 `upstream/main@9120b90` 深度审阅。隔离 worktree 合并本地 `main@305b108` 发生真实跨架构冲突后已安全中止；`main`、`gateway` 未变，无提交、无 push。确定优先加固 Rule 持久化，再独立补 managed Codex 缓存亲和；Rule 离线同步必须显式 opt-in；不整体移植 Deno/Rust runtime。详细结论见差异 PRD §16。
 
-- **2026-08-30**：完成 `v0.0.52.5` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，产物归档为 `bin/release/0.0.52.5/cursor-byok-0.0.52.5-macos-arm64.dmg`（24,031,370 bytes）。构建首次因误用 Go 1.26.3 且清空编译缓存，在 8GB 内存/swap 压力下大型生成文件 `aiserver_v1.connect.go` 编译停滞；改用项目 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后成功。已核验 `0.0.52.5` 版本（Info.plist 与二进制注入）、arm64 架构、adhoc 签名、`hdiutil verify` 与 SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+- **2026-08-30**：完成 `v1.52.5` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，产物归档为 `bin/release/1.52.5/cursor-byok-1.52.5-macos-arm64.dmg`（24,031,370 bytes）。构建首次因误用 Go 1.26.3 且清空编译缓存，在 8GB 内存/swap 压力下大型生成文件 `aiserver_v1.connect.go` 编译停滞；改用项目 Go 1.25.0 并加 `GOGC=20` 控制编译器内存后成功。已核验 `1.52.5` 版本（Info.plist 与二进制注入）、arm64 架构、adhoc 签名、`hdiutil verify` 与 SHA-256 `b131348e7afd154dd05eae6f00968d971401d92f10b26efeb109ba49b2ee3153`。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
 - **2026-08-29**：实现 Codex 多账户管理与安全轮换。模型配置仍只选择 Codex 凭据来源；旧单账户私有文件兼容迁移为账户池，接入页支持激活、逐账户用量和删除。401 定向刷新失败后切换备用账户，明确 quota 仅在零输出安全窗口内幂等轮换并单次重试。自动化验证范围见 `task/todo.md`；未使用真实 token、未做 Wails 视觉点击或发布包重构建。
 
-- **2026-08-29**：完成 `v0.0.52.2` Apple Silicon macOS 本地构建，产物为 `bin/release/0.0.52.2/cursor-byok-0.0.52.2-macos-arm64.dmg`；版本元数据与发布说明已对齐，DMG 校验、版本、架构、签名和 SHA-256 已核验。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+- **2026-08-29**：完成 `v1.52.2` Apple Silicon macOS 本地构建，产物为 `bin/release/1.52.2/cursor-byok-1.52.2-macos-arm64.dmg`；版本元数据与发布说明已对齐，DMG 校验、版本、架构、签名和 SHA-256 已核验。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
 - **2026-08-29**：修复订阅模型测试沿用用户填写接口地址的问题。Codex 订阅统一使用 ChatGPT Codex Responses 官方上游，Grok 订阅统一使用 xAI 官方上游；前后端保存、重载和测试采用同一归一化规则，订阅模式下接口地址与协议端点只读。后端端点、Codex 请求协议、客户端测试链路、前端投影和生产构建通过；未使用用户真实 token 请求外部上游，未重新打包 macOS 安装包。
 
-- **2026-08-29**：完成 `v0.0.52.1` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，带版本号的产物位于 `bin/release/0.0.52.1/cursor-byok-0.0.52.1-macos-arm64.dmg`；已核验 `0.0.52.1` 版本、arm64 架构、adhoc 签名、DMG 完整性和 SHA-256。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+- **2026-08-29**：完成 `v1.52.1` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，带版本号的产物位于 `bin/release/1.52.1/cursor-byok-1.52.1-macos-arm64.dmg`；已核验 `1.52.1` 版本、arm64 架构、adhoc 签名、DMG 完整性和 SHA-256。未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
-- **2026-08-29**：完成 `v0.0.52.0` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，`bin/macos-arm64.dmg` 的版本、arm64 架构、adhoc 签名、DMG 完整性及 SHA-256 已验证；未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
+- **2026-08-29**：完成 `v1.52.0` Apple Silicon macOS 本地构建。版本元数据与发布说明已对齐，`bin/macos-arm64.dmg` 的版本、arm64 架构、adhoc 签名、DMG 完整性及 SHA-256 已验证；未做 Developer ID 签名、notarization、Intel 构建或 GitHub 发布。
 
 - **2026-08-28**：修复模型页保存时身份字段变化导致 fallback 渠道 ID 悬空，以及切换 OpenAI/Anthropic 清空模型标识。`SaveModelAdapters`/`SaveUserConfig` 使用请求旧 ID 与磁盘 adapter 精确 remap；新 adapter 不携带旧 ID，删除加新增不会误配。类型切换保留当前 `modelID`。定向 Go/前端测试与生产构建通过；未做 Wails 视觉点击。详见 `task/todo.md` 的 `model-save-identity-remap-20260828`。
 - **2026-08-26**：冻结 v5 四页控制面阶段 0 合同（`/access?client=...`、per-scope dirty、真实计数、完整配置导入导出文案、`system` 主题、持久小时桶、Cursor 启动/重启安全语义、Codex/Claude 非生产 fixture）。决策基线 §7.5/§10.14、系统 Design §4.2/§10.2/§14.16 与 `task/todo.md` 的 `ui-v5-shell-20260826` 已同步。本轮只改文档，实现未开始，不得标完成。ACP 工作包保持 blocked。
