@@ -5,6 +5,16 @@
 
 ## 当前焦点
 
+### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
+
+- 负责人：主会话。目标：不再关联原上游代码库；删除原 `main`、`noad` 改名为 `main`、合并 `gateway`；清除所有分支中的上游作者信息与帮助链接；`0.0.50` 之后的版本统一改为 `1.x`；同步文档。用户已确认：先在本地完成并验证再确认推送、删除 `leookun` 与 `komeadanagito` 远程、旧 tag 保留并另建 `v1.77.0`、`cli` 保持 `0.0.49.6`、删除作者入口与帮助链接、`LICENSE` 署名改 `yaogjim`。
+- [completed] `restructure-branches`：删除原上游镜像 `main`（`31e9f5c`），`noad@954b7ac` 改名为 `main`，合并 `gateway@96a6d6a`（合并提交 `6f8e9c2`）。仅 `README.md` 下载入口文案冲突，取 gateway 版本；已核对 `b61a4de` 的 Windows 目录 fsync 修复仍在合并结果中。三个 pre-restructure 备份分支保留在本地。
+- [completed] `renumber-versions`：`0.0.N.M`（N≥50）→ `1.N.M`；覆盖 `build/config.yml`、darwin plist、nfpm、windows info/nsis/manifest、README、release-notes、`releaselog/`（26 个改名）、`docs/**`、`task/todo.md` 与 semver 测试 fixture。`go run ./scripts/release version` 输出 `1.77.0`。`0.0.49.x` 保持不变，`cli` 按确认保留 `0.0.49.6`。
+- [completed] `remove-upstream-attribution`：删除 `internal/bridge/window_author.go`，移除 `MainLayout.vue` 作者入口与“使用教程”按钮、`clientApi.js` 对应绑定，`LICENSE` 改为 `Copyright (c) 2026 yaogjim`，updater 负向 fixture 改为中性地址；`main`、`gateway`、`cli` 三分支均无 `leookun` 残留（`tab.leokun.cn`/`ads.leokun.cn` 为运行时端点配置，非署名，未改）。
+- [completed] `update-docs`：`README.md` 分支说明改为 `main`/`gateway`/`cli`；`docs/cursor_byok_upstream_merge_requirements.md` 标记停用；三份 PRD/方案文档的上游仓库链接与作者标识移除；`release-notes.md` 版本小节改写为版本方案变更说明。
+- [completed] `local-verification`：`go build ./...` 退出0；`go test ./... -count=1 -timeout=300s` 36 个包全部通过、0 FAIL（保留 macOS 目标版本链接 warning）；`gofmt` 无输出。前端未跑 `yarn build`，平台构建、release 与推送均未执行。
+- [pending] `remote-sync-and-release`：待用户确认推送窗口后执行：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、`origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0` tag，并重建 `1.77.0` 安装包与 release 资产。**当前远程仍是旧状态，不得记为已完成。**
+
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21；verified-partial）
 
 - 负责人：主会话；目标为修复主对话出现 `chat context summarized` 后失败，并查明同一聊天 BYOK→官网模型被要求新建聊天的原因。源码基线 `ca4d6ed`；本轮保留既有协作规范修改，不部署、重启、修改 Cursor 安装/真实会话或配置，不 commit/push。
