@@ -2,9 +2,22 @@
 
 > 让 Cursor 使用你自己的模型 API 的本地 BYOK 客户端。`noad` 分支默认浅色、默认关闭广告、默认不启动检查更新，更新按“检查 / 下载 / 安装”分阶段确认，发布与更新资源固定使用 `yaogjim/cursor-byok`。当前发布版本为 [v0.0.49.6](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6)。
 
-[下载最新版](https://github.com/yaogjim/cursor-byok/releases/latest) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues)
+[下载 noad 版本](https://github.com/yaogjim/cursor-byok/releases/tag/v0.0.49.6) · [问题反馈](https://github.com/yaogjim/cursor-byok/issues)
 
 ![Cursor BYOK noad 主界面](./docs/images/main.png)
+
+## 分支定位
+
+这是本项目的**早期无广告版本**，保留默认关闭广告、默认不自动检查更新、默认浅色主题等策略，版本停留在 v0.0.49.x。
+
+| 你想做的事 | 应该去的分支 |
+| --- | --- |
+| 使用最新功能：本地路由、共享入口、Codex / Grok 订阅账号、CLI | [`gateway`](https://github.com/yaogjim/cursor-byok/tree/gateway) |
+| 查看与上游完全一致的代码 | [`main`](https://github.com/yaogjim/cursor-byok/tree/main) |
+| 使用早期无广告版本 | 当前 `noad` 分支 |
+| 使用带 Docker CLI 的版本 | [`cli`](https://github.com/yaogjim/cursor-byok/tree/cli) |
+
+`noad` 不再作为最新主线；新功能和修复优先进入 `gateway`。
 
 ## 核心能力
 
