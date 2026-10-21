@@ -100,6 +100,20 @@ jobs:
           go install "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
           go install "connectrpc.com/connect/cmd/protoc-gen-connect-go@${PROTOC_GEN_CONNECT_GO_VERSION}"
           echo "$(go env GOPATH)/bin" >> "${GITHUB_PATH}"
+          # choco 安装的 NSIS 不在默认 PATH 中，显式加入，供 makensis 使用
+          nsis_dir=""
+          for candidate in "/c/Program Files (x86)/NSIS" "/c/Program Files/NSIS"; do
+            if [ -x "${candidate}/makensis.exe" ]; then
+              nsis_dir="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${nsis_dir}" ]; then
+            echo "::error::未找到 makensis.exe，NSIS 安装可能失败"
+            exit 1
+          fi
+          echo "$(cygpath -w "${nsis_dir}")" >> "${GITHUB_PATH}"
+          "${nsis_dir}/makensis.exe" -VERSION
 
       - name: 生成 proto 代码
         run: wails3 task common:generate:proto

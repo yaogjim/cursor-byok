@@ -171,8 +171,8 @@ tasks:
           ARCH: amd64
           OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       - mkdir -p "{{.RELEASE_DIR}}"
-      - nfpm package -f build/linux/nfpm/nfpm.yaml -p deb -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.deb"
-      - nfpm package -f build/linux/nfpm/nfpm.yaml -p rpm -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.rpm"
+      - nfpm package -f build/linux/nfpm/cursor-byok.nfpm.yaml -p deb -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.deb"
+      - nfpm package -f build/linux/nfpm/cursor-byok.nfpm.yaml -p rpm -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.rpm"
       - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}"
 
   create:archive:

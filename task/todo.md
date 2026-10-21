@@ -20,12 +20,13 @@
 ### CI 构建 Windows/Linux 失败修复（2026-10-21；本地已验证，待真实运行复核）
 
 - 负责人：主会话。目标：修复 GitHub Actions 上 Windows 与 Linux 安装包 job 的失败，使三平台安装包与 tag 触发的一致。
-- [completed] `linux-nfpm-paths`：`build/linux/nfpm/nfpm.yaml` 的 desktop 源改为 `./build/linux/nfpm/cursor-byok.desktop`；图标按 1024×1024 真实尺寸安装并追加 `/usr/share/pixmaps`；`version`/`arch` 改用任务注入的 `${VERSION}`/`${ARCH}`；维护者与 homepage 固定；启用 `postremove`。
+- [completed] `linux-nfpm-paths`：发现 `build/linux/nfpm/nfpm.yaml` 属于 `wails3 update build-assets` 的可更新资产、会被模板重写，且模板引用的 `build/linux/<binary>.desktop` 与生成的实际文件名 `build/linux/desktop` 不一致。处理方式：`nfpm.yaml` 保持生成态，新增自维护配置 `build/linux/nfpm/cursor-byok.nfpm.yaml`（`${VERSION}`/`${ARCH}` 由任务注入、维护者与 homepage 固定、图标 1024×1024 加 pixmaps、启用 `postinstall`/`postremove`），`linux:package:installers` 改为引用该文件。
 - [completed] `linux-nfpm-scripts-tracked`：`postinstall.sh`、`postremove.sh` 因 `.gitignore` 的 `build/` 规则从未入库，已 `git add -f` 纳入版本控制；否则 nfpm 在修好 desktop 后仍会因脚本缺失失败。
 - [completed] `windows-zip-cross-platform`：`scripts/release` 新增 `zip` 子命令（`archive/zip`），`windows:create:zip` 改用 `go run ./scripts/release zip -src ... -out ...`，去掉对平台 `zip` 命令 `-y` 选项的依赖；Windows job 的 `choco install` 移除 `zip`。
+- [completed] `windows-nsis-path`：Windows job 报 `makensis: executable file not found in $PATH`；工作流改为在安装步骤内搜索 `C:\Program Files (x86)\NSIS`（兼容 `C:\Program Files\NSIS`），加入 `GITHUB_PATH` 并 `makensis -VERSION` 自检。
 - [completed] `release-assets-glob`：发布 job 的 `files` 增加 `bin/release/*/*installer.exe`，Windows NSIS 安装包此前不会上传到 Release。
-- [completed] `local-verification`：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok（新增 zip 回归测试）；`release:build:windows:amd64` 完整跑通，zip 根目录为 `cursor-byok-windows-amd64.exe`，解包为 `PE32+ executable (GUI) x86-64`；nfpm 桩二进制重打 deb/rpm，deb 的 control、postinst/postrm、desktop 与图标路径均核对正确；相关 YAML 全部通过解析。
-- [pending] `ci-recheck`：修复未推送，尚无新的 CI 结论。Windows NSIS 实际编译与 Linux 真实二进制/deb/rpm 安装行为仍需在对应 runner 或实机确认。
+- [completed] `local-verification`：`go build ./...` 退出 0；`go test ./scripts/release ./internal/updater ./internal/bridge ./internal/app` 全部 ok（新增 zip 回归测试）；`release:build:windows:amd64` 完整跑通，zip 根目录为 `cursor-byok-windows-amd64.exe`，解包为 `PE32+ executable (GUI) x86-64`；nfpm 桩二进制按新配置重打 deb/rpm，deb 的 control、postinst/postrm、desktop 与图标路径均核对正确；`common:update:build-assets` 后 `build/` 无 diff；相关 YAML 全部通过解析。
+- [pending] `ci-recheck`：第二次修复尚待推送与真实运行复核。Windows NSIS 实际编译与 Linux 真实二进制/deb/rpm 安装行为仍需在对应 runner 或实机确认。
 
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
 
