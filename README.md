@@ -1,4 +1,4 @@
-# Gateway-byok
+# cursor-byok
 
 > 让 Cursor 用上你自己的模型 API，同时保留 Cursor 官方模型；再把同一个模型池通过本机 OpenAI 兼容入口，共享给 Codex、Grok、脚本和其他 AI 客户端。
 >
@@ -10,7 +10,7 @@
 
 ## 30 秒读懂
 
-Gateway-byok 不是简单地“把 Cursor 的地址改掉”，而是在本机做一层**模型路由器**：
+cursor-byok 不是简单地“把 Cursor 的地址改掉”，而是在本机做一层**模型路由器**：
 
 - **Cursor 的请求可以分流**：BYOK 模型走你自己的 API，官方模型继续走 Cursor 官方，两边可以同时存在。
 - **一个模型池可以多处复用**：除了 Cursor，还能通过 `http://127.0.0.1:18091/v1` 这个 OpenAI 兼容入口给 Codex、Grok、脚本或其他客户端使用。
@@ -21,7 +21,7 @@ Gateway-byok 不是简单地“把 Cursor 的地址改掉”，而是在本机�
 
 ## 它解决什么问题
 
-| 常见困扰 | Gateway-byok 的做法 |
+| 常见困扰 | cursor-byok 的做法 |
 | --- | --- |
 | 官方模型不够用，或想用自己熟悉的模型 | 接入任意 OpenAI / Anthropic 兼容 API，模型参数、Header、推理强度都可配 |
 | 既想保留官方模型，又想用 BYOK | 官方与本地目录共存，模型来源标 `[官方]` / `[BYOK]`；同名冲突时本地渠道优先，其余走官方 |
@@ -155,8 +155,15 @@ Base URL: http://127.0.0.1:18091/v1
 
 ## 快速开始
 
-1. 从 [Releases](https://github.com/yaogjim/cursor-byok/releases/latest) 下载对应平台的安装包（最新版提供 macOS Apple Silicon 与 Intel 构建）。
-2. 打开 Gateway-byok，在「上游模型」里添加你的 API：填写接口地址、API Key、模型 ID，并选择 `/v1/chat/completions`、`/v1/responses` 或自定义路径。
+1. 从 [Releases](https://github.com/yaogjim/cursor-byok/releases/latest) 下载对应平台的安装包：
+
+   | 平台 | 安装包 | 免安装归档（自动更新使用） |
+   | --- | --- | --- |
+   | macOS（Apple Silicon / Intel） | `cursor-byok-<版本>-macos-arm64.dmg`、`cursor-byok-<版本>-macos-amd64.dmg` | `*-macos-arm64.tar.gz`、`*-macos-amd64.tar.gz` |
+   | Windows（x64） | `cursor-byok-<版本>-windows-amd64-installer.exe` | `*-windows-amd64.zip` |
+   | Linux（x64） | `cursor-byok-<版本>-linux-amd64.deb`、`*.rpm` | `*-linux-amd64.tar.gz` |
+
+2. 打开 cursor-byok，在「上游模型」里添加你的 API：填写接口地址、API Key、模型 ID，并选择 `/v1/chat/completions`、`/v1/responses` 或自定义路径。
 3. 在「接入中心」按需要选择一种或两种用法：
    - **Cursor 深度集成**：启动本地服务，按页面提示让 Cursor 走本机代理；
    - **共享入口**：启用 Gateway，复制 `http://127.0.0.1:18091/v1` 和 Bearer Token 到其他客户端。
@@ -194,7 +201,16 @@ Cursor / Codex / Grok / 其他客户端
 
 本仓库已不再与原上游仓库保持同步，`main` 只承载本项目自己的改动。
 
-需要最新功能、共享入口或订阅账号，请使用 `gateway`。
+`main` 已包含 `gateway` 的全部能力，日常使用请以 `main` 为准；`gateway` 只作为并行开发线保留。
+
+## 构建与发布
+
+安装包统一由 [GitHub Actions](.github/workflows/build.yml) 在托管的 macOS / Windows / Linux 机器上构建，不再手工上传本机构建成果：
+
+- push 到 `main` 或 `gateway`：自动构建 macOS（DMG + tar.gz）、Windows（ZIP + NSIS 安装包）、Linux（tar.gz + deb + rpm），产物保留在 Actions 的 Artifacts 中；
+- push `v*` tag：三平台构建通过后生成 `update.json` 一并发到 Releases；tag 必须等于 `v` + `build/config.yml` 的 `info.version`。
+
+需要在本机只验证单个平台时，可用 `task release:prepare:macos`、`task release:build:windows:amd64`、`task release:build:windows:installer`、`task release:build:linux:amd64`、`task release:build:linux:installers`。完整说明见 [`CONTRIBUTING.md`](./CONTRIBUTING.md) 的“构建与发布”。
 
 ## 兼容与边界
 

@@ -494,7 +494,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 115,
+          "line": 112,
           "column": 12
         },
         {
@@ -564,12 +564,12 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 162,
+          "line": 159,
           "column": 34
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 162,
+          "line": 159,
           "column": 52
         }
       ]
@@ -1108,7 +1108,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 46,
+          "line": 43,
           "column": 9
         }
       ]
@@ -1219,7 +1219,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 32,
+          "line": 29,
           "column": 12
         }
       ]
@@ -1553,7 +1553,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 41,
+          "line": 38,
           "column": 44
         }
       ]
@@ -1856,7 +1856,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 78,
+          "line": 75,
           "column": 10
         }
       ]
@@ -1996,18 +1996,6 @@
           "file": "src/components/ModelAdapterTestCard.vue",
           "line": 157,
           "column": 1
-        }
-      ]
-    },
-    "33d2d273e2bd5f88": {
-      "source": "打开使用教程失败",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 178,
-          "column": 21
         }
       ]
     },
@@ -2428,7 +2416,7 @@
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 349,
+          "line": 314,
           "column": 11
         },
         {
@@ -2532,7 +2520,7 @@
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 275,
+          "line": 256,
           "column": 13
         },
         {
@@ -2754,7 +2742,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 242,
+          "line": 223,
           "column": 13
         },
         {
@@ -3106,7 +3094,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 51,
+          "line": 48,
           "column": 9
         }
       ]
@@ -3647,7 +3635,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 50,
+          "line": 47,
           "column": 9
         }
       ]
@@ -3823,7 +3811,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 191,
+          "line": 172,
           "column": 21
         },
         {
@@ -4114,7 +4102,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 124,
+          "line": 121,
           "column": 12
         },
         {
@@ -5192,7 +5180,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 309,
+          "line": 290,
           "column": 15
         },
         {
@@ -5262,7 +5250,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 108,
+          "line": 105,
           "column": 45
         }
       ]
@@ -5836,7 +5824,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 99,
+          "line": 96,
           "column": 12
         },
         {
@@ -5930,7 +5918,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 151,
+          "line": 148,
           "column": 36
         }
       ]
@@ -6144,7 +6132,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 224,
+          "line": 205,
           "column": 43
         }
       ]
@@ -6315,7 +6303,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 221,
+          "line": 202,
           "column": 37
         }
       ]
@@ -6455,7 +6443,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 98,
+          "line": 95,
           "column": 12
         }
       ]
@@ -6829,7 +6817,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 267,
+          "line": 248,
           "column": 13
         }
       ]
@@ -7338,7 +7326,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 35,
+          "line": 32,
           "column": 12
         }
       ]
@@ -7494,7 +7482,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 54,
+          "line": 51,
           "column": 12
         }
       ]
@@ -7790,7 +7778,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 114,
+          "line": 111,
           "column": 12
         },
         {
@@ -8345,7 +8333,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 106,
+          "line": 103,
           "column": 12
         },
         {
@@ -8603,7 +8591,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 123,
+          "line": 120,
           "column": 12
         }
       ]
@@ -9240,7 +9228,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 45,
+          "line": 42,
           "column": 9
         }
       ]
@@ -9482,7 +9470,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 105,
+          "line": 102,
           "column": 12
         }
       ]
@@ -9606,18 +9594,6 @@
         }
       ]
     },
-    "f526ab6eff33039a": {
-      "source": "打开作者地址失败",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 170,
-          "column": 21
-        }
-      ]
-    },
     "f5494110cb26d393": {
       "source": "删除模型配置",
       "kind": "text",
@@ -9649,12 +9625,12 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 254,
+          "line": 235,
           "column": 11
         },
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 255,
+          "line": 236,
           "column": 11
         }
       ]
@@ -9790,7 +9766,7 @@
       "refs": [
         {
           "file": "src/layouts/MainLayout.vue",
-          "line": 56,
+          "line": 53,
           "column": 10
         }
       ]
@@ -10012,18 +9988,6 @@
           "file": "src/components/ModelEditor.vue",
           "line": 946,
           "column": 1
-        }
-      ]
-    },
-    "fec45092945f8790": {
-      "source": "使用教程",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/layouts/MainLayout.vue",
-          "line": 317,
-          "column": 15
         }
       ]
     },

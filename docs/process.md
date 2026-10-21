@@ -20,6 +20,19 @@
 - **验证**：`go build ./...` 退出0；`go test ./... -count=1 -timeout=300s` 全部通过（36 个包 ok，0 FAIL，保留 macOS 目标版本链接 warning）；`go test ./internal/updater ./internal/bridge ./internal/backend` 通过；`gofmt` 无输出。前端未执行 `yarn build`（本轮改动仅删除 UI 入口，且未安装依赖）。**平台构建、GitHub 发布与远程同步均未执行，不得记为已发布。**
 - **待办**：按用户确认后在推送窗口执行：删除 `origin/main`、推送新 `main`、删除 `origin/noad`、把 `origin/HEAD` 指向 `main`、同步 `gateway`/`cli`、推送 `v1.77.0` tag；并重新构建 `1.77.0` 安装包与 release 资产。
 
+### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；local-only，未推送）
+
+**应用名、构建产物名与文档已统一改为 `cursor-byok`，安装包改由 GitHub Actions 三平台自动构建；工作流尚未在 GitHub 上真实运行，远程未推送。** 负责人：主会话。用户要求：把 `Gateway-byok` 改为 `cursor-byok`（含构建应用名与各文档），push 后由 GitHub 自动构建 macOS/Windows/Linux 安装包，并一并修复在 GitHub 上构建可能失败的问题。
+
+- **改名范围**：37 个文件中的 `Gateway-byok` 替换为 `cursor-byok`，包括 `build/config.yml`（companyName/productName/description/copyright/comments）、`build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/linux/nfpm/nfpm.yaml`、`Taskfile.yml` 的 `APP_NAME`、`internal/app/runner.go` 的 `appName`、`README.md`、`release-notes.md`、`releaselog/*.md`；`build/linux/desktop` 随 `git mv` 改名为 `build/linux/nfpm/cursor-byok.desktop`。改完执行 `wails3 task common:update:build-assets`，`git diff` 未产生额外差异，说明手工改名与 wails 生成结果一致。
+- **历史记录口径**：`docs/process.md`、`task/todo.md`、`releaselog/1.57.0.md` 中记录旧版本真实文件系统路径（`/Applications/Gateway-byok.app`）与旧运行实例名的语句保持原样，不改写当时的验证证据；正文其余品牌表述按用户要求改名。
+- **CI 工作流**：新增 `.github/workflows/build.yml`。push `main` / `gateway` / `v*` tag、PR 到 `main`、手工触发都会跑三平台：macOS（`macos-14`，arm64 与 amd64 的 DMG 与 updater tar.gz）、Windows（`windows-latest`，ZIP 与 NSIS 安装包）、Linux（`ubuntu-24.04`，updater tar.gz 与 deb/rpm）。tag 触发的第四个 job 汇总三平台产物、校验 tag 与 `build/config.yml` 版本一致、生成 `update.json` 后发布 Release；分支 push 只上传 Actions Artifacts。
+- **CI 失败点修复**：`gen/` 与 `frontend/bindings` 未入库，干净检出必须先执行 `wails3 task common:generate:proto`，工作流已显式加入该步骤；`generate:bindings` 与三平台 `build:native` 不再依赖 `go:mod:tidy`（原先与 proto 生成并行执行，干净检出时 `gen/` 缺失会直接失败）；`generate:proto` 的 `-I /opt/homebrew/include` 改为按操作系统选择（Linux 用 `/usr/include`，Windows 不追加）；Linux job 安装 `libgtk-3-dev`、`libwebkit2gtk-4.1-dev`、`protobuf-compiler`、`nfpm`，并在构建前用 `common:update:build-assets` + `git diff --exit-code` 校验生成资产与 `build/config.yml` 一致；Windows job 安装 `nsis`、`zip`、`protoc`，`create:nsis:installer` 的 webview2 bootstrapper 改为文件已存在时跳过下载。
+- **打包缺陷修复**：`build/linux/nfpm/nfpm.yaml` 原先引用不存在的 `build/linux/Gateway-byok.desktop` 与 `scripts/postinstall.sh`，版本与维护者硬编码（CI 无 `GIT_COMMITTER_NAME`）；现改为仓库根目录相对路径、`VERSION`/`ARCH` 由调用方注入、维护者固定、512×512 应用图标，并新增 `postinstall.sh` / `postremove.sh`。新增 `linux:package:installers`（一次编译产出 deb 与 rpm）、根任务 `release:build:linux:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:verify:installers`，并把安装包纳入 `release:prepare:macos` / `:darwin` / `:linux`。
+- **本地验证**：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`wails3 task release:prepare:macos` 成功，产出 `cursor-byok-1.77.0-macos-arm64.dmg`（24,343,468 字节）、`cursor-byok-1.77.0-macos-amd64.dmg`（25,665,638 字节）与两个同名 tar.gz（21,309,616 / 22,363,677 字节），两个 DMG 均通过 `hdiutil verify`；arm64 包内二进制为 `Mach-O 64-bit executable arm64`，`Info.plist` 的 `CFBundleName`、`CFBundleExecutable` 与 `CFBundleShortVersionString` 分别为 `cursor-byok`、`cursor-byok`、`1.77.0`；`release:build:windows:amd64` 在 macOS 上交叉编译成功并产出 `cursor-byok-1.77.0-windows-amd64.zip`；`nfpm` 用桩二进制产出 deb/rpm，解包核对 deb 的 `Package`、`Version`、`Depends`、维护者与安装路径均正确。
+- **未验证/受阻**：GitHub Actions 尚未真实运行（需要推送后观察）；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 的安装运行行为未在对应实机验证；本机无 Docker daemon，未执行 `release:build:linux:amd64`。
+- **待办**：推送后在 Actions 页面确认首次三平台运行结果；按用户确认的顺序同步远程分支与 `v1.77.0` tag。
+
 ### 1.77 主对话摘要失败与同聊天切换官网模型（2026-10-21）
 
 **主对话摘要参数缺陷已修复并通过源码回归；两条缺失控制接口已补齐；同聊天BYOK→官网模型要求新建聊天的现场症状仍未关闭。** 主会话持续负责整合；基线 `ca4d6ed`，修改未提交。当前保留工作区原有协作规范修改；未替换运行实例、构建发布、部署/重启、修改Cursor安装/真实会话/配置或commit/push。

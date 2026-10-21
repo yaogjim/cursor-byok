@@ -5,6 +5,17 @@
 
 ## 当前焦点
 
+### 应用改名 cursor-byok 与 GitHub Actions 三平台构建（2026-10-22；local-only）
+
+- 负责人：主会话。目标：把应用名 `Gateway-byok` 改为 `cursor-byok`（含构建应用名、产物名与各文档），并让 GitHub 在 push 后自动构建 macOS/Windows/Linux 安装包，替代本机编译后手工上传；同时修复在 GitHub 上构建可能失败的问题。
+- [completed] `rename-app`：37 个文件完成替换，覆盖 `build/config.yml`、darwin plist、windows info/nsis、nfpm、`Taskfile.yml` 的 `APP_NAME`、`internal/app/runner.go` 的 `appName`、README、release-notes 与 releaselog；`build/linux/desktop` 改名 `build/linux/nfpm/cursor-byok.desktop`。改后执行 `wails3 task common:update:build-assets` 无额外 diff。历史记录中的旧版本路径（`/Applications/Gateway-byok.app`）与旧实例名保持原样。
+- [completed] `ci-workflow`：新增 `.github/workflows/build.yml`，三平台 job（`macos-14` / `windows-latest` / `ubuntu-24.04`）构建 DMG+tar.gz、ZIP+NSIS、tar.gz+deb+rpm；tag 触发的发布 job 校验 tag 与 `build/config.yml` 版本一致、生成 `update.json` 并发布 Release；分支 push 仅上传 Artifacts。
+- [completed] `ci-failure-fixes`：干净检出先执行 `common:generate:proto`；`generate:bindings` 与各平台 `build:native` 移除 `go:mod:tidy` 依赖（原先与 proto 生成并行，`gen/` 缺失会失败）；`generate:proto` 的 include 路径按 OS 选择；Linux 补 webkit/gtk 依赖与 `nfpm`、并校验生成资产与 `build/config.yml` 一致；Windows 补 `nsis`/`zip`/`protoc`，webview2 bootstrapper 已存在时跳过下载。
+- [completed] `packaging-fixes`：修正 nfpm 引用了不存在的 desktop 文件与安装脚本、硬编码版本/维护者、图标尺寸；新增 `postinstall.sh`/`postremove.sh`、`linux:package:installers`、`release:build:macos:installers`、`release:build:windows:installer`、`release:build:linux:installers`、`release:verify:installers`。
+- [completed] `local-verification`：`go build ./...` 退出 0；`go test ./internal/updater ./internal/bridge ./internal/app` 通过；`release:prepare:macos` 产出两个 DMG 与两个 tar.gz，DMG 均通过 `hdiutil verify`，arm64 二进制为 Mach-O arm64，`CFBundleName`/`CFBundleExecutable`/版本为 `cursor-byok`/`cursor-byok`/`1.77.0`；`release:build:windows:amd64` 交叉编译出 zip；nfpm 桩二进制产出 deb/rpm 且 deb 字段与路径解包核对正确。
+- [pending] `ci-real-run`：工作流尚未在 GitHub 上真实运行，需推送后确认三平台 job 结论；Windows NSIS 安装包、Linux 真实二进制与 deb/rpm 安装行为未在对应实机验证；本机无 Docker daemon，未跑 `release:build:linux:amd64`。
+- [pending] `remote-sync`：沿用上一条任务的推送窗口，按用户确认顺序执行远程分支与 `v1.77.0` tag 同步。
+
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only）
 
 - 负责人：主会话。目标：不再关联原上游代码库；删除原 `main`、`noad` 改名为 `main`、合并 `gateway`；清除所有分支中的上游作者信息与帮助链接；`0.0.50` 之后的版本统一改为 `1.x`；同步文档。用户已确认：先在本地完成并验证再确认推送、删除原上游与中转镜像两个远程、旧 tag 保留并另建 `v1.77.0`、`cli` 保持 `0.0.49.6`、删除作者入口与帮助链接、`LICENSE` 署名改 `yaogjim`。

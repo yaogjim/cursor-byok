@@ -2,12 +2,12 @@ version: "3"
 
 # 构建元信息（修改后可执行：wails3 task common:update:build-assets）
 info:
-  companyName: "Gateway-byok"
-  productName: "Gateway-byok"
+  companyName: "cursor-byok"
+  productName: "cursor-byok"
   productIdentifier: "com.cursor.wuxianxubei"
-  description: "Gateway-byok"
-  copyright: "© 2026, Gateway-byok"
-  comments: "Gateway-byok"
+  description: "cursor-byok"
+  copyright: "© 2026, cursor-byok"
+  comments: "cursor-byok"
   version: "1.77.0"
 
 dev_mode:

@@ -74,16 +74,21 @@ release: 0.0.42
 
 ## Build & Release
 
+Installers are built by GitHub Actions on hosted macOS / Windows / Linux runners; no local build upload is required.
+
 ```bash
-# Build all platforms (macOS host only)
-task build:all
+# Trigger a three-platform build manually (or use "Run workflow" on GitHub)
+gh workflow run build.yml
 
-# Prepare release assets
-task release:prepare
-
-# Publish to GitHub Releases
-task release:github
+# Release: bump build/config.yml info.version and release-notes.md, then push a tag
+git tag v1.78.0
+git push origin v1.78.0
 ```
+
+- Pushing to `main` / `gateway` builds macOS (arm64 + amd64 DMG and updater tar.gz), Windows (ZIP and NSIS installer) and Linux (updater tar.gz plus deb/rpm), uploaded as workflow artifacts.
+- Pushing a `v*` tag publishes those artifacts to GitHub Releases together with a generated `update.json`. The tag must match `v` + `build/config.yml` `info.version`.
+- Build one platform locally with `task release:prepare:macos`, `task release:build:windows:amd64`, `task release:build:windows:installer`, `task release:build:linux:amd64` or `task release:build:linux:installers` (deb/rpm needs `nfpm` installed).
+- Tool versions (wails3, Node, yarn, nfpm, protoc plugins) are pinned at the top of `.github/workflows/build.yml`.
 
 ## License
 

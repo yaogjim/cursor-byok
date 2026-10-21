@@ -42,7 +42,6 @@ tasks:
     summary: 使用本机构建 Linux 程序
     internal: true
     deps:
-      - task: common:go:mod:tidy
       - task: common:build:frontend
         vars:
           BUILD_FLAGS:
@@ -153,6 +152,28 @@ tasks:
             ref: .OUTPUT
           BINARY_NAME:
             ref: .BINARY_NAME
+
+  package:installers:
+    summary: 生成 Linux .deb 与 .rpm 安装包（一次编译，两种格式）
+    internal: true
+    dir: '{{.PROJECT_ROOT}}'
+    preconditions:
+      - sh: '[ "{{OS}}" = "linux" ] || [ "{{OS}}" = "darwin" ]'
+        msg: "安装包任务仅支持在 Linux 或 macOS 上执行。"
+      - sh: command -v nfpm >/dev/null 2>&1
+        msg: "未检测到 nfpm，请先安装：go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.46.0"
+    env:
+      VERSION: '{{.APP_VERSION}}'
+      ARCH: amd64
+    cmds:
+      - task: build
+        vars:
+          ARCH: amd64
+          OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
+      - mkdir -p "{{.RELEASE_DIR}}"
+      - nfpm package -f build/linux/nfpm/nfpm.yaml -p deb -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.deb"
+      - nfpm package -f build/linux/nfpm/nfpm.yaml -p rpm -t "{{.RELEASE_DIR}}/{{.RELEASE_BASE_NAME}}-{{.APP_VERSION}}-linux-amd64.rpm"
+      - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}"
 
   create:archive:
     summary: 生成 Linux updater tar.gz 归档

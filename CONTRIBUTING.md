@@ -120,16 +120,21 @@ release: 0.0.42
 
 ## 构建与发布
 
+安装包由 GitHub Actions 在托管的 macOS / Windows / Linux 机器上自动构建，不需要在本机编译后再手工上传。
+
 ```bash
-# 构建全平台（仅 macOS 主机）
-task build:all
+# 手动触发一次三平台构建（也可以在 GitHub 页面点 "Run workflow"）
+gh workflow run build.yml
 
-# 准备发布资产
-task release:prepare
-
-# 发布到 GitHub Releases
-task release:github
+# 发布新版本：先改 build/config.yml 的 info.version 与 release-notes.md，再打 tag 推送
+git tag v1.78.0
+git push origin v1.78.0
 ```
+
+- push 到 `main` / `gateway`：自动构建 macOS（arm64、amd64 的 DMG 与 updater tar.gz）、Windows（ZIP 与 NSIS 安装包）、Linux（updater tar.gz 与 deb、rpm），产物保留在 Actions 的 Artifacts 中。
+- push `v*` tag：三平台构建通过后自动生成 `update.json` 并发布到 GitHub Releases；tag 必须与 `build/config.yml` 的版本一致（`v` + `info.version`），否则流水线直接失败。
+- 本地复现单个平台的产物：`task release:prepare:macos`（DMG + tar.gz）、`task release:build:windows:amd64` 与 `task release:build:windows:installer`、`task release:build:linux:amd64` 与 `task release:build:linux:installers`（deb/rpm 需要本机安装 `nfpm`）。
+- 流水线用到的工具版本（wails3、Node、yarn、nfpm、protoc 插件）集中写在 `.github/workflows/build.yml` 顶部；Linux 任务会用 `wails3 task common:update:build-assets` 校验 `build/` 下的生成资产与 `build/config.yml` 是否一致。
 
 ## 许可证
 

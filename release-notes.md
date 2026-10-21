@@ -1,6 +1,12 @@
-# Gateway-byok v1.77.0
+# cursor-byok v1.77.0
 
 本版本修复上下文压缩摘要达到输出上限后导致会话失败的问题，补齐已派发子任务结果的跨请求持久化恢复，并在同版本内追加固件更新：修复主对话摘要因 `gpt-6.1-sol` 不支持 `reasoning.effort=none` 而连续失败的问题，补齐两个缺失的 AgentService 控制接口转发。
+
+## 应用改名与三平台自动构建
+
+- 应用名由 `Gateway-byok` 改为 `cursor-byok`：包含窗口标题与托盘提示、macOS 应用包与可执行文件名、Windows 程序与安装包名、Linux 可执行文件与 desktop 项、deb/rpm 包名，以及 README、贡献指南和各文档中的表述。
+- 安装包改为由 GitHub Actions 在托管的 macOS / Windows / Linux 机器上自动构建：push 到 `main` / `gateway` 产出三平台产物，push `v*` tag 时额外生成 `update.json` 并发布 Release，不再依赖本机编译后手工上传。
+- 修复跨平台打包缺陷：Linux 打包引用的 desktop 文件路径与缺失的安装脚本、`nfpm` 中硬编码的版本与维护者、Linux 主机的 protoc 头文件搜索路径，以及干净检出（`gen/` 尚未生成）时 `go mod tidy` 抢先执行导致的构建失败。
 
 ## 主对话摘要思考等级修复（本次更新）
 
