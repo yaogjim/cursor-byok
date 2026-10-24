@@ -74,11 +74,17 @@ func estimateTextTokens(text string) int64 {
 	if trimmed == "" {
 		return 0
 	}
-	runeCount := utf8.RuneCountInString(trimmed)
-	if runeCount <= 0 {
-		return 0
+	// ASCII 保留原有四字符近似；非 ASCII 按 UTF-8 字节作保守估算，
+	// 避免中文、日文及 emoji 被当成每四字符一个 token，压缩后仍超窗口。
+	asciiBytes, nonASCIITokens := 0, int64(0)
+	for _, r := range trimmed {
+		if r < utf8.RuneSelf {
+			asciiBytes++
+		} else {
+			nonASCIITokens += int64((utf8.RuneLen(r) + 1) / 2)
+		}
 	}
-	estimated := int64((runeCount + 3) / 4)
+	estimated := int64((asciiBytes+3)/4) + nonASCIITokens
 	estimated += int64(strings.Count(trimmed, "\n"))
 	if estimated < 1 {
 		return 1

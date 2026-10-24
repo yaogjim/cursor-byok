@@ -16,10 +16,12 @@ func (config debugRecorderTestConfig) ObservabilityLogMode(context.Context) stri
 }
 
 type debugRecorderTestCapture struct {
-	captures []observability.Capture
+	captures     []observability.Capture
+	correlations []observability.Correlation
 }
 
-func (capture *debugRecorderTestCapture) Record(_ context.Context, value observability.Capture) bool {
+func (capture *debugRecorderTestCapture) Record(ctx context.Context, value observability.Capture) bool {
+	capture.correlations = append(capture.correlations, observability.CorrelationFromContext(ctx))
 	capture.captures = append(capture.captures, value)
 	return true
 }

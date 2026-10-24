@@ -24,6 +24,27 @@ func (reader failReader) Close() error {
 	return nil
 }
 
+func TestBuildHTTPStatusErrorKeepsOnlyKnownSummaryParameter(t *testing.T) {
+	for _, param := range []string{"reasoning.effort", "max_output_tokens", "max_completion_tokens", "sk-private-field"} {
+		err := buildHTTPStatusError("openai", &http.Response{StatusCode: 400,
+			Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"error":{"code":"unsupported_value","param":%q,"message":"invalid parameter"}}`, param)))})
+		var typed *HTTPStatusError
+		if !errors.As(err, &typed) {
+			t.Fatal(err)
+		}
+		want := param
+		if param == "sk-private-field" {
+			want = ""
+		}
+		if typed.Code != "unsupported_value" || typed.Param != want || typed.Body != "invalid parameter" {
+			t.Fatalf("摘要错误元数据丢失或保留未知字段: %+v", typed)
+		}
+		if strings.Contains(err.Error(), param) {
+			t.Fatal("错误文本不应增加上游参数原文")
+		}
+	}
+}
+
 func TestBuildHTTPStatusErrorIsTypedAndKeepsLegacyText(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: http.StatusBadGateway,

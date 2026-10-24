@@ -105,8 +105,9 @@ func TestUnifiedCaptureOmitsUnknownBidiRawBytes(t *testing.T) {
 }
 
 func TestHTTPTraceReplacesPrematureBackgroundCorrelation(t *testing.T) {
+	// 此用例检查原始帧本身的关联，完整模式保留该帧；基础模式已只保留后续摘要。
 	capture, err := observability.NewRecorder(t.TempDir(), observability.Settings{
-		Mode: observability.ModeBasic, RetentionDays: 7, MaxDiskMB: 64,
+		Mode: observability.ModeFull, RetentionDays: 7, MaxDiskMB: 64,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -72,9 +72,12 @@ func TestAppLogSinkSharesNormalBudgetWithTrace(t *testing.T) {
 	}) {
 		t.Fatal("Record must still accept the event for the caller")
 	}
-	traceStatus := waitForStatus(t, recorder, func(status Status) bool { return status.QuotaBlocked })
+	traceStatus := waitForStatus(t, recorder, func(status Status) bool { return status.DroppedEvents >= 1 })
 	if !traceStatus.Enabled {
-		t.Fatalf("trace quota block disabled the recorder: %+v", traceStatus)
+		t.Fatalf("info quota drop disabled the recorder: %+v", traceStatus)
+	}
+	if traceStatus.QuotaBlocked {
+		t.Fatalf("info quota drop froze capture: %+v", traceStatus)
 	}
 
 	// Diagnostics keeps its own reserve and still persists WARN/ERROR events.

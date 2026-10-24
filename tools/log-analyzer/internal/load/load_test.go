@@ -13,6 +13,38 @@ import (
 	"cursor-log-analyzer/internal/workspace"
 )
 
+func TestIntoWorkspaceReadsRotatedEventSegments(t *testing.T) {
+	root := t.TempDir()
+	files := []string{"events-20261021T030127.693286000Z-000001.jsonl", "events-20261021T031648.172894000Z-000002.jsonl", "events.jsonl"}
+	for index, name := range files {
+		payload, err := json.Marshal(map[string]any{
+			"schema_version": 2, "timestamp": "2026-10-21T03:00:00Z", "sequence": index + 1,
+			"app_session_id": "rotated-session", "trace_id": "trace-rotated", "layer": "runtime", "event": "request_finished",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(root, name), append(payload, '\n'))
+	}
+	// 未知辅助文件不得作为事件导入。
+	writeFile(t, filepath.Join(root, "events-index.jsonl"), []byte("not an event\n"))
+	ws := openWorkspace(t)
+	defer ws.CloseAndRemove()
+	if err := IntoWorkspace(context.Background(), ws, workspace.DatasetCurrent, []string{root}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	id := mustDatasetID(t, ws, workspace.DatasetCurrent)
+	stats, err := ws.Stats(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.EventCount != 3 || stats.WarningCount != 0 {
+		t.Fatalf("轮转历史必须完整可读，stats = %+v", stats)
+	}
+	ordered := queryStrings(t, ws.DBPath(), `SELECT sequence_key FROM events WHERE dataset_id = ? ORDER BY ingest_order`, id)
+	assertStrings(t, ordered, []string{"00000000000000000001", "00000000000000000002", "00000000000000000003"})
+}
+
 func TestIntoWorkspaceRejectsUnknownSchemaByDefault(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "events.jsonl")

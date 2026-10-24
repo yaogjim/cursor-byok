@@ -34,8 +34,47 @@ type logBudget struct {
 }
 
 func newLogBudget(root string, settings Settings) *logBudget {
-	budget := &logBudget{root: root}
+	budget := &logBudget{root: filepath.Clean(strings.TrimSpace(root))}
 	budget.update(settings)
+	registerLiveBudget(budget)
+	return budget
+}
+
+var (
+	liveBudgetsMu sync.Mutex
+	liveBudgets   = map[string]*logBudget{}
+)
+
+func registerLiveBudget(b *logBudget) {
+	if b == nil {
+		return
+	}
+	root := filepath.Clean(strings.TrimSpace(b.root))
+	if root == "" || root == "." {
+		return
+	}
+	liveBudgetsMu.Lock()
+	liveBudgets[root] = b
+	liveBudgetsMu.Unlock()
+}
+
+func unregisterLiveBudget(b *logBudget) {
+	if b == nil {
+		return
+	}
+	root := filepath.Clean(strings.TrimSpace(b.root))
+	liveBudgetsMu.Lock()
+	if liveBudgets[root] == b {
+		delete(liveBudgets, root)
+	}
+	liveBudgetsMu.Unlock()
+}
+
+func liveBudgetForRoot(root string) *logBudget {
+	root = filepath.Clean(strings.TrimSpace(root))
+	liveBudgetsMu.Lock()
+	budget := liveBudgets[root]
+	liveBudgetsMu.Unlock()
 	return budget
 }
 
@@ -365,6 +404,11 @@ func (b *logBudget) removeExpiredNormalLocked(excludeDir string) {
 			_ = os.RemoveAll(shard.path)
 		}
 	}
+	for _, fragment := range reclaimableEventFragments(b.root) {
+		if fragment.when.Before(cutoff) {
+			_ = os.Remove(fragment.path)
+		}
+	}
 }
 
 // reclaimCandidatesLocked collects closed traces and archived app shards in
@@ -374,6 +418,7 @@ func (b *logBudget) removeExpiredNormalLocked(excludeDir string) {
 // Diagnostics shards are intentionally excluded: the diagnostics partition
 // reclaims itself through its own rotating sink.
 func (b *logBudget) reclaimCandidatesLocked(excludeDir string) (fullCandidates []reclaimCandidate, mergedCandidates []reclaimCandidate) {
+	wholeSessions := make(map[string]struct{})
 	tracesRoot := filepath.Join(b.root, tracesDirname)
 	if entries, err := os.ReadDir(tracesRoot); err == nil {
 		for _, entry := range entries {
@@ -392,6 +437,7 @@ func (b *logBudget) reclaimCandidatesLocked(excludeDir string) (fullCandidates [
 			if sizeErr != nil {
 				continue
 			}
+			wholeSessions[path] = struct{}{}
 			candidate := reclaimCandidate{path: path, when: manifest.StartedAt, size: size}
 			if manifest.Mode == ModeFull {
 				fullCandidates = append(fullCandidates, candidate)
@@ -402,6 +448,13 @@ func (b *logBudget) reclaimCandidatesLocked(excludeDir string) (fullCandidates [
 	}
 	for _, shard := range reclaimableAppShards(b.root, b.activeAppPath) {
 		mergedCandidates = append(mergedCandidates, reclaimCandidate{path: shard.path, when: shard.when, size: shard.size})
+	}
+	for _, fragment := range reclaimableEventFragments(b.root) {
+		// 整个会话目录已入候选时，子片段不能再次扣减同一批字节。
+		if _, included := wholeSessions[filepath.Dir(fragment.path)]; included {
+			continue
+		}
+		mergedCandidates = append(mergedCandidates, fragment)
 	}
 	for _, candidates := range [][]reclaimCandidate{fullCandidates, mergedCandidates} {
 		sort.Slice(candidates, func(left int, right int) bool {
@@ -467,6 +520,44 @@ func reclaimableAppShards(root string, activePath string) []appShard {
 		shards = shards[:len(shards)-1]
 	}
 	return shards
+}
+
+func reclaimableEventFragments(root string) []reclaimCandidate {
+	tracesRoot := filepath.Join(root, tracesDirname)
+	entries, err := os.ReadDir(tracesRoot)
+	if err != nil {
+		return nil
+	}
+	fragments := make([]reclaimCandidate, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		dir := filepath.Join(tracesRoot, entry.Name())
+		manifest, readErr := readManifest(filepath.Join(dir, manifestFilename))
+		if readErr != nil || !knownManagedSession(entry.Name(), manifest) {
+			continue
+		}
+		files, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		for _, file := range files {
+			if !file.Type().IsRegular() || !isRotatedEventsName(file.Name()) {
+				continue
+			}
+			info, infoErr := file.Info()
+			if infoErr != nil {
+				continue
+			}
+			fragments = append(fragments, reclaimCandidate{
+				path: filepath.Join(dir, file.Name()),
+				when: info.ModTime().UTC(),
+				size: info.Size(),
+			})
+		}
+	}
+	return fragments
 }
 
 // normalUsageBytes counts everything in the logs root except the diagnostics

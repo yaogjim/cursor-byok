@@ -12,13 +12,364 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"cursor/gen/agentv1"
 	modeladapter "cursor/internal/backend/agent/model"
+	"cursor/internal/observability"
 	legacyruntime "cursor/internal/runtime"
 )
+
+func TestCompactionSummaryRecoveryBoundaries(t *testing.T) {
+	plan := &PendingCompaction{ExistingSummary: "保留已完成任务", CompactedTurns: []compactedTurnSummary{{UserText: "继续修复"}}}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		fallback bool
+	}{
+		{"摘要参数不兼容", &modeladapter.HTTPStatusError{StatusCode: 400, Code: "unsupported_value", Param: "reasoning.effort"}, true},
+		{"摘要输出额度不兼容", &modeladapter.HTTPStatusError{StatusCode: 400, Code: "unsupported_parameter", Param: "max_output_tokens"}, true},
+		{"服务暂时不可用", &modeladapter.HTTPStatusError{StatusCode: 503}, true},
+		{"摘要流截断", &modeladapter.StreamTruncatedError{}, true},
+		{"鉴权失败", &modeladapter.HTTPStatusError{StatusCode: 401}, false},
+		{"限流", &modeladapter.HTTPStatusError{StatusCode: 429}, false},
+		{"未知400", &modeladapter.HTTPStatusError{StatusCode: 400}, false},
+		{"模型不存在", &modeladapter.HTTPStatusError{StatusCode: 400, Body: `{"error":{"code":"unsupported_value","param":"model"}}`}, false},
+		{"安全拒绝", &modeladapter.ProviderTerminalStatusError{Status: "failed", Code: "content_filter"}, false},
+		{"本地存储失败", errors.New("write checkpoint failed"), false},
+		{"取消", context.Canceled, false},
+		{"父请求超时", context.DeadlineExceeded, false},
+		{"旧调用", errProviderLoopInterrupted, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveCompactionSummaryResult(plan, "不完整摘要不可使用", providerTerminalError{cause: tc.err})
+			if tc.fallback {
+				if err != nil || !strings.Contains(got, "保留已完成任务") || strings.Contains(got, "不完整摘要不可使用") {
+					t.Fatalf("安全回退失败: summary=%q err=%v", got, err)
+				}
+			} else if !errors.Is(err, tc.err) || got != "" {
+				t.Fatalf("不得吞掉非恢复错误: summary=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestCompactionUnicodeBudget(t *testing.T) {
+	for _, text := range []string{"中文会话压缩", "日本語の履歴", "한국어대화", "😀🚀🧪"} {
+		if got := estimateTextTokens(text); got < int64(len([]rune(text))) {
+			t.Errorf("非ASCII文本按四字符一token严重低估: %q = %d", text, got)
+		}
+	}
+	if got := estimateTextTokens("abcdefgh"); got != 2 {
+		t.Fatalf("ASCII估算不应改变: %d", got)
+	}
+	compiled := CompiledConversation{Messages: []modeladapter.Message{{Role: "user", Content: strings.Repeat("中", 12000)}}}
+	if err := validateCompactionCandidateBudget(compiled, &PendingCompaction{ContextWindowSize: 20000}); err == nil {
+		t.Fatal("压缩后保留的大段中文输入必须通过真实字节敏感的预算检查")
+	}
+}
+
+// 使用正式新回合入口、默认编译器与真实 HTTP adapter；仅模拟远端上游和客户端 ACK。
+// 覆盖摘要阶段故障、摘要成功后主请求故障，以及同会话下一回合无需改写内部状态即可恢复。
+func TestCompactionRecoveryThroughRunIntentHTTP(t *testing.T) {
+	for _, scenario := range []string{"summary_parameter", "summary_truncated", "summary_auth", "summary_unknown400", "post_summary_failure", "repeat_overflow"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, seed := testOverflowRecoveryStream(t)
+			appendCompletedToolHistory(t, service, seed)
+			service.compiler = NewPromptCompiler(service.projector, NewToolCatalog(), NewReminderInjector(), nil)
+			conversationID := seed.ConversationID
+			_, err := service.updateConversationMetaAndCheckpoint(seed, conversationID, func(c *ConversationFile) error {
+				c.TokenDetailsMaxTokens = 128000
+				c.TokenDetailsUsedTokens = 127000
+				c.AutoCompactionPending = true
+				c.AutoCompactionPromptTokens = 127000
+				if scenario == "repeat_overflow" {
+					c.TokenDetailsUsedTokens = 1000
+					clearConversationAutoCompactionState(c)
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var mu sync.Mutex
+			summaryCalls, mainCalls := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					w.WriteHeader(400)
+					return
+				}
+				reasoning, _ := body["reasoning"].(map[string]any)
+				isSummary := reasoning["effort"] == "low"
+				if !isSummary {
+					input, err := json.Marshal(body["input"])
+					if err != nil || !bytes.Contains(input, []byte("继续")) {
+						t.Error("续接主请求丢失了当前用户输入")
+					}
+				}
+				mu.Lock()
+				if isSummary {
+					summaryCalls++
+				} else {
+					mainCalls++
+				}
+				s, m := summaryCalls, mainCalls
+				mu.Unlock()
+				if isSummary && (body["tools"] != nil || body["max_output_tokens"] != float64(compactionSummaryOutputMaxTokens)) {
+					t.Errorf("摘要请求合同错误: tools=%v max_output_tokens=%v", body["tools"], body["max_output_tokens"])
+				}
+				if isSummary && s == 1 && scenario == "summary_parameter" {
+					w.WriteHeader(400)
+					fmt.Fprint(w, `{"error":{"code":"unsupported_value","param":"reasoning.effort","message":"private-provider-body"}}`)
+					return
+				}
+				if isSummary && s == 1 && scenario == "summary_auth" {
+					w.WriteHeader(401)
+					return
+				}
+				if isSummary && s == 1 && scenario == "summary_unknown400" {
+					w.WriteHeader(400)
+					return
+				}
+				if !isSummary && m <= 2 && scenario == "repeat_overflow" {
+					w.WriteHeader(400)
+					fmt.Fprint(w, `{"error":{"code":"context_length_exceeded","message":"context window exceeded"}}`)
+					return
+				}
+				if !isSummary && m == 1 && scenario == "post_summary_failure" {
+					w.WriteHeader(400)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if isSummary && s == 1 && scenario == "summary_truncated" {
+					fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"incomplete-secret-summary\"}\n\n")
+					return
+				}
+				text := "主回合已完成"
+				if isSummary {
+					text = "保留已完成的工具和任务"
+				}
+				fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\n", text)
+				fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-review\",\"model\":\"gpt-6.1-sol\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1000,\"output_tokens\":20}}}\n\n")
+			}))
+			defer server.Close()
+			service.provider = NewProviderGateway(compactionHTTPChannelResolver{channel: &legacyruntime.ResolvedChannel{
+				ID: "review-channel", Provider: "openai", Model: "gpt-6.1-sol", BaseURL: server.URL,
+				APIKey: "test-only", OpenAIEndpoint: "/v1/responses", ReasoningEffort: "high",
+			}})
+			for turn := 0; turn < 2; turn++ {
+				intent := InboundIntent{RequestID: fmt.Sprintf("review-%s-%d", scenario, turn), ConversationID: conversationID,
+					ModelID: seed.ModelID, ModelName: "gpt-6.1-sol", Mode: agentv1.AgentMode_AGENT_MODE_AGENT,
+					UserMessage: &agentv1.UserMessage{Text: "继续"}}
+				if err := service.handleRunIntent(intent); err != nil {
+					t.Fatal(err)
+				}
+				stream, ok := service.broker.Get(intent.RequestID)
+				if !ok {
+					t.Fatal("缺少新回合")
+				}
+				deadline := time.Now().Add(10 * time.Second)
+				for {
+					tryCompleteOverflowPreCompactHook(t, service, stream)
+					acknowledgeCheckpointBlobs(t, service, stream)
+					stream.mu.Lock()
+					status, pending := stream.Status, len(stream.PendingCheckpointBlobWrites)
+					stream.mu.Unlock()
+					if isTerminalStreamStatus(status) && pending == 0 {
+						want := StreamStatusCompleted
+						if turn == 0 && (scenario == "summary_auth" || scenario == "summary_unknown400" || scenario == "post_summary_failure" || scenario == "repeat_overflow") {
+							want = StreamStatusFailed
+						}
+						if status != want {
+							t.Fatalf("回合%d状态=%s，期望%s", turn, status, want)
+						}
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("新回合未收口: status=%s pending=%d", status, pending)
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+				stream.mu.Lock()
+				entries := cloneHistoryEntries(stream.CheckpointConversation.Entries)
+				stream.mu.Unlock()
+				if countHistoryKind(entries, "tool_call") != 1 || countHistoryKind(entries, "tool_result") != 1 {
+					t.Fatal("已执行工具丢失或被重复写入")
+				}
+				if turn == 1 && countHistoryKind(entries, "compacted_summary") != 1 {
+					t.Fatal("摘要应只提交一次，后续继续不能重复压缩旧历史")
+				}
+				for _, event := range readCheckpointTestEvents(t, service, stream) {
+					if summary := event.Message.GetInteractionUpdate().GetSummary(); summary != nil && strings.Contains(summary.GetSummary(), "incomplete-secret-summary") {
+						t.Fatal("截断摘要被发布")
+					}
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			wantSummaries, wantMain := 1, 2
+			if scenario == "summary_auth" || scenario == "summary_unknown400" {
+				wantSummaries, wantMain = 2, 1
+			}
+			if scenario == "repeat_overflow" {
+				wantMain = 3
+			}
+			if summaryCalls != wantSummaries || mainCalls != wantMain {
+				t.Fatalf("调用次数失控: summary=%d main=%d", summaryCalls, mainCalls)
+			}
+		})
+	}
+}
+
+func TestCompactionInFlightCancelRejectsLateFallback(t *testing.T) {
+	service, stream := testOverflowRecoveryStream(t)
+	started, finished := make(chan struct{}), make(chan struct{})
+	provider := &overflowRecoveryTestProvider{handler: func(ctx context.Context, _ ProviderRequest, _ func(modeladapter.ModelEvent) error) error {
+		close(started)
+		<-ctx.Done()
+		defer close(finished)
+		// 模拟取消后才到达的可回退错误，不能复活会话或提交摘要。
+		return &modeladapter.HTTPStatusError{StatusCode: 503}
+	}}
+	service.provider = provider
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: stream.CurrentProviderToken, Done: true, Err: testContextOverflowErr()}); err != nil {
+		t.Fatal(err)
+	}
+	completeOverflowPreCompactHook(t, service, stream)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("摘要未开始")
+	}
+	if err := service.handleCancelIntent(InboundIntent{RequestID: stream.RequestID, CancelReason: "user aborted"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("取消未传到摘要请求")
+	}
+	_, done, err := service.ensureStreamActor(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("取消后actor未退出")
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.Status != StreamStatusCanceled || countHistoryKind(stream.CheckpointConversation.Entries, "compacted_summary") != 0 || provider.requestCount() != 1 {
+		t.Fatalf("迟到摘要恢复了已取消回合: status=%s", stream.Status)
+	}
+}
+
+func TestCompactionLocalBudgetFallbackResumes(t *testing.T) {
+	service, stream := testOverflowRecoveryStream(t)
+	appendCompletedToolHistory(t, service, stream)
+	provider := &overflowRecoveryTestProvider{handler: func(_ context.Context, req ProviderRequest, sink func(modeladapter.ModelEvent) error) error {
+		if strings.Contains(req.CompileSummary, "compaction") {
+			t.Error("超预算的摘要不应访问上游")
+		}
+		if err := sink(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "恢复完成"}); err != nil {
+			return err
+		}
+		return sink(overflowUsageFinished(1000, 10))
+	}}
+	service.provider = provider
+	failedCall := stream.CurrentModelCallID
+	if err := service.handleProviderDoneEvent(stream, &streamProviderEvent{Token: stream.CurrentProviderToken, Done: true, Err: testContextOverflowErr()}); err != nil {
+		t.Fatal(err)
+	}
+	stream.mu.Lock()
+	for _, pending := range stream.PendingExecs {
+		if pending.ExecKind == "execute_hook_pre_compact" {
+			stream.mu.Unlock()
+			markExecCompleted(stream, pending)
+			if err := service.handlePreCompactTerminal(stream, pending.ProviderPass, strings.Repeat("保留完整归档", 4000)); err != nil {
+				t.Fatal(err)
+			}
+			stream.mu.Lock()
+			break
+		}
+	}
+	stream.mu.Unlock()
+	waitForOverflowRecoveryResume(t, service, stream, failedCall, provider)
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.Status != StreamStatusCompleted || countHistoryKind(stream.CheckpointConversation.Entries, "compacted_summary") != 1 || provider.requestCount() != 1 {
+		t.Fatalf("本地回退后未完成原回合: status=%s", stream.Status)
+	}
+}
+
+func TestCompactionSummaryFallbackRecordsSafeWarning(t *testing.T) {
+	service, stream := testOverflowRecoveryStream(t)
+	capture := &debugRecorderTestCapture{}
+	service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+	defer service.debug.Close()
+	service.recordCompactionSummaryFallback(context.Background(), stream, "summary-call", "summary_input_budget")
+	if len(capture.captures) != 1 {
+		t.Fatalf("回退诊断条数=%d", len(capture.captures))
+	}
+	event := capture.captures[0].Event
+	if event.Event != "compaction_summary_fallback" || event.SemanticOutcome != observability.OutcomeDegraded || event.Status != "degraded" || event.Fields["reason"] != "summary_input_budget" {
+		t.Fatalf("回退必须留下基础模式警告: %+v", event)
+	}
+}
+
+func TestCompactionSummaryRecordsSafeLifecycle(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			service, stream := testOverflowRecoveryStream(t)
+			capture := &debugRecorderTestCapture{}
+			service.debug = newDebugRecorder(t.TempDir(), service.broker, debugRecorderTestConfig("basic"), capture)
+			t.Cleanup(service.debug.Close)
+			service.provider = &overflowRecoveryTestProvider{handler: func(_ context.Context, _ ProviderRequest, onEvent func(modeladapter.ModelEvent) error) error {
+				if fail {
+					return &modeladapter.HTTPStatusError{StatusCode: 400, Body: "sensitive-summary-body"}
+				}
+				return onEvent(modeladapter.ModelEvent{Kind: modeladapter.ModelEventKindTextDelta, Text: "sensitive-summary-body"})
+			}}
+			_, err := service.generateCompactionSummaryAttempt(context.Background(), stream, &PendingCompaction{Trigger: "auto"}, stream.CurrentModelCallID,
+				[]modeladapter.Message{{Role: "user", Content: "sensitive-input-body"}}, compactionSummaryOutputMaxTokens)
+			if (err != nil) != fail {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var events []observability.Event
+			for _, c := range capture.captures {
+				if strings.HasPrefix(c.Event.Event, "compaction_summary_") {
+					events = append(events, c.Event)
+				}
+			}
+			if len(events) != 2 {
+				t.Fatalf("摘要开始和结果必须有独立结构化记录，got %d", len(events))
+			}
+			if events[0].Event != "compaction_summary_started" {
+				t.Fatal(events[0].Event)
+			}
+			last := events[1]
+			correlation := capture.correlations[len(capture.correlations)-1]
+			if correlation.ModelCallID != stream.CurrentModelCallID || correlation.ConversationID != stream.ConversationID {
+				t.Fatal("缺少摘要调用关联")
+			}
+			if fail && (last.Event != "compaction_summary_failed" || last.ErrorCategory == "" || fmt.Sprint(last.Fields["http_status"]) != "400") {
+				t.Fatalf("缺少摘要错误分类: %+v", last)
+			}
+			if !fail && last.Event != "compaction_summary_completed" {
+				t.Fatal(last.Event)
+			}
+			encoded, _ := json.Marshal(capture.captures)
+			if bytes.Contains(encoded, []byte("sensitive-")) {
+				t.Fatal("摘要观测泄露正文")
+			}
+		})
+	}
+}
 
 func TestCompactionFailureDoesNotPersistProviderResponseBody(t *testing.T) {
 	secret := "provider response contains sk-secret and user prompt"
@@ -1091,7 +1442,7 @@ func TestProductionCompactionPlanFreezesHomologousPrefix(t *testing.T) {
 	}
 }
 
-func TestPrepareCompactionSummaryFrozenPrefixRejectsOverBudgetWithoutTrim(t *testing.T) {
+func TestPrepareCompactionSummaryFrozenPrefixFallsBackWithoutTrim(t *testing.T) {
 	service := &Service{}
 	oldest := compactedTurnSummary{UserText: strings.Repeat("oldest-turn-content ", 800)}
 	middle := compactedTurnSummary{UserText: strings.Repeat("middle-turn-content ", 800)}
@@ -1106,12 +1457,8 @@ func TestPrepareCompactionSummaryFrozenPrefixRejectsOverBudgetWithoutTrim(t *tes
 	}
 	originalTurns := append([]compactedTurnSummary(nil), plan.CompactedTurns...)
 	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
-	if err == nil || useFallback || len(messages) != 0 {
-		t.Fatalf("冻结前缀超预算应明确停止, messages=%#v fallback=%v err=%v", messages, useFallback, err)
-	}
-	var terminal compactionTerminalError
-	if !errors.As(err, &terminal) || terminal.TerminalCode() != compactionOverflowTerminalCode {
-		t.Fatalf("超预算错误 = %v, want compaction overflow terminal", err)
+	if err != nil || !useFallback || len(messages) != 0 {
+		t.Fatalf("冻结前缀超预算应改用本地摘要，不能裁掉源回合或发出超限请求: messages=%#v fallback=%v err=%v", messages, useFallback, err)
 	}
 	if !reflect.DeepEqual(plan.CompactedTurns, originalTurns) {
 		t.Fatal("超预算准备改写了冻结回合")

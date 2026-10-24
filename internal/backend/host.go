@@ -596,6 +596,12 @@ func observabilitySummaryValue(value any) (string, bool) {
 }
 
 func logObservabilityEvent(event observability.Event) {
+	// 普通链路事件只保留结构化记录，避免与 app 日志重复消耗同一配额。
+	// 应用启动等独立 Info 日志不经过此入口，告警和错误仍输出可读摘要。
+	severity := strings.ToLower(strings.TrimSpace(event.Severity))
+	if severity != observability.SeverityWarning && severity != observability.SeverityError {
+		return
+	}
 	args := []any{
 		"layer", event.Layer,
 		"event", event.Event,

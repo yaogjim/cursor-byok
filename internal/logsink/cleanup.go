@@ -5,13 +5,115 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
 
 type CleanupStats struct {
-	Removed int
-	Kept    int
+	Removed    int
+	Kept       int
+	FreedBytes int64
+}
+
+// ManagedShardCleanupConfig removes historical rotating shards while keeping
+// the newest files and any caller-protected paths. Symlinks and non-regular
+// entries are never followed or deleted.
+type ManagedShardCleanupConfig struct {
+	Prefix     string
+	Extension  string
+	KeepNewest int
+	Protected  map[string]struct{}
+}
+
+func CleanupManagedShards(dir string, config ManagedShardCleanupConfig) (CleanupStats, error) {
+	var stats CleanupStats
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return stats, nil
+	}
+	prefix := strings.TrimSpace(config.Prefix)
+	if prefix == "" {
+		return stats, nil
+	}
+	extension := normalizeExtension(config.Extension)
+	keepNewest := config.KeepNewest
+	if keepNewest < 0 {
+		keepNewest = 0
+	}
+	info, err := os.Lstat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return stats, nil
+	}
+	if err != nil {
+		return stats, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return stats, errors.New("拒绝清理非真实日志目录")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return stats, nil
+		}
+		return stats, err
+	}
+	type shard struct {
+		path    string
+		name    string
+		size    int64
+		modTime time.Time
+	}
+	shards := make([]shard, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, prefix+"-") || !strings.HasSuffix(name, extension) {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		shards = append(shards, shard{
+			path:    filepath.Join(dir, name),
+			name:    name,
+			size:    info.Size(),
+			modTime: info.ModTime(),
+		})
+	}
+	sort.Slice(shards, func(left int, right int) bool {
+		if shards[left].modTime.Equal(shards[right].modTime) {
+			return shards[left].name < shards[right].name
+		}
+		return shards[left].modTime.Before(shards[right].modTime)
+	})
+	keepFrom := len(shards) - keepNewest
+	if keepFrom < 0 {
+		keepFrom = 0
+	}
+	for index, item := range shards {
+		if index >= keepFrom || isProtectedPath(config.Protected, item.path) {
+			stats.Kept++
+			continue
+		}
+		if removeErr := os.Remove(item.path); removeErr != nil && !os.IsNotExist(removeErr) {
+			return stats, removeErr
+		}
+		stats.Removed++
+		stats.FreedBytes += item.size
+	}
+	return stats, nil
+}
+
+func isProtectedPath(protected map[string]struct{}, path string) bool {
+	if len(protected) == 0 {
+		return false
+	}
+	_, ok := protected[filepath.Clean(path)]
+	return ok
 }
 
 type DebugCleanupConfig struct {

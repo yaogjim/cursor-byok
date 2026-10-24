@@ -38,6 +38,7 @@ func newControllerWithBudget(root string, settings Settings, humanSink HumanSink
 		budget = newLogBudget(root, normalized)
 	} else {
 		budget.update(normalized)
+		registerLiveBudget(budget)
 	}
 	var recorder *Recorder
 	var err error
@@ -185,7 +186,9 @@ func (controller *Controller) Close() error {
 	controller.mu.Unlock()
 	err := closeRecorderBounded(recorder, recorderCloseTimeout)
 	controller.waitAsyncCloses(recorderCloseTimeout)
-	return errors.Join(err, appLog.close())
+	closeErr := errors.Join(err, appLog.close())
+	unregisterLiveBudget(controller.budget)
+	return closeErr
 }
 
 func storageSettingsEqual(left Settings, right Settings) bool {

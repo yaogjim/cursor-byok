@@ -29,7 +29,7 @@ var (
 		"header_at": {}, "first_byte_at": {}, "last_byte_at": {}, "body_end_at": {},
 		"first_event_at": {}, "last_effective_content_at": {}, "first_effective_content_at": {},
 		"close_cause": {}, "partial_boundary": {}, "transport_outcome": {},
-		"completion_marker": {}, "http_status": {},
+		"completion_marker": {}, "http_status": {}, "repeated_count": {}, "phase": {},
 		"artifact_model_call_id": {}, "fallback_channel_index": {}, "payload_bytes": {},
 		"failure_class": {}, "failure_origin": {}, "reschedule_decision": {}, "reschedule_suppressed_reason": {},
 		"attempts_used": {}, "attempts_remaining": {}, "last_event_sequence": {}, "last_event_at": {},

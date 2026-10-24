@@ -397,7 +397,17 @@ func (service *Service) runPendingCompaction(stream *ActiveStream, token uint64,
 		return
 	}
 	summaryText, err := service.generateCompactionSummary(ctx, stream, plan, modelCallID)
+	if interrupted := providerLoopInterruptErr(ctx, stream, plan.SummaryModelCallID); interrupted != nil {
+		err = interrupted
+	}
+	fallbackReason := compactionSummaryFallbackReason(err)
+	if err == nil && strings.TrimSpace(summaryText) == "" {
+		fallbackReason = "empty_summary"
+	}
 	summaryText, err = resolveCompactionSummaryResult(plan, summaryText, err)
+	if err == nil && fallbackReason != "" {
+		service.recordCompactionSummaryFallback(ctx, stream, plan.SummaryModelCallID, fallbackReason)
+	}
 	if postErr := service.postStreamCommandWait(stream, streamCommand{
 		Kind: streamCommandCompactionEvent,
 		Compaction: &streamCompactionEvent{
@@ -1983,9 +1993,43 @@ func isCompactionSummaryOutputLimit(err error) bool {
 			strings.EqualFold(strings.TrimSpace(terminal.Code), "max_output_tokens"))
 }
 
+func compactionSummaryFallbackReason(err error) string {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errProviderLoopInterrupted) {
+		return ""
+	}
+	if modeladapter.IsContextOverflowError(err) {
+		return "context_overflow"
+	}
+	if isCompactionSummaryOutputLimit(err) {
+		return "output_limit"
+	}
+	// 摘要没有工具副作用，也尚未对客户端发布文本。仅对明确的远端故障
+	// 使用本地历史生成替代摘要；不能吞掉鉴权、限流、安全拒绝和本地写入错误。
+	var httpErr *modeladapter.HTTPStatusError
+	if errors.As(err, &httpErr) && httpErr != nil {
+		if httpErr.StatusCode >= 500 && httpErr.StatusCode <= 599 {
+			return "upstream_unavailable"
+		}
+		if httpErr.StatusCode == 400 {
+			switch httpErr.Code {
+			case "unsupported_value", "unsupported_parameter", "invalid_parameter":
+				switch httpErr.Param {
+				case "reasoning.effort", "reasoning_effort", "max_tokens", "max_completion_tokens", "max_output_tokens":
+					return "summary_parameter_unsupported"
+				}
+			}
+		}
+		return ""
+	}
+	if modeladapter.IsRecoverableTruncatedStreamError(err) {
+		return "stream_truncated"
+	}
+	return ""
+}
+
 func resolveCompactionSummaryResult(plan *PendingCompaction, summaryText string, err error) (string, error) {
 	if err != nil {
-		if modeladapter.IsContextOverflowError(err) || isCompactionSummaryOutputLimit(err) {
+		if compactionSummaryFallbackReason(err) != "" {
 			return buildFallbackCompactionSummary(plan), nil
 		}
 		return "", err
@@ -2008,14 +2052,9 @@ func (service *Service) prepareCompactionSummaryMessages(plan *PendingCompaction
 		budget := compactionBudgetTokens(plan.ContextWindowSize)
 		estimated := estimateModelMessagesTokens(messages) + compactionSummaryOutputMaxTokens
 		if budget > 0 && estimated > budget {
-			return nil, false, compactionTerminalError{
-				code: compactionOverflowTerminalCode,
-				message: fmt.Sprintf(
-					"compaction summary request exceeds context budget (estimated=%d budget=%d)",
-					estimated,
-					budget,
-				),
-			}
+			// 保持冻结源及归档边界不变，不发送必定超限的摘要请求。
+			// 本地替代摘要仍需通过 applyCompactionPlan 的重编译预算检查。
+			return nil, true, nil
 		}
 		if len(messages) == 0 {
 			return nil, true, nil
@@ -2094,11 +2133,15 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 	if service == nil || stream == nil || plan == nil {
 		return "", nil
 	}
+	if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
+		return "", err
+	}
 	messages, useFallback, err := service.prepareCompactionSummaryMessages(plan)
 	if err != nil {
 		return "", err
 	}
 	if useFallback || len(messages) == 0 {
+		service.recordCompactionSummaryFallback(ctx, stream, modelCallID, "summary_input_budget")
 		return buildFallbackCompactionSummary(plan), nil
 	}
 	if err := providerLoopInterruptErr(ctx, stream, modelCallID); err != nil {
@@ -2146,7 +2189,19 @@ func (service *Service) generateCompactionSummary(ctx context.Context, stream *A
 	return text, err
 }
 
-func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, stream *ActiveStream, plan *PendingCompaction, modelCallID string, messages []modeladapter.Message, maxTokens int) (string, error) {
+func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, stream *ActiveStream, plan *PendingCompaction, modelCallID string, messages []modeladapter.Message, maxTokens int) (summary string, resultErr error) {
+	started := time.Now()
+	service.recordCompactionSummaryAttempt(ctx, stream, plan, modelCallID, "started", 0, nil)
+	defer func() {
+		status := "completed"
+		if resultErr != nil {
+			status = "failed"
+			if errors.Is(resultErr, errProviderLoopInterrupted) || errors.Is(resultErr, context.Canceled) {
+				status = "canceled"
+			}
+		}
+		service.recordCompactionSummaryAttempt(ctx, stream, plan, modelCallID, status, time.Since(started).Milliseconds(), resultErr)
+	}()
 	accumulated := ""
 	usage := turnUsageSnapshot{}
 	var outputLimitErr error
@@ -2229,6 +2284,30 @@ func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, st
 		return "", fmt.Errorf("record compaction provider usage: %w", err)
 	}
 	return strings.TrimSpace(accumulated), nil
+}
+
+// 摘要单独标记阶段与结果，仅保留关联和状态元数据，不记录输入、摘要或上游错误正文。
+func (service *Service) recordCompactionSummaryAttempt(ctx context.Context, stream *ActiveStream, plan *PendingCompaction, modelCallID, status string, durationMS int64, err error) {
+	fields := map[string]any{
+		"model_call_id": modelCallID, "phase": "compaction_summary", "status": status,
+		"reason": plan.Trigger, "duration_ms": durationMS,
+	}
+	if status == "failed" {
+		fields["status"] = "error"
+		fields["error_category"] = "compaction_summary_failed"
+		var httpErr *modeladapter.HTTPStatusError
+		if errors.As(err, &httpErr) {
+			fields["http_status"] = httpErr.StatusCode
+		}
+	}
+	service.debug.LogRuntime(ctx, stream.RequestID, stream.ConversationID, "compaction_summary_"+status, fields)
+}
+
+func (service *Service) recordCompactionSummaryFallback(ctx context.Context, stream *ActiveStream, modelCallID, reason string) {
+	service.debug.LogRuntime(ctx, stream.RequestID, stream.ConversationID, "compaction_summary_fallback", map[string]any{
+		"model_call_id": modelCallID, "phase": "compaction_summary", "status": "degraded",
+		"reason": reason,
+	})
 }
 
 func existingConversationSummaryText(conversation *ConversationFile) string {

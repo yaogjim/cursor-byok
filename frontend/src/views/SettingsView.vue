@@ -77,6 +77,9 @@ async function handleOpenLogsDirectory() {
 
 function formatBytes(value) {
   const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
   if (bytes < 1024 * 1024) {
     return `${Math.round(bytes / 1024)} KB`;
   }
@@ -86,7 +89,7 @@ function formatBytes(value) {
 async function handleClearClosedSessions() {
   const confirmed = await showModal({
     title: "清理日志",
-    content: "只会删除已关闭的采集 session，不会删除当前活跃 session 和普通运行日志。",
+    content: "将删除已关闭的采集会话、历史应用与诊断日志，以及活跃会话已轮转的日志。保留正在写入的文件和会话数据。",
     confirmText: "确认清理",
   });
   if (!confirmed) {
@@ -99,7 +102,7 @@ async function handleClearClosedSessions() {
   }
   await showModal({
     title: "清理完成",
-    content: `已删除 ${result.removedSessions} 个 session，释放 ${formatBytes(result.freedBytes)}。`,
+    content: `已释放 ${formatBytes(result.freedBytes)}，删除 ${result.removedSessions} 个已关闭的采集会话及可清理的历史日志。`,
     showCancel: false,
   });
 }

@@ -7,6 +7,53 @@
 
 ## 一、待完成的内容
 
+### 日志配额恢复与上下文压缩续接复核（2026-10-23；源码与本地链路已验证）
+
+整合负责人：主会话。前轮起始工作树干净，本轮二次评审沿用前轮未提交改动；修改尚未提交或发布。用户导出只读，未操作真实服务和会话。最终桌面/实机验收仍待授权候选安装。以下前轮记录保留，当前补充修复与证据见本节末尾“二次评审”。
+
+**现场证据与结论**
+
+- `/Users/yaogj/Downloads/logs 3` 约 229 MiB，其中 diagnostics 162 MiB、traces 42 MiB、app 25 MiB。导出不是截图中完整的 2 GiB 现场，不能把导出大小当现场配额用量。
+- app 中 63,096 条普通「链路事件」合计 25,542,991 字节，表明结构化事件又被投影成可读日志，重复占用同一预算。diagnostics 中 `tls_handshake_failed/client_unknown_ca` 104,102 条，为明确的重复网络噪声。基础 traces 还包含大量 `llm_response_chunk`、`send_message` 和双向帧。
+- 原清理只处理 closed traces；当前 open 会话及应用/诊断历史占额时，删除 0 session / 0KB 可以反复出现。新实现保留当前写入路径、清理可回收历史，且在同一预算锁下与轮转同步；未知 schema、坏 manifest、链接目录/文件保守跳过或报错。
+- 主 trace 同一会话在 UTC 03:06:00、03:14:08、03:14:34 三次模型调用出现 HTTP 400 并结束。本轮没有重新访问真实上游，导出仍缺具体400错误体；本文件历史调查已记录 sol 拒绝 `reasoning.effort=none` 的最小真实对照。当前代码已有摘要最低合法等级 `low` 修复，本轮通过真实适配器+模拟HTTP上游重新验证，不将历史实验冒充本轮真实回放。
+
+**实施与安全边界**
+
+- 基础模式省略逐块/逐帧/心跳记录；普通链路 info 不再写两份。核心请求结束、模型摘要/终态和告警错误仍保留。仅无会话/模型/工具关联的同类证书未知CA噪声按目标聚合；每30秒输出重复计数，正常关闭补写尾批，最多128个聚合键；完整模式不聚合。突发退出前尚未刷出的计数仍可能缺失，不能视为持久审计计数。
+- events 超10 MiB轮转；预算内优先回收可清理历史，核心错误在普通分区不足时可封存当前分片后继续写，诊断分区仍独立。app只有单分片时也可在持锁关闭后回收自己的封存文件，避免「保留最新」使它永久停写。未知数据或物理磁盘耗尽仍可能阻止写入，状态不得伪报正常。
+- 手动清理覆盖 closed traces、历史 app/diagnostics、已知 open traces 的封存片段；当前 events/manifest及会话业务数据保留。旧版本遗留 open 会话的未轮转 events 不自动强删；需要明确安全生命周期证据才可扩展。清理即使没有 traces 目录也能处理 app 历史。分析器补齐轮转分片读取，按既有时间/序号排序，拒绝 `events-index.jsonl` 等辅助名。
+- 压缩新增独立 `compaction_summary_started/completed/failed/canceled` 记录，保留阶段、关联、耗时和HTTP状态，不记录输入、摘要或上游错误正文。新增同会话失败后继续的永久回归，验证新回合不继承失败/恢复一次性状态、摘要一次发布、工具不重复、摘要low后主回合恢复high；未通过吞掉400或无限重试规避问题。
+- 清理提示与结果文本同步四语种，小于1KiB按字节显示，避免实际释放字节被四舍五入成0KB。
+
+**本轮验证与适用条件**
+
+- 已实际观察红→绿：分析器轮转历史缺失（只读到1/3条）、普通链路info重复写app、摘要生命周期记录缺失、无traces清理失效、链接目录误删、TLS噪声100条未聚合、目录和分片双重扣减配额、仅一个app分片永久配额阻塞。上述均为临时目录/模拟接口，未改原始材料。
+- `go test ./... -count=1 -timeout=300s` 最终退出0，输出 `/tmp/cursor-byok-log-recovery-final-tests.log`。首次全量曾失败：关联测试在basic中要求持久化双向原始帧，与新的采集合同冲突；将该原始帧关联测试改用full，既有basic上下文关联测试保留，随后全量通过。旧失败记录为 `/tmp/cursor-byok-log-recovery-tests.log`，不抹去失败证据。
+- 最后app/配额修改后 `go test -race ./internal/observability ./internal/logsink ./internal/logger -count=1 -timeout=120s` 通过；压缩/host未变实现的 `go test -race ./internal/backend/forwarder ./internal/backend -run 'TestCompaction|TestLogObservabilityEvent' -count=1 -timeout=180s` 通过。
+- `go vet ./internal/observability ./internal/logsink ./internal/backend/forwarder ./internal/backend` 退出0；独立 `tools/log-analyzer` 模块 `go test ./... -count=1 -timeout=120s` 全部通过；`npm run build` 和 `npm run test:config-projection` 通过；`git diff --check` 通过。macOS链接目标版本、前端包尺寸和Node localstorage警告保留，不等于相应旧系统已实测。
+- 初轮独立评审指出分片读取、未知格式保护、活跃文件保护与状态恢复缺口，已修正并补测；续接评审工具返回503，没有成功返回最终复审结论，不把其状态记为通过。主会话补查并修复配额双计数和单app分片阻塞，承担整合责任。
+
+**二次评审：压缩中、压缩后及下一回合的恢复（2026-10-23）**
+
+- 已确认前轮“400后继续”测试用 `Prewarm` 后手工设置运行状态，不能证明正常新回合入口。已删除该简化分支，保留 sol 参数兼容专项；用 `TestCompactionRecoveryThroughRunIntentHTTP` 经正式 `handleRunIntent`、默认编译器、真实 OpenAI HTTP 适配器和模拟上游完成六种双回合验证：摘要专用参数400、摘要流截断、摘要401、摘要未知400、摘要成功后主请求400、溢出恢复后再次溢出。每种都验证下一回合恢复、当前“继续”输入进入主请求、摘要只提交一次及已完成工具不丢失/不重复。客户端 hook/存储确认仍为测试替身，不能称真实 Cursor 验收。
+- 修复冻结摘要输入超预算就直接终止的问题：改用已有本地摘要生成器，冻结前缀和归档边界不变，提交前仍重编译检查预算。不能通过裁掉未完成工具、当前输入或伪造摘要成功绕过。补 `TestCompactionLocalBudgetFallbackResumes`，明确断言不发超预算摘要请求、原回合续接成功。
+- 摘要专用参数400（错误码及 reasoning/输出额度参数均命中白名单）、5xx及可恢复流截断允许使用本地历史生成替代摘要，不发布截断内容；增加 `compaction_summary_fallback` 降级记录，仅有原因枚举及关联元数据。真实适配器测试还发现错误体会先被整理成 message，原 `param` 丢失，已在 `HTTPStatusError` 保留白名单参数名而不保留任意原文。401/403、429、安全拒绝、未知400、本地错误及取消继续失败收口；普通主请求的副作用/重试保护不变。
+- 修复所有语言都按四字符一个 token 的严重低估：ASCII不变，非ASCII按UTF-8字节作更保守估算。该值仍非模型精确分词，会使部分中文大输入提前压缩或拒绝；无法缩减的当前输入超窗口仍保留原历史并明确失败，不宣称任意长度都能恢复。压缩前用量不能直接当压缩后真实用量，一次溢出恢复上限不解除。
+- 摘要开始前和结束后检查取消、终态及当前调用身份；新增 `TestCompactionInFlightCancelRejectsLateFallback`，在摘要执行中取消后返回503，验证迟到错误不能提交摘要、复活会话或发起主请求。降级诊断、错误分类边界及预算都有永久回归。
+- 独立复核已成功返回，未发现候选新增的确定性阻断缺陷；指出的旧测试覆盖误导已替换，并补取消/重复溢出链路。关于无code/无param及422兼容错误，继续保守失败，未把缺少可信分类的错误扩大成允许回退；真实提供商差异仍待现场验收。关于basic过滤，已核查 `TestRecorderBasicSkipsHighFrequencyInfoKeepsCore` 保留生命周期，`TestAppLogQuotaReclaimsItsOnlySealedShard` 覆盖单分片恢复；这两项并非未覆盖的缺陷。独立复核未证明所有导入/客户端requestID行为，相关推测不作为已确认根因。
+
+本轮执行证据（仅隔离本地/模拟HTTP）：
+
+- `/tmp/cursor-byok-compaction-review-red.log`：新增参数400、503、流截断回退、非ASCII估算、冻结前缀预算回归先失败；修复后定向通过。`/tmp/cursor-byok-compaction-entry.log` 还捕获真实适配器丢失param导致回退未触发，修复元数据后通过。
+- `go test ./... -count=1 -timeout=300s` 退出0：`/tmp/cursor-byok-review-final-all.log`。随后只缩小一个超预算测试夹具并新增“继续”输入断言，未再修改产品源码；受影响用例按下述重复race重新验证。
+- `go test -race ./internal/backend/forwarder ./internal/backend/agent/model -run 'TestCompaction|TestPrepareCompaction|TestApplyCompaction|TestOverflow|TestBuildHTTPStatusError' -count=1 -timeout=180s` 退出0：`/tmp/cursor-byok-review-race-final.log`。首次race在超大hook夹具上超过测试助手5秒等待，未报告数据竞争；把夹具从50,000组缩至仍超预算的4,000组后通过，失败记录保留为 `/tmp/cursor-byok-review-race.log`。
+- 最终入口、取消、本地预算回退和降级诊断四项再以 `go test -race ./internal/backend/forwarder -run 'TestCompactionRecoveryThroughRunIntentHTTP|TestCompactionLocalBudgetFallbackResumes|TestCompactionInFlightCancelRejectsLateFallback|TestCompactionSummaryFallbackRecordsSafeWarning' -count=2 -timeout=120s` 退出0：`/tmp/cursor-byok-review-final-entry-race.log`。
+- 日志三包 `go test -race ./internal/observability ./internal/logsink ./internal/logger -count=1 -timeout=120s` 退出0：`/tmp/cursor-byok-review-log-race.log`；独立 `tools/log-analyzer` 目录 `go test ./... -count=1 -timeout=120s` 退出0：`/tmp/cursor-byok-review-analyzer.log`。
+- `go vet ./internal/backend/forwarder ./internal/backend/agent/model ./internal/observability ./internal/logsink ./internal/backend`、`gofmt`与差异检查通过。前端本轮未变更，沿用前轮证据，不声称重跑构建。
+
+下一步：获准后构建/安装本次候选，在用户真实 Cursor 长会话验证摘要后继续和满额清理；本轮没有部署、重启或发布，不能称现场已彻底验收。
+
 ### 解除上游关联、分支重构与版本重编号（2026-10-20；local-only，未推送）
 
 **已完成本地分支重构、全仓版本重编号与上游署名清理；远程尚未同步。** 负责人：主会话。用户确认的边界：先在本地完成并验证，推送前再确认；删除原上游与中转镜像两个远程；版本按 `0.0.50` 之后统一改为 `1.x`（旧 tag 保留，另建 `v1.77.0`）；`cli` 保持 `0.0.49.6` 不参与新序列；删除作者入口与外部帮助链接；`LICENSE` 署名改为 `yaogjim`。

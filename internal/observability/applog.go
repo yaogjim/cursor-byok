@@ -70,9 +70,27 @@ func (sink *appLogSink) write(payload []byte) (int, error) {
 	// Keep the same eventReserveBytes headroom as trace writes so ordinary app
 	// log bytes can never consume the room reserved for session metadata.
 	if !budget.admitNormalLocked(int64(len(payload)), eventReserveBytes, "") {
-		budget.mu.Unlock()
-		sink.markDroppedLocked("app_log_quota_exceeded")
-		return len(payload), nil
+		if path := sink.writer.CurrentPath(); path != "" {
+			if err := sink.writer.Close(); err != nil {
+				budget.mu.Unlock()
+				sink.markDroppedLocked("app_log_write_failed")
+				return 0, err
+			}
+			budget.activeAppPath = ""
+			// 普通回收会保护最新分片；这里已持有写入锁并封存自己的句柄，
+			// 可回收该文件，否则仅有一个分片时会永久停写。
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				budget.mu.Unlock()
+				sink.markDroppedLocked("app_log_write_failed")
+				return 0, err
+			}
+			budget.usageKnown = false
+		}
+		if !budget.admitNormalLocked(int64(len(payload)), eventReserveBytes, "") {
+			budget.mu.Unlock()
+			sink.markDroppedLocked("app_log_quota_exceeded")
+			return len(payload), nil
+		}
 	}
 	result, err := sink.writer.Append(payload)
 	if result.Path != "" {
@@ -86,6 +104,9 @@ func (sink *appLogSink) write(payload []byte) (int, error) {
 	if err != nil {
 		sink.markDroppedLocked("app_log_write_failed")
 		return int(result.Length), err
+	}
+	if sink.lastErr == "app_log_quota_exceeded" {
+		sink.lastErr = ""
 	}
 	return int(result.Length), nil
 }

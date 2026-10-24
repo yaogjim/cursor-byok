@@ -28,7 +28,8 @@ type Recorder struct {
 	// diagQueueDropped counts WARN/ERROR captures rejected at queue admission,
 	// as opposed to diagnostic sink write failures. DiagnosticDropped reports
 	// the sum of both.
-	diagQueueDropped atomic.Uint64
+	diagQueueDropped    atomic.Uint64
+	repeatedDiagnostics map[string]*repeatedDiagnostic
 
 	mu        sync.RWMutex
 	closed    bool
@@ -150,6 +151,18 @@ func (recorder *Recorder) Record(ctx context.Context, capture Capture) (accepted
 		recorder.mu.Unlock()
 		return false
 	}
+	if recorder.settings.Mode == ModeBasic && isHighFrequencyBasicEvent(capture.Event) {
+		recorder.mu.Unlock()
+		return true
+	}
+	noiseKey := ""
+	if recorder.settings.Mode == ModeBasic {
+		noiseKey = networkDiagnosticKey(capture.Event)
+		if recorder.suppressRepeatedDiagnosticLocked(noiseKey) {
+			recorder.mu.Unlock()
+			return true
+		}
+	}
 	diagnostic := isDiagnosticEvent(capture.Event)
 	limit := cap(recorder.queue)
 	if !diagnostic {
@@ -158,6 +171,7 @@ func (recorder *Recorder) Record(ctx context.Context, capture Capture) (accepted
 	if len(recorder.queue) < limit {
 		select {
 		case recorder.queue <- capture:
+			recorder.trackDiagnosticLocked(noiseKey, capture.Event)
 			recorder.mu.Unlock()
 			return true
 		default:
@@ -227,9 +241,21 @@ func (recorder *Recorder) Close() error {
 func (recorder *Recorder) run() {
 	defer close(recorder.done)
 	var sequence uint64
-	for capture := range recorder.queue {
-		sequence = recorder.safeWriteCapture(sequence+1, capture)
+	ticker := time.NewTicker(networkDiagnosticWindow)
+	defer ticker.Stop()
+consume:
+	for {
+		select {
+		case capture, open := <-recorder.queue:
+			if !open {
+				break consume
+			}
+			sequence = recorder.safeWriteCapture(sequence+1, capture)
+		case <-ticker.C:
+			sequence = recorder.flushRepeatedDiagnostics(sequence)
+		}
 	}
+	sequence = recorder.flushRepeatedDiagnostics(sequence)
 	dropped := recorder.dropped.Load()
 	recorder.writer.updateDropped(dropped)
 	if err := recorder.writer.close("closed"); err != nil {
@@ -284,10 +310,18 @@ func (recorder *Recorder) writeCapture(sequence uint64, capture Capture) uint64 
 		category := "event_write_failed"
 		if errors.Is(err, errSessionQuotaExceeded) {
 			category = "event_quota_exceeded"
+			if !isDiagnosticEvent(event) {
+				dropped := recorder.dropped.Add(1)
+				recorder.mu.Lock()
+				recorder.status.DroppedEvents = dropped
+				recorder.mu.Unlock()
+				return sequence
+			}
 		}
 		recorder.setTraceDegraded(category)
 		return sequence
 	}
+	recorder.clearQuotaBlock()
 	recorder.writer.updateDropped(event.DroppedEvents)
 	if recorder.humanSink != nil {
 		recorder.humanSink(event)
@@ -348,6 +382,26 @@ func isDiagnosticEvent(event Event) bool {
 	}
 }
 
+func isHighFrequencyBasicEvent(event Event) bool {
+	if isDiagnosticEvent(event) {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(event.Event))
+	switch name {
+	case "send_message", "bidi.raw", "bidi.decoded", "heartbeat", "client_heartbeat":
+		return true
+	}
+	if strings.HasSuffix(name, "_heartbeat") || strings.HasSuffix(name, "_chunk") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(event.Layer)) {
+	case "bidi_raw", "bidi_decoded":
+		return true
+	default:
+		return false
+	}
+}
+
 // markDiagnosticQueueDroppedLocked records a WARN/ERROR rejected at queue
 // admission. Callers must hold recorder.mu. DiagnosticDropped is published as
 // the sink drop count plus this queue-drop count, so incrementing the published
@@ -381,6 +435,9 @@ func (recorder *Recorder) setPayloadDegraded(category string) {
 	recorder.mu.Lock()
 	recorder.status.PayloadDegraded = true
 	recorder.status.LastError = strings.TrimSpace(category)
+	if category == "payload_quota_exceeded" {
+		recorder.status.QuotaBlocked = true
+	}
 	dropped := recorder.status.DroppedEvents
 	recorder.mu.Unlock()
 	recorder.writer.markDegraded(dropped, category)
@@ -404,6 +461,27 @@ func (recorder *Recorder) setTraceDegraded(category string) {
 	}
 	recorder.mu.Unlock()
 	recorder.writer.markDegraded(recorder.dropped.Load(), category)
+}
+
+func (recorder *Recorder) clearQuotaBlock() {
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.clearQuotaBlockLocked()
+}
+
+func (recorder *Recorder) clearQuotaBlockLocked() {
+	recorder.status.QuotaBlocked = false
+	switch recorder.status.LastError {
+	case "event_quota_exceeded", "payload_quota_exceeded":
+		recorder.status.LastError = ""
+	}
+}
+
+func (recorder *Recorder) clearTraceQuotaBlock() {
+	recorder.clearQuotaBlock()
 }
 
 func (recorder *Recorder) setDroppedLocked(dropped uint64) {

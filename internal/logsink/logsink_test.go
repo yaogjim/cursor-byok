@@ -321,3 +321,54 @@ func TestCleanupPayloadDirectoryPreservesPackFiles(t *testing.T) {
 		t.Fatalf("expected only payload pack to remain, got %v", entries)
 	}
 }
+
+func TestCleanupManagedShardsKeepsNewestAndSkipsSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	oldPath := filepath.Join(dir, "app-20260101T000000.000000000Z-000001.log")
+	newPath := filepath.Join(dir, "app-20260102T000000.000000000Z-000002.log")
+	protectedPath := filepath.Join(dir, "app-20251201T000000.000000000Z-000050.log")
+	for _, path := range []string{oldPath, newPath, protectedPath} {
+		if err := os.WriteFile(path, []byte("shard\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	if err := os.Chtimes(oldPath, now.Add(-2*time.Hour), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("age old shard: %v", err)
+	}
+	if err := os.Chtimes(protectedPath, now.Add(-time.Hour), now.Add(-time.Hour)); err != nil {
+		t.Fatalf("age protected shard: %v", err)
+	}
+	if err := os.Chtimes(newPath, now, now); err != nil {
+		t.Fatalf("touch newest shard: %v", err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.log")
+	if err := os.WriteFile(target, []byte("outside\n"), 0o600); err != nil {
+		t.Fatalf("write symlink target: %v", err)
+	}
+	link := filepath.Join(dir, "app-20251101T000000.000000000Z-000099.log")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	stats, err := CleanupManagedShards(dir, ManagedShardCleanupConfig{
+		Prefix:     "app",
+		Extension:  ".log",
+		KeepNewest: 1,
+		Protected:  map[string]struct{}{protectedPath: {}},
+	})
+	if err != nil {
+		t.Fatalf("CleanupManagedShards: %v", err)
+	}
+	if stats.Removed != 1 || stats.Kept != 2 || stats.FreedBytes <= 0 {
+		t.Fatalf("cleanup stats = %+v, want removed=1 kept=2 freed>0", stats)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("oldest shard still exists: %v", err)
+	}
+	for _, path := range []string{newPath, protectedPath, link, target} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("protected path removed %s: %v", path, err)
+		}
+	}
+}

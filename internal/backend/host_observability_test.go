@@ -77,8 +77,8 @@ func TestLogObservabilityEventUsesEventSeverity(t *testing.T) {
 		Severity: observability.SeverityInfo,
 		Status:   "completed",
 	})
-	if !strings.Contains(buf.String(), "level=INFO") {
-		t.Fatalf("success observability log = %q", buf.String())
+	if buf.Len() != 0 {
+		t.Fatalf("普通链路事件已保存在结构化日志，不应再次写入应用日志: %q", buf.String())
 	}
 	buf.Reset()
 	logObservabilityEvent(observability.Event{

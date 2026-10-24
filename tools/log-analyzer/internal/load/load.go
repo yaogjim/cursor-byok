@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -638,6 +639,9 @@ func allowlistedFields(input map[string]any) map[string]any {
 	return sanitize.AllowlistedFields(input)
 }
 
+// 与客户端轮转命名保持兼容，仅识别事件分片，排除未来的辅助索引文件。
+var rotatedEventName = regexp.MustCompile(`^events-\d{8}T\d{6}\.\d{9}Z-\d{6}\.jsonl$`)
+
 func inputFileKind(path string) (workspace.FileKind, bool) {
 	name := filepath.Base(path)
 	switch name {
@@ -648,6 +652,9 @@ func inputFileKind(path string) (workspace.FileKind, bool) {
 	case "app.log":
 		return workspace.FileAppLog, true
 	default:
+		if rotatedEventName.MatchString(name) {
+			return workspace.FileEvents, true
+		}
 		if strings.HasPrefix(name, "app-") && strings.HasSuffix(name, ".log") {
 			return workspace.FileAppLog, true
 		}

@@ -7,23 +7,34 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"cursor/internal/logsink"
 )
 
 const (
-	manifestFilename  = "manifest.json"
-	eventsFilename    = "events.jsonl"
-	payloadsDirname   = "payloads"
-	tracesDirname     = "traces"
-	eventReserveBytes = int64(1024 * 1024)
+	manifestFilename     = "manifest.json"
+	eventsFilename       = "events.jsonl"
+	payloadsDirname      = "payloads"
+	tracesDirname        = "traces"
+	eventReserveBytes    = int64(1024 * 1024)
+	eventSegmentMaxBytes = int64(10 << 20)
+	rotatedEventsPrefix  = "events-"
+	rotatedEventsExt     = ".jsonl"
 	// minimumSupportedSchemaVersion mirrors the log-analyzer contract, which
 	// reads schema versions 1..SchemaVersion. Older but known manifests must
 	// stay reclaimable; only truly unknown versions are protected.
 	minimumSupportedSchemaVersion = 1
 )
+
+// rotatedEventsName matches the fragment names this process writes:
+// events-<RFC3339 nano UTC>-<6-digit seq>.jsonl. Broader names such as
+// events-index.jsonl are left untouched.
+var rotatedEventsName = regexp.MustCompile(`^events-\d{8}T\d{6}\.\d{9}Z-\d{6}\.jsonl$`)
 
 var errSessionQuotaExceeded = errors.New("observability session quota exceeded")
 
@@ -36,6 +47,7 @@ type sessionWriter struct {
 	eventsFile *os.File
 	manifest   Manifest
 	payloadSeq uint64
+	rotateSeq  uint64
 	budget     *logBudget
 	// manifestWriteError records the last failed manifest persistence in memory
 	// only. The on-disk manifest is left untouched on failure; status readers
@@ -146,11 +158,21 @@ func (writer *sessionWriter) appendEvent(event Event) error {
 	payload = append(payload, '\n')
 	writer.budget.mu.Lock()
 	defer writer.budget.mu.Unlock()
-	// Ordinary event bytes leave the same eventReserveBytes headroom that
-	// payload writes already keep, so the normal partition can never be filled
-	// to the point where the terminal manifest rewrite is denied.
-	if !writer.budget.admitNormalLocked(int64(len(payload)), eventReserveBytes, writer.dir) {
-		return errSessionQuotaExceeded
+	incoming := int64(len(payload))
+	if writer.eventsSizeLocked() > 0 && writer.eventsSizeLocked()+incoming > eventSegmentMaxBytes {
+		if err := writer.rotateEventsLocked(); err != nil {
+			return err
+		}
+	}
+	if !writer.budget.admitNormalLocked(incoming, eventReserveBytes, writer.dir) {
+		if isDiagnosticEvent(event) && writer.eventsSizeLocked() > 0 {
+			if err := writer.rotateEventsLocked(); err != nil {
+				return err
+			}
+		}
+		if !writer.budget.admitNormalLocked(incoming, eventReserveBytes, writer.dir) {
+			return errSessionQuotaExceeded
+		}
 	}
 	written, err := writer.eventsFile.Write(payload)
 	if written > 0 {
@@ -158,6 +180,111 @@ func (writer *sessionWriter) appendEvent(event Event) error {
 		writer.budget.usageKnown = true
 	}
 	return err
+}
+
+func (writer *sessionWriter) eventsSizeLocked() int64 {
+	if writer == nil || writer.eventsFile == nil {
+		return 0
+	}
+	info, err := writer.eventsFile.Stat()
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+func (writer *sessionWriter) rotateEventsLocked() error {
+	if writer == nil || writer.eventsFile == nil {
+		return nil
+	}
+	if err := writer.eventsFile.Close(); err != nil {
+		writer.eventsFile = nil
+		return err
+	}
+	writer.eventsFile = nil
+	src := filepath.Join(writer.dir, eventsFilename)
+	reopen := func() error {
+		file, err := os.OpenFile(src, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := file.Chmod(0o600); err != nil {
+			_ = file.Close()
+			return err
+		}
+		writer.eventsFile = file
+		return nil
+	}
+	dst, err := writer.reserveRotatedEventsPath()
+	if err != nil {
+		_ = reopen()
+		return err
+	}
+	if err := os.Rename(src, dst); err != nil {
+		_ = os.Remove(dst)
+		_ = reopen()
+		return err
+	}
+	file, err := os.OpenFile(src, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		_ = reopen()
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = os.Remove(src)
+		return err
+	}
+	writer.eventsFile = file
+	writer.budget.usageKnown = false
+	return nil
+}
+
+func (writer *sessionWriter) reserveRotatedEventsPath() (string, error) {
+	reserve := func() (string, error) {
+		writer.rotateSeq++
+		name := fmt.Sprintf("%s%s-%06d%s", rotatedEventsPrefix, time.Now().UTC().Format("20060102T150405.000000000Z"), writer.rotateSeq, rotatedEventsExt)
+		dst := filepath.Join(writer.dir, name)
+		file, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(dst)
+			return "", err
+		}
+		return dst, nil
+	}
+	dst, err := reserve()
+	if err == nil || !os.IsExist(err) {
+		return dst, err
+	}
+	// One retry is enough: rotateSeq is monotonic per writer, so a leftover
+	// name from an earlier process is the only realistic collision.
+	return reserve()
+}
+
+func isRotatedEventsName(name string) bool {
+	return rotatedEventsName.MatchString(name)
+}
+
+// knownManagedSession reports whether a directory is a session this build is
+// allowed to manage. Unknown schema versions, unknown modes, identity mismatch
+// and unreadable manifests are protected so a future format is never deleted.
+func knownManagedSession(dirName string, manifest Manifest) bool {
+	if manifest.SchemaVersion < minimumSupportedSchemaVersion || manifest.SchemaVersion > SchemaVersion {
+		return false
+	}
+	if manifest.Mode != ModeFull && manifest.Mode != ModeBasic {
+		return false
+	}
+	if strings.TrimSpace(manifest.AppSessionID) != dirName {
+		return false
+	}
+	if manifest.StartedAt.IsZero() {
+		return false
+	}
+	return true
 }
 
 func (writer *sessionWriter) appendPayload(payload Payload, timestamp time.Time) (string, error) {
@@ -383,19 +510,7 @@ func reclaimableManifest(dirName string, manifest Manifest) bool {
 	if manifest.Status != "closed" {
 		return false
 	}
-	if manifest.SchemaVersion < minimumSupportedSchemaVersion || manifest.SchemaVersion > SchemaVersion {
-		return false
-	}
-	if manifest.Mode != ModeFull && manifest.Mode != ModeBasic {
-		return false
-	}
-	if strings.TrimSpace(manifest.AppSessionID) != dirName {
-		return false
-	}
-	if manifest.StartedAt.IsZero() {
-		return false
-	}
-	return true
+	return knownManagedSession(dirName, manifest)
 }
 
 type CleanupResult struct {
@@ -418,22 +533,40 @@ func CleanupAllClosedSessions(root string) (CleanupResult, error) {
 	cleanupAllClosedSessionsMu.Lock()
 	defer cleanupAllClosedSessionsMu.Unlock()
 
+	// 清理与轮转、预算回收共享锁，避免删掉尚在重命名的预留分片。
+	budget := liveBudgetForRoot(root)
+	if budget != nil {
+		budget.mu.Lock()
+		defer budget.mu.Unlock()
+		defer func() { budget.usageKnown = false }()
+	}
+	for _, dir := range []string{root, filepath.Join(root, tracesDirname)} {
+		info, statErr := os.Lstat(dir)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return CleanupResult{}, statErr
+		}
+		if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return CleanupResult{}, fmt.Errorf("拒绝清理非真实日志目录: %s", dir)
+		}
+	}
 	tracesRoot := filepath.Join(root, tracesDirname)
 	entries, err := os.ReadDir(tracesRoot)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return CleanupResult{}, nil
-		}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return CleanupResult{}, err
 	}
 	var result CleanupResult
+	remaining := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		path := filepath.Join(tracesRoot, entry.Name())
 		manifest, readErr := readManifest(filepath.Join(path, manifestFilename))
-		if readErr != nil || !reclaimableManifest(entry.Name(), manifest) {
+		if readErr != nil || !knownManagedSession(entry.Name(), manifest) {
+			continue
+		}
+		if !reclaimableManifest(entry.Name(), manifest) {
+			remaining = append(remaining, path)
 			continue
 		}
 		size, sizeErr := directorySize(path)
@@ -446,7 +579,77 @@ func CleanupAllClosedSessions(root string) (CleanupResult, error) {
 		result.RemovedSessions++
 		result.FreedBytes += size
 	}
+	for _, path := range remaining {
+		freed, fragErr := removeRotatedEventFragments(path)
+		if fragErr != nil {
+			return result, fragErr
+		}
+		result.FreedBytes += freed
+	}
+
+	appKeepNewest := 1
+	diagKeepNewest := 1
+	var appProtected map[string]struct{}
+	var diagProtected map[string]struct{}
+	if budget != nil {
+		appKeepNewest = 0
+		diagKeepNewest = 0
+		if budget.activeAppPath != "" && budget.activeAppPath != "." {
+			appProtected = map[string]struct{}{budget.activeAppPath: {}}
+		}
+		diagProtected = budget.peerActiveDiagnosticPathsLocked(nil)
+	}
+	appStats, appErr := logsink.CleanupManagedShards(filepath.Join(root, appLogDirname), logsink.ManagedShardCleanupConfig{
+		Prefix:     appLogPrefix,
+		Extension:  ".log",
+		KeepNewest: appKeepNewest,
+		Protected:  appProtected,
+	})
+	if appErr != nil {
+		return result, appErr
+	}
+	result.FreedBytes += appStats.FreedBytes
+	diagStats, diagErr := logsink.CleanupManagedShards(filepath.Join(root, diagnosticsDirname), logsink.ManagedShardCleanupConfig{
+		Prefix:     diagnosticsPrefix,
+		Extension:  diagnosticsExtension,
+		KeepNewest: diagKeepNewest,
+		Protected:  diagProtected,
+	})
+	if diagErr != nil {
+		return result, diagErr
+	}
+	result.FreedBytes += diagStats.FreedBytes
+	if budget != nil {
+		budget.usageKnown = false
+	}
 	return result, nil
+}
+
+func removeRotatedEventFragments(sessionDir string) (int64, error) {
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var freed int64
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !isRotatedEventsName(entry.Name()) {
+			continue
+		}
+		info, infoErr := entry.Info()
+		size := int64(0)
+		if infoErr == nil {
+			size = info.Size()
+		}
+		path := filepath.Join(sessionDir, entry.Name())
+		if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
+			return freed, removeErr
+		}
+		freed += size
+	}
+	return freed, nil
 }
 
 func CleanupClosedSessions(root string, settings Settings) error {

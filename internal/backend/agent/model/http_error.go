@@ -48,6 +48,7 @@ type HTTPStatusError struct {
 	Attempt           int
 	MaxAttempts       int
 	Code              string
+	Param             string // 仅保留可识别的摘要参数名，不携带任意上游字段值。
 	Body              string
 	BodyReadError     error
 	BodySummaryType   string
@@ -368,6 +369,17 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 	}
 	rawBody := string(limitedBody)
 	statusError.Code = extractJSONErrorCode(rawBody)
+	var payload struct {
+		Error struct {
+			Param string `json:"param"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(rawBody), &payload) == nil {
+		switch payload.Error.Param {
+		case "reasoning.effort", "reasoning_effort", "max_tokens", "max_completion_tokens", "max_output_tokens":
+			statusError.Param = payload.Error.Param
+		}
+	}
 	statusError.Body, statusError.BodySummaryType = summarizeProviderErrorBody(rawBody)
 	return statusError
 }
