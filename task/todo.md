@@ -13,7 +13,8 @@
 - [completed] `analyzer-compatibility`：独立分析器识别严格命名的轮转分片并保持事件顺序，保留重复计数和摘要阶段字段。
 - [completed] `compaction-recovery`：二次评审确认并修复冻结摘要输入超预算直接终止、摘要专用参数400/5xx/截断无本地回退、非ASCII预算严重低估；保留既有 sol 最低合法等级修复。HTTP错误保留白名单参数元数据，回退有脱敏降级诊断；取消、未知400、鉴权、限流、安全拒绝、本地错误和一次溢出恢复上限不放宽。替换前轮手工设置流状态的“继续”测试，正式新回合入口+默认编译器+真实HTTP适配器覆盖六种双回合场景，另补摘要进行中取消及本地超预算回退；当前输入、原始工具记录及追加式历史均受断言保护。
 - [completed] `local-verification`：本轮根模块全量、压缩/模型错误定向race、最终入口恢复重复race（count=2）、日志三包race、受影响包vet、独立分析器全量、diff检查通过。前端未新增修改，沿用前轮build/config-projection记录，不宣称本轮重跑。首次新增回归红、HTTP元数据丢失红及测试夹具导致race超时均保留在 `docs/process.md`，最终复验通过。独立复核已成功返回，主会话完成意见处置和整合。
-- [pending] `installed-candidate-acceptance`：尚未打包安装本次候选或在真实 Cursor 目标会话验收。需获准后安装候选，验证配额压力下清理能释放空间且继续写入，并在同聊天触发摘要后继续；受保护的未知文件、旧 open 会话原始文件和物理磁盘耗尽不以强删绕过。
+- [completed] `commit-and-release`：已随 `e137d7f` 提交并推送 `main`（38 文件，+2183/−219），按 minor 规则升至 1.78.0，同步七处平台元数据与发布说明。push `main` 只触发三平台编译（run 40069807072 全绿，发布 job 因 `refs/tags/v` 条件 skipped）；随后补建注释 tag `v1.78.0` 并推送，run 40077097865 四 job 全绿，Release v1.78.0 已发布 9 个安装包加 `update.json`，`update.json` 版本为 1.78.0。
+- [pending] `installed-candidate-acceptance`：尚未安装已发布的 1.78.0 安装包或在真实 Cursor 目标会话验收。需获准后安装候选，验证配额压力下清理能释放空间且继续写入，并在同聊天触发摘要后继续；受保护的未知文件、旧 open 会话原始文件和物理磁盘耗尽不以强删绕过。
 
 ### 自动更新偶发 unexpected EOF 的重试与续传加固（2026-10-21；local-verified）
 

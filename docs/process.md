@@ -7,6 +7,15 @@
 
 ## 一、待完成的内容
 
+### 1.78.0 提交、三平台构建与 Release 发布（2026-10-24；已发布）
+
+整合负责人：主会话。用户要求 push 后同时发布；`/ship` 命令本身禁止创建 tag/Release，workflow 的发布 job 又只在 `v*` tag 上运行，因此 push `main` 仅产出编译产物。已在确认两点后补建 tag 发布。
+
+- 提交 `e137d7f`（38 文件，+2183/−219）推送 `main`：run 40069807072 的 macOS/Windows/Linux 三个 job success，发布 job skipped。本地 `task build` 产出 `bin/macos-arm64.dmg`。
+- 注释 tag `v1.78.0` 指向 `e137d7f`，推送后 run 40077097865 的四个 job（含“发布 GitHub Release”）全部 success。
+- Release v1.78.0 已发布且非草稿/非预发布，共 10 个资产：macOS arm64/amd64 的 DMG 与 tar.gz、Windows zip 与 `-installer.exe`、Linux tar.gz/deb/rpm，以及 `update.json`（版本 1.78.0）。发布说明取自仓库 `release-notes.md`。
+- 未验证范围：未安装已发布安装包，真实 Cursor 长会话的摘要后续接与满额清理实机验收仍待授权；本记录不把 CI 全绿提升为现场验收。
+
 ### 日志配额恢复与上下文压缩续接复核（2026-10-23；源码与本地链路已验证）
 
 整合负责人：主会话。前轮起始工作树干净，本轮二次评审沿用前轮未提交改动；修改尚未提交或发布。用户导出只读，未操作真实服务和会话。最终桌面/实机验收仍待授权候选安装。以下前轮记录保留，当前补充修复与证据见本节末尾“二次评审”。
