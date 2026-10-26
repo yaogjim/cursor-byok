@@ -7,6 +7,12 @@
 
 ## 一、待完成的内容
 
+### 1.79.0 提交、三平台构建与 Release 发布（2026-10-26；已发布）
+
+整合负责人：主会话。用户指令 `/ship minor --build --push --release`：同一回合重复自动压缩加固按 minor 规则从 1.78.0 升至 1.79.0（`build/config.yml`），同步七处平台元数据（`wails3 task common:update:build-assets`）与 `release-notes.md`。macOS 宿主平台 `task build` 成功（`bin/macos-arm64.dmg` 注入 1.79.0），`release:notes` 生成与 `git diff --check` 通过；Windows/Linux 未本机编译，由远端 CI 构建。提交 `cfecad4`（25 文件，+2905/-71）推送 main 后打注释 tag `v1.79.0` 并推送。
+
+tag 触发的 run `40255418051` 首次 macOS job 在 amd64 DMG 生成时 `hdiutil: create failed - Resource busy`（arm64 DMG 数秒前刚成功，属 GitHub macOS runner 瞬态磁盘映像竞争，非代码问题；Windows/Linux 首次即过）。`gh run rerun --failed` 重跑该 job 后四个 job（macOS/Windows/Linux 安装包、发布 GitHub Release）全部成功，Release `v1.79.0` 正式发布（非草稿，2026-10-26T02:01:42Z），含 10 个资产：macOS arm64/amd64 DMG 与 tar.gz、Windows zip 与 installer.exe、Linux tar.gz/deb/rpm 及 update.json。main push 的 run `40255376105` 同步完成三平台构建。实机候选安装验收仍待另行授权（`same-turn-installed-acceptance`）。
+
 ### 同一用户回合重复自动压缩（2026-10-24；默认路径本地验证完成，原生固定输入域设计受阻）
 
 整合负责人：主会话。源码基线 `7f4ae85`，当前为未提交工作树。本轮仅修改本地源码、测试和记录；不安装、打包、重启、提交或推送，不修改真实配置、原始日志和会话。计划为用户批准的 `同回合重复压缩修复_78487422.plan.md`；活动状态以 `task/todo.md` 为准。
