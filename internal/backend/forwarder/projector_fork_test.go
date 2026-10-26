@@ -2268,7 +2268,6 @@ func TestNativeCheckpointLocalCompactionRootKeepsUnclippedPreservedToolResult(t 
 		newAssistantTextEntry(1, "request-1", "first answer", "", ""),
 		compactionTestUserEntry(t, 2, "request-2", "current question", "message-2"),
 		tailReadToolCallEntry(t, 2, "request-2", "call-1", "model-call-1"),
-		tailReadToolResultEntry(t, 2, "request-2", "call-1", "model-call-1", "/tmp/large.txt", largeResult),
 	})
 	plan, err := (&Service{}).buildAutoCompactionPlanFromHistory(&compactionPlan{
 		Trigger:                   "auto",
@@ -2281,6 +2280,14 @@ func TestNativeCheckpointLocalCompactionRootKeepsUnclippedPreservedToolResult(t 
 	if err != nil || plan == nil {
 		t.Fatalf("buildAutoCompactionPlanFromHistory() error = %v plan=%#v", err, plan)
 	}
+	// 在工具完成前冻结旧回合边界，当前输入仍在连续尾中，不需独立重放。
+	// 带非空固定引用的新域由专门的拒绝回归覆盖，不能借本例放宽原生门禁。
+	if plan.Layout == nil || len(plan.Layout.PinnedInputs) != 0 {
+		t.Fatal("未构造出原生可表示的空固定引用边界")
+	}
+	appendEntriesInPlace(conversation, []HistoryEntry{
+		tailReadToolResultEntry(t, 2, "request-2", "call-1", "model-call-1", "/tmp/large.txt", largeResult),
+	})
 	if err := applyCompactionToConversation(conversation, newPendingCompaction(plan), "current progress summary"); err != nil {
 		t.Fatalf("applyCompactionToConversation() error = %v", err)
 	}

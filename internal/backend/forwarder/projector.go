@@ -93,6 +93,9 @@ func (projector *HistoryProjector) ProjectPromptReplay(conversation *Conversatio
 	if conversation == nil {
 		return nil, nil
 	}
+	if err := validateCompactionLayouts(conversation.Entries); err != nil {
+		return nil, err
+	}
 	entries := replayablePromptProjectionEntries(conversation.Entries)
 	messages := make([]projectedReplayMessage, 0, len(entries)*2)
 	seenToolCalls := make(map[string]struct{})
@@ -366,6 +369,14 @@ func projectCompactedPromptEntries(entries []HistoryEntry, rewritePreservedToolR
 		preservedIndexes = autoCompactionPreservedEntryIndexes(prefix, compactionPayload.CurrentTurnSeq, compactionPayload.CurrentRequestID, latestToolCallID)
 	}
 	tailStart := continuousTailStartIndex(entries, compactionIndex, preservedIndexes)
+	layout, pinnedIndexes, err := validateCompactionLayout(entries, compactionIndex, compactionPayload)
+	if err != nil {
+		// 有错误返回值的生产入口负责返回具体错误；内部纯投影不得退回旧边界。
+		return nil
+	}
+	if layout != nil {
+		tailStart = layout.TailStart
+	}
 	filtered := make([]HistoryEntry, 0, len(entries))
 	for index := 0; index < compactionIndex; index++ {
 		if !isPromptReplayEntryKind(entries[index].Kind) {
@@ -373,6 +384,11 @@ func projectCompactedPromptEntries(entries []HistoryEntry, rewritePreservedToolR
 		}
 	}
 	filtered = append(filtered, entries[compactionIndex])
+	for index := 0; index < tailStart; index++ {
+		if _, pinned := pinnedIndexes[index]; pinned {
+			filtered = append(filtered, entries[index])
+		}
+	}
 	for index := tailStart; index < compactionIndex; index++ {
 		if !isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
 			continue
@@ -995,6 +1011,9 @@ func lastNativeSummarySource(conversation *ConversationFile) (runtimeStateEntryP
 func nativeCheckpointMessages(conversation *ConversationFile) ([]modeladapter.Message, error) {
 	if conversation == nil {
 		return nil, nil
+	}
+	if err := validateCompactionLayouts(conversation.Entries); err != nil {
+		return nil, err
 	}
 	if conversationHasLocalCompaction(conversation) {
 		if err := validateAllLocalCompactionSources(conversation); err != nil {
@@ -2748,31 +2767,32 @@ const (
 var nativeCheckpointMaxSafeInteger = big.NewInt(9007199254740991)
 
 var (
-	errNativeCheckpointNilGraph            = errors.New("native checkpoint: nil blob graph")
-	errNativeCheckpointUnknownRole         = errors.New("native checkpoint: unknown message role")
-	errNativeCheckpointSystemRole          = errors.New("native checkpoint: system role not supported")
-	errNativeCheckpointReasoningMetadata   = errors.New("native checkpoint: reasoning metadata not supported")
-	errNativeCheckpointContentParts        = errors.New("native checkpoint: content parts not supported")
-	errNativeCheckpointProviderMetadata    = errors.New("native checkpoint: provider item metadata not supported")
-	errNativeCheckpointToolCallIdentity    = errors.New("native checkpoint: tool call missing id or name")
-	errNativeCheckpointToolCallType        = errors.New("native checkpoint: unsupported tool call type")
-	errNativeCheckpointToolResultIdentity  = errors.New("native checkpoint: tool result missing id or name")
-	errNativeCheckpointUnexpectedToolCalls = errors.New("native checkpoint: unexpected tool calls for role")
-	errNativeCheckpointJSONInvalid         = errors.New("native checkpoint: invalid JSON value")
-	errNativeCheckpointNumber              = errors.New("native checkpoint: number outside safe integer domain")
-	errNativeCheckpointResultType          = errors.New("native checkpoint: tool result string is itself valid JSON (W-RESULT-TYPE)")
-	errNativeCheckpointOrphanToolResult    = errors.New("native checkpoint: orphan tool result")
-	errNativeCheckpointDuplicateToolResult = errors.New("native checkpoint: duplicate tool result")
-	errNativeCheckpointMissingToolResult   = errors.New("native checkpoint: missing tool result")
-	errNativeCheckpointDuplicateToolCall   = errors.New("native checkpoint: duplicate tool call id in batch")
-	errNativeCheckpointToolNameMismatch    = errors.New("native checkpoint: tool result name mismatch")
-	errNativeCheckpointPendingToolResults  = errors.New("native checkpoint: message inserted before tool results completed")
-	errNativeCheckpointMessageTooLarge     = errors.New("native checkpoint: message exceeds client JSON size limit")
-	errNativeCheckpointIDAmbiguity         = errors.New("native checkpoint: content id collides with inline JSON (W-ID-AMBIGUITY)")
-	errNativeCheckpointNativePayload       = errors.New("native checkpoint: invalid native message payload")
-	errNativeCheckpointNativeGroup         = errors.New("native checkpoint: invalid native message group")
-	errNativeCheckpointNativeParts         = errors.New("native checkpoint: native message parts truncated or mismatched")
-	errNativeCheckpointNativeViewMismatch  = errors.New("native checkpoint: native message view mismatch")
+	errNativeCheckpointPinnedInputsUnsupported = errors.New("native checkpoint: compaction pinned inputs not supported")
+	errNativeCheckpointNilGraph                = errors.New("native checkpoint: nil blob graph")
+	errNativeCheckpointUnknownRole             = errors.New("native checkpoint: unknown message role")
+	errNativeCheckpointSystemRole              = errors.New("native checkpoint: system role not supported")
+	errNativeCheckpointReasoningMetadata       = errors.New("native checkpoint: reasoning metadata not supported")
+	errNativeCheckpointContentParts            = errors.New("native checkpoint: content parts not supported")
+	errNativeCheckpointProviderMetadata        = errors.New("native checkpoint: provider item metadata not supported")
+	errNativeCheckpointToolCallIdentity        = errors.New("native checkpoint: tool call missing id or name")
+	errNativeCheckpointToolCallType            = errors.New("native checkpoint: unsupported tool call type")
+	errNativeCheckpointToolResultIdentity      = errors.New("native checkpoint: tool result missing id or name")
+	errNativeCheckpointUnexpectedToolCalls     = errors.New("native checkpoint: unexpected tool calls for role")
+	errNativeCheckpointJSONInvalid             = errors.New("native checkpoint: invalid JSON value")
+	errNativeCheckpointNumber                  = errors.New("native checkpoint: number outside safe integer domain")
+	errNativeCheckpointResultType              = errors.New("native checkpoint: tool result string is itself valid JSON (W-RESULT-TYPE)")
+	errNativeCheckpointOrphanToolResult        = errors.New("native checkpoint: orphan tool result")
+	errNativeCheckpointDuplicateToolResult     = errors.New("native checkpoint: duplicate tool result")
+	errNativeCheckpointMissingToolResult       = errors.New("native checkpoint: missing tool result")
+	errNativeCheckpointDuplicateToolCall       = errors.New("native checkpoint: duplicate tool call id in batch")
+	errNativeCheckpointToolNameMismatch        = errors.New("native checkpoint: tool result name mismatch")
+	errNativeCheckpointPendingToolResults      = errors.New("native checkpoint: message inserted before tool results completed")
+	errNativeCheckpointMessageTooLarge         = errors.New("native checkpoint: message exceeds client JSON size limit")
+	errNativeCheckpointIDAmbiguity             = errors.New("native checkpoint: content id collides with inline JSON (W-ID-AMBIGUITY)")
+	errNativeCheckpointNativePayload           = errors.New("native checkpoint: invalid native message payload")
+	errNativeCheckpointNativeGroup             = errors.New("native checkpoint: invalid native message group")
+	errNativeCheckpointNativeParts             = errors.New("native checkpoint: native message parts truncated or mismatched")
+	errNativeCheckpointNativeViewMismatch      = errors.New("native checkpoint: native message view mismatch")
 )
 
 // nativeCheckpointRootMessage 是原生 CoreMessage 的最小顶层结构，仅含 role/content。
@@ -3391,11 +3411,25 @@ func validateAllLocalCompactionSources(conversation *ConversationFile) error {
 		return nil
 	}
 	found := false
-	for _, entry := range conversation.Entries {
+	for index, entry := range conversation.Entries {
 		if !isCompactionSummaryKind(entry.Kind) {
 			continue
 		}
 		found = true
+		payload, err := decodeCompactionSummaryPayload(entry.Payload)
+		if err != nil {
+			return err
+		}
+		layout, _, err := validateCompactionLayout(conversation.Entries, index, payload)
+		if err != nil {
+			return err
+		}
+		// 原生归档只能表达连续移除前缀，无法标识同时独立重放的输入。
+		// 直接写出会在归档展开后与 ROOT 重复；拒绝此独立 writer 的新域，
+		// 不删输入、不改计数、不影响默认检查点，待原生表示合同重新评审。
+		if layout != nil && len(layout.PinnedInputs) > 0 {
+			return errNativeCheckpointPinnedInputsUnsupported
+		}
 		if _, _, _, err := localCompactionArchiveFromEntry(conversation.Entries, entry); err != nil {
 			return err
 		}

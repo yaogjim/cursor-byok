@@ -46,6 +46,8 @@ const (
 type compactionPlan struct {
 	Trigger                   string
 	ContextTokens             int64
+	CompiledTokensBefore      int64
+	ForcedOverflowRecovery    bool
 	ContextWindowSize         int64
 	ContextUsagePercent       float64
 	ReserveTokens             int64
@@ -66,6 +68,7 @@ type compactionPlan struct {
 	FrozenPrefixEnd           int
 	FrozenPrefixEntries       []HistoryEntry
 	NativeArchiveSource       *compactionNativeArchiveSource
+	Layout                    *compactionLayout
 }
 
 type compactedTurnSummary struct {
@@ -94,6 +97,7 @@ func (service *Service) maybeCompactBeforeProvider(stream *ActiveStream, convers
 		}
 		return false, nil
 	}
+	plan.CompiledTokensBefore = estimateCompiledPromptTokens(compiled)
 	return true, service.beginPendingCompaction(stream, plan)
 }
 
@@ -186,6 +190,8 @@ func (service *Service) buildAutoCompactionPlanWithForce(stream *ActiveStream, c
 	base := &compactionPlan{
 		Trigger:                   "auto",
 		ContextTokens:             contextTokens,
+		CompiledTokensBefore:      estimatedCompiledTokens,
+		ForcedOverflowRecovery:    force,
 		ContextWindowSize:         contextWindowSize,
 		ContextUsagePercent:       usagePercent,
 		ReserveTokens:             reserveTokens,
@@ -202,6 +208,13 @@ func (service *Service) buildAutoCompactionPlanWithForce(stream *ActiveStream, c
 		return nil, err
 	}
 	if plan == nil && (preflightExceeded || force) {
+		fields := compactionPlanDiagnosticFields(conversation, newPendingCompaction(base))
+		fields["compiled_tokens_before"] = estimatedCompiledTokens
+		fields["blocked_reason"] = "no_compactable_execution"
+		if compactionCurrentInputTokens(conversation.Entries, base.CurrentTurnSeq, base.CurrentRequestID) > budgetTokens {
+			fields["blocked_reason"] = "current_input_exceeds_budget"
+		}
+		service.recordCompactionDecision(stream, compactionDiagnosticEventBlocked, fields)
 		return nil, compactionTerminalError{
 			code: compactionOverflowTerminalCode,
 			message: fmt.Sprintf(
@@ -274,6 +287,9 @@ func (service *Service) buildAutoCompactionPlanFromHistory(base *compactionPlan,
 	if conversation == nil || base == nil {
 		return nil, nil
 	}
+	if err := validateCompactionLayouts(conversation.Entries); err != nil {
+		return nil, err
+	}
 	legacyPlan := service.buildLegacyCompactionPlanBase(base, conversation)
 	currentCandidate, hasCurrentCandidate := buildCurrentTurnCompactionCandidate(replayablePromptProjectionEntries(conversation.Entries), base.CurrentTurnSeq, base.CurrentRequestID)
 	if !hasCurrentCandidate {
@@ -311,6 +327,10 @@ func (service *Service) beginPendingCompaction(stream *ActiveStream, plan *compa
 	if service == nil || stream == nil || plan == nil {
 		return nil
 	}
+	stream.mu.Lock()
+	diagnosticConversation := cloneConversationFile(stream.CheckpointConversation)
+	stream.mu.Unlock()
+	service.recordCompactionDecision(stream, compactionDiagnosticEventPlanned, compactionPlanDiagnosticFields(diagnosticConversation, newPendingCompaction(plan)))
 	request := buildPreCompactHookRequest(stream, plan)
 	serverMessage, pendingExec, err := service.execBridge.OpenExecuteHook(request, "execute_hook_pre_compact")
 	if err != nil {
@@ -442,6 +462,8 @@ func (service *Service) handleCompactionEvent(stream *ActiveStream, payload *str
 		return nil
 	}
 	if payload.Err != nil {
+		fields := map[string]any{"phase": "compaction", "blocked_reason": "summary_failed"}
+		service.recordCompactionDecision(stream, compactionDiagnosticEventBlocked, fields)
 		if _, err := service.appendConversationEntries(stream, stream.ConversationID, []HistoryEntry{
 			newCompactionFailedEntry(payload.Plan, payload.Err),
 		}); err != nil {
@@ -591,16 +613,28 @@ func (service *Service) publishSummaryCompleted(stream *ActiveStream, hookMessag
 	})
 }
 
-func (service *Service) applyCompactionPlan(stream *ActiveStream, conversationID string, plan *PendingCompaction, summaryText string) error {
+func (service *Service) applyCompactionPlan(stream *ActiveStream, conversationID string, plan *PendingCompaction, summaryText string) (resultErr error) {
 	if service == nil || stream == nil || service.compiler == nil || plan == nil {
 		return nil
 	}
+	fields := map[string]any{"phase": "compaction"}
+	blockedReason := "commit_failed"
+	defer func() {
+		if resultErr != nil {
+			fields["blocked_reason"] = blockedReason
+			service.recordCompactionDecision(stream, compactionDiagnosticEventBlocked, fields)
+		} else {
+			service.recordCompactionDecision(stream, compactionDiagnosticEventApplied, fields)
+		}
+	}()
 	candidateConversation, err := service.snapshotCompactionCandidate(stream, conversationID)
 	if err != nil {
 		return err
 	}
+	fields = compactionPlanDiagnosticFields(candidateConversation, plan)
 	originalEntryCount := len(candidateConversation.Entries)
 	if err := applyCompactionToConversation(candidateConversation, plan, summaryText); err != nil {
+		blockedReason = "source_mismatch"
 		return err
 	}
 	latestUserText := ""
@@ -609,16 +643,30 @@ func (service *Service) applyCompactionPlan(stream *ActiveStream, conversationID
 	}
 	recompiled, err := service.compiler.Compile(candidateConversation, stream.Mode, latestUserText, stream.ModelName)
 	if err != nil {
+		blockedReason = "compile_failed"
 		return err
 	}
+	recompiled = guardCompiledConversationForProvider(recompiled)
+	afterTokens := estimateCompiledPromptTokens(recompiled)
+	fields["compiled_tokens_after"] = afterTokens
 	if validationErr := validateCompactionCandidateBudget(recompiled, plan); validationErr != nil {
+		blockedReason = "candidate_exceeds_budget"
 		return validationErr
+	}
+	// 上游真实溢出仍沿既有的一次性恢复合同；它可能发生在本地估算预算内，
+	// 不能用乐观的本地 before 估算废止已获准的恢复。正常自动压缩须实际缩减。
+	if plan.Layout != nil && plan.Trigger == "auto" && !plan.ForcedOverflowRecovery && plan.CompiledTokensBefore > 0 && afterTokens >= plan.CompiledTokensBefore {
+		blockedReason = "summary_not_reduced"
+		return compactionTerminalError{code: compactionOverflowTerminalCode, message: "compaction summary did not reduce compiled prompt"}
 	}
 	compactionEntries := append([]HistoryEntry(nil), candidateConversation.Entries[originalEntryCount:]...)
 	if service.store != nil {
 		persisted, _, err := service.store.AppendEntriesWithUpdate(conversationID, resetEntrySequences(compactionEntries), func(item *ConversationFile) error {
-			if item == nil {
-				return nil
+			if item == nil || len(item.Entries) != originalEntryCount+len(compactionEntries) {
+				return fmt.Errorf("compaction history changed before commit")
+			}
+			if err := verifyFrozenCompactionSource(item, plan); err != nil {
+				return err
 			}
 			item.TokenDetailsUsedTokens = 0
 			clearConversationAutoCompactionState(item)
@@ -634,8 +682,11 @@ func (service *Service) applyCompactionPlan(stream *ActiveStream, conversationID
 		return nil
 	}
 	_, err = service.updateConversationMetaAndCheckpoint(stream, conversationID, func(item *ConversationFile) error {
-		if item == nil {
-			return nil
+		if item == nil || len(item.Entries) != originalEntryCount {
+			return fmt.Errorf("compaction history changed before commit")
+		}
+		if err := verifyFrozenCompactionSource(item, plan); err != nil {
+			return err
 		}
 		appendEntriesInPlace(item, resetEntrySequences(compactionEntries))
 		item.TokenDetailsUsedTokens = 0
@@ -714,6 +765,10 @@ func newCompactionSummaryEntry(plan *PendingCompaction, summaryText string) Hist
 		CompactTurnCount:          plan.CompactTurnCount,
 		MessagesToCompact:         plan.MessagesToCompact,
 		PreserveCurrentTurnInputs: plan.PreserveCurrentTurnInputs,
+	}
+	if plan.Layout != nil {
+		payload.LayoutVersion = compactionLayoutVersion
+		payload.Layout, _ = json.Marshal(plan.Layout)
 	}
 	if plan != nil && plan.NativeArchiveSource != nil {
 		if encoded, err := json.Marshal(plan.NativeArchiveSource); err == nil {
@@ -999,6 +1054,8 @@ func newPendingCompaction(plan *compactionPlan) *PendingCompaction {
 	return &PendingCompaction{
 		Trigger:                   plan.Trigger,
 		ContextTokens:             plan.ContextTokens,
+		CompiledTokensBefore:      plan.CompiledTokensBefore,
+		ForcedOverflowRecovery:    plan.ForcedOverflowRecovery,
 		ContextWindowSize:         plan.ContextWindowSize,
 		ContextUsagePercent:       plan.ContextUsagePercent,
 		ReserveTokens:             plan.ReserveTokens,
@@ -1019,6 +1076,7 @@ func newPendingCompaction(plan *compactionPlan) *PendingCompaction {
 		FrozenPrefixEnd:           plan.FrozenPrefixEnd,
 		FrozenPrefixEntries:       cloneFrozenHistoryEntries(plan.FrozenPrefixEntries),
 		NativeArchiveSource:       cloneNativeArchiveSource(plan.NativeArchiveSource),
+		Layout:                    cloneCompactionLayout(plan.Layout),
 	}
 }
 
@@ -1030,6 +1088,8 @@ func clonePendingCompaction(plan *PendingCompaction) *PendingCompaction {
 	return &PendingCompaction{
 		Trigger:                   plan.Trigger,
 		ContextTokens:             plan.ContextTokens,
+		CompiledTokensBefore:      plan.CompiledTokensBefore,
+		ForcedOverflowRecovery:    plan.ForcedOverflowRecovery,
 		ContextWindowSize:         plan.ContextWindowSize,
 		ContextUsagePercent:       plan.ContextUsagePercent,
 		ReserveTokens:             plan.ReserveTokens,
@@ -1053,6 +1113,7 @@ func clonePendingCompaction(plan *PendingCompaction) *PendingCompaction {
 		FrozenPrefixEnd:           plan.FrozenPrefixEnd,
 		FrozenPrefixEntries:       cloneFrozenHistoryEntries(plan.FrozenPrefixEntries),
 		NativeArchiveSource:       cloneNativeArchiveSource(plan.NativeArchiveSource),
+		Layout:                    cloneCompactionLayout(plan.Layout),
 	}
 }
 
@@ -1063,6 +1124,8 @@ func cloneCompactionPlanBase(base *compactionPlan) compactionPlan {
 	return compactionPlan{
 		Trigger:                   base.Trigger,
 		ContextTokens:             base.ContextTokens,
+		CompiledTokensBefore:      base.CompiledTokensBefore,
+		ForcedOverflowRecovery:    base.ForcedOverflowRecovery,
 		ContextWindowSize:         base.ContextWindowSize,
 		ContextUsagePercent:       base.ContextUsagePercent,
 		ReserveTokens:             base.ReserveTokens,
@@ -1083,6 +1146,7 @@ func cloneCompactionPlanBase(base *compactionPlan) compactionPlan {
 		FrozenPrefixEnd:           base.FrozenPrefixEnd,
 		FrozenPrefixEntries:       cloneFrozenHistoryEntries(base.FrozenPrefixEntries),
 		NativeArchiveSource:       cloneNativeArchiveSource(base.NativeArchiveSource),
+		Layout:                    cloneCompactionLayout(base.Layout),
 	}
 }
 
@@ -1120,6 +1184,7 @@ func freezeHomologousCompactionPlan(plan *compactionPlan, conversation *Conversa
 	plan.FrozenPrefixStart = start
 	plan.FrozenPrefixEnd = end
 	plan.FrozenPrefixEntries = cloneFrozenHistoryEntries(conversation.Entries[start:end])
+	freezeCompactionLayout(conversation.Entries, plan)
 	plan.CompactedTurns = compactedTurnsFromCanonicalPrefix(conversation.Entries, start, end)
 	plan.CompactTurnCount = clampInt64ToInt32(int64(len(plan.CompactedTurns)))
 	plan.MessagesToCompact = ordinaryPromptCountInPrefix(conversation.Entries, start, end)
@@ -1147,13 +1212,6 @@ func homologousCompactionPrefixBounds(entries []HistoryEntry, plan *compactionPl
 	if plan == nil {
 		return 0, 0, fmt.Errorf("compaction prefix missing plan")
 	}
-	compactionIndex := len(entries)
-	preserved := map[int]struct{}{}
-	if plan.PreserveCurrentTurnInputs {
-		latestToolCallID := latestCompletedToolCallIDForTurn(entries, plan.CurrentTurnSeq, plan.CurrentRequestID)
-		preserved = autoCompactionPreservedEntryIndexes(entries, plan.CurrentTurnSeq, plan.CurrentRequestID, latestToolCallID)
-	}
-	thisTail := continuousTailStartIndex(entries, compactionIndex, preserved)
 	prevTail := 0
 	latestSummary := latestCompactionSummaryIndex(entries)
 	if latestSummary >= 0 {
@@ -1165,7 +1223,13 @@ func homologousCompactionPrefixBounds(entries []HistoryEntry, plan *compactionPl
 		if err != nil {
 			return 0, 0, err
 		}
-		if source != nil {
+		layout, _, err := validateCompactionLayout(entries, latestSummary, payload)
+		if err != nil {
+			return 0, 0, err
+		}
+		if layout != nil {
+			prevTail = layout.PrefixEnd
+		} else if source != nil {
 			prevTail = source.PrefixEnd
 		} else {
 			preservedPrev := map[int]struct{}{}
@@ -1176,6 +1240,15 @@ func homologousCompactionPrefixBounds(entries []HistoryEntry, plan *compactionPl
 			}
 			prevTail = continuousTailStartIndex(entries, latestSummary, preservedPrev)
 		}
+	}
+	preserved := map[int]struct{}{}
+	if plan.PreserveCurrentTurnInputs {
+		latestToolCallID := latestCompletedToolCallIDForTurn(entries, plan.CurrentTurnSeq, plan.CurrentRequestID)
+		preserved = autoCompactionPreservedEntryIndexes(entries, plan.CurrentTurnSeq, plan.CurrentRequestID, latestToolCallID)
+	}
+	thisTail := continuousTailStartIndex(entries, len(entries), preserved)
+	if plan.PreserveCurrentTurnInputs && latestCompletedToolCallIDForTurn(entries, plan.CurrentTurnSeq, plan.CurrentRequestID) != "" {
+		thisTail = executionTailStart(entries, preserved, prevTail, plan.CurrentTurnSeq, plan.CurrentRequestID)
 	}
 	if thisTail < prevTail {
 		return 0, 0, fmt.Errorf("compaction prefix inverted")
@@ -1329,6 +1402,17 @@ func decodeCompactionSummaryPayload(raw json.RawMessage) (compactionSummaryEntry
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return compactionSummaryEntryPayload{}, fmt.Errorf("native checkpoint: invalid native archive source")
 	}
+	// 只有两个新版键都缺省才是旧格式；int 解码会把显式 null/0 与缺省混为一谈，
+	// 因而在原始对象上检查存在性，避免损坏版本标记静默绕过冻结布局校验。
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return compactionSummaryEntryPayload{}, fmt.Errorf("invalid compaction summary payload")
+	}
+	_, hasVersion := fields["compaction_layout_version"]
+	_, hasLayout := fields["compaction_layout"]
+	if (hasVersion || hasLayout) && (!hasVersion || !hasLayout || payload.LayoutVersion != compactionLayoutVersion) {
+		return compactionSummaryEntryPayload{}, fmt.Errorf("missing or unsupported compaction layout version")
+	}
 	return payload, nil
 }
 
@@ -1339,7 +1423,20 @@ func verifyFrozenCompactionSource(conversation *ConversationFile, plan *PendingC
 	if conversation == nil {
 		return fmt.Errorf("compaction native archive source mismatch")
 	}
+	if err := validateCompactionLayouts(conversation.Entries); err != nil {
+		return err
+	}
+	if plan.Layout != nil {
+		raw, _ := json.Marshal(plan.Layout)
+		payload := compactionSummaryEntryPayload{Trigger: plan.Trigger, Layout: raw, LayoutVersion: compactionLayoutVersion, CurrentTurnSeq: plan.CurrentTurnSeq, CurrentRequestID: plan.CurrentRequestID, PreserveCurrentTurnInputs: plan.PreserveCurrentTurnInputs}
+		if _, _, err := validateCompactionLayout(conversation.Entries, len(conversation.Entries), payload); err != nil {
+			return err
+		}
+	}
 	start, end := plan.FrozenPrefixStart, plan.FrozenPrefixEnd
+	if plan.Layout != nil && (plan.Layout.PrefixStart != start || plan.Layout.PrefixEnd != end) {
+		return fmt.Errorf("compaction layout frozen range mismatch")
+	}
 	if start < 0 || end > len(conversation.Entries) || start > end {
 		return fmt.Errorf("compaction native archive source mismatch")
 	}

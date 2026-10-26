@@ -213,6 +213,58 @@ func TestAllowlistedFieldsKeepsDiagnosticSummaryFacts(t *testing.T) {
 	}
 }
 
+func TestAllowlistedFieldsKeepsCompactionDiagnostics(t *testing.T) {
+	fields := AllowlistedFields(map[string]any{
+		"compaction_sequence":       2,
+		"compaction_layout_version": 1,
+		"prefix_start":              0,
+		"prefix_end":                4,
+		"tail_start":                4,
+		"pinned_input_count":        1,
+		"completed_batch_count":     3,
+		"compiled_tokens_before":    160000,
+		"compiled_tokens_after":     64000,
+		"budget_tokens":             200000,
+		"pinned_input_tokens":       1200,
+		"current_input_tokens":      1500,
+		"tail_tokens":               4000,
+		"blocked_reason":            "pinned_input_exceeds_budget",
+		"reason":                    "already_compacted_batch",
+		"phase":                     "compaction",
+		"error_category":            "budget",
+		"body":                      `{"prompt":"COMPACTION_SECRET_CANARY"}`,
+		"user":                      "COMPACTION_SECRET_CANARY",
+		"summary":                   "COMPACTION_SECRET_CANARY",
+		"tool_output":               "COMPACTION_SECRET_CANARY",
+		"authorization":             "Bearer COMPACTION_SECRET_CANARY",
+		"unknown_field":             "drop-me",
+	})
+	for _, key := range []string{
+		"compaction_sequence", "compaction_layout_version", "prefix_start", "prefix_end",
+		"tail_start", "pinned_input_count", "completed_batch_count", "compiled_tokens_before",
+		"compiled_tokens_after", "budget_tokens", "pinned_input_tokens", "current_input_tokens", "tail_tokens",
+		"blocked_reason", "reason", "phase", "error_category",
+	} {
+		if _, ok := fields[key]; !ok {
+			t.Fatalf("compaction diagnostic field %q dropped: %#v", key, fields)
+		}
+	}
+	for _, key := range []string{"body", "user", "summary", "tool_output", "authorization", "unknown_field"} {
+		if _, ok := fields[key]; ok {
+			t.Fatalf("sensitive field %q retained: %#v", key, fields)
+		}
+	}
+	if fields["compiled_tokens_before"] != 160000 || fields["tail_tokens"] != 4000 {
+		t.Fatalf("token counters were coerced or dropped: %#v", fields)
+	}
+	if ForbiddenKey("compiled_tokens_before") || ForbiddenKey("pinned_input_tokens") || ForbiddenKey("current_input_tokens") || ForbiddenKey("tail_tokens") || ForbiddenKey("budget_tokens") {
+		t.Fatal("compaction token counters must not be treated as credentials")
+	}
+	if !ForbiddenKey("token") || !ForbiddenKey("authorization") {
+		t.Fatal("raw credential keys must remain forbidden")
+	}
+}
+
 func TestAllowlistedFieldsRejectsRawKeysAndKeepsSummaryBounded(t *testing.T) {
 	fields := AllowlistedFields(map[string]any{
 		"missing_blob_keys": "blob-a,blob-b",

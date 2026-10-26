@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "cursor-byok"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "1.78.0"
+    !define INFO_PRODUCTVERSION "1.79.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "© 2026, cursor-byok"

@@ -238,8 +238,13 @@ func (store *ConversationFileStore) SaveConversationWithEntries(conversationID s
 			CreatedAt:          time.Now().UTC(),
 		}
 	}
+	before := append(append([]HistoryEntry(nil), conversation.Entries...), entries...)
+	firstChanged := len(conversation.Entries)
 	mergeConversationMetadata(conversation, source)
 	appendEntriesInPlace(conversation, resetEntrySequences(entries))
+	if err := remapCompactionLayouts(before, conversation.Entries, firstChanged); err != nil {
+		return nil, err
+	}
 	deriveConversationLoopState(conversation)
 	if err := store.writeConversationLocked(normalizedConversationID, conversation); err != nil {
 		return nil, err
@@ -328,6 +333,9 @@ func (store *ConversationFileStore) ReplaceEntries(conversationID string, entrie
 	conversation.NextEntrySeq = 1
 	conversation.NextTurnSeq = 1
 	appendEntriesInPlace(conversation, resetEntrySequences(entries))
+	if err := remapCompactionLayouts(entries, conversation.Entries, 0); err != nil {
+		return nil, err
+	}
 	if update != nil {
 		if err := update(conversation); err != nil {
 			return nil, err

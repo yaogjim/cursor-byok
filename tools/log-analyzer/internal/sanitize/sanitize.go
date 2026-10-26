@@ -41,10 +41,16 @@ var (
 		"failure_phase": {}, "failure_stage": {}, "recovery_action": {}, "business_outcome": {},
 		"protocol_final_status": {}, "model_call_final_status": {}, "retry_suppression_reason": {},
 		"status": {}, "provider_pass": {}, "http_attempt": {}, "checkpoint_result": {},
+		"compaction_sequence": {}, "compaction_layout_version": {}, "prefix_start": {},
+		"prefix_end": {}, "tail_start": {}, "pinned_input_count": {}, "completed_batch_count": {},
+		"compiled_tokens_before": {}, "compiled_tokens_after": {}, "budget_tokens": {},
+		"pinned_input_tokens": {}, "current_input_tokens": {}, "tail_tokens": {}, "blocked_reason": {}, "reason": {},
+		"error_category": {},
 	}
 	summaryFields = map[string]struct{}{
 		"error_summary": {}, "provider_error_summary": {}, "skip_reason": {},
 		"failure_cause": {}, "recovery_action": {}, "retry_suppression_reason": {},
+		"blocked_reason": {}, "reason": {},
 	}
 )
 

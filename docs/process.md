@@ -7,6 +7,59 @@
 
 ## 一、待完成的内容
 
+### 同一用户回合重复自动压缩（2026-10-24；默认路径本地验证完成，原生固定输入域设计受阻）
+
+整合负责人：主会话。源码基线 `7f4ae85`，当前为未提交工作树。本轮仅修改本地源码、测试和记录；不安装、打包、重启、提交或推送，不修改真实配置、原始日志和会话。计划为用户批准的 `同回合重复压缩修复_78487422.plan.md`；活动状态以 `task/todo.md` 为准。
+
+**根因与实现**
+
+- 当前回合输入曾同时充当连续执行尾的起点，首次摘要后同回合新增工具记录无法再次进入冻结前缀；扩大窗口或新发“继续”只能延迟/绕开，不是根治。输入预算公式保持不变：270000窗口对应243000输入预算，未将最大输出留空认定为根因。
+- 新增可选版本化布局，分别记录冻结覆盖区间、尾段起点、来源身份摘要和独立保留输入引用。用户消息、请求上下文及持久提示上下文按真实条目身份原样保留；近期工具批次及同批文本/推理载体保持完整，当前回合未完成或身份不完整的工具不能被跨越。旧摘要缺省新字段仍按旧规则读取，不迁移；新版损坏、缺字段/null、未知版本及引用失配明确拒绝，不猜测降级。
+- 压缩仅追加摘要，原始工具/用户历史不改写。保存及替换历史的重新编号使用逐项对应映射，保全引用和来源校验。提交前走与真实发送相同的保护后编译口径，校验预算及正常自动压缩缩减；手动摘要仍可在预算内生成比短历史更长的摘要。落盘锁内重新检查冻结来源，取消及迟到结果不提交/复活请求，上游一次溢出恢复上限不变。
+- 基础采集增加 `compaction_planned`、`compaction_applied`、`compaction_blocked`，区分摘要生成和实际提交；包含压缩序号、冻结范围、预算及估算值、输入/尾段占用和固定原因枚举。生产采集及独立分析器保留安全 token 计数，不输出输入、摘要、工具正文或凭据。
+
+**评审发现、修复及明确限制**
+
+- 独立评审曾发现 no-shrink 使用未经过工具保护的估算而误拒既有本地回退、旧回合工具缺身份/未完成锁住未来边界、短历史手动摘要被自动 no-shrink 误拒；均补永久回归并修正。模型调用文本/推理与工具的整体边界也有回归。
+- 最终独立评审又确认 `prompt_context` 在归档后丢失且因原始历史去重不再派生，现纳入独立保留输入。永久回归覆盖4轮压缩、保存重读及每条命令/提醒恰好一次。
+- **原生独立检查点写出部分停止实施，整体计划未全部完成。** 早期原生活动视图回读通过，不能证明归档历史展开无损：同一固定输入既进入摘要归档又进入 ROOT（活动根消息），外部展开会重复。现有原生格式仅有有序归档消息及尾部计数，不能表达任意位置输入的“已归档但仍活动”身份；过滤输入会丢顺序，改计数或移除活动输入都不满足合同。
+- 按批准计划阶段3的停止条件，新版布局含非空固定引用时，两个原生入口均返回 `native checkpoint: compaction pinned inputs not supported`，在生成投影前拒绝并保全会话。不删输入、不伪造计数、不静默回退；默认检查点不经过该门禁且仍可恢复输入。旧格式与固定引用为空的新版原生写出继续支持；大工具结果原文及保存重读的正向回归保留。默认 writer 从未全局切换为原生写出。
+- 最后独立窄复核确认提示上下文修复、原生门禁覆盖和默认路径隔离有效；没有把暂时拒绝这一新域写成“原生无损支持已完成”。后续需重新完成该数据域的表示设计及批准，再恢复原生写出；真实 Cursor 验收仍单独待授权。
+
+**隔离验证与证据**
+
+证据目录 `/tmp/cbyok-same-turn.H2wUSX`，指针 `/tmp/cbyok-same-turn-current`。测试使用隔离 HOME、保留原 GOPATH/GOCACHE、`GOPROXY=off`，仅连接本地模拟上游；无前端改动，未重复前端构建。
+
+- `red.log`：永久 `TestSameTurnCompactionRepeatedBudget` 在原实现下失败，50000窗口估算44857/预算40000，270000窗口估算250732/预算243000；均为首次摘要之后同回合再次压缩无计划。当前同回合四轮、270000配置及小窗口回归通过；三次是测试下限，不是运行上限。
+- `final-current-targeted.log`：最后一轮评审前定向回归通过（42.344s），含正式 HTTP 单请求4次压缩及第二/第三次摘要故障分支。HTTP 测试走正式 `handleRunIntent`、默认编译器、真实 Responses HTTP 适配器、本地模拟上游和正常工具结果入口；不换请求、不新发用户消息、不伪造 usage、不手改摘要后状态，断言工具仅执行一次、输入完整且唯一、覆盖持续推进及旧结果不回流。该早期日志不替代下述最后补丁后的全量结果。
+- `final-review-red.log` 是新增测试先误用了方法名造成的构建失败，不算语义复现；修正夹具后 `final-review-semantic-red.log` 明确复现提示上下文遗漏与原生重复未阻止两个语义失败。修复后 `final-review-green.log` 布局、4轮持久化、默认检查点、原生拒绝和空固定引用原生未裁剪结果等用例全部通过（0.763s）。
+- 最后产品/测试源码修改后的 `go test ./... -count=1 -timeout=300s`：`final-root-after-review.log` 显示36个测试包全部通过，其中 forwarder 70.205s；保留既有macOS目标版本链接warning，不代表旧系统实测。此前 `forwarder-full.log` 及中间持久化调试失败保留，不改写为通过。
+- `go vet ./internal/backend/forwarder ./internal/backend/agent/model ./internal/backend ./internal/observability` 及独立分析器 `go vet ./internal/sanitize` 通过；`final-vet.log`、`final-analyzer-vet.log` 无错误输出，随后主会话同步复验得到 `FINAL_VET_VERIFIED`。
+- 独立 `tools/log-analyzer` 的 `go test ./... -count=1 -timeout=120s`：`final-analyzer.log` 显示11个测试包全部通过，含基础字段导出及脱敏回归。
+- 重复 race 首次 `go test -race ./internal/backend/forwarder ./internal/backend/agent/model -run 'Test.*(Compaction|SameTurn|Overflow)' -count=2 -timeout=240s` 在正式HTTP第4分支执行中达到整包上限，`final-race.log` 为超时失败，未报告数据竞争；不得当作通过。日志显示前三个分支持续推进至18次主调用，按实际夹具耗时原样延长 `-timeout=900s` 重跑，两包通过（forwarder 640.428s、model 1.356s），无数据竞争报告；`final-race-extended.exit` 为0，主会话成功等待并回收 `FINAL_RACE_EXIT=0`。未改测试语义或产品代码掩盖超时。
+- 最后文档收口前 `gofmt -l`、`git diff --check` 及根模块/分析器通过包数核对成功，`FORMAT_DIFF_ROOT_ANALYZER_VERIFIED`；`final-source-sha256.txt` 对本轮Go源码/测试留存校验值，后续仅改任务及过程记录，源码再次比对一致。交付复核同时检查并发测试退出码、两包通过记录及任务中的原生设计阻塞，避免把默认路径验证写成整体完成。
+
+**2026-10-25 完成情况复核与补修**
+
+本次复核结论仍为“默认路径本地验证完成”，而不是“除实机外全部完成”。原生固定输入域的无损表示仍按阶段3停止在设计评审；默认检查点未切换。当前15个Go源码/测试改动均未提交，另有任务及过程记录修改；旧证据的源码哈希不覆盖以下新补丁。
+
+- 新永久回归先复现输入保留策略校验缺口：自动摘要同时将 `preserve_current_turn_inputs` 关闭并清空引用，可静默遗漏当前输入。现新版布局校验保留策略；只有手动摘要、无独立引用时才允许不保留当前输入，自动摘要及缺少触发语义的损坏记录明确拒绝。
+- 最后追加回归又复现外层版本标记显式为0或null、同时缺少布局时静默退回旧规则。现读取原始JSON对象判断键是否存在，只有两个新版键都缺省才按旧记录读取；显式损坏标记不视为旧格式。18种损坏变体覆盖模型重放、默认检查点、原生检查点拒绝，且失败不改写历史。
+- 诊断原先把仍在连续尾段中的当前输入计入独立保留输入；现 `pinned_input_tokens` 仅统计布局实际引用且位于尾段之前的条目，`current_input_tokens` 单独统计全部当前输入，`tail_tokens` 维持连续尾口径。没有冻结布局时不伪报固定引用；超大当前输入原因同步使用 `current_input_exceeds_budget`。分析器白名单和脱敏测试同步更新。
+- 独立只读复核覆盖最后的版本键校验、保留策略、投影/保存消费链和诊断分类，未发现新的阻断或旧记录/手动摘要回归；另独立运行损坏变体、旧新混用、并行批次、手动摘要及诊断定向测试通过。其结论不包含真实客户端验收，也不关闭原生设计阻塞。
+
+本轮证据为 `/tmp/cbyok-completion-review.bCJ302`（指针 `/tmp/cbyok-completion-review-current`），继续使用隔离HOME、实际GOPATH/GOCACHE、`GOPROXY=off`，最终补验增加 `GOFLAGS=-mod=readonly`：
+
+- `review-red.log` 保存保留策略和诊断两组语义失败；`version-marker-red.log` 保存版本0/null的语义失败。修复后的 `review-green.log` 及最终补验通过，不将RED改记为通过。
+- 最后一轮源码修改后的 `root-final.log`、`analyzer-final.log`、`vet-final.log`、`race-final.log` 及各自 `.exit` 已逐项核验：退出码均0，根模块36个测试包、独立分析器11个测试包通过，受影响race通过（forwarder 48.755s）。根模块及分析器保留既有macOS链接目标版本warning，不代表旧系统兼容实测。所有本轮Go文件最后修改时间早于这四批最终日志；本次未默认重复全量测试。
+- 主会话另在锁定当前源码后运行 `go test ./internal/backend/forwarder -run 'TestSameTurnLayout|TestCompactionDiagnostics|TestRecordCompactionDecision|TestSameTurnCompactionManualKeepsExistingBudgetContract|TestSameTurnCompactionDecisionProductionApply' -count=1 -timeout=120s`（0.699s）及分析器 `go test ./internal/sanitize -count=1 -timeout=120s`（0.332s），均通过，日志 `closeout-targeted.log`、`closeout-sanitize.log`。
+- 当前源码再运行forwarder/model/backend/observability四包vet及分析器sanitize vet，均退出0；损坏布局、压缩诊断、记录脱敏和手动摘要的定向race通过（1.900s）。日志 `closeout-vet.log`、`closeout-analyzer-vet.log`、`closeout-race.log`；终态为 `CLOSEOUT_VET_RACE_PASS`。
+- `completion-source-sha256.json` 锁定当前15个Go文件的SHA-256；记录收口后已再次比较哈希、核查gofmt与 `git diff --check`，全部通过，终态 `COMPLETION_REVIEW_CLOSEOUT_PASS` 保存在 `closeout-final.log`。前轮全链路重复race记录保留为此前覆盖，本轮仅对受影响校验及诊断补验，不冒称全链路重复race再次运行。
+
+**交付与回滚**
+
+默认运行路径及安全拒绝边界的本地验证已完成，交付为未提交源码与隔离证据；整体计划仍因原生固定输入表示设计而未全部完成，真实候选验收也未授权执行。源码回退应只撤销本轮差异，保留既有未提交工作；未对真实数据产生迁移或回滚操作。候选安装前须另行授权并备份，新版记录不能假定旧二进制可安全读取；回滚使用兼容版本或备份，不直接降级猜测读取，不通过扩大窗口掩盖错误。
+
 ### 1.78.0 提交、三平台构建与 Release 发布（2026-10-24；已发布）
 
 整合负责人：主会话。用户要求 push 后同时发布；`/ship` 命令本身禁止创建 tag/Release，workflow 的发布 job 又只在 `v*` tag 上运行，因此 push `main` 仅产出编译产物。已在确认两点后补建 tag 发布。

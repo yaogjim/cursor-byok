@@ -305,6 +305,8 @@ type pendingCheckpointPublish struct {
 type PendingCompaction struct {
 	Trigger                   string
 	ContextTokens             int64
+	CompiledTokensBefore      int64
+	ForcedOverflowRecovery    bool
 	ContextWindowSize         int64
 	ContextUsagePercent       float64
 	ReserveTokens             int64
@@ -332,6 +334,7 @@ type PendingCompaction struct {
 	FrozenPrefixEntries []HistoryEntry
 	// NativeArchiveSource 仅在前缀可无损原生编码时设置，经 clone/event 传递到 apply。
 	NativeArchiveSource *compactionNativeArchiveSource
+	Layout              *compactionLayout
 }
 
 type ProviderStreamStats struct {
@@ -558,6 +561,8 @@ type compactionSummaryEntryPayload struct {
 	PreserveCurrentTurnInputs bool   `json:"preserve_current_turn_inputs,omitempty"`
 	// NativeArchiveSource 为可选 JSON 对象；缺省走旧本地读，native writer 拒绝。
 	NativeArchiveSource json.RawMessage `json:"native_archive_source,omitempty"`
+	Layout              json.RawMessage `json:"compaction_layout,omitempty"`
+	LayoutVersion       int             `json:"compaction_layout_version,omitempty"`
 }
 
 // compactionNativeArchiveSource 是 §19.3k 冻结的同源归档来源。五字段写入不得 omitempty，
