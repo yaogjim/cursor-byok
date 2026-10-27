@@ -5,6 +5,15 @@
 
 ## 当前焦点
 
+### 三项正确性修复（2026-10-27；本地验证收口，verified-partial）
+
+- 负责人：主会话；基线 main@b3f8ec7。用户已批准最小修复计划，Design=系统架构 §20 `DESIGN-CORRECTNESS-REPAIR-20261026`，Design Readiness=approved；delivery_status=verified-partial（本地正式内部链路、相关 test/race/vet、独立复核及记录已收口；真实 Cursor/Wails、外部模型/MCP与跨平台实机未验收）。
+- 范围：导入历史→摘要→续接保序；MCP 两入口非法参数→失败工具结果且零执行；Gateway 排空/取消→真实停止状态与可重启。保持存储、默认 writer、预算、MCP 合法空值/别名与 Cursor 独立性，不修历史混用其他缺口。updater 独立待设计。
+- [completed] `review-summary-user-preservation`：导入→真实内部压缩链→模拟 HTTP 摘要/回退→提交→同/下一回合续接通过，顺序、重复实例、原始历史不变及既有预算/取消/同回合回归通过；不修改历史编号或扩大预算。证据统一见 docs/process.md。
+- [completed] `review-mcp-invalid-arguments`：两入口非法参数零执行/零新增 pending、一次失败收口、空值/别名兼容通过。独立复核及正式自动续接回归进一步修复 direct 漏计数和孤立失败结果被省略；provider stop→自动第二请求收到失败结果→纠正调用恰好派发一次通过，最终定向 race/vet 通过；详细 RED、夹具失败与补修证据见 docs/process.md。
+- [completed] `review-gateway-lifecycle`：随机回环 HTTP 验证 Chat/Responses 正常排空及超时取消、双 listener 关闭、重启、bind失败保留旧服务、并发与旧 Serve 延迟隔离；client 配置监听失败/恢复及真实五秒 Stop 超时→失败事件→重复 Stop 清错通过。定向 test/race/vet 通过，主控已核对新增夹具和最终日志；真实环境未验收。
+- [completed] `review-correctness-closeout`：受影响 test/race/vet、独立有界复核、证据及隔离偏差已归档于 docs/process.md。最终测试增加 scutil 替身，禁止依赖下载；未部署、安装、重启真实服务、访问真实凭据/会话或 commit/push。真实 Cursor/Wails 验收未授权，整体 verified-partial；更新安装机制仍单独待设计。
+
 ### 同一用户回合重复自动压缩（默认路径本地验证完成；原生独立写出部分受阻；1.79.0 已发布）
 
 - 整合负责人：主会话；源码基线 `7f4ae85`，2026-10-26 以提交 `cfecad4` 发布为 v1.79.0（详见 `docs/process.md` 的 1.79.0 发布记录）。目标是在同一请求、同一用户回合内至少连续三次压缩并继续，保全当前输入、工具关系和追加式原始历史；三次不是运行次数上限。

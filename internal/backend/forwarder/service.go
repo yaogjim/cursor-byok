@@ -1959,7 +1959,26 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 		return err
 	}
 	invocation.ToolName = runtimecore.CanonicalToolName(strings.TrimSpace(invocation.ToolName))
-	invocation = service.rewriteDirectMCPToolInvocation(stream, invocation)
+	stream.mu.Lock()
+	stream.ToolInvocationCount++
+	stream.UpdatedAt = time.Now().UTC()
+	stream.mu.Unlock()
+	rewritten, rewriteErr := service.rewriteDirectMCPToolInvocation(stream, invocation)
+	if rewriteErr != nil {
+		// direct MCP 仍需配对的调用记录，供失败结果在下一轮模型请求中回放。
+		// 原始名称和非法参数保留在 invocation；这里只构建展示/历史身份，不派发执行。
+		serverIdentifier := lookupMCPToolServer(stream, invocation.ToolName)
+		started := &agentv1.ToolCall{Tool: &agentv1.ToolCall_McpToolCall{
+			McpToolCall: &agentv1.McpToolCall{Args: &agentv1.McpArgs{
+				Name:               forwarderCanonicalMCPToolLookupName(serverIdentifier, invocation.ToolName),
+				ToolCallId:         invocation.CallID,
+				ProviderIdentifier: serverIdentifier,
+				ToolName:           invocation.ToolName,
+			}},
+		}}
+		return service.completePreDispatchToolError(stream, invocation, started, false, false, rewriteErr)
+	}
+	invocation = rewritten
 	invocation = service.normalizeCallMCPToolInvocation(stream, invocation)
 	trimmedToolName := strings.TrimSpace(invocation.ToolName)
 	stream.mu.Lock()
@@ -1968,8 +1987,6 @@ func (service *Service) handleToolInvocation(stream *ActiveStream, invocation ru
 	if stream.CheckpointConversation != nil {
 		subagentTypeName = strings.TrimSpace(stream.CheckpointConversation.SubagentTypeName)
 	}
-	stream.ToolInvocationCount++
-	stream.UpdatedAt = time.Now().UTC()
 	stream.mu.Unlock()
 	if !isKnownToolName(trimmedToolName) {
 		displayToolName := trimmedToolName
@@ -3871,19 +3888,21 @@ func (service *Service) updateStreamMCPToolServers(stream *ActiveStream, request
 	stream.mu.Unlock()
 }
 
-func (service *Service) rewriteDirectMCPToolInvocation(stream *ActiveStream, invocation runtimecore.ToolInvocation) runtimecore.ToolInvocation {
+func (service *Service) rewriteDirectMCPToolInvocation(stream *ActiveStream, invocation runtimecore.ToolInvocation) (runtimecore.ToolInvocation, error) {
 	toolName := strings.TrimSpace(invocation.ToolName)
 	if toolName == "" || isExecTool(toolName) {
-		return invocation
+		return invocation, nil
 	}
 	serverIdentifier := lookupMCPToolServer(stream, toolName)
 	if serverIdentifier == "" {
-		return invocation
+		return invocation, nil
 	}
 
 	arguments := make(map[string]any)
 	if len(invocation.ArgsJSON) > 0 {
-		_ = json.Unmarshal(invocation.ArgsJSON, &arguments)
+		if err := json.Unmarshal(invocation.ArgsJSON, &arguments); err != nil {
+			return invocation, fmt.Errorf("invalid MCP arguments: expected valid JSON object")
+		}
 	}
 	payload := struct {
 		Server    string         `json:"server"`
@@ -3896,11 +3915,11 @@ func (service *Service) rewriteDirectMCPToolInvocation(stream *ActiveStream, inv
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		return invocation
+		return invocation, fmt.Errorf("invalid MCP arguments: cannot encode JSON object")
 	}
 	invocation.ToolName = "CallMcpTool"
 	invocation.ArgsJSON = encoded
-	return invocation
+	return invocation, nil
 }
 
 func (service *Service) normalizeCallMCPToolInvocation(stream *ActiveStream, invocation runtimecore.ToolInvocation) runtimecore.ToolInvocation {

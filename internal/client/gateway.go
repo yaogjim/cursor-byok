@@ -40,6 +40,7 @@ func (s *ProxyService) StartGateway() (ProxyState, error) {
 		return s.GetState(), err
 	}
 	s.reconcileGateway(cfg)
+	s.emitState()
 	state := s.GetState()
 	if state.GatewayLastError != "" {
 		return state, errors.New(state.GatewayLastError)
@@ -48,7 +49,6 @@ func (s *ProxyService) StartGateway() (ProxyState, error) {
 		err := errors.New(firstNonEmptyGatewayError(state.GatewayLastError, "Gateway 启动失败"))
 		return state, err
 	}
-	s.emitState()
 	return state, nil
 }
 
@@ -59,11 +59,11 @@ func (s *ProxyService) StopGateway() (ProxyState, error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	s.stopGatewayBestEffort()
+	s.emitState()
 	state := s.GetState()
 	if state.GatewayLastError != "" {
 		return state, errors.New(state.GatewayLastError)
 	}
-	s.emitState()
 	return state, nil
 }
 
@@ -146,6 +146,7 @@ func (s *ProxyService) stopGatewayBestEffort() {
 	s.gatewayMu.Lock()
 	defer s.gatewayMu.Unlock()
 	if s.gateway == nil {
+		s.setGatewayError(nil)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

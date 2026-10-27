@@ -1678,14 +1678,22 @@ func buildContextTurnCompactionCandidate(entries []HistoryEntry) (compactionCand
 		return compactionCandidateTurn{}, false
 	}
 	summary := compactedTurnSummary{}
+	appendUser := func(text string) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		if summary.UserText == "" && len(summary.Steps) == 0 {
+			summary.UserText = text
+		} else {
+			summary.Steps = append(summary.Steps, "user="+text)
+		}
+	}
 	replayCount := int32(0)
 	estimatedTokens := int64(0)
 	for _, entry := range entries {
 		switch strings.TrimSpace(entry.Kind) {
 		case "user_message":
-			if strings.TrimSpace(summary.UserText) == "" {
-				summary.UserText = currentTurnUserText(entry)
-			}
+			appendUser(currentTurnUserText(entry))
 			replayCount++
 			estimatedTokens += estimateTextTokens(string(entry.Payload))
 		case "assistant_text":
@@ -1713,9 +1721,7 @@ func buildContextTurnCompactionCandidate(entries []HistoryEntry) (compactionCand
 			}
 			switch strings.TrimSpace(payload.Message.Role) {
 			case "user":
-				if strings.TrimSpace(summary.UserText) == "" {
-					summary.UserText = truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3)
-				}
+				appendUser(truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3))
 			case "assistant":
 				if text := truncateCompactionText(payload.Message.Content, compactionTurnSnippetMaxChars/3); text != "" {
 					summary.Steps = append(summary.Steps, "assistant="+text)

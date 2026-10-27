@@ -2332,3 +2332,57 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 阶段 0 早期审查记录：主会话复核两个独立取证交付，拒收“变体透传即参数生效”“空参数恒默认”“创建配置即最终提交行为”和“reasoning 因缺 case 不支持”等过宽结论；Max Mode 与 resume 的最终语义以 §19.4 的 `_runSubagent` 复核为准。复杂历史/承载设计尚未完成独立实现模拟，最高风险仍为历史基线错配/两文件部分提交及子模型静默改用偏好参数。C0-W1 的本次作者反向审计与局部限制见 §19.3c；不将其表述为独立评审或真实官方验收。
 
 **当前门禁：C0-P1（§19.4b）、C0-H1（§19.3a/b）、C0-W1（§19.3c 的有限数据域）及 C0-W2（§19.3e 的 plan/todos 域）分别闭合；整个 C0 和 C1/C2A/C2B/C4 完整验收仍未通过。** 未启用异步恢复、默认原生检查点写出/增量同步或官方正文改写。未知项只阻塞对应工作包或数据域；不再要求全部取证结束后才修复已确认且合同清晰的缺陷。
+
+
+## 20. DESIGN-CORRECTNESS-REPAIR-20261026：摘要、MCP 与 Gateway 最小修复
+
+Design Readiness=approved（用户通过计划审批确认）；实现与验收状态仅见 task/todo.md 和 docs/process.md。以下为批准合同，不代表已实现。
+
+## 范围与不变量
+
+- 不改变历史持久格式、TurnSeq 编号合同、原始追加式记录、默认 checkpoint writer 或原生格式门禁；不补缺失 Blob/历史增量同步。
+- 不改变 MCP 正常对象与合法字符串化对象兼容，不增加工具权限或重试，不把非法参数改为空对象继续执行。
+- Gateway 保持独立 loopback/Bearer 入口、既有关闭等待上限，不影响 Cursor backend/MITM、共享 provider 管线或配置格式。
+- 不新增依赖、通用状态框架、迁移脚本或范围外重构。
+
+## 已核实事实与方案边界
+
+- 历史导入 `token_usage.go:203` 使用 TurnSeq=0；`compactedTurnsFromCanonicalPrefix` 按 TurnSeq 分组；`buildContextTurnCompactionCandidate` 忽略同组后续 user。实际摘要请求、预算降级 `buildFallbackCompactionSummary`（历史块仍按既有6000字符截断）及 `buildCompactedConversationSummary` 共同消费 `UserText/Steps`。修复只消除结构性丢消息，不承诺有限摘要逐字保存任意长历史，也不改变既有单片/总摘要长度及模型预算。
+- `DecodeMCPToolPayload` 是 normalizer 与执行桥共同解析入口；执行桥 `openMcp` 已有解析失败返回错误的接缝，应复用而不是新建错误协议。
+- Gateway 当前没有实例级 request cancellation；Shutdown 超时不会自动关闭活动连接。已有同地址启动快速返回与 client 配置 listener 都消费 Running，必须保持真实实例状态。
+- 系统 Design §14.14 已规定 Gateway 独立、有界关闭、失败不污染 Cursor；本计划细化超时收尾，不扩展端口或身份权限。
+- 未知：真实客户端和实际外部工具如何表现，不作为修复前提；本地协议回归不能代替实机验收。更新安装的权限/回滚另案设计。
+
+## 实施顺序与最小合同
+
+### A. 导入历史压缩遗漏
+
+**改动位置**：`internal/backend/forwarder/compaction.go`；测试复用 `imported_history_test.go`、`compaction_append_only_test.go` 及现有 HTTP 摘要/续接夹具。`token_usage.go` 仅作为导入入口与测试调用，不重新编号历史。
+
+**推荐机制**：在候选构造层保留每条导入 user 的独立片段及相对顺序；继续使用既有 `compactedTurnSummary.UserText/Steps`，不新增持久字段。统一处理 `user_message` 与 `model_message(role=user)`：仅在 UserText 为空且 Steps 尚为空时把用户片段放入 UserText，其余非空用户片段按遍历位置追加 `user=...` 到 Steps。这样前置 assistant 不会被后来 user 跨越，后续 user 不拼进第一条 UserText，不按内容去重。现有 snippet 截断与预算估算继续作用于全部新保留片段；空白消息沿既有摘要省略行为，不伪造文本。
+
+**验收**：短且总预算充足的多回合导入历史，每条用户约束在真实摘要请求中恰好一次、顺序正确；正常摘要与本地 fallback 都消费同一完整候选；正式压缩提交后续接看到受控摘要中的后续约束。重复文本保持重复实例，原始历史不变。覆盖首项为已有摘要、前置 assistant、普通本地回合及同回合重复压缩。故障/取消和预算不足沿既有失败保全，不通过扩大上限使测试通过。
+
+### B. MCP 参数吞错
+
+**改动位置**：`internal/backend/agent/core/mcp.go` 与其专项测试；必要时最小调整 `forwarder/service.go` normalizer；在 `internal/backend/agent/bridge/exec` 和 forwarder 既有调用链测试补负向覆盖。
+
+**推荐机制**：复用公共解析函数，将非法嵌套类型/损坏 JSON 的错误透传至既有执行失败路径。对象和字符串化对象继续可用，合法空对象继续代表无参数。缺省参数继续支持真正无参工具。错误只返回固定类别/字段名，不拼入原始参数、凭据或正文。
+
+**精确兼容合同**：对象及字符串化对象正常接受；缺失、JSON null、空/空白字符串、字符串 `null`、空对象及字符串 `{}` 保留既有空对象兼容。arguments 合法且非空时优先，忽略未使用的 args；arguments 合法但为空时继续尝试 args；arguments 非法时立即报错，即使 args 合法也不得掩盖。被实际消费的 args 遵守同一空值/类型规则。数组、数字、布尔、字符串化非对象（null除外）和损坏 JSON 均拒绝。顶层 null/零长度输入及 server/toolName 规则不借此收紧。
+
+**direct MCP 同源缺陷**：`service.go::rewriteDirectMCPToolInvocation` 也忽略 JSON 解码错误。将其私有返回值增加 error，解析已匹配 MCP 工具的原始 ArgsJSON 时保留原有零长度/null/合法对象支持，拒绝损坏 JSON、数组及标量，不新增 direct 字符串对象兼容；在 `handleToolInvocation` 的派发前复用 `completePreDispatchToolError` 收口。保留原 invocation/CallID，不包装成成功的空参数；非 MCP 工具不受影响。此项是避免同一修复被已有入口绕过，非新增工具能力。
+
+**验收**：direct MCP 与 CallMcpTool 两入口非法参数均不产生 MCP 执行消息、无新增 PendingExecs、一次 failed result/completed；bridge 返回 nil message/空 pending/error；forwarder 复用 `completePreDispatchToolError` 写 failed tool result 并允许后续模型纠正，而不是新增整会话终止协议；缺少 CallID 仍沿既有错误处理。正常无参/别名兼容保持。normalizer 解码错误时保留原 invocation，交桥接拒绝，不重编码为合法空对象。错误正文不含测试中嵌入的敏感标记。
+
+### C. Gateway 生命周期
+
+**改动位置**：`internal/gateway/server.go`、`server_test.go`；必要的 `internal/client/gateway.go`/`gateway_test.go` 状态与错误传播回归，不改前端或公共 DTO。
+
+**推荐机制**：每个 HTTP server 实例持有独立的请求取消源，Chat/Responses 仍沿 request.Context 传给既有 provider。停止先停接入并等待既有有界 drain，正常完成不提前取消；超时后取消该实例请求并关闭活动连接，再释放实例资源，保留明确错误。取消是终止本地在途请求，不承诺撤回已发送请求或供应商已计费用量。
+
+**监听切换失败策略**：先绑定候选，bind 失败不动旧服务；开始 Shutdown 之后不再假定旧 listener 可回滚。旧实例 drain 超时则关闭候选、强制收尾旧实例、呈现停止态并返回错误，不偷偷切换成功。之后显式 Start 可正常重试；旧实例收尾不得清空新实例。保持同地址有效实例的幂等启动。
+
+**调用方状态合同**：本次失败保留 server/client 对应错误；成功 Start、成功 Stop、重复 Stop 均清除陈旧错误，client 无 gateway 的停止成功分支也清错。Start/Stop 返回 error 前仍发布最终状态。前端已有 catch→syncServiceState→finally清 busy，复用而不改 DTO/绑定。配置保存成功只代表持久化成功；运行应用失败可经既有 GatewayLastError/状态事件和查询观察，不新增保存 RPC 返回协议。`service.go` 的 config manager listener 已覆盖独立运行 Gateway 的更新，测试验证该入口，不重复新增启动逻辑。异常 Serve 只清理自身实例并在身份匹配时更新状态；正常 ErrServerClosed 不提前取消 drain 中请求。cancel/Close 不承诺强制结束忽略 context 的任意 goroutine。
+
+**验收**：长请求停止超时后 provider 观察取消、连接关闭、Running=false、错误可见；再次停止幂等；重新启动可用且不携带旧错误。热切换超时两个 listener 均关闭且可重启；候选 bind 失败旧 listener 保持可用；正常 drain 可完成原请求再停止/切换；覆盖 Chat/Responses、并发启停和旧 Serve 延迟退出。client 状态与错误一致，Cursor 生命周期不受影响。

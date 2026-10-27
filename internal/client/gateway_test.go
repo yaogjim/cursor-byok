@@ -3,7 +3,13 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
+	"net/http"
+	"time"
+
+	modeladapter "cursor/internal/backend/agent/model"
+	"cursor/internal/backend/forwarder"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +19,84 @@ import (
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/gateway"
 )
+
+type gatewayLifecycleConfig struct{ cfg serverconfig.Config }
+
+func (source gatewayLifecycleConfig) Current() serverconfig.Config { return source.cfg }
+
+type gatewayLifecycleStreamer struct {
+	started  chan struct{}
+	canceled chan struct{}
+	release  chan struct{}
+}
+
+func (streamer *gatewayLifecycleStreamer) StartStream(ctx context.Context, _ forwarder.ProviderRequest, _ func(modeladapter.ModelEvent) error) error {
+	close(streamer.started)
+	select {
+	case <-ctx.Done():
+		close(streamer.canceled)
+		return ctx.Err()
+	case <-streamer.release:
+		return nil
+	}
+}
+
+func TestStopGatewayTimeoutEmitsFinalStateAndRepeatedStopClearsError(t *testing.T) {
+	cfg := serverconfig.DefaultConfig()
+	cfg.Gateway.Enabled = true
+	cfg.Gateway.ListenAddr = "127.0.0.1:0"
+	cfg.Gateway.Token = "test-token"
+	adapters, err := serverconfig.NormalizeModelAdapterConfigs([]serverconfig.ModelAdapterConfig{{DisplayName: "test", TooltipData: "test", Type: "openai", BaseURL: "https://invalid.example/v1", APIKey: "fake", ModelID: "test", OpenAIEndpoint: "/v1/chat/completions"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ModelAdapters = adapters
+	cfg.Gateway.PublicModels = []serverconfig.GatewayPublicModel{{ID: "test", TargetAdapterID: adapters[0].ID}}
+	streamer := &gatewayLifecycleStreamer{started: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	instance := gateway.New(streamer, gatewayLifecycleConfig{cfg: cfg})
+	if err := instance.Start(cfg.Gateway); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { close(streamer.release); _ = instance.Stop(context.Background()) }()
+	req, _ := http.NewRequest(http.MethodPost, "http://"+instance.ListenAddr()+"/v1/chat/completions", strings.NewReader(`{"model":"test","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Authorization", "Bearer test-token")
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+	response, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	select {
+	case <-streamer.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider not started")
+	}
+	service := &ProxyService{gateway: instance, lastError: "cursor unchanged"}
+	var emitted []ProxyState
+	service.emitProxyStateFn = func(state ProxyState) { emitted = append(emitted, state) }
+	state, err := service.StopGateway()
+	if err == nil || state.GatewayRunning || state.GatewayLastError == "" || state.LastError != "cursor unchanged" {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	if len(emitted) != 1 || emitted[0].GatewayLastError != state.GatewayLastError || emitted[0].GatewayRunning {
+		t.Fatalf("failure event=%#v", emitted)
+	}
+	select {
+	case <-streamer.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("provider not canceled")
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	state, err = service.StopGateway()
+	if err != nil || state.GatewayLastError != "" || state.GatewayRunning {
+		t.Fatalf("repeat state=%#v err=%v", state, err)
+	}
+	if len(emitted) != 2 || emitted[1].GatewayLastError != "" {
+		t.Fatalf("success event=%#v", emitted)
+	}
+}
 
 func TestStartAndStopGatewayWithoutCursorRuntime(t *testing.T) {
 	service := newConfigTransferTestService(t)
@@ -53,6 +137,81 @@ func TestStartAndStopGatewayWithoutCursorRuntime(t *testing.T) {
 	}
 	if _, err := service.TestGateway(); err == nil || !strings.Contains(err.Error(), "未运行") {
 		t.Fatalf("TestGateway() after stop error = %v", err)
+	}
+}
+
+func TestGatewayConfigListenerFailurePublishesStateAndRecovers(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	reserve, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := serverconfig.DefaultConfig()
+	cfg.Gateway.Enabled = true
+	cfg.Gateway.Token = "test-token"
+	cfg.Gateway.ListenAddr = reserve.Addr().String()
+	_ = reserve.Close()
+	if _, err := service.store.Save(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartGateway(); err != nil {
+		t.Fatal(err)
+	}
+	defer service.StopGateway()
+	var emitted []ProxyState
+	service.emitProxyStateFn = func(state ProxyState) { emitted = append(emitted, state) }
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	next := cfg
+	next.Gateway.ListenAddr = occupied.Addr().String()
+	if _, err := service.backendHost.ConfigManager().Save(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	state := service.GetState()
+	if !state.GatewayRunning || state.GatewayListenAddr != cfg.Gateway.ListenAddr || state.GatewayLastError == "" || state.LastError != "" || state.BackendRunning || state.ProxyRunning {
+		t.Fatalf("failed apply state=%#v", state)
+	}
+	if len(emitted) != 1 || emitted[0].GatewayLastError != state.GatewayLastError {
+		t.Fatalf("events=%#v", emitted)
+	}
+	if _, err := service.backendHost.ConfigManager().Save(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if service.GetState().GatewayLastError != "" {
+		t.Fatal("successful same-address config update kept error")
+	}
+	stopped, err := service.StopGateway()
+	if err != nil || stopped.GatewayLastError != "" || stopped.GatewayRunning {
+		t.Fatalf("stop=%#v err=%v", stopped, err)
+	}
+}
+
+func TestStartGatewayBindFailureEmitsFinalState(t *testing.T) {
+	service := newConfigTransferTestService(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg := serverconfig.DefaultConfig()
+	cfg.Gateway.Enabled = true
+	cfg.Gateway.Token = "test-token"
+	cfg.Gateway.ListenAddr = listener.Addr().String()
+	if _, err := service.store.Save(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	var emitted []ProxyState
+	service.emitProxyStateFn = func(state ProxyState) { emitted = append(emitted, state) }
+	service.lastError = "cursor unchanged"
+	state, err := service.StartGateway()
+	if err == nil || state.GatewayRunning || state.GatewayLastError == "" {
+		t.Fatalf("state=%#v err=%v", state, err)
+	}
+	if len(emitted) != 1 || emitted[0].GatewayLastError != state.GatewayLastError || emitted[0].LastError != "cursor unchanged" {
+		t.Fatalf("missing final failure event: %#v", emitted)
 	}
 }
 
@@ -233,7 +392,17 @@ func TestStopGatewayBestEffortClearsErrorWithoutCursorRollback(t *testing.T) {
 
 func TestStopGatewayBestEffortWithNilGateway(t *testing.T) {
 	service := &ProxyService{}
-	service.stopGatewayBestEffort()
+	service.setGatewayError(errors.New("stale gateway failure"))
+	service.lastError = "cursor error unchanged"
+	var emitted []ProxyState
+	service.emitProxyStateFn = func(state ProxyState) { emitted = append(emitted, state) }
+	state, err := service.StopGateway()
+	if err != nil || state.GatewayLastError != "" || state.GatewayRunning {
+		t.Fatalf("StopGateway() state=%#v err=%v", state, err)
+	}
+	if len(emitted) != 1 || emitted[0].GatewayLastError != "" || emitted[0].LastError != "cursor error unchanged" {
+		t.Fatalf("stop event = %#v", emitted)
+	}
 }
 
 func TestGetStateSnapshotsGatewayWithoutDataRace(t *testing.T) {

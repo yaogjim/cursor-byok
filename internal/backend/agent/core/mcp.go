@@ -2,6 +2,7 @@ package runtimecore
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -35,9 +36,16 @@ func DecodeMCPToolPayload(raw []byte) (MCPToolPayload, error) {
 	payload.ProviderIdentifier = decodeJSONStringValue(decoded["providerIdentifier"])
 	payload.ToolName = decodeJSONStringValue(decoded["toolName"])
 	payload.Name = decodeJSONStringValue(decoded["name"])
-	payload.Arguments = decodeJSONObjectLike(decoded["arguments"])
+	var err error
+	payload.Arguments, err = decodeJSONObjectLike(decoded["arguments"])
+	if err != nil {
+		return payload, fmt.Errorf("invalid MCP arguments: %w", err)
+	}
 	if len(payload.Arguments) == 0 {
-		payload.Arguments = decodeJSONObjectLike(decoded["args"])
+		payload.Arguments, err = decodeJSONObjectLike(decoded["args"])
+		if err != nil {
+			return payload, fmt.Errorf("invalid MCP args: %w", err)
+		}
 	}
 	return payload, nil
 }
@@ -75,13 +83,15 @@ func decodeJSONStringValue(value any) string {
 	return strings.TrimSpace(text)
 }
 
-func decodeJSONObjectLike(value any) map[string]any {
+func decodeJSONObjectLike(value any) (map[string]any, error) {
 	switch item := value.(type) {
+	case nil:
+		return make(map[string]any), nil
 	case map[string]any:
 		if item == nil {
-			return make(map[string]any)
+			return make(map[string]any), nil
 		}
-		return item
+		return item, nil
 	case string:
 		return decodeJSONObjectBytes([]byte(item))
 	case []byte:
@@ -89,22 +99,18 @@ func decodeJSONObjectLike(value any) map[string]any {
 	case json.RawMessage:
 		return decodeJSONObjectBytes([]byte(item))
 	default:
-		return make(map[string]any)
+		return nil, fmt.Errorf("expected JSON object")
 	}
 }
 
-func decodeJSONObjectBytes(raw []byte) map[string]any {
+func decodeJSONObjectBytes(raw []byte) (map[string]any, error) {
 	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return make(map[string]any)
+	if trimmed == "" || trimmed == "null" {
+		return make(map[string]any), nil
 	}
-	var decoded any
-	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
-		return make(map[string]any)
+	var object map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &object); err != nil {
+		return nil, fmt.Errorf("expected valid JSON object")
 	}
-	object, ok := decoded.(map[string]any)
-	if !ok || object == nil {
-		return make(map[string]any)
-	}
-	return object
+	return object, nil
 }

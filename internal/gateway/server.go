@@ -41,11 +41,12 @@ type Server struct {
 	streamer forwarder.ProviderGateway
 	configs  ConfigSource
 
-	mu         sync.Mutex
-	httpServer *http.Server
-	listener   net.Listener
-	listenAddr string
-	lastError  string
+	mu            sync.Mutex
+	httpServer    *http.Server
+	requestCancel context.CancelFunc
+	listener      net.Listener
+	listenAddr    string
+	lastError     string
 }
 
 func New(streamer forwarder.ProviderGateway, configs ConfigSource) *Server {
@@ -107,7 +108,11 @@ func (server *Server) Start(cfg serverconfig.GatewayConfig) error {
 		return server.Stop(ctx)
 	}
 	if strings.TrimSpace(cfg.Token) == "" {
-		return errors.New("Gateway token 未生成")
+		err := errors.New("Gateway token 未生成")
+		server.mu.Lock()
+		server.lastError = err.Error()
+		server.mu.Unlock()
+		return err
 	}
 	listenAddr := strings.TrimSpace(cfg.ListenAddr)
 	if listenAddr == "" {
@@ -133,22 +138,25 @@ func (server *Server) Start(cfg serverconfig.GatewayConfig) error {
 		server.lastError = err.Error()
 		return err
 	}
+	requestContext, requestCancel := context.WithCancel(context.Background())
 	httpServer := &http.Server{
+		BaseContext:       func(net.Listener) context.Context { return requestContext },
 		Addr:              listener.Addr().String(),
 		Handler:           server.Handler(),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
-	if previous := server.httpServer; previous != nil {
+	if server.httpServer != nil {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		err := previous.Shutdown(stopCtx)
+		err := server.stopLocked(stopCtx)
 		stopCancel()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil {
+			requestCancel()
 			_ = listener.Close()
-			server.lastError = err.Error()
 			return fmt.Errorf("停止旧 Gateway listener 失败: %w", err)
 		}
 	}
 	server.httpServer = httpServer
+	server.requestCancel = requestCancel
 	server.listener = listener
 	server.listenAddr = listener.Addr().String()
 	server.lastError = ""
@@ -156,7 +164,11 @@ func (server *Server) Start(cfg serverconfig.GatewayConfig) error {
 	go func(instance *http.Server, ln net.Listener) {
 		if err := instance.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			server.mu.Lock()
+			// 取消源仅属于当前实例；旧 Serve 延迟退出不得取消或清空新实例。
+			requestCancel()
+			_ = instance.Close()
 			if server.httpServer == instance {
+				server.requestCancel = nil
 				server.httpServer = nil
 				server.listener = nil
 				server.listenAddr = ""
@@ -183,10 +195,13 @@ func (server *Server) Stop(ctx context.Context) error {
 
 func (server *Server) stopLocked(ctx context.Context) error {
 	instance := server.httpServer
+	cancelRequests := server.requestCancel
+	server.requestCancel = nil
 	server.httpServer = nil
 	server.listener = nil
 	server.listenAddr = ""
 	if instance == nil {
+		server.lastError = ""
 		return nil
 	}
 	if ctx == nil {
@@ -198,10 +213,15 @@ func (server *Server) stopLocked(ctx context.Context) error {
 		defer cancel()
 	}
 	err := instance.Shutdown(ctx)
+	if cancelRequests != nil {
+		cancelRequests()
+	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		_ = instance.Close()
 		server.lastError = err.Error()
 		return err
 	}
+	server.lastError = ""
 	return nil
 }
 

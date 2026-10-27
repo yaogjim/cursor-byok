@@ -7,6 +7,41 @@
 
 ## 一、待完成的内容
 
+### 三项正确性修复（2026-10-27；本地验证收口，verified-partial）
+
+整合负责人：主会话。基线 `main@b3f8ec7`；用户批准的最小合同已保留于系统架构 §20 `DESIGN-CORRECTNESS-REPAIR-20261026`（锚点保持稳定，实施记录日期采用用户指定的 2026-10-27）。本轮不提交、推送、部署、安装或操作真实 Cursor 会话；updater 安装机制仍单独待设计。
+
+**根因与修复链路**
+
+- 导入历史所有条目可共用 TurnSeq=0，候选构造仅保留第一条 user，导致后续用户约束在进入摘要模型前已丢失。现在按遍历位置将后续非空用户片段写入既有 Steps，保留重复实例及前置 assistant/已有摘要顺序；不改历史编号、持久格式、片段截断和预算。导入→HTTP 溢出恢复→摘要请求/本地 fallback→正式追加提交→第二次 run 续接的测试覆盖短历史；不承诺任意长历史无损压缩。
+- MCP 公共解析器和 direct MCP 重写分别吞掉 JSON/类型错误。公共解析明确返回字段类别错误；direct MCP 解析失败走既有预派发失败收口，保留原 invocation。两入口均无 MCP 执行消息、无新增 pending、一次工具结果/完成事件，纠正为合法参数后可正常派发。错误文本不含输入标记；既有历史中的 arguments 字段没有借此删除。空值、对象、字符串对象和 args 优先级合同保持不变（direct 不额外支持字符串对象）。
+- Gateway 实例增加独立 request context；正常 drain 后释放，超时 cancel+Close。监听切换一旦旧实例 Shutdown 超时，旧/候选 listener 均关闭并呈现停止态，可显式重启；成功/重复停止清旧错，client 在返回错误前发布最终状态。随机回环 HTTP 的正常/超时/切换/重启及 client 错误事件验证已通过，主控核对最终日志及补充测试后整合。
+
+**已获得的本地证据**
+
+统一工具链：`go version go1.26.1 darwin/arm64`。Context7 工具当前不可用，本轮未查询，也未新增第三方 API 用法。统一环境：临时 HOME，`GOCACHE=/Users/yaogj/Library/Caches/go-build GOPATH=/Users/yaogj/go GOPROXY=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly`；仅 httptest/随机回环端口和既有缓存，不调用真实模型/MCP。主控执行：
+
+- `go test ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder -count=1`：退出 0，三个包通过（forwarder 69.852s）。
+- `go test -race ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder -run 'TestDecodeMCP|TestOpenMCP|TestMCPInvalid|TestImportedHistoryCompaction|TestPrepareCompactionSummaryFrozenPrefixFallsBackWithoutTrim|TestApplyCompactionPlanRejectsOverBudgetWithoutPersisting' -count=1`：退出 0，含新增 MCP 纠正后正常执行和导入摘要 HTTP 链。
+- `go test ./internal/backend/forwarder -run '^TestDirectMCPPreservesEmptyAndObjectArguments$' -count=1`：退出 0，direct 零长度/null/空对象/正常对象透传通过。
+- `go vet ./internal/backend/agent/core ./internal/backend/agent/bridge/exec ./internal/backend/forwarder ./internal/gateway ./internal/client`：未输出诊断；同一 shell 后续 diff 检查首次发现设计文档末尾空行，已移除并单独重跑 `git diff --check` 退出 0。
+- 摘要 HTTP 集成的旧产品 overlay RED：`go test -overlay=/tmp/cbyok-correctness-20261026/summary-red-overlay/overlay.json ./internal/backend/forwarder -run '^TestImportedHistoryCompactionThroughHTTP$' -count=1 -v` 退出 1，三个场景均确认历史标记丢失/乱序；工作区产品代码未回退。修复后新增集成、既有预算/取消/同回合 HTTP 四场景定向回归退出 0（45.050s），相关 race 退出 0（4.974s），证据 `summary-http-red.log`、`summary-regression.log`、`summary-race.log`。
+- RED 记录：摘要遗漏及 core 非法参数原先被接受均已复现；MCP 入口测试首次因夹具未设置 execBridge panic（非有效语义 RED），补齐真实桥后 direct 五种非法输入均出现执行消息；修复后通过。首次错误泄漏断言误把历史 arguments 与错误文本合并检查，已改为仅检查 result_text，未通过删除历史掩盖问题。
+- 临时日志索引：`/tmp/cbyok-correctness-20261026/{summary-red,mcp-red,mcp-entry-red,affected-test,targeted-race}.log`；路径沿用早期名称，不表示当前日期，也不作为持久证据唯一载体。
+
+**Gateway 验证证据（已整合）**：子任务日志目录 `/tmp/gateway-c-evidence.OgUvTn`；所有日志记录命令、环境及退出码。主控核对最终 race 日志、旧 Serve 身份隔离及 client Stop 超时测试源码。后续测试 PATH 前置该目录 `bin`，`scutil` 仅输出空 dictionary，不读取系统设置。
+
+- 七项语义 RED→GREEN：Stop 超时未取消（Chat/Responses）、热换超时假运行、成功 Stop 残留错误、异常 Serve 未取消、nil Gateway Stop 残留错误、bind 失败未发布事件、缺 token 的错误状态未记录，分别有对应 `red-*` / `green-*` 日志。编译时共享编辑的 fmt unused、client 超时夹具缺 tooltipData 均是测试/编译失败，不算产品 RED。
+- gateway 定向正常/超时/绑定/重启/并发及 Chat/Responses 协议测试退出 0（`gateway-regression.log`）；client 启停/配置监听/失败状态/快照定向测试退出 0（`client-regression.log`）。补充真实五秒 `TestStopGatewayTimeoutEmitsFinalStateAndRepeatedStopClearsError` 与 `TestGatewayDelayedOldServeExitDoesNotClearReplacement` 各退出 0。
+- 最终 `go test -race ./internal/gateway ./internal/client -run '^Test(Gateway(GracefulDrainCompletesRequests|BindFailureKeepsOldListenerAvailable|ReplaceTimeoutStopsBothListeners|UnexpectedServeExitCancelsOwnRequests|DelayedOldServeExitDoesNotClearReplacement|SuccessfulAndRepeatedStopClearError|ConcurrentStartStop|StopTimeoutCancelsRequest|StartMissingTokenRecordsError|StartRestartClosesPreviousListener|CancelStopsStream|ChatNonStreamAndStream|ResponsesStreamsTextToolsUsageAndCompleted|ConfigListenerFailurePublishesStateAndRecovers)|StartAndStopGatewayWithoutCursorRuntime|StartGatewayRequiresEnabledConfig|StartGatewayBindFailureEmitsFinalState|ReconcileGatewayStartFailureDoesNotSetCursorError|StopGatewayBestEffortClearsErrorWithoutCursorRollback|StopGatewayBestEffortWithNilGateway|StopGatewayTimeoutEmitsFinalStateAndRepeatedStopClearsError|GetStateSnapshotsGatewayWithoutDataRace)$' -count=1 -timeout=90s` 退出 0：gateway 6.625s、client 6.852s，无 race。macOS linker 有对象 14.0/target 11.0 警告，非测试失败。
+- `go vet ./internal/gateway ./internal/client` 及四文件 gofmt、范围内 `git diff --check` 均退出 0。未启动真实 CLI 或固定 18080/18090/18091 服务，也未跑无关全仓测试。
+
+**独立复核发现及处置（已完成）**：只读复核发现 direct MCP 拒绝分支位于 ToolInvocationCount 增加之前，actor 在 finishReason=stop 时可能直接结束而不自动续接。主控核对 actor 的 hadToolInvocation 判定确认，新增正式 provider done→fake provider 下一请求→纠正派发回归得到语义 RED（status=completed calls=1），先把每次 invocation 计数前移且只一次。第二次请求的强断言又发现失败结果未回放：direct 工具名不被 started 构造识别，孤立结果被 projector 省略。现在仅在已匹配 direct MCP 的解析失败分支构造 MCP 调用历史/展示身份，复用现有 completePreDispatchToolError；不改通用 projector，不改原 invocation/CallID/原始参数，不生成 Exec 或 pending。修复后正式自动续接测试通过，下一请求实际收到失败结果，纠正调用恰好派发一次。新增约十余行得到独立只读复核，无新增阻断。Gateway 的旧 Serve 异常迟到与 client Stop 超时失败事件也已补证。
+
+最终补丁后验证：隔离 HOME，PATH 前置 `/tmp/mcp-resume-review.r4aCsq/bin` 的空 scutil 替身；`go test ./internal/backend/forwarder -run '^TestDirectMCPInvalidArgumentsAutomaticallyResumeProvider$' -count=1 -timeout=45s` 退出 0。随后 `go test -race ./internal/backend/forwarder -run 'TestDirectMCP|TestMCPInvalid|TestUnknownToolInvocationRecordsFailedResultWithoutPendingOrFailedStream|TestImportedHistoryCompaction' -count=1 -timeout=90s` 首次失败于夹具过早读取事件（pending 已建立但派发事件尚未发布），未发现 race；改为等待可观察派发事件再断言，原错误/次数断言未放宽。最终同命令退出 0（5.646s，`mcp-final-race-retry.log`）；首次失败保留 `mcp-final-race.log`。最终产品补丁后 `go vet ./internal/backend/forwarder` 退出 0；gofmt 与全工作区 `git diff --check` 退出 0。早期三个后端包全量证据不冒充最终补丁后的全量重跑，最终只按新风险做上述定向复验。
+
+**隔离偏差与剩余边界**：子任务发现前几次 client 状态测试隐式经 netproxy 执行 `scutil --proxy`；主控检查 `summary-http-red.log` 也确认摘要 HTTP 测试出现 system proxy 描述，因此该偏差涵盖早期 forwarder/client 测试，不仅 client。只读系统代理描述，未修改系统设置；测试目标为回环服务，未进行真实供应商调用。后续使用临时 PATH 替身隔离，不能声称前几次完全没有读取系统设置。独立复核、三项实现、相关本地验证及文档收口已完成；真实 Cursor/Wails、外部模型/MCP与跨平台实机未授权验收（env / permission-secret gap）。能力已接入本地正式内部链路；覆盖范围为上述合成数据、模拟上游与随机回环场景，非所有真实会话或生产覆盖；最终 `delivery_status=verified-partial`，不将本地源码/测试通过说成已部署。未提交、推送、部署或安装。更新安装机制未设计完成，也未改动；真实验收和该独立设计不随本轮自动获准。
+
 ### 1.79.0 提交、三平台构建与 Release 发布（2026-10-26；已发布）
 
 整合负责人：主会话。用户指令 `/ship minor --build --push --release`：同一回合重复自动压缩加固按 minor 规则从 1.78.0 升至 1.79.0（`build/config.yml`），同步七处平台元数据（`wails3 task common:update:build-assets`）与 `release-notes.md`。macOS 宿主平台 `task build` 成功（`bin/macos-arm64.dmg` 注入 1.79.0），`release:notes` 生成与 `git diff --check` 通过；Windows/Linux 未本机编译，由远端 CI 构建。提交 `cfecad4`（25 文件，+2905/-71）推送 main 后打注释 tag `v1.79.0` 并推送。
