@@ -7,6 +7,48 @@
 
 ## 一、待完成的内容
 
+### Cursor 3.29.15 BidiAppend 二进制载荷修复与 404 分析（2026-11-12）
+
+负责人：主会话。基线 `2849e49`；用户授权创建并使用 `fix/bidi-append-binary-encoding-3.29.15`，随后明确授权本机应用维护窗口。未 commit/push、未修改发布版本、未发布安装包。
+
+**根因与最小修复**：客户端 3.29.15 默认通过 BidiAppendRequest 的 field 4 `data_binary` 发送 AgentClientMessage，旧 forwarder 仅读 field 1 `data` hex，因此把合法请求当作空消息并返回 400 `unsupported client message kind`。现通过 `ReadAppendPayload` 统一非空 binary 优先、否则 hex 的规则，并让路由分流、forwarder、调试器消费同一字节解码入口。未改 protobuf 字段、选模、工具执行或会话格式；诊断增加 `payload_source`/长度，不增加未知二进制原始抓包。
+
+**测试证据**（本会话此前执行，非收口时重跑）：
+
+- `go test ./internal/backend/forwarder -run TestBidiAppendAcceptsBinaryPayload -count=1`：原实现明确 RED，报 `invalid_argument: unsupported client message kind:`；修复后通过（0.526s），模拟 provider 收到正确模型请求。
+- `go test ./internal/backend/agent/protocol ./internal/backend/server/upstream -count=1`：通过（0.329s/0.452s），覆盖 binary 优先、旧 hex、空值、非法 hex 和二进制路由。
+- `go test ./internal/backend -run TestGatewayDuoHostGzipUnaryWire -count=1 -v`：四个子场景 plainLocalBYOK/gzipLocalBYOK/binaryPayloadLocalBYOK/gzipOfficialAndAuto 全通过（16.173s）。其中模拟客户端未 ACK 检查点，出现预期的 blob writes timed out 日志；此测试不证明真实检查点持久化完整性。
+- `go test ./cursor-proxy-debugger -count=1`：通过（0.417s）。中途 build 曾因重构后遗留未使用 import 失败，已删除该 import；后续候选构建并成功运行，不将中途失败写为通过。2026-11-12 补充 `TestDecodeBidiAppendHexPayload`，与二进制用例并列断言 `agent_client_kind`/`request_id`，再次通过（0.574s），锁定调试器对旧 hex 与 3.29.15 binary 两种载荷的一致性。
+
+**兼容性结论（含证据层级）**：
+
+- 旧 hex 路径：修改前 `DecodeAgentClientMessage` 与现 `ReadAppendPayload` 的 hex 分支逐字同义（去空白、空值返回空消息、非法 hex 错误文本、protobuf 解码后标签一致）。`Host` 合约的 `plainLocalBYOK`/`gzipLocalBYOK` 即 hex 载荷且通过，协议包 `TestReadAppendPayloadHex` 通过。因此 3.29.15 之前版本与 3.29.15 在 `bidi_append_binary_encoding_disabled` 打开时的上行编码都兼容。
+- 3.29.15 默认 binary：`TestBidiAppendAcceptsBinaryPayload`、`TestParseBidiAppendRoutingFromBinaryPayload`、`binaryPayloadLocalBYOK` 及真实维护窗口会话通过。
+- 两者同时出现时新规则以 `data_binary` 为准（修改前路由层临时 fallback 以 hex 为准）；3.29.15 客户端按开关二选一发送，不双发，当前无实际输入触发该差异，规则已写入系统架构 §D2.2。
+- 未验证：更早版本实机、后续版本改字段或信封结构。旧版本实机回归未执行（本机已升级），属 test/env gap，不由合成兼容性外推。
+
+**维护与真实入口证据**：`/tmp/cursor-byok-maintenance/` 保留旧应用 `cursor-byok.app.backup/`、旧二进制 `cursor-byok-1.80.0.bin` 及候选 `cursor-byok-candidate`。候选以临时 HOME/28080/28090 独立 CLI 启动时立即退出，未成为有效预验收；随后在已授权维护窗口内备份、替换、重新签名并启动本机应用。签名会改变二进制哈希，不把重签后的哈希差异误当载荷变更。用户确认 Cursor 3.29.15 两次普通回答正常，并主动执行“文件变动检查”。运行证据位于 `~/.cursor-local-assistant-v2/logs/traces/20261112T113226.998548000Z-ff1cf2b79b30/events.jsonl`：13:02:00Z 附近工具消息及控制消息被接受，`inbound_intent_dispatched` 包含 `exec_result`/`exec_control`；provider 完成记录与后续模型输出证明工具回传后继续生成。用户界面反馈与日志联合支持已观察路径恢复，不外推所有 Agent 能力。
+
+**三个 404 的根因（只读分析，未修复）**：
+
+- `DashboardService/GetEffectiveUserPlugins`：`host.go:1034` 的早期空响应 mock 后，又在 `host.go:1118` 注册相同 POST 控制面路由；后注册覆盖前者。控制面未登录时调用默认 `http.NotFound`（`host.go:1273–1284,1304–1323`）。当前运行 trace 中该 route 的 28 个 request_finished 全为 `execution_target=local_runtime,status_code=404`，不是官网返回 404。
+- `MCPRegistryService/GetKnownServers`：仅有控制面注册（`host.go:1131`），相同未登录兜底。当前 trace 中 8 个后端完成事件全部为 local_runtime/404。这里的未登录是 cursor-byok 控制面账号状态，不等于 Cursor 客户端自身未登录。
+- `AnalyticsService/Batch`：Analytics 只注册 BootstrapStatsig/GetFirstWindowStatsigDecision/SubmitLogs/TrackEvents（`host.go:826–856`），没有 Batch；因此后端路由层返回 404，没有对应已命名 handler 的完成事件。
+- MITM 的 `host/target_host=api2.cursor.sh` 代表原始请求目的地，`action=backend_forward` 仅证明送到了本地后端，不能证明后端继续请求官网。插件/MCP 的 backend local_runtime 事件才是区分来源的证据。旧 Cursor 3.15.19 的 2026-11-10 日志已有三类同型 404（插件9、注册表8、Batch16），故不是 3.29.15 新引入，也不是本次 binary 修复造成。
+
+**建议与边界**：插件/MCP 属控制面能力，不与 Bidi 消息修复混做；未登录时返回空列表还是显式不可用须按产品语义确认，不能以任意 mock 200 假装真实插件/注册表功能可用。Batch 为遥测，不建议为消红字将其自动转发官网；若确认本地丢弃策略，应先核实响应契约再做最小无操作响应。协议提取器对新 `static $(){return["TypeName|..."]}` 格式尚不可用，直接运行现有 sync:proto 会覆盖产物，未执行全量覆盖生成。未来提取器适配和版本基线记录需单独确认范围。
+
+**四类运行时操作验收（2026-11-12，13:25:42–13:26:24Z）**：用户完成取消、恢复、子任务及其他消息类型操作后，主控只读核对。**证据源说明**：13:26 发生日志轮转，trace `events.jsonl` 仅剩 sequence 4864 起的分片，13:02–13:26 的事件与旧 app 分片已被配额回收删除（当前 app 仅存 000012，manifest 记录 dropped_events=166）。因此改用会话级 `history/<conversation>/debug/{bidi,runtime,provider,runsse}` 记录；这些文件保留了同一窗口的判据。该现象是日志回收的实测样本，后续实机验收应在操作后立即快照或直接读会话级记录。
+
+- **取消（2 次）**：父会话 `a731bce7` 的 `5c77a76e` 于 13:25:45、`e2ba40b0` 于 13:26:02 各收到 `cancel_action`；对应 `provider_stream_finished=canceled`、`model_call_final=canceled`（close_cause=context_canceled，downstream_published=false，chunk_count=0）。取消被正确识别且未向客户端发布残留输出。
+- **恢复（2 次）**：同 conversation 内先后新增 run_request `e2ba40b0`（13:25:49）与 `0418f830`（13:26:08），分别于 13:25:55（4 chunks、1 个完成工具）和 13:26:24（10 chunks）成功；工具结果经 `exec_client_message` 回到同一 request。证明取消后同会话可继续模型回合，工具结果可进入下一回合。
+- **子任务（1 次）**：13:25:54.907 `subagent_dispatched`，tool=Task、exec_kind=subagent、parent_conversation=a731bce7、parent_model_call=2fc2ef9c、parent_tool_call=tc_92611、subagent_run=f8c76686；子会话 `847ce190` 于 13:25:55 起跑，3 次 model_call（0/33/411 chunks，前两次各完成 1 个工具），上行 25 条全部 accepted。边界：日志没有把 `847ce190` 与 `f8c76686` 显式绑定的字段，父子关联依据时间线、模型差异与执行特征；父侧 Task 结果与 tool_call_id 的逐字段绑定未核对。
+- **其他消息类型**：`run_request`、`conversation_action`（cancel）、`client_heartbeat`、`exec_client_message`、`exec_client_control_message`、`kv_client_message` 均 accepted；父会话 65 条、子会话 25 条 `payload_source=binary`，无 `decode_error`/`intent_error`。未观察到 `prewarm_request`、`interaction_response`、`resume_action`；本次“恢复”由新 run_request 实现。
+
+结论：四类操作在 3.29.15 binary 路径下均可识别并走通，`delivery_status=verified-partial`；prewarm/interaction_response 未在样本出现，父子显式绑定与上下文内容级无损未逐项核对。
+
+当前能力：本机普通回答、工具回传及续答、取消、同会话恢复与子任务派发已接通；覆盖：上述真实样本及相关合成合约；验收：`delivery_status=verified-partial`。剩余 feature gap=新格式提取器；test/env gap=prewarm/interaction_response、跨平台及后续版本未实机验收；product-decision gap=控制面 404 的修复策略未批准。无需为继续分析重启当前服务。
+
 ### 三项正确性修复（2026-10-27；本地验证收口，verified-partial）
 
 整合负责人：主会话。基线 `main@b3f8ec7`；用户批准的最小合同已保留于系统架构 §20 `DESIGN-CORRECTNESS-REPAIR-20261026`（锚点保持稳定，实施记录日期采用用户指定的 2026-10-27）。本轮不提交、推送、部署、安装或操作真实 Cursor 会话；updater 安装机制仍单独待设计。

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"cursor/gen/agentv1"
 	"cursor/gen/aiserverv1"
 	"cursor/internal/backend/agent/protocol"
 	"cursor/internal/modelchannel"
@@ -114,15 +113,13 @@ func parseBidiAppendRouting(contentType string, encoding string, body []byte) (r
 		}
 	}
 	requestID = protocol.NormalizeRequestID(protocol.ReadAppendRequestID(message))
-	clientMessage, _, decodeErr := protocol.DecodeAgentClientMessage(message.GetData())
+	payload, _, decodeErr := protocol.ReadAppendPayload(message)
 	if decodeErr != nil {
 		return requestID, "", false, decodeErr
 	}
-	if clientMessage == nil && len(message.GetDataBinary()) > 0 {
-		clientMessage = &agentv1.AgentClientMessage{}
-		if err := proto.Unmarshal(message.GetDataBinary(), clientMessage); err != nil {
-			return requestID, "", false, err
-		}
+	clientMessage, _, decodeErr := protocol.DecodeAgentClientMessageBytes(payload)
+	if decodeErr != nil {
+		return requestID, "", false, decodeErr
 	}
 	return requestID, protocol.ReadRequestedModelID(clientMessage), protocol.HasRunOrPrewarmRequest(clientMessage), nil
 }

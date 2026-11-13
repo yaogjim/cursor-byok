@@ -5,6 +5,15 @@
 
 ## 当前焦点
 
+### Cursor 3.29.15 BidiAppend 二进制载荷修复（2026-11-12；真实主链路 verified-partial）
+
+- 负责人：主会话；基线 `2849e49`，用户授权分支 `fix/bidi-append-binary-encoding-3.29.15` 及本机维护窗口；未提交、推送或发布。
+- [completed] `bidi-binary-payload`：统一读取非空 `data_binary` 优先、否则旧 `data` hex；接入分流、forwarder 和调试器，诊断仅增加载荷来源/长度，不增加未知二进制抓包。永久回归先复现 `unsupported client message kind` 再通过；Host 二进制/旧 hex/gzip 合约通过，调试器对 binary 与 hex 两种载荷各有断言。维护窗口内备份并替换本机应用，用户确认两次对话有正常回答；日志确认工具执行结果回传及模型续答。兼容契约写入系统架构 §D2.2；旧版本实机未回归（本机已升级）。详细证据和覆盖边界见 `docs/process.md` 同名记录。
+- [completed] `cursor-control-plane-404-analysis`（仅分析）：插件/MCP 查询命中本地未登录 404 兜底；插件查询后注册控制面路由覆盖早期 mock。Analytics Batch 未注册。旧 Cursor 3.15.19 已有同型 404，未作为本次二进制修复扩项处理。
+- [completed] `bidi-runtime-coverage`（2026-11-12 实机样本，verified-partial）：用户完成四项操作后只读核对会话级 debug 记录（trace 分片在 13:26 轮转中被回收）。取消 2 次均产生 provider/model_call canceled（downstream_published=false、chunk_count=0）；恢复 2 次在同会话以新 run_request 成功完成并带回工具结果；子任务 1 次 `subagent_dispatched`（tool=Task、exec_kind=subagent、parent 关联齐全），子会话 3 次模型调用完成；run/cancel/heartbeat/exec_result/exec_control/kv 全部 accepted 且 `payload_source=binary`，无 decode/intent 错误。边界：父子会话无显式绑定字段、父侧 Task 结果与 tool_call_id 未逐字段核对；prewarm/interaction_response/resume_action 未出现。详细证据见 `docs/process.md`。
+- [pending] `cursor-control-plane-404-followup`（用户已同意后续处理，策略未批准）：插件/MCP 查询在控制面未登录时的产品语义（空列表 / 显式不可用 / 保持 404）尚未决定；`AnalyticsService/Batch` 若本地接收须先核实响应契约再最小无操作响应。不改以 mock 200 假装插件或注册表可用；不与 Bidi 修复混合提交。
+- 缺口：本机 3.29.15 已覆盖普通回答、工具回传、取消、同会话恢复、子任务及主要消息类型；prewarm/interaction_response 未出现，父子显式绑定与上下文内容级无损未逐项核对；协议提取器尚不支持新描述符格式（feature gap），更早版本实机与跨平台未验收（test/env gap）。后续若适配提取器须单独确认范围；404 修复策略见上述 pending（product-decision gap）。整体保持 `verified-partial`。
+
 ### 三项正确性修复（2026-10-27；本地验证收口，verified-partial）
 
 - 负责人：主会话；基线 main@b3f8ec7。用户已批准最小修复计划，Design=系统架构 §20 `DESIGN-CORRECTNESS-REPAIR-20261026`，Design Readiness=approved；delivery_status=verified-partial（本地正式内部链路、相关 test/race/vet、独立复核及记录已收口；真实 Cursor/Wails、外部模型/MCP与跨平台实机未验收）。

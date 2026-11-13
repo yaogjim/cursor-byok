@@ -1043,6 +1043,18 @@ func TestParseBidiAppendRoutingFromConnectEnvelope(t *testing.T) {
 	}
 }
 
+func TestParseBidiAppendRoutingFromBinaryPayload(t *testing.T) {
+	t.Parallel()
+	body := bidiAppendRunBinaryBody(t, "req-binary", agentTestLocalChannel)
+	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", "", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestID != "req-binary" || modelID != agentTestLocalChannel || !runOrPrewarm {
+		t.Fatalf("request=%q model=%q run=%t", requestID, modelID, runOrPrewarm)
+	}
+}
+
 func TestParseBidiAppendRoutingDistinguishesEmptyRunFromFollowup(t *testing.T) {
 	t.Parallel()
 	requestID, modelID, runOrPrewarm, err := parseBidiAppendRouting("application/connect+proto", "", bidiAppendRunBody(t, "req-empty-run", ""))
@@ -1410,6 +1422,28 @@ func bidiAppendRunBody(t *testing.T, requestID string, modelID string) []byte {
 	return marshalBidiAppend(t, requestID, &agentv1.AgentClientMessage{
 		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: runRequest},
 	})
+}
+
+func bidiAppendRunBinaryBody(t *testing.T, requestID string, modelID string) []byte {
+	t.Helper()
+	runRequest := &agentv1.AgentRunRequest{}
+	if strings.TrimSpace(modelID) != "" {
+		runRequest.RequestedModel = &agentv1.RequestedModel{ModelId: modelID}
+	}
+	encoded, err := proto.Marshal(&agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: runRequest},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := proto.Marshal(&aiserverv1.BidiAppendRequest{
+		RequestId:  &aiserverv1.BidiRequestId{RequestId: requestID},
+		DataBinary: encoded,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connectEnvelope(payload)
 }
 
 func bidiAppendFollowupBody(t *testing.T, requestID string) []byte {

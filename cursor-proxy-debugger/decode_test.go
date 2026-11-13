@@ -3,6 +3,7 @@ package proxydebugger
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -89,6 +90,68 @@ func TestDecodeForkTrafficRequests(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDecodeBidiAppendBinaryPayload(t *testing.T) {
+	t.Parallel()
+
+	clientPayload, err := proto.Marshal(&agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_ClientHeartbeat{ClientHeartbeat: &agentv1.ClientHeartbeat{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPayload, err := proto.Marshal(&aiserverv1.BidiAppendRequest{
+		RequestId:  &aiserverv1.BidiRequestId{RequestId: "req-binary"},
+		DataBinary: clientPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, kind, requestID, err := decodeUnaryRequest(bidiAppendPath, requestPayload)
+	if err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if kind != "client_heartbeat" || requestID != "req-binary" {
+		t.Fatalf("kind=%q requestID=%q", kind, requestID)
+	}
+	compact := compactJSON(t, decoded)
+	for _, expected := range []string{`"agent_client_kind":"client_heartbeat"`, `"request_id":"req-binary"`} {
+		if !strings.Contains(compact, expected) {
+			t.Errorf("decoded JSON does not contain %q:\n%s", expected, decoded)
+		}
+	}
+}
+
+func TestDecodeBidiAppendHexPayload(t *testing.T) {
+	t.Parallel()
+
+	clientPayload, err := proto.Marshal(&agentv1.AgentClientMessage{
+		Message: &agentv1.AgentClientMessage_ClientHeartbeat{ClientHeartbeat: &agentv1.ClientHeartbeat{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPayload, err := proto.Marshal(&aiserverv1.BidiAppendRequest{
+		RequestId: &aiserverv1.BidiRequestId{RequestId: "req-hex"},
+		Data:      hex.EncodeToString(clientPayload),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, kind, requestID, err := decodeUnaryRequest(bidiAppendPath, requestPayload)
+	if err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if kind != "client_heartbeat" || requestID != "req-hex" {
+		t.Fatalf("kind=%q requestID=%q", kind, requestID)
+	}
+	compact := compactJSON(t, decoded)
+	for _, expected := range []string{`"agent_client_kind":"client_heartbeat"`, `"request_id":"req-hex"`} {
+		if !strings.Contains(compact, expected) {
+			t.Errorf("decoded JSON does not contain %q:\n%s", expected, decoded)
+		}
 	}
 }
 
