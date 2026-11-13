@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "1.80.0"
+		"file_version": "1.90.0"
 	},
 	"info": {
 		"0000": {
-			"ProductVersion": "1.80.0",
+			"ProductVersion": "1.90.0",
 			"CompanyName": "cursor-byok",
 			"FileDescription": "cursor-byok",
 			"LegalCopyright": "© 2026, cursor-byok",

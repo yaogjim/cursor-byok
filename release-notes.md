@@ -1,32 +1,25 @@
-# cursor-byok v1.80.0
+# cursor-byok v1.90.0
 
-本版本交付三项正确性修复：导入历史压缩丢失后续用户消息、MCP 非法参数被静默吞掉、Gateway 停止/切换超时后状态失真。三项均按已批准的最小合同实施，不改变历史持久格式、预算约束与合法参数兼容行为。
+本版本修复 Cursor 3.29.15 的 `BidiAppend` 二进制载荷兼容问题：新版客户端默认把 Agent 上行消息放进 `data_binary`，旧实现只读 `data`（hex），合法请求被当成空消息拒绝。修复不改变历史持久格式、旧 hex 上行行为与既有错误语义。
 
-## 导入历史压缩保留全部用户片段
+## 兼容 Cursor 3.29.15 的 BidiAppend 二进制载荷
 
-- 导入历史所有条目可共用 TurnSeq=0，原候选构造仅保留第一条用户消息，后续用户约束在进入摘要模型前已丢失。现按遍历位置将后续非空用户片段写入既有 Steps（`user=...`），保留重复实例及前置 assistant/已有摘要顺序。
-- 不改变历史编号、持久格式、片段截断和预算；导入→HTTP 溢出恢复→摘要请求/本地 fallback→正式追加提交→第二次 run 续接的测试覆盖短历史。
-
-## MCP 非法参数显式失败并可纠正
-
-- 公共解析器 `DecodeMCPToolPayload` 与 direct MCP 重写原先分别吞掉 JSON/类型错误。现公共解析明确返回字段类别错误；direct MCP 解析失败走既有预派发失败收口（复用 `completePreDispatchToolError`），保留原 invocation/CallID。
-- 两入口均无 MCP 执行消息、无新增 pending、一次失败工具结果/完成事件；模型在下一请求中实际收到失败结果，纠正为合法参数后恰好派发一次。
-- 错误文本只含固定类别、不含输入标记；空值、对象、字符串化对象和 args 优先级合同保持不变（direct 不额外支持字符串化对象）。
-
-## Gateway 生命周期加固
-
-- 每个 HTTP server 实例持有独立请求取消源；正常 drain 后释放，超时后 cancel+Close 强制收尾在途连接。
-- 监听切换一旦旧实例 Shutdown 超时，旧/候选 listener 均关闭并呈现停止态，可显式重启；成功/重复停止清除陈旧错误，旧 Serve 异常迟到不取消或清空新实例。
-- client 在 Start/Stop 返回错误前发布最终状态；bind 失败保留旧服务可用，缺 token 等启动失败记录对应错误。
+- 新增统一字节解码头 `ReadAppendPayload`：`data_binary` 非空时优先使用，否则按旧 `data` hex 解码；空载荷、非法 hex 与 protobuf 解码失败沿用修改前的错误语义，不放宽失败判定。
+- `BidiAppend` 处理、客户端消息分流路由与 `cursor-proxy-debugger` 共用同一解码头，避免三处各自判断编码造成行为分叉。
+- 两字段同时出现时以 `data_binary` 为准（修改前路由层临时实现以 hex 为准）。3.29.15 客户端按开关二选一发送、不双发，该差异当前无实际输入触发；规则已写入系统架构 §D2.2。
+- 3.29.15 之前版本、以及 3.29.15 打开 `bidi_append_binary_encoding_disabled` 时的旧 hex 上行保持修改前行为，两种编码都可正常处理。
+- 诊断记录只增加载荷来源与长度（`payload_source`、`payload_bytes`），不落盘未知二进制原文。
 
 ## 明确限制
 
-- 真实 Cursor 实机、外部模型/MCP 服务与跨平台实机未授权验收；本地证据为合成数据、模拟 HTTP 上游与随机回环场景。
-- 压缩修复消除结构性丢消息，不承诺有限摘要逐字保存任意长历史。
-- updater 安装机制仍单独待设计，本版本未改动。
+- 协议提取器尚不支持 Cursor 新版描述符格式（`static $(){return["TypeName|..."]}`），本版本未做适配，直接全量 `sync:proto` 会覆盖现有产物，因此未执行。
+- 更早版本 Cursor 的实机回归未执行（本机已升级到 3.29.15），也未做跨平台实机验收；旧版本兼容结论来自与修改前实现等价的合成契约测试，不外推为实机通过。
+- 控制面未登录时插件/MCP 查询返回 404 的问题属独立议题，策略尚未决定，本版本未改动。
+- updater 安装机制仍未设计完成，本版本未改动。
 
 ## 验证边界
 
-- 受影响包全量与定向 `go test`（含 `-race`）、`go vet`、gofmt 与 `git diff --check` 通过；关键修复先以旧实现复现失败（RED）再验证修复。
-- 早期部分测试隐式读取系统代理描述（`scutil --proxy`，只读），最终验证已用 PATH 替身隔离；详细证据见 `docs/process.md`。
-- macOS 宿主平台 `task build` 成功；Windows/Linux 由远端 CI 构建各平台安装包。
+- 先行回归在原实现下复现 `unsupported client message kind`，修复后通过；覆盖二进制载荷上行、二进制载荷路由、Host 的 gzip/hex/binary 三种合约以及调试器对新旧两种编码的解码断言。
+- `go test ./internal/backend ...`、`go test ./cursor-proxy-debugger`、定向 race/vet、gofmt 与 `git diff --check` 通过，详细命令与退出码见 `docs/process.md`。
+- 维护窗口内替换本机应用后，用户确认普通对话正常回答问题，日志确认工具执行结果回传与模型续答；取消、同会话恢复与子任务路径按只读 debug 记录核对，整体仍为 `verified-partial`。
+- 本机未执行打包编译（本次仅版本元数据与发布说明变更）；macOS、Windows、Linux 安装包由远端 CI 构建。

@@ -84,6 +84,14 @@
 
 **隔离偏差与剩余边界**：子任务发现前几次 client 状态测试隐式经 netproxy 执行 `scutil --proxy`；主控检查 `summary-http-red.log` 也确认摘要 HTTP 测试出现 system proxy 描述，因此该偏差涵盖早期 forwarder/client 测试，不仅 client。只读系统代理描述，未修改系统设置；测试目标为回环服务，未进行真实供应商调用。后续使用临时 PATH 替身隔离，不能声称前几次完全没有读取系统设置。独立复核、三项实现、相关本地验证及文档收口已完成；真实 Cursor/Wails、外部模型/MCP与跨平台实机未授权验收（env / permission-secret gap）。能力已接入本地正式内部链路；覆盖范围为上述合成数据、模拟上游与随机回环场景，非所有真实会话或生产覆盖；最终 `delivery_status=verified-partial`，不将本地源码/测试通过说成已部署。未提交、推送、部署或安装。更新安装机制未设计完成，也未改动；真实验收和该独立设计不随本轮自动获准。
 
+### 1.90.0 提交、三平台构建与 Release 发布（2026-11-12；已发布）
+
+整合负责人：主会话。用户指令 `/ship --push --release` 后确认“升级到 1.90.0，打 tag，发布”。工作区在 `/ship` 开始时无未提交改动，`main` 领先 `origin/main` 3 个提交（`373f069` Bidi 二进制载荷修复、`166da8a` 记录、`e299e68` 合并提交）；由于 `build/config.yml` 仍为 1.80.0 且 `v1.80.0` 本地与远端均已存在，无法对当前 `HEAD` 直接发布，改为新增版本提交后发布。
+
+版本事实源与同步：`build/config.yml` 的 `info.version` 由 1.80.0 升至 1.90.0，执行 `wails3 task common:update:build-assets` 同步 `build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/linux/nfpm/nfpm.yaml`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/windows/wails.exe.manifest`，共 7 个文件、10 行变更，`build/` 内无 1.80.0 残留。`release-notes.md` 按 v1.90.0 重写，内容来自 `373f069` 的提交说明与本文档同名修复记录，未新增未验证结论。
+
+验证边界：本轮改动仅版本元数据与发布说明，未传 `--build`，因此未执行本机编译、打包或会隐式触发编译的检查（不冒充 `task build` 成功）；依赖静态核对与 `git diff --check`。Windows/Linux/macOS 安装包由 tag 触发的远端 CI 构建。
+
 ### 1.79.0 提交、三平台构建与 Release 发布（2026-10-26；已发布）
 
 整合负责人：主会话。用户指令 `/ship minor --build --push --release`：同一回合重复自动压缩加固按 minor 规则从 1.78.0 升至 1.79.0（`build/config.yml`），同步七处平台元数据（`wails3 task common:update:build-assets`）与 `release-notes.md`。macOS 宿主平台 `task build` 成功（`bin/macos-arm64.dmg` 注入 1.79.0），`release:notes` 生成与 `git diff --check` 通过；Windows/Linux 未本机编译，由远端 CI 构建。提交 `cfecad4`（25 文件，+2905/-71）推送 main 后打注释 tag `v1.79.0` 并推送。
