@@ -84,13 +84,17 @@
 
 **隔离偏差与剩余边界**：子任务发现前几次 client 状态测试隐式经 netproxy 执行 `scutil --proxy`；主控检查 `summary-http-red.log` 也确认摘要 HTTP 测试出现 system proxy 描述，因此该偏差涵盖早期 forwarder/client 测试，不仅 client。只读系统代理描述，未修改系统设置；测试目标为回环服务，未进行真实供应商调用。后续使用临时 PATH 替身隔离，不能声称前几次完全没有读取系统设置。独立复核、三项实现、相关本地验证及文档收口已完成；真实 Cursor/Wails、外部模型/MCP与跨平台实机未授权验收（env / permission-secret gap）。能力已接入本地正式内部链路；覆盖范围为上述合成数据、模拟上游与随机回环场景，非所有真实会话或生产覆盖；最终 `delivery_status=verified-partial`，不将本地源码/测试通过说成已部署。未提交、推送、部署或安装。更新安装机制未设计完成，也未改动；真实验收和该独立设计不随本轮自动获准。
 
-### 1.90.0 提交、三平台构建与 Release 发布（2026-11-12；已发布）
+### 1.90.0 → 1.90.1 提交、三平台构建与 Release 发布（2026-11-12 至 2026-11-13；以 1.90.1 发布）
 
 整合负责人：主会话。用户指令 `/ship --push --release` 后确认“升级到 1.90.0，打 tag，发布”。工作区在 `/ship` 开始时无未提交改动，`main` 领先 `origin/main` 3 个提交（`373f069` Bidi 二进制载荷修复、`166da8a` 记录、`e299e68` 合并提交）；由于 `build/config.yml` 仍为 1.80.0 且 `v1.80.0` 本地与远端均已存在，无法对当前 `HEAD` 直接发布，改为新增版本提交后发布。
 
 版本事实源与同步：`build/config.yml` 的 `info.version` 由 1.80.0 升至 1.90.0，执行 `wails3 task common:update:build-assets` 同步 `build/darwin/Info.plist`、`build/darwin/Info.dev.plist`、`build/linux/nfpm/nfpm.yaml`、`build/windows/info.json`、`build/windows/nsis/wails_tools.nsh`、`build/windows/wails.exe.manifest`，共 7 个文件、10 行变更，`build/` 内无 1.80.0 残留。`release-notes.md` 按 v1.90.0 重写，内容来自 `373f069` 的提交说明与本文档同名修复记录，未新增未验证结论。
 
 验证边界：本轮改动仅版本元数据与发布说明，未传 `--build`，因此未执行本机编译、打包或会隐式触发编译的检查（不冒充 `task build` 成功）；依赖静态核对与 `git diff --check`。Windows/Linux/macOS 安装包由 tag 触发的远端 CI 构建。
+
+首次发布结果：提交 `7e2d5df` 推送 main 后打注释 tag `v1.90.0` 并推送。tag 触发的 run `43341353279` 中 macOS job 在启动前即被取消，check-run 注释为 `The configuration 'macos-14-arm64-us-default' is not supported`；GitHub 当前托管的 macOS 标准标签为 `macos-15`/`macos-26`/`macos-latest` 等，`macos-14` 已不在支持列表。`release` job 依赖 macOS job，因此 `v1.90.0` 未生成 Release，`gh release view v1.90.0` 返回 not found。同一提交的 main push run `43341341674` 出现相同 macOS 取消。
+
+处置（用户确认）：`.github/workflows/build.yml` 的 macOS job 由 `runs-on: macos-14` 改为 `macos-15`（同为 arm64 标准镜像，amd64 产物仍由同一 runner 交叉构建）；版本升至 1.90.1 并同步七处平台元数据，`release-notes.md` 标题改为 v1.90.1 并说明重发原因。`v1.90.0` 标签保持不可变、不删除也不移动，仅无对应 Release。
 
 ### 1.79.0 提交、三平台构建与 Release 发布（2026-10-26；已发布）
 

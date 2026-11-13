@@ -1,6 +1,8 @@
-# cursor-byok v1.90.0
+# cursor-byok v1.90.1
 
 本版本修复 Cursor 3.29.15 的 `BidiAppend` 二进制载荷兼容问题：新版客户端默认把 Agent 上行消息放进 `data_binary`，旧实现只读 `data`（hex），合法请求被当成空消息拒绝。修复不改变历史持久格式、旧 hex 上行行为与既有错误语义。
+
+`v1.90.0` 标签因 Git 托管 macOS 构建机标签 `macos-14` 停用而未产出发布包，本版本改用 `macos-15` 构建并以 `v1.90.1` 重新发布，产品代码与 `v1.90.0` 完全一致。
 
 ## 兼容 Cursor 3.29.15 的 BidiAppend 二进制载荷
 
