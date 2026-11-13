@@ -2070,6 +2070,14 @@ BidiAppend 与 RunSSE 的分流解析显式接收 Content-Type、HTTP Content-En
 
 路由决策只消费解码结果，后续本地处理器/官方请求保留原始 body、Content-Type、Content-Encoding 和身份；D1、D2 的首决策保持、已知会话后续消息及取消语义不变。此次不修改 AgentSessionStore、等待时限、CA、账号、客户端压缩或代理。实现落点限定 agent_action.go/agent_route.go 与既有回归文件；单元/处理器测试和真实 Host 模拟 provider 回复共同验证，不将临时 overlay 或任意返回 200 的替身当作完整入口成功证据。实际官方/Auto/BYOK 对话在另行确认的实机窗口验收。
 
+### D2.2 BidiAppend 载荷编码兼容（Cursor 3.29.15，2026-11-12）
+
+客户端对同一 `AgentClientMessage` 有两种承载方式：`BidiAppendRequest.data`（field 1，hex 文本）和 `BidiAppendRequest.data_binary`（field 4，原始 protobuf 字节）。Cursor 3.29.15 默认使用 `data_binary`，受客户端 `bidi_append_binary_encoding_disabled` 开关控制；旧版本与开关打开时继续使用 `data` hex。字段号与 wire 类型来自既有 proto 基线，本次未改 protobuf、持久格式或响应编码。
+
+统一读取规则：`data_binary` 非空时以它为准，否则对 `data` 去空白后按 hex 解码；两者皆空返回空消息；非法 hex 或解码失败沿用既有 `decode_error` 链路。路由分流、forwarder 与调试器共用同一字节解码头，不得各自解释字段。该规则对旧 hex 路径保持修改前的返回语义（空值、非法 hex 错误文本与消息标签一致），因此 3.29.15 之前版本及 3.29.15 的两种编码开关状态均兼容；不因载荷来源改变选模、会话归属、工具执行或诊断中的敏感内容策略。诊断只增加载荷来源与长度，未知二进制不抓取原文。
+
+兼容边界：本轮实机只验证 3.29.15 的 binary 默认路径及旧 hex 合成合约；更早版本的实机回归、后续版本若改变字段或信封结构均未验证，属测试/事实缺口，不能由本规则外推。载荷读取失败仍按既有错误返回，不对客户端做静默降级或双写。
+
 ### D3 目录、默认与显示
 
 纯本地不请求官方，返回当前本地完整目录/默认。官方成功保留官方 metadata、默认和 protobuf unknown fields，官方原顺序后追加本地配置顺序；按 ID 去重，同 ID 本地替换官方，同名不同 ID 并列。官方目录失败返回本地可选项，但移除合成本地默认/fallback 推荐配置；官方默认接口失败保持错误，不默认本地。AvailableModels、两命名空间 GetUsableModels/GetDefaultModelForCli、GetDefaultModel/GetDefaultModelNudgeData 接线一致。现有 newProtoMessage 兼容类型映射不变。
