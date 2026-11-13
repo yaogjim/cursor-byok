@@ -96,6 +96,8 @@
 
 处置（用户确认）：`.github/workflows/build.yml` 的 macOS job 由 `runs-on: macos-14` 改为 `macos-15`（同为 arm64 标准镜像，amd64 产物仍由同一 runner 交叉构建）；版本升至 1.90.1 并同步七处平台元数据，`release-notes.md` 标题改为 v1.90.1 并说明重发原因。`v1.90.0` 标签保持不可变、不删除也不移动，仅无对应 Release。
 
+最终结果：提交 `33c76c3` 推送 main 后打注释 tag `v1.90.1` 并推送。tag 触发的 run `43341636613` 四个 job（macOS/Windows/Linux 安装包与发布 GitHub Release）全部成功，macOS job 在 `macos-15` 上正常完成（01:01:10Z 启动、约 20 分钟）。Release `v1.90.1` 正式发布（非草稿、非预发布，2026-11-13T01:21:14Z），共 10 个资产：macOS arm64/amd64 的 DMG 与 tar.gz、Windows zip 与 `-installer.exe`、Linux tar.gz/deb/rpm 及 `update.json`（`version=1.90.1`，发布说明取自仓库 `release-notes.md`）。本机仍未安装该版本包，实机安装验收未执行。
+
 ### 1.79.0 提交、三平台构建与 Release 发布（2026-10-26；已发布）
 
 整合负责人：主会话。用户指令 `/ship minor --build --push --release`：同一回合重复自动压缩加固按 minor 规则从 1.78.0 升至 1.79.0（`build/config.yml`），同步七处平台元数据（`wails3 task common:update:build-assets`）与 `release-notes.md`。macOS 宿主平台 `task build` 成功（`bin/macos-arm64.dmg` 注入 1.79.0），`release:notes` 生成与 `git diff --check` 通过；Windows/Linux 未本机编译，由远端 CI 构建。提交 `cfecad4`（25 文件，+2905/-71）推送 main 后打注释 tag `v1.79.0` 并推送。
