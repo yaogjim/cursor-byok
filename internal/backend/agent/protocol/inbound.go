@@ -92,6 +92,33 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// Append 载荷来源标签，用于日志与测试区分新旧表示。
+const (
+	AppendPayloadSourceHex    = "hex"
+	AppendPayloadSourceBinary = "binary"
+)
+
+// ReadAppendPayload 提取 BidiAppend 携带的 AgentClientMessage 原始字节。
+// Cursor 3.29.15 起默认把载荷放进 data_binary，旧版客户端使用 data（hex 字符串）；
+// 两者同时存在时以 data_binary 为准。
+func ReadAppendPayload(input *aiserverv1.BidiAppendRequest) ([]byte, string, error) {
+	if input == nil {
+		return nil, "", nil
+	}
+	if payload := input.GetDataBinary(); len(payload) > 0 {
+		return payload, AppendPayloadSourceBinary, nil
+	}
+	trimmed := strings.TrimSpace(input.GetData())
+	if trimmed == "" {
+		return nil, "", nil
+	}
+	payload, err := hex.DecodeString(trimmed)
+	if err != nil {
+		return nil, "", fmt.Errorf("bidi append data is not valid hex: %w", err)
+	}
+	return payload, AppendPayloadSourceHex, nil
+}
+
 // DecodeAgentClientMessage 解析 hex 文本为 AgentClientMessage，并返回消息类型标签。
 func DecodeAgentClientMessage(hexData string) (*agentv1.AgentClientMessage, string, error) {
 	trimmed := strings.TrimSpace(hexData)
@@ -101,6 +128,14 @@ func DecodeAgentClientMessage(hexData string) (*agentv1.AgentClientMessage, stri
 	payload, err := hex.DecodeString(trimmed)
 	if err != nil {
 		return nil, "", fmt.Errorf("bidi append data is not valid hex: %w", err)
+	}
+	return DecodeAgentClientMessageBytes(payload)
+}
+
+// DecodeAgentClientMessageBytes 解析原始 protobuf 字节为 AgentClientMessage。
+func DecodeAgentClientMessageBytes(payload []byte) (*agentv1.AgentClientMessage, string, error) {
+	if len(payload) == 0 {
+		return nil, "", nil
 	}
 	clientMessage := &agentv1.AgentClientMessage{}
 	if err := proto.Unmarshal(payload, clientMessage); err != nil {

@@ -427,27 +427,38 @@ func (service *Service) BidiAppend(ctx context.Context, req *connect.Request[ais
 		return connect.NewResponse(&aiserverv1.BidiAppendResponse{}), nil
 	}
 	defer appendTicket.Release()
-	message, clientKind, err := protocol.DecodeAgentClientMessage(dataHex)
+	payload, payloadSource, err := protocol.ReadAppendPayload(req.Msg)
 	if err != nil {
 		service.debug.LogBidiRaw(ctx, requestID, "", appendSeqno, dataHex, "decode_error", map[string]any{
 			"error": err.Error(),
 		})
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	payloadLog := map[string]any{
+		"payload_bytes":  len(payload),
+		"payload_source": payloadSource,
+	}
+	message, clientKind, err := protocol.DecodeAgentClientMessageBytes(payload)
+	if err != nil {
+		service.debug.LogBidiRaw(ctx, requestID, "", appendSeqno, dataHex, "decode_error", mergeDebugFields(payloadLog, map[string]any{
+			"error": err.Error(),
+		}))
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 	intent, err := service.decodeInboundIntent(requestID, message, clientKind)
 	if err != nil {
-		service.debug.LogBidiRaw(ctx, requestID, "", appendSeqno, dataHex, "intent_error", map[string]any{
+		service.debug.LogBidiRaw(ctx, requestID, "", appendSeqno, dataHex, "intent_error", mergeDebugFields(payloadLog, map[string]any{
 			"client_kind": strings.TrimSpace(clientKind),
 			"error":       err.Error(),
-		})
+		}))
 		service.debug.LogBidiDecoded(ctx, requestID, "", appendSeqno, clientKind, message, InboundIntent{RequestID: requestID}, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	service.debug.LogBidiRaw(ctx, requestID, intent.ConversationID, appendSeqno, dataHex, "accepted", map[string]any{
+	service.debug.LogBidiRaw(ctx, requestID, intent.ConversationID, appendSeqno, dataHex, "accepted", mergeDebugFields(payloadLog, map[string]any{
 		"client_kind": strings.TrimSpace(clientKind),
-	})
+	}))
 	service.debug.LogBidiDecoded(ctx, requestID, intent.ConversationID, appendSeqno, clientKind, message, intent, nil)
 	if err := service.dispatchInboundIntent(intent); err != nil {
 		if shouldAcknowledgeInterruptedInboundIntent(intent, err) {
@@ -475,6 +486,17 @@ func (service *Service) BidiAppend(ctx context.Context, req *connect.Request[ais
 	})
 
 	return connect.NewResponse(&aiserverv1.BidiAppendResponse{}), nil
+}
+
+func mergeDebugFields(base map[string]any, extra map[string]any) map[string]any {
+	merged := make(map[string]any, len(base)+len(extra))
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range extra {
+		merged[key] = value
+	}
+	return merged
 }
 
 func shouldAcknowledgeInterruptedInboundIntent(intent InboundIntent, err error) bool {

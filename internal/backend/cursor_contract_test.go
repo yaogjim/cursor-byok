@@ -542,6 +542,9 @@ func TestGatewayDuoHostGzipUnaryWire(t *testing.T) {
 	t.Run("gzipLocalBYOK", func(t *testing.T) {
 		assertGatewayDuoGzipLocalRun(t, officialAuth, providerID, reply, true)
 	})
+	t.Run("binaryPayloadLocalBYOK", func(t *testing.T) {
+		assertGatewayDuoBinaryLocalRun(t, officialAuth, providerID, reply)
+	})
 	t.Run("gzipOfficialAndAuto", func(t *testing.T) {
 		_, _, official, mux, sink := newGatewayDuoGzipWireHost(t, providerID, reply)
 		for _, modelID := range []string{officialID, "auto"} {
@@ -1343,15 +1346,30 @@ func (stub *cliCatalogCredentialStub) RefreshUsage(context.Context, subscription
 
 func assertGatewayDuoGzipLocalRun(t *testing.T, officialAuth, providerID, reply string, gzipBody bool) {
 	t.Helper()
-	host, localID, official, mux, sink := newGatewayDuoGzipWireHost(t, providerID, reply)
-	streamCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	t.Cleanup(cancel)
-
 	requestID := "gzip-local-byok"
 	if !gzipBody {
 		requestID = "plain-local-byok"
 	}
-	payload := duoAgentBidiUnaryPayload(t, requestID, localID, "conv-"+requestID, "hello wire")
+	assertGatewayDuoLocalRun(t, officialAuth, providerID, reply, requestID, func(localID string) []byte {
+		return duoAgentBidiUnaryPayload(t, requestID, localID, "conv-"+requestID, "hello wire")
+	}, gzipBody)
+}
+
+func assertGatewayDuoBinaryLocalRun(t *testing.T, officialAuth, providerID, reply string) {
+	t.Helper()
+	const requestID = "binary-local-byok"
+	assertGatewayDuoLocalRun(t, officialAuth, providerID, reply, requestID, func(localID string) []byte {
+		return duoAgentBidiUnaryBinaryPayload(t, requestID, localID, "conv-"+requestID, "hello binary wire")
+	}, false)
+}
+
+func assertGatewayDuoLocalRun(t *testing.T, officialAuth, providerID, reply, requestID string, buildPayload func(localID string) []byte, gzipBody bool) {
+	t.Helper()
+	host, localID, official, mux, sink := newGatewayDuoGzipWireHost(t, providerID, reply)
+	streamCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+
+	payload := buildPayload(localID)
 	assertGatewayDuoUnaryBidiControlOK(t, payload, "")
 	encoding := ""
 	body := payload
@@ -1556,6 +1574,16 @@ func (tr gatewayDuoLegacyStreamTransport) RoundTrip(req *http.Request) (*http.Re
 
 func duoAgentBidiUnaryPayload(t *testing.T, requestID, modelID, conversationID, userText string) []byte {
 	t.Helper()
+	return duoAgentBidiUnaryPayloadWithEncoding(t, requestID, modelID, conversationID, userText, false)
+}
+
+func duoAgentBidiUnaryBinaryPayload(t *testing.T, requestID, modelID, conversationID, userText string) []byte {
+	t.Helper()
+	return duoAgentBidiUnaryPayloadWithEncoding(t, requestID, modelID, conversationID, userText, true)
+}
+
+func duoAgentBidiUnaryPayloadWithEncoding(t *testing.T, requestID, modelID, conversationID, userText string, binaryPayload bool) []byte {
+	t.Helper()
 	run := &agentv1.AgentRunRequest{}
 	if strings.TrimSpace(modelID) != "" {
 		run.RequestedModel = &agentv1.RequestedModel{ModelId: modelID}
@@ -1572,10 +1600,25 @@ func duoAgentBidiUnaryPayload(t *testing.T, requestID, modelID, conversationID, 
 			},
 		}
 	}
-	envelope := duoAgentMarshalBidi(t, requestID, &agentv1.AgentClientMessage{
+	encoded, err := proto.Marshal(&agentv1.AgentClientMessage{
 		Message: &agentv1.AgentClientMessage_RunRequest{RunRequest: run},
 	})
-	return envelope[5:]
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &aiserverv1.BidiAppendRequest{
+		RequestId: &aiserverv1.BidiRequestId{RequestId: requestID},
+	}
+	if binaryPayload {
+		request.DataBinary = encoded
+	} else {
+		request.Data = hex.EncodeToString(encoded)
+	}
+	payload, err := proto.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func gzipHTTPBody(t *testing.T, body []byte) []byte {

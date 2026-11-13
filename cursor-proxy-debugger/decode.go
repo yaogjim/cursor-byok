@@ -156,7 +156,11 @@ func decodeUnaryRequest(path string, payload []byte) (decodedJSON string, kind s
 		}
 		requestID := strings.TrimSpace(request.GetRequestId().GetRequestId())
 		outer := marshalProtoJSON(request)
-		clientMessage, clientKind, decodeErr := agentprotocol.DecodeAgentClientMessage(request.GetData())
+		payloadBytes, _, payloadErr := agentprotocol.ReadAppendPayload(request)
+		if payloadErr != nil {
+			return outer, "bidi_append", requestID, payloadErr
+		}
+		clientMessage, clientKind, decodeErr := agentprotocol.DecodeAgentClientMessageBytes(payloadBytes)
 		if decodeErr != nil || clientMessage == nil {
 			return outer, "bidi_append", requestID, decodeErr
 		}
