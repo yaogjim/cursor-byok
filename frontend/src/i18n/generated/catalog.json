@@ -193,18 +193,6 @@
         }
       ]
     },
-    "03f3f19dee6f4b35": {
-      "source": "深度集成 · 尚未支持",
-      "kind": "text",
-      "placeholders": 0,
-      "refs": [
-        {
-          "file": "src/views/AccessView.vue",
-          "line": 63,
-          "column": 11
-        }
-      ]
-    },
     "04062edb583b7c39": {
       "source": "已同步",
       "kind": "text",
@@ -8523,6 +8511,18 @@
           "file": "src/views/SettingsView.vue",
           "line": 256,
           "column": 35
+        }
+      ]
+    },
+    "dbd8fe0bd6b30bcd": {
+      "source": "封神 · 不支持",
+      "kind": "text",
+      "placeholders": 0,
+      "refs": [
+        {
+          "file": "src/views/AccessView.vue",
+          "line": 63,
+          "column": 11
         }
       ]
     },

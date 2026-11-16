@@ -60,7 +60,7 @@ const clients = computed(() => [
   {
     id: "anthropic",
     name: "Anthropic",
-    meta: "深度集成 · 尚未支持",
+    meta: "封神 · 不支持",
     status: "unsupported",
     supported: false,
     dirty: false,
