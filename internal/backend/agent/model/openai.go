@@ -498,6 +498,7 @@ func (adapter *OpenAIAdapter) streamChatCompletions(ctx context.Context, req Str
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return wrapRequestBuildFailure(req, err)
 	}
+	req.RequestComposition = summarizeRequestComposition(bodyMap, len(payload))
 
 	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
 	if ownedLiveness {
@@ -1040,6 +1041,7 @@ func (adapter *OpenAIAdapter) streamResponses(ctx context.Context, req StreamReq
 		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "openai", modelID, startedAt, time.Time{}, finishedAt, "", 0, 0, 0, 0, err))
 		return wrapRequestBuildFailure(req, err)
 	}
+	req.RequestComposition = summarizeRequestComposition(bodyMap, len(payload))
 
 	streamCtx, streamIdle, ownedLiveness := attachRequestLiveness(ctx, &req)
 	if ownedLiveness {

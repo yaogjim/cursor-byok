@@ -46,6 +46,11 @@ func streamDiagnosticFieldKeys() []string {
 	return []string{
 		"header_at",
 		"first_byte_at",
+		"wrote_request_at",
+		"wrote_request_ms",
+		"wrote_request_err",
+		"first_response_byte_at",
+		"first_response_byte_ms",
 		"last_byte_at",
 		"body_end_at",
 		"last_effective_content_at",

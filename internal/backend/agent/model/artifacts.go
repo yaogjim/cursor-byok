@@ -37,6 +37,9 @@ func recordLLMRequestArtifact(req StreamRequest, provider string, model string, 
 		"tools_summary":                  summarizeTools(req.Tools),
 		"messages_summary":               summarizeMessages(req.Messages),
 	}
+	if retention := strings.TrimSpace(req.ImageRetention); retention != "" {
+		payload["image_retention"] = retention
+	}
 	if artifactCallID != strings.TrimSpace(req.ModelCallID) {
 		payload["artifact_model_call_id"] = artifactCallID
 		payload["fallback_channel_index"] = channelIndex
@@ -111,6 +114,9 @@ func buildLLMSummaryPayload(
 		payload["codex_affinity_profile"] = profile
 		payload["codex_affinity_injected"] = req.CodexAffinity != (CodexAffinity{})
 	}
+	if composition := strings.TrimSpace(req.RequestComposition); composition != "" {
+		payload["request_composition"] = composition
+	}
 	return payload
 }
 
@@ -179,6 +185,117 @@ func summarizeMessages(items []Message) []map[string]any {
 		})
 	}
 	return result
+}
+
+// summarizeRequestComposition 生成不含正文的请求体组成统计，用于定位超大请求。
+// 只输出字节数与计数，不包含 message、tool result 或图片内容。
+func summarizeRequestComposition(body map[string]any, totalBytes int) string {
+	if body == nil {
+		return ""
+	}
+	items := requestCompositionItems(body, "messages")
+	if items == nil {
+		items = requestCompositionItems(body, "input")
+	}
+	var itemsBytes, largest, imageBytes, toolResultBytes int64
+	imageCount := 0
+	for _, raw := range items {
+		encoded, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+		size := int64(len(encoded))
+		itemsBytes += size
+		if size > largest {
+			largest = size
+		}
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := item["role"].(string)
+		itemType, _ := item["type"].(string)
+		if role == "tool" || itemType == "function_call_output" {
+			toolResultBytes += size
+		}
+		// 图片可能出现在消息 content（chat/tool 消息）或 Responses 工具结果 output，
+		// 两处都要统计，否则大图会被算进 tool_result_bytes 却报告 image_count=0。
+		for _, key := range []string{"content", "output"} {
+			count, bytes := requestContentImageStats(item[key])
+			imageCount += count
+			imageBytes += bytes
+		}
+	}
+	return fmt.Sprintf(
+		"total_bytes=%d;messages_bytes=%d;tools_bytes=%d;instructions_bytes=%d;message_count=%d;image_count=%d;image_bytes=%d;tool_result_bytes=%d;largest_message_bytes=%d",
+		totalBytes, itemsBytes, jsonEncodedSize(body["tools"]),
+		jsonEncodedSize(body["instructions"])+jsonEncodedSize(body["system"]),
+		len(items), imageCount, imageBytes, toolResultBytes, largest,
+	)
+}
+
+func requestCompositionItems(body map[string]any, key string) []any {
+	if items, ok := body[key].([]any); ok {
+		return items
+	}
+	if items, ok := body[key].([]map[string]any); ok {
+		result := make([]any, len(items))
+		for index := range items {
+			result[index] = items[index]
+		}
+		return result
+	}
+	return nil
+}
+
+func requestContentImageStats(content any) (count int, bytes int64) {
+	for _, raw := range requestContentParts(content) {
+		part, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		partType, _ := part["type"].(string)
+		if partType != "image_url" && partType != "input_image" {
+			continue
+		}
+		url := ""
+		switch value := part["image_url"].(type) {
+		case string:
+			url = value
+		case map[string]any:
+			url, _ = value["url"].(string)
+		}
+		count++
+		bytes += int64(len(url))
+	}
+	return count, bytes
+}
+
+// requestContentParts 归一化内容部件容器，兼容 []any 与 []map[string]any 两种构造形态。
+func requestContentParts(content any) []any {
+	switch typed := content.(type) {
+	case []any:
+		return typed
+	case []map[string]any:
+		parts := make([]any, len(typed))
+		for index := range typed {
+			parts[index] = typed[index]
+		}
+		return parts
+	default:
+		return nil
+	}
+}
+
+func jsonEncodedSize(value any) int64 {
+	if value == nil {
+		return 0
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 0
+	}
+	return int64(len(encoded))
 }
 
 // normalizeModelArtifactTime 把时间格式化为 RFC3339Nano。

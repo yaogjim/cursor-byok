@@ -10,10 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"cursor/internal/netproxy"
 )
 
 func TestClassifyStreamCloseCauseTypedCauses(t *testing.T) {
@@ -549,4 +552,117 @@ func collectOpenAIStreamWithDiagnostics(t *testing.T, adapter *OpenAIAdapter, ba
 		return nil
 	})
 	return events, err
+}
+
+func TestDoProviderRequestKeepsConnectionTraceAfterAttemptContext(t *testing.T) {
+	diag := &StreamDiagnostics{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	retry := instantRetry()
+	retry.diagnostics = diag
+	resp, err := doProviderRequest(context.Background(), server.Client(), "openai", "request-id", "model-call-id", func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodPost, server.URL, strings.NewReader("{}"))
+	}, nil, retry)
+	if err != nil {
+		t.Fatalf("doProviderRequest() error = %v", err)
+	}
+	defer resp.Body.Close()
+	snap := diag.Snapshot()
+	if !snap.ConnectionObserved {
+		t.Fatal("connection trace was dropped when the attempt context replaced the request context")
+	}
+	if snap.WroteRequestAt.IsZero() {
+		t.Fatal("request write completion was not recorded")
+	}
+	if snap.FirstResponseByteAt.IsZero() {
+		t.Fatal("first response byte was not recorded")
+	}
+	if snap.WroteRequestMS < 0 || snap.FirstResponseByteMS < 0 {
+		t.Fatalf("attempt timeline regressed: %#v", snap)
+	}
+}
+
+func TestBindAttemptRequestPreservesProxyAndConnectionTrace(t *testing.T) {
+	diag := &StreamDiagnostics{}
+	cfg := netproxy.Config{Enabled: true, URL: "http://127.0.0.1:7890"}
+	parent := netproxy.WithRequestConfig(context.Background(), cfg)
+	request, err := http.NewRequestWithContext(parent, http.MethodPost, "http://example.test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attemptCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	bound := bindAttemptRequest(request, attemptCtx, parent, diag)
+	if httptrace.ContextClientTrace(bound.Context()) == nil {
+		t.Fatal("bound request lost httptrace")
+	}
+	got, ok := netproxy.RequestConfigFromContext(bound.Context())
+	if !ok || got != cfg {
+		t.Fatalf("bound request lost outbound proxy config: %#v ok=%v", got, ok)
+	}
+}
+
+func TestRecordWroteRequestSeparatesSuccessFromUploadFailure(t *testing.T) {
+	t.Parallel()
+	success := &StreamDiagnostics{}
+	success.BeginHTTPAttempt()
+	success.RecordWroteRequest(time.Now(), nil)
+	snap := success.Snapshot()
+	if snap.WroteRequestAt.IsZero() || snap.WroteRequestErr != "" {
+		t.Fatalf("successful write should record time only: %#v", snap)
+	}
+
+	failed := &StreamDiagnostics{}
+	failed.BeginHTTPAttempt()
+	failed.RecordWroteRequest(time.Now(), &net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE})
+	snap = failed.Snapshot()
+	if snap.WroteRequestErr != WroteRequestErrBrokenPipe {
+		t.Fatalf("wrote_request_err = %q", snap.WroteRequestErr)
+	}
+	// 写入失败的耗时不是上传耗时；当成完成时刻会把预算校准带偏。
+	if !snap.WroteRequestAt.IsZero() {
+		t.Fatalf("failed write must not record completion time: %#v", snap)
+	}
+}
+
+func TestRecordWroteRequestClassifiesTransportFailures(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "reset", err: &net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET}, want: WroteRequestErrReset},
+		{name: "deadline", err: context.DeadlineExceeded, want: WroteRequestErrDeadline},
+		{name: "canceled", err: context.Canceled, want: WroteRequestErrCanceled},
+		{name: "unknown", err: errors.New("write tcp 10.0.0.1:443: boom"), want: WroteRequestErrUnknown},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			diag := &StreamDiagnostics{}
+			diag.BeginHTTPAttempt()
+			diag.RecordWroteRequest(time.Now(), test.err)
+			if got := diag.Snapshot().WroteRequestErr; got != test.want {
+				t.Fatalf("wrote_request_err = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestRecordWroteRequestFailureCategoryResetsPerAttempt(t *testing.T) {
+	t.Parallel()
+	diag := &StreamDiagnostics{}
+	diag.BeginHTTPAttempt()
+	diag.RecordWroteRequest(time.Now(), &net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE})
+	diag.BeginHTTPAttempt()
+	if got := diag.Snapshot().WroteRequestErr; got != "" {
+		t.Fatalf("previous attempt failure leaked: %q", got)
+	}
 }

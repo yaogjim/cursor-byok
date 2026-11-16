@@ -56,6 +56,8 @@ func (origin ReasoningOrigin) normalized() ReasoningOrigin {
 
 // Message 表示模型适配层统一使用的消息结构。
 type Message struct {
+	// SourceTurnSeq 仅用于本地请求预算策略，不进入 provider 请求或持久化消息。
+	SourceTurnSeq int64 `json:"-"`
 	// Role 表示消息角色。
 	Role string `json:"role"`
 	// Content 表示消息文本内容。
@@ -199,6 +201,10 @@ type StreamRequest struct {
 	RequestKnobs map[string]any
 	// CompileSummary 保存当前 prompt 编译摘要。
 	CompileSummary string
+	// ImageRetention 保存本次请求图片去重与字节预算裁剪结果，仅用于诊断。
+	ImageRetention string
+	// RequestComposition 保存不含正文的请求体组成统计，仅用于诊断超大请求。
+	RequestComposition string
 	// Observer 负责写入 request-scoped LLM 工件。
 	Observer LLMArtifactObserver
 	// ArtifactPaths 用于由 adapter 回填工件路径。

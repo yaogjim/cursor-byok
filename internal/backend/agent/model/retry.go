@@ -281,6 +281,12 @@ func attachStreamHTTPTrace(request *http.Request, diagnostics *StreamDiagnostics
 		GotConn: func(info httptrace.GotConnInfo) {
 			diagnostics.RecordConnection(info.Reused, info.WasIdle)
 		},
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			diagnostics.RecordWroteRequest(time.Now(), info.Err)
+		},
+		GotFirstResponseByte: func() {
+			diagnostics.RecordFirstResponseByte(time.Now())
+		},
 	}
 	return request.WithContext(httptrace.WithClientTrace(request.Context(), trace))
 }
@@ -297,6 +303,13 @@ func bindAttemptOutboundProxy(request *http.Request, attemptCtx context.Context,
 		attemptCtx = netproxy.WithRequestConfig(attemptCtx, cfg)
 	}
 	return request.WithContext(attemptCtx)
+}
+
+// bindAttemptRequest 用 attempt context 替换请求 context，并在替换后重新挂载连接追踪。
+// httptrace 存放在 context 中，必须先绑定 attempt context 再挂载，否则会被覆盖丢弃。
+func bindAttemptRequest(request *http.Request, attemptCtx context.Context, parent context.Context, diagnostics *StreamDiagnostics) *http.Request {
+	request = bindAttemptOutboundProxy(request, attemptCtx, parent)
+	return attachStreamHTTPTrace(request, diagnostics)
 }
 
 func doProviderRequest(
@@ -343,9 +356,8 @@ func doProviderRequest(
 		}
 
 		retry.diagnostics.BeginHTTPAttempt()
-		httpReq = attachStreamHTTPTrace(httpReq, retry.diagnostics)
 		attemptCtx, finishAttempt := retry.startHTTPAttempt(ctx)
-		httpReq = bindAttemptOutboundProxy(httpReq, attemptCtx, ctx)
+		httpReq = bindAttemptRequest(httpReq, attemptCtx, ctx, retry.diagnostics)
 		startedAt := time.Now()
 		targetHost := ""
 		endpointKind := "custom"
@@ -776,9 +788,8 @@ func (body *retryingStreamBody) retryAfterPreEventFailure(cause error) error {
 			return err
 		}
 		body.retry.diagnostics.BeginHTTPAttempt()
-		request = attachStreamHTTPTrace(request, body.retry.diagnostics)
 		attemptCtx, finishAttempt := body.retry.startHTTPAttempt(body.ctx)
-		request = bindAttemptOutboundProxy(request, attemptCtx, body.ctx)
+		request = bindAttemptRequest(request, attemptCtx, body.ctx, body.retry.diagnostics)
 		startedAt := time.Now()
 		endpoint, targetHost, canaryMatched := body.recordRequest(request)
 		if !body.retry.consumeFallbackAttempt() {

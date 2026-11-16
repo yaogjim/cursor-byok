@@ -635,6 +635,18 @@ func applyProviderStreamDiagnostics(stats *ProviderStreamStats, diagnostics *mod
 	if !snap.FirstByteAt.IsZero() {
 		stats.FirstByteAt = snap.FirstByteAt
 	}
+	if !snap.WroteRequestAt.IsZero() {
+		stats.WroteRequestAt = snap.WroteRequestAt
+		stats.WroteRequestMS = snap.WroteRequestMS
+	}
+	// 写入失败没有完成时刻，分类必须单独搬运，否则上传失败在终端事件里不可见。
+	if snap.WroteRequestErr != "" {
+		stats.WroteRequestErr = snap.WroteRequestErr
+	}
+	if !snap.FirstResponseByteAt.IsZero() {
+		stats.FirstResponseByteAt = snap.FirstResponseByteAt
+		stats.FirstResponseByteMS = snap.FirstResponseByteMS
+	}
 	if !snap.LastByteAt.IsZero() {
 		stats.LastByteAt = snap.LastByteAt
 	}
@@ -791,6 +803,9 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 		"tool_dispatch_state": firstNonEmpty(stats.ToolDispatchState, "not_recorded"), "downstream_published": stats.DownstreamPublished,
 		"potential_side_effect": firstNonEmpty(stats.PotentialSideEffect, "unknown"), "first_event_at": optionalTimeField(stats.FirstEventAt),
 		"header_at": optionalTimeField(stats.HeaderAt), "first_byte_at": optionalTimeField(stats.FirstByteAt),
+		"wrote_request_at": optionalTimeField(stats.WroteRequestAt), "wrote_request_ms": optionalDurationMSField(stats.WroteRequestAt, stats.WroteRequestMS),
+		"wrote_request_err":      firstNonEmpty(stats.WroteRequestErr, "not_recorded"),
+		"first_response_byte_at": optionalTimeField(stats.FirstResponseByteAt), "first_response_byte_ms": optionalDurationMSField(stats.FirstResponseByteAt, stats.FirstResponseByteMS),
 		"last_byte_at": optionalTimeField(stats.LastByteAt), "body_end_at": optionalTimeField(stats.BodyEndAt),
 		"last_effective_content_at":  optionalTimeField(stats.LastEffectiveContentAt),
 		"first_effective_content_at": optionalTimeField(stats.FirstEffectiveContentAt),
@@ -826,6 +841,13 @@ func optionalTimeField(value time.Time) any {
 		return "not_recorded"
 	}
 	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func optionalDurationMSField(at time.Time, ms int64) any {
+	if at.IsZero() {
+		return "not_recorded"
+	}
+	return ms
 }
 
 func providerTTFRMS(stats ProviderStreamStats) any {
@@ -911,10 +933,18 @@ func (service *Service) recordModelCallFinal(stream *ActiveStream, businessOutco
 }
 
 func safeProviderErrorSummary(stats ProviderStreamStats) string {
-	if strings.TrimSpace(stats.ErrorCategory) == "" {
+	category := strings.TrimSpace(stats.ErrorCategory)
+	if category == "" {
 		return "not_recorded"
 	}
-	return strings.TrimSpace(stats.ErrorCategory) + " status=" + firstNonEmpty(strings.TrimSpace(stats.HTTPStatus), "not_recorded")
+	status := strings.TrimSpace(stats.HTTPStatus)
+	if status == "" || status == "not_recorded" {
+		if category == modeladapter.ProviderErrorTransport {
+			return "transport error (no HTTP response)"
+		}
+		return category + " (no HTTP status)"
+	}
+	return category + " status=" + status
 }
 
 func providerFailureBusinessOutcome(stats ProviderStreamStats) string {

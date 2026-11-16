@@ -788,8 +788,21 @@ func TestSafeProviderTerminalMessageKeepsTypedStatusAndRedactsBody(t *testing.T)
 		t.Fatalf("safe message leaked body: %q", got)
 	}
 	got = safeProviderTerminalMessage(errors.New("connection refused"))
-	if got != "transport status=not_recorded" {
+	if got != "transport error (no HTTP response)" {
 		t.Fatalf("safe transport message = %q", got)
+	}
+	got = safeProviderTerminalMessage(&modeladapter.LivenessTimeoutError{Phase: modeladapter.LivenessPhaseConnect, Timeout: 30 * time.Second})
+	if got != "provider connect timeout after 30s (no response headers)" {
+		t.Fatalf("safe timeout message = %q", got)
+	}
+}
+
+func TestSafeProviderErrorSummaryExplainsMissingHTTPResponse(t *testing.T) {
+	if got := safeProviderErrorSummary(ProviderStreamStats{ErrorCategory: modeladapter.ProviderErrorTransport, HTTPStatus: "not_recorded"}); got != "transport error (no HTTP response)" {
+		t.Fatalf("transport summary = %q", got)
+	}
+	if got := safeProviderErrorSummary(ProviderStreamStats{ErrorCategory: "status_4xx", HTTPStatus: "401"}); got != "status_4xx status=401" {
+		t.Fatalf("http summary = %q", got)
 	}
 }
 

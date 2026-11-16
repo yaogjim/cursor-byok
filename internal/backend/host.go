@@ -573,6 +573,7 @@ var observabilitySummaryFieldKeys = []string{
 	"missing_blob_key_count", "missing_blob_count", "checkpoint_request_id",
 	"phase", "checkpoint_result", "blob_count", "pending_blob_count",
 	"error_summary", "provider_error_summary", "provider_error_summary_type",
+	"request_composition", "image_retention",
 }
 
 const observabilitySummaryMaxRunes = 512

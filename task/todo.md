@@ -578,4 +578,32 @@ DELIVERY_STATUS: blocked
 
 - 提供能连接本地 stdio bridge 的真实 ACP Client/编辑器，或明确授权并提供其版本、启动方式和临时 HOME/workspace 验收边界。届时先作 metadata-only 探针，再冻结协议与权限合同。
 
+## 用户附图请求预算补齐（2026-11-15）
+
+TASK_ID: provider-user-image-budget-20261115
+STATUS: in_progress
+OWNER: 当前会话
+DELIVERY_STATUS: verified-partial
+
+- 已确认范围/验收：旧工具图优先裁剪，其次历史轮用户图；当前轮及来源未知用户图保护；逐张占位且保留文本；剩余超预算继续发送并暴露摘要数字。仅改请求副本，不改历史、不做降采样、不新增拒绝策略。
+- 已实现：SourceTurnSeq 历史投影与当前 turnSeq 透传、用户图裁剪、user_omitted / over_budget / over_budget_bytes 摘要；策略测试及 selectedImages → projector → service 集成测试通过。
+- 详细验证及限制唯一记录：[process 用户附图预算](../docs/process.md#用户附图纳入-provider-请求字节预算2026-11-15verified-partial)。backend 回归与 Go 构建通过；没有提交或替换运行实例。
+- 下一步：以包含历史轮和当前轮附图的真实 Cursor 请求验收，确认 provider 收到当前图且历史图占位、摘要与请求组成一致；尚缺 driveProvider → HTTP 全链预算接线测试。本次 DMG 未重建，不能把源码验证当成安装版验收。
+
+## provider 上传失败诊断补点（2026-11-15）
+
+TASK_ID: provider-wrote-request-diagnostics-20261115
+STATUS: in_progress
+OWNER: 当前会话
+DELIVERY_STATUS: verified-partial
+
+- 目标：让 `connect timeout` 能区分"请求体上传失败"和"上传完成但等首包超时"，同时不污染 `wrote_request_ms`。
+- 已实现：`RecordWroteRequest(at, err)` 成功才记录完成时间；失败只存稳定分类，原始错误文本不落盘。分类经 stream diagnostics → stats → provider terminal 事件字段 `wrote_request_err`，并加入观测白名单。
+- 验证：model 侧三条测试经历编译失败（RED）后转绿；forwarder 侧两条字段测试为实现后补写、首次即通过（不构成 RED-GREEN）。backend 全量回归与 `go build ./...` 通过；详见 process 同名小节。
+- 下一步：构建并安装新版本后，用一次会超时的真实大请求确认 `wrote_request_err` 与 `wrote_request_at` 的互斥关系和分类命中；据此校准 `providerRequestUploadBytesPerSecond`。尚无真实失败样本，分类覆盖未经运行验证。
+
+## 暂缓事项（不计入活动任务）
+
+- [deferred] `provider-image-downsample-deferred`（S 级分析已完成，未批准实施）：以请求副本内降采样替代占位裁剪。分析与重启条件见系统架构 §19.8。暂缓理由：收益依赖未测得的真实图片分布，缩放实现及依赖复用待核实，并需对"当前轮附图是否可变糊"做产品决策。重启条件：模型反复重读被占位图片、校准后仍频繁 `over_budget`、或用户要求模型必须看到全部图片。第一步是只读编码探针，不是改代码。
+
 ## Completed Work Packages (Historical)

@@ -1679,6 +1679,8 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	if isContinuation {
 		compiled.Tools = nil
 	}
+	imageRetention := ""
+	compiled, imageRetention = service.applyProviderImageRetention(compiled, modelID, turnSeq)
 	if !isContinuation {
 		if compacted, compactErr := service.maybeCompactBeforeProvider(stream, conversation, compiled); compactErr != nil {
 			service.setTurnPhase(stream, TurnPhaseFailed)
@@ -1737,6 +1739,7 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 		MaxTokens:          maxTokens,
 		RequestKnobs:       requestKnobs,
 		CompileSummary:     compiled.CompileSummary,
+		ImageRetention:     imageRetention,
 		Observer:           service.recorder,
 		ArtifactPaths:      &modeladapter.LLMArtifactPaths{},
 		StreamDiagnostics:  diagnostics,
@@ -2449,12 +2452,24 @@ func safeProviderTerminalMessage(err error) string {
 	if category == "" {
 		category = "provider_error"
 	}
-	status := "not_recorded"
 	var httpErr *modeladapter.HTTPStatusError
 	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
-		status = fmt.Sprintf("%d", httpErr.StatusCode)
+		return fmt.Sprintf("%s status=%d", category, httpErr.StatusCode)
 	}
-	return category + " status=" + status
+	var timeout *modeladapter.LivenessTimeoutError
+	if errors.As(err, &timeout) && timeout != nil {
+		switch timeout.Phase {
+		case modeladapter.LivenessPhaseConnect:
+			return timeout.Error() + " (no response headers)"
+		case modeladapter.LivenessPhaseFirstEvent:
+			return timeout.Error() + " (no model output)"
+		}
+		return timeout.Error()
+	}
+	if category == modeladapter.ProviderErrorTransport {
+		return "transport error (no HTTP response)"
+	}
+	return category + " (no HTTP status)"
 }
 
 // closeStreamWithProviderError 在真实 LLM/provider 出错时通过 RunSSE 传回错误，并正常结束流。
@@ -3537,6 +3552,30 @@ func (service *Service) resolveContextWindowTokens(modelID string) uint32 {
 		return projectedConversationMaxTokens
 	}
 	return clampInt64ToUint32(int64(channel.ContextWindowTokens))
+}
+
+// resolveProviderConnectTimeoutSeconds 取当前模型渠道计划的建连超时，用于推导请求体预算。
+func (service *Service) resolveProviderConnectTimeoutSeconds(modelID string) int64 {
+	if service != nil && service.resolver != nil {
+		if planResolver, ok := service.resolver.(modeladapter.ChannelPlanResolver); ok {
+			plan, err := planResolver.SelectChannelPlanForModel(context.Background(), strings.TrimSpace(modelID))
+			if err == nil && plan != nil && plan.ConnectTimeoutSeconds > 0 {
+				return int64(plan.ConnectTimeoutSeconds)
+			}
+		}
+	}
+	return providerRequestDefaultConnectTimeoutSeconds
+}
+
+// applyProviderImageRetention 按渠道建连超时推导字节预算，必要时裁剪自动补入的历史图片。
+func (service *Service) applyProviderImageRetention(compiled CompiledConversation, modelID string, currentTurnSeq int64) (CompiledConversation, string) {
+	budgetBytes := providerRequestByteBudget(service.resolveProviderConnectTimeoutSeconds(modelID))
+	if budgetBytes <= 0 {
+		return compiled, ""
+	}
+	var retention providerImageRetention
+	compiled.Messages, retention = applyProviderImageBudget(compiled.Messages, compiled.Tools, budgetBytes, currentTurnSeq)
+	return compiled, retention.Summary()
 }
 
 func (service *Service) syncConversationContextWindowTokens(stream *ActiveStream, conversationID string, conversation *ConversationFile) (*ConversationFile, error) {

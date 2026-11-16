@@ -372,6 +372,11 @@ type ProviderStreamStats struct {
 	FirstEventAt             time.Time
 	HeaderAt                 time.Time
 	FirstByteAt              time.Time
+	WroteRequestAt           time.Time
+	WroteRequestMS           int64
+	WroteRequestErr          string
+	FirstResponseByteAt      time.Time
+	FirstResponseByteMS      int64
 	LastByteAt               time.Time
 	BodyEndAt                time.Time
 	LastEffectiveContentAt   time.Time
@@ -410,6 +415,7 @@ type ProviderRequest struct {
 	EnforceOutputLimit  bool // 仅摘要等内部调用启用：强制把 MaxTokens 作为输出预算发送。
 	RequestKnobs        map[string]any
 	CompileSummary      string
+	ImageRetention      string
 	Observer            modeladapter.LLMArtifactObserver
 	ArtifactPaths       *modeladapter.LLMArtifactPaths
 	RequestBodyOverride map[string]any

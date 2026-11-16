@@ -1775,6 +1775,7 @@ type projectedReplayMessage struct {
 }
 
 func newProjectedReplayMessage(message modeladapter.Message, entry HistoryEntry) projectedReplayMessage {
+	message.SourceTurnSeq = entry.TurnSeq
 	return projectedReplayMessage{
 		Message:              cloneReplayModelMessage(message),
 		replayAggregationKey: replayModelCallAggregationKey(entry),

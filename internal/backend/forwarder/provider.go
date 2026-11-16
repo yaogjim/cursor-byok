@@ -68,6 +68,7 @@ func (gateway *DefaultProviderGateway) StartStream(ctx context.Context, req Prov
 		Stream:              true,
 		RequestKnobs:        requestKnobs,
 		CompileSummary:      req.CompileSummary,
+		ImageRetention:      req.ImageRetention,
 		Observer:            req.Observer,
 		ArtifactPaths:       req.ArtifactPaths,
 		RequestBodyOverride: req.RequestBodyOverride,

@@ -48,12 +48,24 @@ const (
 	PartialBoundaryPartialTool   = "partial_tool"
 	PartialBoundaryCompletedTool = "completed_tool"
 	PartialBoundaryCheckpoint    = "checkpoint"
+
+	// WroteRequestErr* 是请求体写入失败的稳定分类；原始错误文本可能含地址，不落盘。
+	WroteRequestErrBrokenPipe = "broken_pipe"
+	WroteRequestErrReset      = "reset"
+	WroteRequestErrDeadline   = "deadline"
+	WroteRequestErrCanceled   = "canceled"
+	WroteRequestErrTimeout    = "timeout"
+	WroteRequestErrUnknown    = "unknown"
 )
 
 // StreamDiagnostics 收集单次 provider HTTP 流的可选时间线与关闭原因。
 // 所有方法对 nil 接收者都是 no-op；旧日志缺失时调用方应投影为 unknown/not_recorded。
 type StreamDiagnostics struct {
 	mu                     sync.Mutex
+	attemptStartedAt       time.Time
+	wroteRequestAt         time.Time
+	wroteRequestErr        string
+	firstResponseByteAt    time.Time
 	headerAt               time.Time
 	firstByteAt            time.Time
 	lastByteAt             time.Time
@@ -82,6 +94,12 @@ type StreamDiagnostics struct {
 
 // StreamDiagnosticsSnapshot 是 StreamDiagnostics 的只读拷贝。
 type StreamDiagnosticsSnapshot struct {
+	AttemptStartedAt       time.Time
+	WroteRequestAt         time.Time
+	WroteRequestMS         int64
+	WroteRequestErr        string
+	FirstResponseByteAt    time.Time
+	FirstResponseByteMS    int64
 	HeaderAt               time.Time
 	FirstByteAt            time.Time
 	LastByteAt             time.Time
@@ -134,6 +152,17 @@ func (d *StreamDiagnostics) RecordHeader(status, attempt int, at time.Time) {
 }
 
 // RecordHTTPResponse 记录不含 header 值正文的安全传输元数据。
+func attemptElapsedMS(start, at time.Time) int64 {
+	if start.IsZero() || at.IsZero() {
+		return 0
+	}
+	value := at.Sub(start).Milliseconds()
+	if value < 0 {
+		return 0
+	}
+	return value
+}
+
 func (d *StreamDiagnostics) RecordHTTPResponse(resp *http.Response, attempt int, at time.Time) {
 	if d == nil || resp == nil {
 		return
@@ -166,6 +195,66 @@ func (d *StreamDiagnostics) RecordConnection(reused, wasIdle bool) {
 	d.connectionObserved = true
 }
 
+// RecordWroteRequest 记录当前 HTTP attempt 的请求体写入结果。
+// 写入失败时只保存稳定分类：失败时刻不是上传耗时，不能当成完成时间。
+func (d *StreamDiagnostics) RecordWroteRequest(at time.Time, err error) {
+	if d == nil {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	category := classifyWroteRequestError(err)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if category != "" {
+		if d.wroteRequestErr == "" {
+			d.wroteRequestErr = category
+		}
+		return
+	}
+	if d.wroteRequestAt.IsZero() {
+		d.wroteRequestAt = at.UTC()
+	}
+}
+
+// classifyWroteRequestError 复用已有 typed 判定，避免依赖错误字符串。
+func classifyWroteRequestError(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, syscall.EPIPE):
+		return WroteRequestErrBrokenPipe
+	case isTypedResetError(err):
+		return WroteRequestErrReset
+	case errors.Is(err, context.DeadlineExceeded):
+		return WroteRequestErrDeadline
+	case errors.Is(err, context.Canceled):
+		return WroteRequestErrCanceled
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return WroteRequestErrTimeout
+	}
+	return WroteRequestErrUnknown
+}
+
+// RecordFirstResponseByte 记录当前 HTTP attempt 收到首个响应字节的时间。
+func (d *StreamDiagnostics) RecordFirstResponseByte(at time.Time) {
+	if d == nil {
+		return
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.firstResponseByteAt.IsZero() {
+		d.firstResponseByteAt = at.UTC()
+	}
+}
+
 // RecordSSEEvent 只保存协议元数据；response ID 仅保留不可逆短哈希。
 func (d *StreamDiagnostics) RecordSSEEvent(eventType, responseID string, sequence int64, responseStatus string) {
 	if d == nil {
@@ -192,6 +281,10 @@ func (d *StreamDiagnostics) RecordSSEEvent(eventType, responseID string, sequenc
 }
 
 func (d *StreamDiagnostics) resetAttemptLocked() {
+	d.attemptStartedAt = time.Now().UTC()
+	d.wroteRequestAt = time.Time{}
+	d.wroteRequestErr = ""
+	d.firstResponseByteAt = time.Time{}
 	d.headerAt = time.Time{}
 	d.firstByteAt = time.Time{}
 	d.lastByteAt = time.Time{}
@@ -313,6 +406,12 @@ func (d *StreamDiagnostics) Snapshot() StreamDiagnosticsSnapshot {
 		transport = TransportOutcomeStarted
 	}
 	return StreamDiagnosticsSnapshot{
+		AttemptStartedAt:       d.attemptStartedAt,
+		WroteRequestAt:         d.wroteRequestAt,
+		WroteRequestMS:         attemptElapsedMS(d.attemptStartedAt, d.wroteRequestAt),
+		WroteRequestErr:        d.wroteRequestErr,
+		FirstResponseByteAt:    d.firstResponseByteAt,
+		FirstResponseByteMS:    attemptElapsedMS(d.attemptStartedAt, d.firstResponseByteAt),
 		HeaderAt:               d.headerAt,
 		FirstByteAt:            d.firstByteAt,
 		LastByteAt:             d.lastByteAt,

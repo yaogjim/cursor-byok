@@ -230,3 +230,45 @@ func TestSummarizeDebugArtifactPayloadKeepsCodexAffinityObservability(t *testing
 		t.Fatalf("body leaked into summary: %#v", summary)
 	}
 }
+
+func TestLLMSummaryKeepsImageRetentionInBasicMode(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	const retention = "deduped=1;omitted=2;omitted_bytes=2048;retained_image_bytes=4096;budget_bytes=7864320;estimated_bytes=6000"
+	recorder.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1", "llm_summary", map[string]any{
+		"image_retention": retention,
+	})
+	rawEvent, ok := capture.onlyCapture(t).Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("payload data type = %T", capture.captures[0].Payload.Data)
+	}
+	summary, _ := rawEvent["payload_summary"].(map[string]any)
+	if summary["image_retention"] != retention {
+		t.Fatalf("image_retention dropped from basic capture: %#v", rawEvent)
+	}
+	if capture.captures[0].Event.Fields["image_retention"] != retention {
+		t.Fatalf("image_retention dropped from trace event fields: %#v", capture.captures[0].Event.Fields)
+	}
+}
+
+func TestLLMSummaryKeepsRequestCompositionInBasicMode(t *testing.T) {
+	capture := &debugRecorderTestCapture{}
+	recorder := newDebugRecorder(t.TempDir(), nil, debugRecorderTestConfig("basic"), capture)
+	t.Cleanup(recorder.Close)
+	const composition = "total_bytes=26212162;messages_bytes=25000000;image_bytes=20000000"
+	recorder.LogProviderArtifact(context.Background(), "request-1", "conversation-1", "model-call-1", "llm_summary", map[string]any{
+		"request_composition": composition,
+	})
+	rawEvent, ok := capture.onlyCapture(t).Payload.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("payload data type = %T", capture.captures[0].Payload.Data)
+	}
+	summary, _ := rawEvent["payload_summary"].(map[string]any)
+	if summary["request_composition"] != composition {
+		t.Fatalf("request_composition dropped from basic capture: %#v", rawEvent)
+	}
+	if capture.captures[0].Event.Fields["request_composition"] != composition {
+		t.Fatalf("request_composition dropped from trace event fields: %#v", capture.captures[0].Event.Fields)
+	}
+}

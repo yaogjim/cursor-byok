@@ -7,6 +7,31 @@
 
 ## 一、待完成的内容
 
+### macOS 本地构建（2026-11-15；1.91.0 arm64）
+
+- 用户要求记录降采样替代路线并暂缓，随后构建 macOS；分析保存于系统架构 §19.8，未授权实施降采样。更正此前分析：513 KiB/s 来自未经独立验证的服务器处理时间假设，不是实测速率；新增缩放依赖是否必要也未核实，不作为既定事实。
+- `PATH="$HOME/go/bin:$PATH" task build` 成功，产物 `bin/macos-arm64.dmg`（26,051,953 bytes），包含当前工作区的图片预算与上传失败诊断改动。
+- `hdiutil verify`：VALID；只读挂载核验 CFBundleShortVersionString=1.91.0、Mach-O arm64、`codesign --verify --deep --strict` 通过、Signature=adhoc；核验后已卸载本次挂载卷，未运行包内程序。
+- SHA-256：`c9c8fc26d50c95ef475be0a543d37004239a7b422b5418cd753415c6bb778650`。
+- 本地打包验收通过；未安装或替换运行实例、未提交、未发布；未做 Developer ID/notarization、Intel 构建及本次真实 Cursor 复现，功能状态仍为 verified-partial。
+
+### 用户附图纳入 provider 请求字节预算（2026-11-15；verified-partial）
+
+- 根因：原图片预算仅裁剪 `role=tool`，历史用户附图虽计入请求估算但不会被裁剪，仍可能导致大请求上传超时。
+- 已确认规则：先占位旧工具图，再逐张占位历史轮用户图；当前轮及轮次未知的用户图不裁剪、不去重。保留用户文本，其余图片不连带删除；用户图占位提示需要时请用户重新附图，不承诺可 Read 重读。预算为软限制，仍超出时继续发送并记录 `over_budget` / `over_budget_bytes` / `user_omitted`，不增加新的拒绝策略。
+- 接线：历史 projector 从 HistoryEntry.TurnSeq 注入仅内存 `Message.SourceTurnSeq`（`json:"-"`）；driveProvider 传递当前 turnSeq；预算在请求副本上执行，不改 canonical history。RetainedBytes 现在包含用户图。
+- 验证：先前新增测试因缺少 UserOmitted/OverBudgetBytes 编译失败（RED）；实现后定向策略测试及 `TestSelectedUserImagesReplayThroughServiceBudget` 通过。后者覆盖真实 selectedImages protobuf → history projector → service 预算、尾部 user 提醒及原输入不变；不是 driveProvider → HTTP 全链测试。
+- 最终检查：`go test ./internal/backend/...` 全部通过；`go build ./...` 成功（链接器提示部分对象 macOS 14.0 高于目标 11.0，不声称已验收 macOS 11）；`git diff --check` 通过。
+- 缺口：test/data gap——没有本次用户附图的真实 Cursor 重放及 driveProvider 到 HTTP 的完整预算接线测试；env gap——未重建/安装本次 DMG，运行实例未替换。当前大图仍超预算时可能超时，这是保护当前意图的明确取舍。其他待办（WroteRequest 错误、预算校准、Chat 实测）不在本次修改范围。代码未提交。
+
+### provider 上传失败诊断补点（2026-11-15；verified-partial）
+
+- 问题：`httptrace.WroteRequestInfo` 的 `Err` 被丢弃，`connect timeout` 无法区分"上传失败"与"上传完成但等首包超时"；失败时刻若被当成完成时刻，还会污染 `wrote_request_ms` 与后续预算校准。
+- 改动：`RecordWroteRequest(at, err)` 仅在成功时记录完成时间，失败只保存稳定分类（`broken_pipe` / `reset` / `deadline` / `canceled` / `timeout` / `unknown`），原始错误文本不落盘。分类经 `applyProviderStreamDiagnostics` → `providerTerminalFields` 输出 `wrote_request_err`，并加入 `streamDiagnosticFieldKeys` 白名单。
+- 验证：model 侧三条测试先因缺字段与常量编译失败（RED），实现后通过；forwarder 侧两条字段测试为实现后补写、首次即通过，不构成 RED-GREEN。`go test ./internal/backend/...` 全通过，`go build ./...` 成功，`git diff --check` 通过。
+- 缺口：test/data gap——尚无真实上传失败样本，分类命中率未经运行验证；该字段只出现在 provider terminal 事件，未在 `llm_summary` 工件重复。范围外发现：`internal/backend/server/config/types.go` 存在既有 gofmt 偏差，未处理。
+- 未提交、未重建 DMG；要采集这条数据必须先构建并安装新版本。
+
 ### 控制面 404 最小修复（2026-11-15；本地验证通过，verified-partial）
 
 **决策与链路**：用户批准系统架构 §19.6：未登录独立控制面账号时，GetEffectiveUserPlugins/GetKnownServers 返回 200 空集合；已登录仍转发官方；写操作不放开。Analytics Batch 本地接收后丢弃并返回空 BatchResponse，不转发、不新增事件正文日志。主链为 Cursor 查询 → Host 路由 → 未登录空结果/登录官方响应；遥测是旁路，不宣称插件安装或官方服务可用。
