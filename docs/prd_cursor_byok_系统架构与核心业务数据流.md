@@ -2295,6 +2295,17 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 - **导入来源共存**：§19.3j导入图原ID/原bytes不动；singular独立保留，repeated原序作为前缀再追加本地Archive，State.Summary换最新本地summary，root不展开外来archive。旧官方isSummary root只作上下文不入本地archive。来源整组覆盖只用于读取导入来源，不得覆盖掉新本地Archive；若历史出现缺来源本地压缩，整个native投影停止，不用后次来源掩盖缺失。独立复核若证明混合子域未闭合，明确仅该子域停止，纯本地及纯导入切片不回退，不猜测singular展开语义。
 - **Gate与验证**：独立只读精查官方A/h赋值纠正“实际provider裁剪集合”的旧推断；另一独立设计模拟核对plan clone/event、区间冻结、预算fallback及默认错误schema隔离。主控限定混合来源组合和域外压缩兼容，正常链=生产plan→完整同源摘要→预算校验→载荷落盘重读→正确原生图→全ACK才发布；最高风险=源失配/预算不足/工具半组/缺来源，均保全停止。永久RED→GREEN覆盖单次/两次、重复/raw多结果、候选与实摘计数、旧格式/坏来源、取消/fork、unsupported用户压缩兼容、真实HTTP末次archive子节点ACK门禁。落点types.go/compaction.go/projector.go及既有compaction/projector/import/checkpoint测试；隔离HOME禁下载、两包test/定向race/vet/gofmt/diff检查。UI/真实发布/迁移为域外；可回退代码但保留新增可选字段的读取能力与全部历史/内容，不能宣称任意旧版回滚安全。本节只批准该切片，不等于保存阶段完成。
 
+### 19.3l 同回合固定输入的原生归档表示（2026-11-15，Design Readiness=approved 仅限本切片）
+
+需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY。本切片只闭合同回合压缩布局含活动固定输入（user_message/request_context/prompt_context）时的原生归档表示，不切换默认 writer、不迁移旧会话、不操作真实数据。
+
+- **复核事实（3.29.15 已核实）**：工作台仍解析 `agent.v1.ConversationSummaryArchive` 四字段；转录展开按 `summary_archives` 次序拼接 `summarized_messages`，再追加 root 中非 system、非 isSummary 消息，无去重且不读 `window_tail`；扩展侧不再解析归档内部，模型上下文由服务端负责。新版 `aiserver.v1.ConversationSummary` 的气泡 ID 截断字段客户端只定义不消费，本地条目也没有气泡 ID，不能作为本切片承载。
+- **合同（用户 2026-11-15 批准）**：本地历史、`compaction_layout` 与 `native_archive_source` 保持不变，仍记录完整冻结前缀及 `candidate=actual=旧摘要+CoreMessage` 计数、`window_tail=0`。原生归档 `summarized_messages` 必须是该前缀普通 CoreMessage 的**有序子序列**，且只允许排除布局 `PinnedInputs` 指向的条目；不得排除其他条目、改变相对顺序或丢弃摘要/`summary_message`。活动输入只由 ROOT 承载，保持原相对顺序；ROOT 仍为 isSummary→固定输入→连续尾段。
+- **外部可见结果**：按上述已验证展开语义得到 [归档子序列][固定输入][尾段]，每个固定输入恰一次；不承诺可重建输入在原始前缀中的位置。摘要是对完整前缀的概括，不因归档子序列而重算。
+- **失败边界**：布局/来源校验失败、固定引用失配、遗漏、非固定条目被过滤或子序列计数与来源不符时明确拒绝，不写半成品、不改计数、不回退旧规则。
+- **范围与证据**：仅独立 native writer（`nativeCheckpointMessages` / `projectNativeCheckpointProjection`）及测试；默认 `ProjectCheckpointProjection` 输出不变且不经过该域。永久回归须模拟工作台展开并断言固定输入恰好一次、归档顺序保持、默认检查点与历史不变；官方服务端互操作未验证（data gap），不声称该检查点在官方服务端无损展开。
+- **回滚**：代码可回退；已写记录字段合法、旧代码可读，但输入在原始前缀中的位置语义不能恢复。
+
 ### 19.4 子模型参数：原拟议承载方案被否证
 
 已核实链路为 `SubagentArgs.model_id` → `toSubagentExecutorArgs` → `createOrResumeSubagent` → 模型配置 → `RequestedModel`。协议没有独立 parameters/max_mode 字段；取证基线中仓库 `service.go` 的 `parseSubagentModelOverrides` 及 `core/types.go` 只保留参数数量，`bridge/exec/bridge.go` 只发送 model_id。内存参数保留的最小修复合同现见 §19.4b；它不改变客户端消费路径。
@@ -2341,6 +2352,85 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 
 **当前门禁：C0-P1（§19.4b）、C0-H1（§19.3a/b）、C0-W1（§19.3c 的有限数据域）及 C0-W2（§19.3e 的 plan/todos 域）分别闭合；整个 C0 和 C1/C2A/C2B/C4 完整验收仍未通过。** 未启用异步恢复、默认原生检查点写出/增量同步或官方正文改写。未知项只阻塞对应工作包或数据域；不再要求全部取证结束后才修复已确认且合同清晰的缺陷。
 
+
+## 19.6 控制面未登录只读空结果与遥测本地丢弃（2026-11-15）
+
+Design Readiness=approved（仅本切片，用户已确认）。需求：Cursor 通过本地后端查询插件/MCP 时，未登录独立控制面账号应获得真实的空集合语义，而非 404；不宣称插件安装、注册表或官方账号已可用。
+
+- 已核实：`host.go` 后注册的控制面路由覆盖早期插件 mock；`cursorControlPlaneAction` 在 nil/未登录账号时使用 fallback，已登录使用独立账号转发官方。`proto/aiserver_v1.proto` 的 `GetEffectiveUserPluginsResponse` 只有 repeated plugins/marketplaces，`BatchResponse` 为空消息；客户端 GetKnownServersResponse 为 repeated servers，零字段 protobuf 表示空集合。
+- 接口合同：仅 POST `DashboardService/GetEffectiveUserPlugins`、`MCPRegistryService/GetKnownServers` 在 nil/未登录账号时本地返回 HTTP 200、零字段 protobuf（Connect envelope 沿现有响应编码），不读取账号凭据、不访问外部服务、不伪造条目。已登录仍沿原认证转发链，官方错误不改为空结果；写操作及其他控制面接口不变。
+- POST `AnalyticsService/Batch` 无论账号状态均返回本地 HTTP 200 空 BatchResponse；丢弃遥测、不持久化事件、不新增正文日志、不转发官方。这是接收成功而非分析入库成功。
+- 取舍：空结果不能区分“未登录”和“确无条目”，这是用户批准的代价；显式不可用或保留 404 会继续触发客户端失败。只删除 fallback 即可回退两项查询，删除 Batch 路由即可恢复旧行为，无数据迁移、无新增配置/UI。
+- 实施与验收：`host.go` 路由 → 既有控制面分支/空 protobuf 响应 → 客户端可解码结果；`cursor_contract_test.go` 从 Host mux 验证 nil/未登录、proto/Connect、写操作 404；注入离线 HTTPClient 验证登录查询仍转发及错误透传、Batch 不访问上游。先测试复现，再实现，运行 backend/upstream 相关测试、build 与 diff 检查。真实 Cursor 界面/日志变化需后续用户实测，本地测试不证明真机告警已消失。
+- 追踪：需求“未登录查询空结果/遥测本地丢弃” → 本节合同 → `cursor-control-plane-404-followup` → 对应 Host 路由测试；执行证据仅记入 `docs/process.md`。GetScmConnectionStatus、TLS 告警、其他 404 不在本次范围。
+
+## 19.7 剩余本地未实现接口的空响应合并切片（2026-11-15，Design Readiness=approved）
+
+用户已批准本合同并确认两点：`NameTab` 排除、`GetScmConnectionStatus` 不区分身份。本合同覆盖三条接口。
+
+### 1. 问题与根因（已核实）
+
+三类 404 都产生于本地，均不访问外部服务，但根因不同：
+
+- `DashboardService/GetScmConnectionStatus`：无精确路由，命中 `/aiserver.v1.DashboardService/*` wildcard 内的 `http.NotFound`（`host.go:1131`）。现存 trace 快照 51 次全 404。
+- `AgentService/UpdateConversationMetadata`：有精确路由，`routeOfficialAgentControl` 仅在请求带官方 Bearer 身份时转发官方；本地中继身份或被识别为非官方时落到 `agentServicePassthrough` 的 `http.NotFoundHandler()`（`host.go:708`、`client.go:369-389`）。现存快照 2 次 `local_runtime` 404。
+- `AiService/ReportCommitAiAnalytics`：命中 `/aiserver.v1.AiService/*` wildcard 的本地 handler 并返回 404。现存快照 2 次。
+- 协议字段已核实：`GetScmConnectionStatusResponse{connected, granted_installation_owners, connected_at_ms, provider_disabled, health, reason}`；`UpdateConversationMetadataResponse{}` 与 `ReportCommitAiAnalyticsResponse{}` 均为空消息；`NameTabResponse{name, reason, icon}` 含非空语义字段。
+- 路由优先级有本地先例：`NetworkService/IsConnected` 的精确 POST 路由注册在 wildcard 之后仍能生效（`host.go:1138-1147` 及注释），chi 静态路径优先于通配符，实施不依赖注册顺序。仍以测试锁定该前提。
+
+### 2. 目标与不变量
+
+目标：客户端对这些接口得到稳定、可解码的"本地状态"，而不是让 404 触发失败分支。不变量：不伪造官方能力、不新增对外请求、不读取或记录正文、不改变官方身份请求的既有转发语义、不引入持久化或新配置。
+
+### 3. 接口合同
+
+| 接口 | 触发条件 | 响应 | 语义 |
+|---|---|---|---|
+| `POST /aiserver.v1.DashboardService/GetScmConnectionStatus` | 任意身份 | 200，零字段 `GetScmConnectionStatusResponse`（`connected=false`） | "本地未接入官方 SCM"，与 BYOK 模式事实一致；不区分身份 |
+| `POST /aiserver.v1.AgentService/UpdateConversationMetadata` | 官方 Bearer 身份 | 维持现状：原样转发官方，官方错误不吞成空结果 | 不变 |
+| 同上 | 本地中继/无身份 | 200，空 `UpdateConversationMetadataResponse` | "本地已接收、不落服务端"；标题由客户端本地保存 |
+| `POST /aiserver.v1.AiService/ReportCommitAiAnalytics` | 任意身份 | 200，空 `ReportCommitAiAnalyticsResponse` | 遥测接收成功，不持久化、不转发 |
+
+约定：Connect/proto 编码沿用 `upstream.EmptyProtoAction` 的既有实现（按入站 Content-Type 自适应），不新增第二套编码器。三个响应都不含可空身份字段，零值不冒充"已连接/已保存"之外的断言。
+
+### 4. 决策与取舍
+
+4.1 **`GetScmConnectionStatus` 不区分身份、一律本地零值**（推荐与否决方案并列）
+- 采用：实现简单、零对外发送、状态稳定。
+- 否决 A：官方身份转发官方。理由：会新增对外请求；BYOK 主要路径不使用官方 GitHub App；且当前无证据表明客户端需要真实 SCM 状态。
+- 否决 B：保持 404。理由：客户端可能把 404 当作"功能不可用"进入错误分支；零值至少是真实状态。
+- 代价：若用户同时使用官方账号且已连接 GitHub，该接口会宣称未连接。这是本合同最明显的语义损失，接受与否由用户确认。
+
+4.2 **`UpdateConversationMetadata` 保留官方转发分支**：只在无官方身份时改空确认。代价是服务端不再保存标题（本地模式本来也不保存），若客户端依赖服务端回显标题，可能表现为标题不同步；该影响未知，列入真机验收项。
+
+4.3 **`NameTab` 已确认排除**
+- 证据：`NameTabResponse.name` 为空会把标签页名称置空；现状 404 时客户端走回退路径。空值有害而非中性。
+- 结论：本切片不处理，保持 404（已有回归测试锁定）；待真机确认标签页命名确有缺失后，另立"本地命名"切片（需决定是否调用本地模型，属于新功能）。
+
+### 5. 执行、失败与回退
+
+- 实施落点：`internal/backend/host.go` 新增两条精确 POST 路由（Local 使用 `EmptyProtoAction`）；为 `UpdateConversationMetadata` 单独构造一个以空响应 http.Handler 为 local 参数的 `AgentRouteAction`，不改 `agent_action.go` 的官方身份判定与转发实现；`internal/backend/server/upstream/action.go` 新增与 `EmptyProtoAction` 共用编码的 http.Handler 形式。
+- 失败：空响应构造失败时返回 500 并记录错误，不静默吞掉；转发分支的错误仍按既有 `ErrorEncoder` 处理。
+- 回退：删除两条精确路由、恢复 `UpdateConversationMetadata` 原 passthrough 即回到旧的 404 行为；无数据迁移、无配置开关。
+- 可观测性：三条路径的 Host 层 `request_finished` 应出现明确 route 名与 200，便于后续日志统计；不新增字段日志。
+
+### 6. 验证合同
+
+- 针对每条接口：Host mux 级测试，覆盖 proto 与 Connect 两种入站的字节与 Content-Type、零值可解码。
+- `UpdateConversationMetadata`：本地中继身份与无身份 → 200 空；官方 Bearer → 转发到离线陷阱，断言目标/身份与官方错误原样透传，不吞成空。
+- 回归保护：`NameTab` 保持 404（防止未来被顺手改成空响应）；`GetEffectiveUserPlugins`/`GetKnownServers`/`Batch` 的 §19.6 行为不回归。
+- 静态与构建：相关包 `go test`、`go build ./...`、`go vet`、gofmt、`git diff --check`。
+- 真机：本轮用户暂停，接口在真实 Cursor 中的效果（SCM 状态展示、标题同步、告警是否消失）记为 test/env gap，不以本地测试替代。
+
+### 7. 事实缺口与未决
+
+- `unknown`：客户端是否依赖 `UpdateConversationMetadata` 的 200 回显标题；`GetScmConnectionStatus` 零值对 UI 的具体影响。
+- `unknown`：51 次查询是否由固定轮询驱动（频次证据来自 trace 快照，未核实触发源）。
+- 已关闭（2026-11-15 用户确认）：4.3 的 `NameTab` 排除、4.1 的"不区分身份"取舍。实施结果与证据见 `docs/process.md` 同名记录。
+
+### 8. 追踪
+
+需求"剩余未实现接口不返回误导性 404" → 本节合同 → `task/todo.md` 的 `control-plane-remaining-404-semantics` → 上述测试证据；执行记录只写入 `docs/process.md`。§19.6 的已完成切片不受本切片影响。
 
 ## 20. DESIGN-CORRECTNESS-REPAIR-20261026：摘要、MCP 与 Gateway 最小修复
 

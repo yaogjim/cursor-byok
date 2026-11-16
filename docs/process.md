@@ -7,6 +7,35 @@
 
 ## 一、待完成的内容
 
+### 控制面 404 最小修复（2026-11-15；本地验证通过，verified-partial）
+
+**决策与链路**：用户批准系统架构 §19.6：未登录独立控制面账号时，GetEffectiveUserPlugins/GetKnownServers 返回 200 空集合；已登录仍转发官方；写操作不放开。Analytics Batch 本地接收后丢弃并返回空 BatchResponse，不转发、不新增事件正文日志。主链为 Cursor 查询 → Host 路由 → 未登录空结果/登录官方响应；遥测是旁路，不宣称插件安装或官方服务可用。
+
+**根因与改动**：早期插件 mock 被后注册控制面路由覆盖，未登录 fallback 为 404；MCP 查询同样如此，Batch 未注册。`host.go` 为两项查询接入 EmptyProtoAction fallback、移除被覆盖的插件注册，Batch 在 Local/Upstream 两种执行目标均接本地空响应；`upstream/action.go` 复用既有 protobuf/Connect 响应编码，不新增协议类型或依赖。
+
+**验证证据**（均 `GOPROXY=off`，Go 工具 PATH 包含 `/Users/yaogj/go/bin`）：
+- RED：新增测试最初因 EmptyProtoAction 未实现编译失败；补齐响应处理后，Host 测试实际复现 GetEffectiveUserPlugins 未登录 HTTP 404。接线后 GREEN。
+- `go test ./internal/backend ./internal/backend/server/upstream -count=1`：通过（16.848s / 0.481s）。新增 `control_plane_fallback_test.go` 覆盖 nil/未登录账号、三条实际 Host 路由、proto/Connect 空响应字节及 Content-Type；InstallUserPlugin/AddMarketplace 保留 404。已登录控制面 action 使用离线 HTTPClient，验证官方目标/测试凭据及 403 原样透传；这是转发分支测试，不是已登录完整 Host 到真实官方验收。
+- 已登录 Batch 经真实 Host mux、两种入站身份及离线上游陷阱验证返回空响应，陷阱未命中。未使用真实账号或外部服务。
+- `go build ./...`：成功；仍有 macOS 14.0 对象链接目标 11.0 的 linker warning，未扩项修改构建配置。
+- `go vet ./internal/backend ./internal/backend/server/upstream`、gofmt、`git diff --check`：通过。
+
+**状态与缺口**：delivery_status=verified-partial；本地路由能力与相关契约已验证，真实 Cursor 页面/新日志及已登录真实官方响应未验收（test/env gap）。无本切片未决产品策略；GetScmConnectionStatus 等剩余接口的空响应语义已另行按系统架构 §19.7 实现（见下节），TLS unknown certificate 不在本次范围。未替换/重启应用，未操作真实账号，未 commit/push。下一步若获应用构建/替换授权，由 Cursor 发起上述查询及 Batch，再核对响应和新 trace，确认对应 404 是否消失；不以本地测试替代该证据。
+
+### 剩余未实现接口空响应合并切片（2026-11-15；本地验证通过，verified-partial）
+
+**决策与范围**：用户批准系统架构 §19.7，并确认排除 `NameTab`、`GetScmConnectionStatus` 不区分身份。范围仅三条接口：SCM 连接状态任意身份返回 `connected=false`；`UpdateConversationMetadata` 在本地中继/无身份时空确认、官方身份维持转发；`ReportCommitAiAnalytics` 本地空响应。`NameTab` 因 `NameTabResponse.name` 空值会把标签页名称置空而排除，保持 404，并由回归测试锁定。
+
+**根因与改动**：三条路径原先分别由 Dashboard wildcard 404、AgentService passthrough 的 `http.NotFoundHandler()`、AiService wildcard 本地 404 产生，均属本地未实现，不涉及上游。`host.go` 新增两条精确 POST 路由并复用 `EmptyProtoAction`；`UpdateConversationMetadata` 改用专用 `AgentRouteAction`，其 local 为新增的 `upstream.EmptyProtoHTTPHandler`（与 `EmptyProtoAction` 共用编码），`agent_action.go` 的官方身份判定与转发实现未改。无新协议类型、无持久化、无配置开关、无对外请求。
+
+**验证证据**（`GOPROXY=off`，Go 工具 PATH 含 `/Users/yaogj/go/bin`）：
+- RED：新增 `control_plane_remaining_404_test.go` 后三条接口实际返回 404（SCM、ReportCommitAiAnalytics、本地身份元数据更新），`NameTab` 已为 404。
+- GREEN：`go test ./internal/backend ./internal/backend/server/upstream -count=1` 通过（16.913s / 0.471s）。新测试覆盖 SCM 三种身份 × proto 入站的零值解码与离线上游陷阱零命中、遥测空响应、元数据本地两种身份空确认且陷阱零命中、官方身份转发一次且 403 原样透传、`NameTab` 保持 404。
+- 既有 `TestHostAgentModelSwitchNudgeForwardsOfficial` 中"本地身份元数据更新期望 404"是旧行为断言，已按 §19.7 更新为 200 空确认；官方 204 与未知过程 404 断言不变，官方命中次数仍为 1。
+- `go build ./...` 成功（仅既有 macOS linker warning）；`go vet`、改动文件 gofmt、`git diff --check` 通过。仓库既有 `internal/backend/server/config/types.go` 的 gofmt 差异与本切片无关，未处理。
+
+**状态与缺口**：delivery_status=verified-partial；本地契约与构建已验证，真实 Cursor 中的 SCM 状态展示、标题同步、告警是否消失（test/env gap），以及客户端是否依赖元数据 200 回显标题（unknown）均未验证。回退：删除两条精确路由并恢复 `UpdateConversationMetadata` 原 passthrough 即回到 404，无数据迁移。未替换/重启应用，未访问真实账号，未 commit/push。
+
 ### 协议提取器新描述符适配（2026-11-13；本地同步链通过，verified-partial）
 
 **授权与范围**：用户确认按推荐方案实施；只读本机 Cursor 3.29.15 默认 `cursor-always-local/dist/main.js`，支持紧凑 message/enum 描述符，保留既有 service，并同批生成 Go/Connect 代码。不修改 Cursor.app，不替换或重启运行中的应用，不访问真实账号，不提交或推送。
@@ -35,6 +64,24 @@
 - **修复 2（旧模型 ID 语义）**：`readRequestedModelID` 初次改用 `SplitN` 改变了旧实现的最后一个冒号语义（多冒号与冒号开头边界）；恢复 `LastIndex` 并新增边界回归（`model:high`→`model`、`a:b:c`→`a:b`、`:high`→`:high`），保持与旧客户端兼容行为一致。
 - **service 合并策略**：bundle 中存在的同名 service 优先，旧快照块仅在 bundle 缺失时保留；旧快照中 bundle 未包含的方法（`DashboardService` Crew 系列 14 个、`BackgroundComposerService` 2 个）不再保留。依据是 bundle 的对应 service 定义存在且包含大量更新方法，判断为上游删除；未用真实服务端验证（data gap），已记录。
 - **复核后有效证据**：重跑 `sync:proto`（诊断同上）、`check:proto`、`go build ./...`、受影响包 test 与 vet、`gofmt -l`、`git diff --check` 均通过；新增 service 生成与旧模型 ID 边界测试通过。
+
+#### 生成后应用真机验证（v1.91.0；日志时间 2026-11-16 UTC）
+
+- **授权与操作**：用户批准前后端全量工作区构建，并要求构建后等待确认；随后用户自行更新替换 `/Applications/cursor-byok.app`，完成交互测试后要求读取日志。本轮仅只读分析已有日志，没有追加真实模型请求、重启应用或 commit/push。运行版本已核实为 1.91.0。
+- **证据范围**：本机 trace `20261116T004427.215073000Z-0e8667065699`，读取快照 1280 条，截止 `2026-11-16T00:49:42.675155Z`；会话仍开放，不把快照计数当成后续累计值。以下 sequence 均为该 trace 内编号；不记录提示词、工具正文或凭据。
+- **真实主链路通过**：3 次 `run`，对应 terminal #511/#874/#1178 均 `status=completed`、`semantic_outcome=succeeded`；5 次 `model_call_final`（#507/#789/#870/#1079/#1174）全部 succeeded。模型为 OpenAI 兼容 Responses 通道的 `glm-5.3`，不是 Codex 缓存 A/B 证据。5 个 provider 流均 HTTP 200、收到 `response.completed`、`downstream_published=true`，无 partial tool、无 stream recovery。
+- **工具往返**：第二轮 1 次、第三轮 2 次工具派发并完成；共收到 `exec_result=3`、`exec_control=3`，随后各有下一次 provider pass 的文本输出及成功 terminal。另有 `kv_result=43`、`metadata=5`。证据证明工具结果回传后模型续答链路可用，不证明工具实际业务结果或文件内容逐项正确。
+- **没有发生模型重试/回退**：5 条 `retry_decision` 全为 attempt=1、success；5 条 `provider_fallback_attempt` 全为 channel_attempt=1、chain_attempts_used=1、recovery_action=success、等待为 0。不能仅凭事件名将其判成故障。
+- **控制面警告（不在本次修改范围）**：`backend_forward_finished` 中 404 共 67 条：GetEffectiveUserPlugins 28、UpdateConversationMetadata 21、GetKnownServers 7、AnalyticsService/Batch 5、GetScmConnectionStatus 3、GetNewChatNudgeParameterizedModelPicker / ReportCommitAiAnalytics / NameTab 各 1。部分 request_finished 也记录同一请求，不能相加当成独立失败。插件/MCP 属既有待决策略；其余路径仅登记观察，尚未逐一核实返回来源、产品影响或是否与本次更新有关，不一概归因为未登录。后续沿用控制面分析任务，不擅自 mock 200。
+- **2026-11-15 只读根因复核（未修改代码或应用；快照取自现存 trace 会话）**：四类 404 根因已分开核实，均非上游返回，也均未与本次二进制修复建立因果。
+  - `AnalyticsService/Batch`：v1.91.0 无精确路由，chi 对未注册路径直接返回默认 404（`server/route.go:39-53` 没有全局 NotFound；`fallbackUpstream` 只在已注册路由且 `ctx.Mode==ModeUpstream` 时生效，`route_precedence_test.go` 的兜底用例也只覆盖已注册 `/fallback`）。因此该请求不经过 Observe 中间件、不转发官方；日志一致：该路径只有 mitm 层记录，无 backend/upstream 层。快照：会话 `20261116T004427` 19 条、会话 `20261112T113226` 11 条，均为 404。
+  - `DashboardService/GetScmConnectionStatus`（快照 51 条全 404）、`AiService/ReportCommitAiAnalytics`（2 条）、`AiService/NameTab`（1 条）：命中已注册 wildcard（`/aiserver.v1.DashboardService/*`、`/aiserver.v1.AiService/*`）内的本地 404，Host 层 `request_finished` 显示 `execution_target=local_runtime`、`error_category=client_error`。属于"接口未实现"，与账号是否登录无关。
+  - `AgentService/UpdateConversationMetadata`（现存快照 2 条；上表 21 条来自已轮转快照）：有精确路由，但 `routeOfficialAgentControl` 仅在请求带官方 Bearer 身份时转发，本地模式下落到 `agentServicePassthrough` 的 `http.NotFoundHandler()`（`host.go:708`），Host 层记录同样为 `local_runtime` 404。
+  - `GetEffectiveUserPlugins`/`GetKnownServers`：控制面路由未登录 fallback 的 `http.NotFound`，已按系统架构 §19.6 修复为本地空集合。
+  - 协议侧：`GetScmConnectionStatusResponse`（connected/provider_disabled/health 等）与 `UpdateConversationMetadataResponse`（空消息）字段已核实；两者均可本地返回零值语义，但**属于新产品语义，尚未获批准**，不在已完成切片的回退范围内。用户可见影响（SCM 状态展示、会话标题是否依赖服务端 200）仍需真机证据，当前为 unknown。
+
+- **TLS 警告**：10 条 `tls_handshake_failed` 事件，涉及 api2.cursor.sh/api3.cursor.sh，原因为 `remote error: tls: unknown certificate`；部分带 repeated_count，10 条不是实际握手失败总次数。日志表明客户端拒绝了部分 MITM 证书，但未定位具体客户端进程/信任链差异；已完成对话不能证明所有连接正常（env gap）。
+- **覆盖边界与结论**：补齐「重新生成协议后的应用 → 真实 Cursor → 模型流 → 工具结果回传 → 续答结束」样本证据；本 trace 未记录 payload_source，不能从该 trace 单独证明 binary/hex 分支。未覆盖旧客户端、其他分片、跨平台、全部 RPC 或历史兼容类型内容级回放（test/env/data gap）。第二阶段第一项的本地链与上述真机样本通过，可进入第二项的合同分析；整体 delivery_status 仍为 verified-partial。原“未安装/实机验证”的缺口由本节更新，其余覆盖限制及 service 服务端验证缺口保持不变。
 
 #### 实施前只读探针（历史记录）
 
@@ -202,7 +249,7 @@
 
 tag 触发的 run `40255418051` 首次 macOS job 在 amd64 DMG 生成时 `hdiutil: create failed - Resource busy`（arm64 DMG 数秒前刚成功，属 GitHub macOS runner 瞬态磁盘映像竞争，非代码问题；Windows/Linux 首次即过）。`gh run rerun --failed` 重跑该 job 后四个 job（macOS/Windows/Linux 安装包、发布 GitHub Release）全部成功，Release `v1.79.0` 正式发布（非草稿，2026-10-26T02:01:42Z），含 10 个资产：macOS arm64/amd64 DMG 与 tar.gz、Windows zip 与 installer.exe、Linux tar.gz/deb/rpm 及 update.json。main push 的 run `40255376105` 同步完成三平台构建。实机候选安装验收仍待另行授权（`same-turn-installed-acceptance`）。
 
-### 同一用户回合重复自动压缩（2026-10-24；默认路径本地验证完成，原生固定输入域设计受阻）
+### 同一用户回合重复自动压缩（2026-10-24；默认路径本地验证完成；原生固定输入域 2026-11-15 解阻）
 
 整合负责人：主会话。源码基线 `7f4ae85`，当前为未提交工作树。本轮仅修改本地源码、测试和记录；不安装、打包、重启、提交或推送，不修改真实配置、原始日志和会话。计划为用户批准的 `同回合重复压缩修复_78487422.plan.md`；活动状态以 `task/todo.md` 为准。
 
@@ -250,6 +297,16 @@ tag 触发的 run `40255418051` 首次 macOS job 在 amd64 DMG 生成时 `hdiuti
 - 主会话另在锁定当前源码后运行 `go test ./internal/backend/forwarder -run 'TestSameTurnLayout|TestCompactionDiagnostics|TestRecordCompactionDecision|TestSameTurnCompactionManualKeepsExistingBudgetContract|TestSameTurnCompactionDecisionProductionApply' -count=1 -timeout=120s`（0.699s）及分析器 `go test ./internal/sanitize -count=1 -timeout=120s`（0.332s），均通过，日志 `closeout-targeted.log`、`closeout-sanitize.log`。
 - 当前源码再运行forwarder/model/backend/observability四包vet及分析器sanitize vet，均退出0；损坏布局、压缩诊断、记录脱敏和手动摘要的定向race通过（1.900s）。日志 `closeout-vet.log`、`closeout-analyzer-vet.log`、`closeout-race.log`；终态为 `CLOSEOUT_VET_RACE_PASS`。
 - `completion-source-sha256.json` 锁定当前15个Go文件的SHA-256；记录收口后已再次比较哈希、核查gofmt与 `git diff --check`，全部通过，终态 `COMPLETION_REVIEW_CLOSEOUT_PASS` 保存在 `closeout-final.log`。前轮全链路重复race记录保留为此前覆盖，本轮仅对受影响校验及诊断补验，不冒称全链路重复race再次运行。
+
+**2026-11-15 原生固定输入表示复核与解阻**
+
+用户要求继续第二阶段第二项；按“恢复该域须重新完成表示合同评审”先只读复核，再经用户批准后实现。
+
+- **复核事实（Cursor 3.29.15 本机只读）**：工作台仍定义并解析 `agent.v1.ConversationSummaryArchive`（`summarized_messages`/`summary`/`window_tail`/`summary_message`）；转录导出按 `summary_archives` 次序拼接 `summarized_messages`，再追加 ROOT 中非 system、非 isSummary 消息，不去重且不读 `window_tail`；扩展侧不再解析归档内部。新 `aiserver.v1.ConversationSummary` 气泡 ID 字段客户端只定义不消费，本地条目无气泡 ID。据此确认原“归档与 ROOT 重复”成立，但“过滤输入必丢顺序”过严：归档子序列内部顺序与工具配对不受影响，丢的只是输入在前缀中的原始位置，而 ROOT 本就按摘要→固定输入→尾段重放。
+- **合同**：用户批准系统设计 §19.3l——本地历史、布局与 `native_archive_source` 不变；原生归档 `summarized_messages` 仅排除布局 `PinnedInputs` 指向的条目，其他普通 CoreMessage 有序保留；活动输入只由 ROOT 承载；`window_tail=0`，来源计数按完整前缀核验。
+- **实现**：移除 `validateAllLocalCompactionSources` 的固定输入拒绝门禁；`nativeCoreMessagesFromCanonicalPrefix` 增加排除集合并按完整前缀返回 CoreMessage 实例计数（排除项每条各计一条）；`localCompactionArchiveFromEntry`/`addLocalCompactionArchive` 改为按下标取摘要并携带布局固定引用；两个原生入口（`nativeCheckpointMessages`、`projectNativeCheckpointProjection`）共用同一校验与输出。默认 `ProjectCheckpointProjection` 未改。
+- **证据**：新增回归 `TestSameTurnLayoutNativeCarriesPinnedInputsOnlyInRoot` 及四轮循环内校验，先 RED（`native checkpoint: compaction pinned inputs not supported`），实现后 GREEN；回归按工作台语义展开归档+ROOT，断言用户输入与 request_context 各恰一次、归档顺序保持、固定输入位于连续尾段之前、默认检查点与历史不变。`go test ./internal/backend/forwarder -count=1` 通过（73.4s）；`go test ./... -count=1` 全部通过；定向 race 通过（10.6s）；`go build ./...` 成功（保留既有 macOS 链接目标 warning）；受影响包 vet、gofmt、`git diff --check` 通过。
+- **状态与缺口**：本切片 delivery_status=verified-partial；官方服务端展开语义未验证（data gap），默认 writer 仍未切换、未发布、未提交。已写记录字段合法，旧代码可读，但输入在前缀中的原始位置不能重建。
 
 **交付与回滚**
 
