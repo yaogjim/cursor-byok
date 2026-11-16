@@ -2767,32 +2767,31 @@ const (
 var nativeCheckpointMaxSafeInteger = big.NewInt(9007199254740991)
 
 var (
-	errNativeCheckpointPinnedInputsUnsupported = errors.New("native checkpoint: compaction pinned inputs not supported")
-	errNativeCheckpointNilGraph                = errors.New("native checkpoint: nil blob graph")
-	errNativeCheckpointUnknownRole             = errors.New("native checkpoint: unknown message role")
-	errNativeCheckpointSystemRole              = errors.New("native checkpoint: system role not supported")
-	errNativeCheckpointReasoningMetadata       = errors.New("native checkpoint: reasoning metadata not supported")
-	errNativeCheckpointContentParts            = errors.New("native checkpoint: content parts not supported")
-	errNativeCheckpointProviderMetadata        = errors.New("native checkpoint: provider item metadata not supported")
-	errNativeCheckpointToolCallIdentity        = errors.New("native checkpoint: tool call missing id or name")
-	errNativeCheckpointToolCallType            = errors.New("native checkpoint: unsupported tool call type")
-	errNativeCheckpointToolResultIdentity      = errors.New("native checkpoint: tool result missing id or name")
-	errNativeCheckpointUnexpectedToolCalls     = errors.New("native checkpoint: unexpected tool calls for role")
-	errNativeCheckpointJSONInvalid             = errors.New("native checkpoint: invalid JSON value")
-	errNativeCheckpointNumber                  = errors.New("native checkpoint: number outside safe integer domain")
-	errNativeCheckpointResultType              = errors.New("native checkpoint: tool result string is itself valid JSON (W-RESULT-TYPE)")
-	errNativeCheckpointOrphanToolResult        = errors.New("native checkpoint: orphan tool result")
-	errNativeCheckpointDuplicateToolResult     = errors.New("native checkpoint: duplicate tool result")
-	errNativeCheckpointMissingToolResult       = errors.New("native checkpoint: missing tool result")
-	errNativeCheckpointDuplicateToolCall       = errors.New("native checkpoint: duplicate tool call id in batch")
-	errNativeCheckpointToolNameMismatch        = errors.New("native checkpoint: tool result name mismatch")
-	errNativeCheckpointPendingToolResults      = errors.New("native checkpoint: message inserted before tool results completed")
-	errNativeCheckpointMessageTooLarge         = errors.New("native checkpoint: message exceeds client JSON size limit")
-	errNativeCheckpointIDAmbiguity             = errors.New("native checkpoint: content id collides with inline JSON (W-ID-AMBIGUITY)")
-	errNativeCheckpointNativePayload           = errors.New("native checkpoint: invalid native message payload")
-	errNativeCheckpointNativeGroup             = errors.New("native checkpoint: invalid native message group")
-	errNativeCheckpointNativeParts             = errors.New("native checkpoint: native message parts truncated or mismatched")
-	errNativeCheckpointNativeViewMismatch      = errors.New("native checkpoint: native message view mismatch")
+	errNativeCheckpointNilGraph            = errors.New("native checkpoint: nil blob graph")
+	errNativeCheckpointUnknownRole         = errors.New("native checkpoint: unknown message role")
+	errNativeCheckpointSystemRole          = errors.New("native checkpoint: system role not supported")
+	errNativeCheckpointReasoningMetadata   = errors.New("native checkpoint: reasoning metadata not supported")
+	errNativeCheckpointContentParts        = errors.New("native checkpoint: content parts not supported")
+	errNativeCheckpointProviderMetadata    = errors.New("native checkpoint: provider item metadata not supported")
+	errNativeCheckpointToolCallIdentity    = errors.New("native checkpoint: tool call missing id or name")
+	errNativeCheckpointToolCallType        = errors.New("native checkpoint: unsupported tool call type")
+	errNativeCheckpointToolResultIdentity  = errors.New("native checkpoint: tool result missing id or name")
+	errNativeCheckpointUnexpectedToolCalls = errors.New("native checkpoint: unexpected tool calls for role")
+	errNativeCheckpointJSONInvalid         = errors.New("native checkpoint: invalid JSON value")
+	errNativeCheckpointNumber              = errors.New("native checkpoint: number outside safe integer domain")
+	errNativeCheckpointResultType          = errors.New("native checkpoint: tool result string is itself valid JSON (W-RESULT-TYPE)")
+	errNativeCheckpointOrphanToolResult    = errors.New("native checkpoint: orphan tool result")
+	errNativeCheckpointDuplicateToolResult = errors.New("native checkpoint: duplicate tool result")
+	errNativeCheckpointMissingToolResult   = errors.New("native checkpoint: missing tool result")
+	errNativeCheckpointDuplicateToolCall   = errors.New("native checkpoint: duplicate tool call id in batch")
+	errNativeCheckpointToolNameMismatch    = errors.New("native checkpoint: tool result name mismatch")
+	errNativeCheckpointPendingToolResults  = errors.New("native checkpoint: message inserted before tool results completed")
+	errNativeCheckpointMessageTooLarge     = errors.New("native checkpoint: message exceeds client JSON size limit")
+	errNativeCheckpointIDAmbiguity         = errors.New("native checkpoint: content id collides with inline JSON (W-ID-AMBIGUITY)")
+	errNativeCheckpointNativePayload       = errors.New("native checkpoint: invalid native message payload")
+	errNativeCheckpointNativeGroup         = errors.New("native checkpoint: invalid native message group")
+	errNativeCheckpointNativeParts         = errors.New("native checkpoint: native message parts truncated or mismatched")
+	errNativeCheckpointNativeViewMismatch  = errors.New("native checkpoint: native message view mismatch")
 )
 
 // nativeCheckpointRootMessage 是原生 CoreMessage 的最小顶层结构，仅含 role/content。
@@ -3411,28 +3410,25 @@ func validateAllLocalCompactionSources(conversation *ConversationFile) error {
 		return nil
 	}
 	found := false
+	hadPrevious := false
 	for index, entry := range conversation.Entries {
 		if !isCompactionSummaryKind(entry.Kind) {
 			continue
 		}
 		found = true
-		payload, err := decodeCompactionSummaryPayload(entry.Payload)
+		_, source, _, total, err := localCompactionArchiveFromEntry(conversation.Entries, index)
 		if err != nil {
 			return err
 		}
-		layout, _, err := validateCompactionLayout(conversation.Entries, index, payload)
-		if err != nil {
-			return err
+		oldSummaryCount := uint32(0)
+		if hadPrevious {
+			oldSummaryCount = 1
 		}
-		// 原生归档只能表达连续移除前缀，无法标识同时独立重放的输入。
-		// 直接写出会在归档展开后与 ROOT 重复；拒绝此独立 writer 的新域，
-		// 不删输入、不改计数、不影响默认检查点，待原生表示合同重新评审。
-		if layout != nil && len(layout.PinnedInputs) > 0 {
-			return errNativeCheckpointPinnedInputsUnsupported
+		if source.CandidateCount != source.ActualCount || source.WindowTail != 0 ||
+			source.ActualCount != oldSummaryCount+total {
+			return fmt.Errorf("native checkpoint: invalid native archive source")
 		}
-		if _, _, _, err := localCompactionArchiveFromEntry(conversation.Entries, entry); err != nil {
-			return err
-		}
+		hadPrevious = true
 	}
 	if !found {
 		return fmt.Errorf("native checkpoint: compaction not supported")
@@ -3440,12 +3436,13 @@ func validateAllLocalCompactionSources(conversation *ConversationFile) error {
 	return nil
 }
 
-func nativeCoreMessagesFromCanonicalPrefix(entries []HistoryEntry, start, end int) ([][]byte, error) {
+func nativeCoreMessagesFromCanonicalPrefix(entries []HistoryEntry, start, end int, excluded map[int]struct{}) ([][]byte, int, error) {
 	if start < 0 || end > len(entries) || start > end {
-		return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+		return nil, 0, fmt.Errorf("native checkpoint: invalid native archive source")
 	}
 	dropped := canceledReplayDroppedIndexes(entries)
 	selected := make([]HistoryEntry, 0, end-start)
+	excludedCount := 0
 	for index := start; index < end; index++ {
 		if _, skip := dropped[index]; skip {
 			continue
@@ -3453,15 +3450,20 @@ func nativeCoreMessagesFromCanonicalPrefix(entries []HistoryEntry, start, end in
 		if !isOrdinaryPromptReplayEntryKind(entries[index].Kind) {
 			continue
 		}
+		// 固定输入只由 ROOT 承载；归档子序列仅排除这些条目，其他条目不得过滤。
+		if _, skip := excluded[index]; skip {
+			excludedCount++
+			continue
+		}
 		selected = append(selected, entries[index])
 	}
 	if len(selected) == 0 {
-		return nil, nil
+		return nil, excludedCount, nil
 	}
 	graph := newCheckpointBlobGraph()
 	ids, err := encodeNativeCheckpointEntryRoot(selected, graph, true)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	repo := make(map[string][]byte, len(graph.blobs))
 	for _, blob := range graph.list() {
@@ -3471,11 +3473,12 @@ func nativeCoreMessagesFromCanonicalPrefix(entries []HistoryEntry, start, end in
 	for _, id := range ids {
 		data, ok := repo[string(id)]
 		if !ok {
-			return nil, fmt.Errorf("native checkpoint: invalid native archive source")
+			return nil, 0, fmt.Errorf("native checkpoint: invalid native archive source")
 		}
 		messages = append(messages, append([]byte(nil), data...))
 	}
-	return messages, nil
+	// total 按 CoreMessage 实例计数：被排除的固定输入每条各算一条，与归档消息合并。
+	return messages, len(messages) + excludedCount, nil
 }
 
 func encodeNativeIsSummaryMessage(text string) ([]byte, error) {
@@ -3508,11 +3511,11 @@ func attachLocalCompactionNativeGraph(conversation *ConversationFile, projection
 	archives := make([][]byte, 0)
 	var latestSummary []byte
 	hadPrevious := false
-	for _, entry := range conversation.Entries {
+	for index, entry := range conversation.Entries {
 		if !isCompactionSummaryKind(entry.Kind) {
 			continue
 		}
-		archiveID, summaryID, err := addLocalCompactionArchive(conversation.Entries, entry, graph, hadPrevious)
+		archiveID, summaryID, err := addLocalCompactionArchive(conversation.Entries, index, graph, hadPrevious)
 		if err != nil {
 			return err
 		}
@@ -3528,8 +3531,8 @@ func attachLocalCompactionNativeGraph(conversation *ConversationFile, projection
 	return nil
 }
 
-func addLocalCompactionArchive(entries []HistoryEntry, entry HistoryEntry, graph *checkpointBlobGraph, hadPrevious bool) ([]byte, []byte, error) {
-	payload, source, summarized, err := localCompactionArchiveFromEntry(entries, entry)
+func addLocalCompactionArchive(entries []HistoryEntry, index int, graph *checkpointBlobGraph, hadPrevious bool) ([]byte, []byte, error) {
+	payload, source, summarized, total, err := localCompactionArchiveFromEntry(entries, index)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3538,7 +3541,7 @@ func addLocalCompactionArchive(entries []HistoryEntry, entry HistoryEntry, graph
 		oldSummaryCount = 1
 	}
 	if source.CandidateCount != source.ActualCount || source.WindowTail != 0 ||
-		source.ActualCount != oldSummaryCount+uint32(len(summarized)) {
+		source.ActualCount != oldSummaryCount+total {
 		return nil, nil, fmt.Errorf("native checkpoint: invalid native archive source")
 	}
 	summaryText := strings.TrimSpace(payload.Summary)
@@ -3581,24 +3584,35 @@ func addLocalCompactionArchive(entries []HistoryEntry, entry HistoryEntry, graph
 	return graph.add(archiveBody), graph.add(summaryBody), nil
 }
 
-func localCompactionArchiveFromEntry(entries []HistoryEntry, entry HistoryEntry) (compactionSummaryEntryPayload, *compactionNativeArchiveSource, [][]byte, error) {
-	payload, err := decodeCompactionSummaryPayload(entry.Payload)
+func localCompactionArchiveFromEntry(entries []HistoryEntry, index int) (compactionSummaryEntryPayload, *compactionNativeArchiveSource, [][]byte, uint32, error) {
+	if index < 0 || index >= len(entries) {
+		return compactionSummaryEntryPayload{}, nil, nil, 0, fmt.Errorf("native checkpoint: compaction not supported")
+	}
+	payload, err := decodeCompactionSummaryPayload(entries[index].Payload)
 	if err != nil {
-		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: compaction not supported")
+		return compactionSummaryEntryPayload{}, nil, nil, 0, fmt.Errorf("native checkpoint: compaction not supported")
 	}
 	source, err := parseNativeArchiveSource(payload.NativeArchiveSource)
 	if err != nil {
-		return compactionSummaryEntryPayload{}, nil, nil, err
+		return compactionSummaryEntryPayload{}, nil, nil, 0, err
 	}
 	if source == nil {
-		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: compaction not supported")
+		return compactionSummaryEntryPayload{}, nil, nil, 0, fmt.Errorf("native checkpoint: compaction not supported")
 	}
 	if source.PrefixStart < 0 || source.PrefixEnd > len(entries) || source.PrefixStart > source.PrefixEnd {
-		return compactionSummaryEntryPayload{}, nil, nil, fmt.Errorf("native checkpoint: invalid native archive source")
+		return compactionSummaryEntryPayload{}, nil, nil, 0, fmt.Errorf("native checkpoint: invalid native archive source")
 	}
-	summarized, err := nativeCoreMessagesFromCanonicalPrefix(entries, source.PrefixStart, source.PrefixEnd)
+	layout, pinned, err := validateCompactionLayout(entries, index, payload)
 	if err != nil {
-		return compactionSummaryEntryPayload{}, nil, nil, err
+		return compactionSummaryEntryPayload{}, nil, nil, 0, fmt.Errorf("native checkpoint: invalid compaction layout: %w", err)
 	}
-	return payload, source, summarized, nil
+	excluded := map[int]struct{}{}
+	if layout != nil {
+		excluded = pinned
+	}
+	summarized, total, err := nativeCoreMessagesFromCanonicalPrefix(entries, source.PrefixStart, source.PrefixEnd, excluded)
+	if err != nil {
+		return compactionSummaryEntryPayload{}, nil, nil, 0, err
+	}
+	return payload, source, summarized, uint32(total), nil
 }

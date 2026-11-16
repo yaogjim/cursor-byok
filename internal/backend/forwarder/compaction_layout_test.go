@@ -8,7 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"cursor/gen/agentv1"
+
 	modeladapter "cursor/internal/backend/agent/model"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func sameTurnLayoutPlan(t *testing.T, conversation *ConversationFile) *PendingCompaction {
@@ -98,10 +102,14 @@ func TestSameTurnLayoutStoreCheckpointAndContinue(t *testing.T) {
 					t.Fatalf("默认检查点活动视图不一致:\nwant=%s\ngot=%s", wantJSON, gotJSON)
 				}
 				if !legacyFirst {
-					// 独立原生写出暂不支持归档内仍活动的固定输入；默认检查点已在上面验证。
+					// 原生写出把固定输入只放在 ROOT；归档子序列不得再含同一输入。
 					native, err := projector.projectNativeCheckpointProjection(restored)
-					if err != errNativeCheckpointPinnedInputsUnsupported || native != nil {
-						t.Fatalf("带固定输入的原生写出未明确拒绝: %v", err)
+					if err != nil || native == nil {
+						t.Fatalf("带固定输入的原生写出失败: %v", err)
+					}
+					transcript := expandNativeCheckpointTranscript(t, native)
+					if count := transcriptCountSubstring(transcript, "second question"); count != 1 {
+						t.Fatalf("第%d轮原生展开固定输入次数=%d, want 1: %#v", cycle+1, count, transcript)
 					}
 				}
 				previousEnd = plan.Layout.PrefixEnd
@@ -339,8 +347,10 @@ func TestSameTurnLayoutPromptContextsSurviveRepeatedCompaction(t *testing.T) {
 	}
 }
 
-func TestSameTurnLayoutNativeRejectsPinnedWithoutChangingDefault(t *testing.T) {
+func TestSameTurnLayoutNativeCarriesPinnedInputsOnlyInRoot(t *testing.T) {
 	conversation := compactionAppendOnlyConversation(t)
+	context := HistoryEntry{TurnSeq: 2, RequestID: "request-2", Role: "system", Kind: "request_context", Payload: json.RawMessage(`{"file_contents":{"/tmp/input.txt":"必要的原样上下文"}}`)}
+	appendEntriesInPlace(conversation, []HistoryEntry{context})
 	appendSameTurnBatches(t, conversation, "native-pinned", 3)
 	plan := sameTurnLayoutPlan(t, conversation)
 	if len(plan.Layout.PinnedInputs) == 0 {
@@ -351,15 +361,49 @@ func TestSameTurnLayoutNativeRejectsPinnedWithoutChangingDefault(t *testing.T) {
 	}
 	before, _ := json.Marshal(conversation)
 	projection, err := NewHistoryProjector().projectNativeCheckpointProjection(conversation)
-	if err == nil || !strings.Contains(err.Error(), "pinned inputs not supported") || projection != nil {
-		t.Fatalf("原生写出没有阻止归档/ROOT重复输入: projection=%v err=%v", projection != nil, err)
+	if err != nil || projection == nil {
+		t.Fatalf("原生写出没有承载固定输入: projection=%v err=%v", projection != nil, err)
 	}
-	if _, err := nativeCheckpointMessages(conversation); err == nil || !strings.Contains(err.Error(), "pinned inputs not supported") {
-		t.Fatalf("第二原生入口绕过独立输入门禁: %v", err)
+	repo := make(map[string][]byte, len(projection.Blobs))
+	for _, blob := range projection.Blobs {
+		repo[string(blob.ID)] = blob.Data
+	}
+	if len(projection.State.GetSummaryArchives()) != 1 {
+		t.Fatalf("archives=%d, want 1", len(projection.State.GetSummaryArchives()))
+	}
+	archive := &agentv1.ConversationSummaryArchive{}
+	if err := proto.Unmarshal(nativeCheckpointBlob(t, repo, projection.State.GetSummaryArchives()[0], "archive"), archive); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range archive.GetSummarizedMessages() {
+		raw := nativeCheckpointBlob(t, repo, id, "summarized message")
+		if bytes.Contains(raw, []byte("second question")) || bytes.Contains(raw, []byte("必要的原样上下文")) {
+			t.Fatalf("固定输入仍进入归档: %s", raw)
+		}
+	}
+	transcript := expandNativeCheckpointTranscript(t, projection)
+	if count := transcriptCountSubstring(transcript, "second question"); count != 1 {
+		t.Fatalf("用户输入展开次数=%d, want 1: %#v", count, transcript)
+	}
+	if count := transcriptCountSubstring(transcript, "必要的原样上下文"); count != 1 {
+		t.Fatalf("请求上下文展开次数=%d, want 1: %#v", count, transcript)
+	}
+	pinnedIndex := transcriptIndexSubstring(transcript, "second question")
+	if pinnedIndex < 0 {
+		t.Fatalf("固定输入未出现在 ROOT: %#v", transcript)
+	}
+	if firstIndex := transcriptIndexSubstring(transcript, "first question"); firstIndex < 0 || firstIndex > pinnedIndex {
+		t.Fatalf("归档顺序被改写: first=%d pinned=%d %#v", firstIndex, pinnedIndex, transcript)
+	}
+	if tailIndex := transcriptIndexSubstring(transcript, "native-pinned-2"); tailIndex <= pinnedIndex {
+		t.Fatalf("固定输入未位于连续尾段之前: pinned=%d tail=%d %#v", pinnedIndex, tailIndex, transcript)
+	}
+	if _, err := nativeCheckpointMessages(conversation); err != nil {
+		t.Fatalf("第二原生入口仍拒绝固定输入: %v", err)
 	}
 	checkpoint, err := NewHistoryProjector().ProjectCheckpointProjection(conversation)
 	if err != nil || checkpoint == nil {
-		t.Fatalf("默认检查点被原生门禁阻断: %v", err)
+		t.Fatalf("默认检查点被原生改动影响: %v", err)
 	}
 	messages, err := importedConversationStateModelMessages(checkpoint.State)
 	if err != nil {
@@ -371,8 +415,86 @@ func TestSameTurnLayoutNativeRejectsPinnedWithoutChangingDefault(t *testing.T) {
 	}
 	after, _ := json.Marshal(conversation)
 	if !bytes.Equal(before, after) {
-		t.Fatal("原生拒绝或默认检查点改写历史")
+		t.Fatal("原生写出或默认检查点改写历史")
 	}
+}
+
+// expandNativeCheckpointTranscript 按 Cursor 3.29.15 工作台的转录展开语义拼接：
+// 依 summary_archives 次序取 summarized_messages，再追加 ROOT 中非 system、非 isSummary 消息。
+func expandNativeCheckpointTranscript(t *testing.T, projection *CheckpointProjection) []string {
+	t.Helper()
+	repo := make(map[string][]byte, len(projection.Blobs))
+	for _, blob := range projection.Blobs {
+		repo[string(blob.ID)] = blob.Data
+	}
+	var out []string
+	appendRaw := func(raw []byte) {
+		var item struct {
+			Role            string          `json:"role"`
+			Content         json.RawMessage `json:"content"`
+			ProviderOptions json.RawMessage `json:"providerOptions"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatalf("原生消息不是 JSON: %s", raw)
+		}
+		if item.Role == "system" {
+			return
+		}
+		summary, err := parseImportedNativeSummaryFlag(item.Role, item.Content, item.ProviderOptions)
+		if err != nil {
+			t.Fatalf("原生消息标记非法: %v: %s", err, raw)
+		}
+		if summary {
+			return
+		}
+		var text string
+		if json.Unmarshal(item.Content, &text) == nil {
+			out = append(out, item.Role+":"+text)
+			return
+		}
+		out = append(out, item.Role+":"+string(item.Content))
+	}
+	for _, id := range projection.State.GetSummaryArchives() {
+		if len(id) == 0 {
+			continue
+		}
+		archive := &agentv1.ConversationSummaryArchive{}
+		if err := proto.Unmarshal(nativeCheckpointBlob(t, repo, id, "archive"), archive); err != nil {
+			t.Fatal(err)
+		}
+		for _, messageID := range archive.GetSummarizedMessages() {
+			if len(messageID) == 0 {
+				continue
+			}
+			appendRaw(nativeCheckpointBlob(t, repo, messageID, "summarized message"))
+		}
+	}
+	for _, id := range projection.State.GetRootPromptMessagesJson() {
+		if len(id) == 0 {
+			continue
+		}
+		appendRaw(nativeCheckpointBlob(t, repo, id, "root message"))
+	}
+	return out
+}
+
+func transcriptCountSubstring(transcript []string, want string) int {
+	count := 0
+	for _, item := range transcript {
+		if strings.Contains(item, want) {
+			count++
+		}
+	}
+	return count
+}
+
+func transcriptIndexSubstring(transcript []string, want string) int {
+	for index, item := range transcript {
+		if strings.Contains(item, want) {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestSameTurnLayoutRequestContextIsPinned(t *testing.T) {

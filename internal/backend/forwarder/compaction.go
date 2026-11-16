@@ -1189,7 +1189,7 @@ func freezeHomologousCompactionPlan(plan *compactionPlan, conversation *Conversa
 	plan.CompactTurnCount = clampInt64ToInt32(int64(len(plan.CompactedTurns)))
 	plan.MessagesToCompact = ordinaryPromptCountInPrefix(conversation.Entries, start, end)
 	plan.NativeArchiveSource = nil
-	coreMessages, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, start, end)
+	_, total, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, start, end, nil)
 	if err != nil {
 		return nil
 	}
@@ -1197,7 +1197,7 @@ func freezeHomologousCompactionPlan(plan *compactionPlan, conversation *Conversa
 	if strings.TrimSpace(plan.ExistingSummary) != "" {
 		oldSummaryCount = 1
 	}
-	actual := oldSummaryCount + uint32(len(coreMessages))
+	actual := oldSummaryCount + uint32(total)
 	plan.NativeArchiveSource = &compactionNativeArchiveSource{
 		PrefixStart:    start,
 		PrefixEnd:      end,
@@ -1455,7 +1455,7 @@ func verifyFrozenCompactionSource(conversation *ConversationFile, plan *PendingC
 	if src.PrefixStart != start || src.PrefixEnd != end {
 		return fmt.Errorf("compaction native archive source mismatch")
 	}
-	coreMessages, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, src.PrefixStart, src.PrefixEnd)
+	_, total, err := nativeCoreMessagesFromCanonicalPrefix(conversation.Entries, src.PrefixStart, src.PrefixEnd, nil)
 	if err != nil {
 		return fmt.Errorf("compaction native archive source mismatch: %w", err)
 	}
@@ -1463,7 +1463,7 @@ func verifyFrozenCompactionSource(conversation *ConversationFile, plan *PendingC
 	if strings.TrimSpace(plan.ExistingSummary) != "" {
 		oldSummaryCount = 1
 	}
-	actual := oldSummaryCount + uint32(len(coreMessages))
+	actual := oldSummaryCount + uint32(total)
 	if actual != src.ActualCount || src.CandidateCount != src.ActualCount || src.WindowTail != 0 {
 		return fmt.Errorf("compaction native archive source mismatch")
 	}
