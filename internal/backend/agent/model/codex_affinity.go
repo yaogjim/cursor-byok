@@ -90,13 +90,15 @@ func (router *Router) codexAffinityKey() ([]byte, error) {
 
 func attachCodexAffinity(req StreamRequest, key []byte) StreamRequest {
 	req.CodexAffinity = CodexAffinity{}
+	req.CodexAffinityProfile = ""
 	if subscriptionauth.NormalizeCredentialSource(req.CredentialSource) != subscriptionauth.CredentialSourceCodex {
 		return req
 	}
+	profile := NormalizeCodexAffinityProfile(os.Getenv(CodexAffinityProfileEnv))
+	req.CodexAffinityProfile = profile
 	if !req.StableAccountID || strings.TrimSpace(req.CredentialID) == "" {
 		return req
 	}
-	profile := NormalizeCodexAffinityProfile(os.Getenv(CodexAffinityProfileEnv))
 	if profile == CodexAffinityProfileControl {
 		return req
 	}

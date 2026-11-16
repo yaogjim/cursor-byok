@@ -139,6 +139,9 @@ type StreamRequest struct {
 	StableAccountID bool
 	// CodexAffinity 是仅内存的 managed Codex 缓存亲和结果，禁止写入配置、日志或导出。
 	CodexAffinity CodexAffinity
+	// CodexAffinityProfile 是本次请求归一化后的亲和档位枚举（control/prompt_key/full），
+	// 仅用于脱敏观测归因，不包含派生值；非 codex 来源时为空。
+	CodexAffinityProfile string
 	// MaxConcurrentRequests 是物理上游组的可选并发上限。
 	// 0 表示不限流；非零合法范围 1–16。路由解析后以 ResolvedChannel 的值为准。
 	MaxConcurrentRequests int

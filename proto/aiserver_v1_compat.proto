@@ -1,0 +1,94 @@
+// 本文件保留 Cursor 3.29.15 协议快照中已删除、但本仓库控制面处理仍引用的
+// aiserver.v1 类型与服务。它们不再随扩展 bundle 提供，因此不参与 sync:proto 自动生成。
+// 只允许删除或迁移到现有替代类型，不应继续扩展。
+syntax = "proto3";
+
+package aiserver.v1;
+
+import "aiserver_v1.proto";
+
+option go_package = "cursor/gen/aiserverv1;aiserverv1";
+
+message BatchRepositoryStatusRequest {
+  repeated RepositoryStatusRequest requests = 1;
+}
+
+message BatchRepositoryStatusResponse {
+  repeated RepositoryStatusResponse responses = 1;
+}
+
+message IsConnectedRequest {
+}
+
+message IsConnectedResponse {
+}
+
+// 上游快照已不再提供 NetworkService，但本仓库控制面按该路径提供本地 mock。
+// 保留历史定义，避免生成代码与历史产物不一致。
+service NetworkService {
+  rpc IsConnected(IsConnectedRequest) returns (IsConnectedResponse) {}
+}
+
+message RepositoryStatusRequest {
+  RepositoryInfo repository = 1;
+}
+
+message RepositoryStatusResponse {
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.AuthTokenNotAuthorized (var: Ct)
+  message AuthTokenNotAuthorized {
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.AuthTokenNotFound (var: Jt)
+  message AuthTokenNotFound {
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.EmptyMessage (var: Nt)
+  message EmptyMessage {
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.NotFound (var: wt)
+  message NotFound {
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.NotSubscribed (var: Et)
+  message NotSubscribed {
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.Synced (var: vt)
+  message Synced {
+    string branch = 1;
+    string commit = 2;
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.Syncing (var: It)
+  message Syncing {
+    string branch = 1;
+    string old_commit = 2;
+    string new_commit = 3;
+    float progress = 4;
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.TooBig (var: Bt)
+  message TooBig {
+    int32 max_size = 1;
+  }
+
+  // Copied from: local:aiserver.v1.RepositoryStatusResponse.Uploading (var: St)
+  message Uploading {
+    float progress = 1;
+  }
+
+  optional bool is_owner = 9;
+  oneof status {
+    NotFound not_found = 1;
+    Uploading uploading = 2;
+    Syncing syncing = 3;
+    Synced synced = 4;
+    NotSubscribed not_subscribed = 5;
+    TooBig too_big = 6;
+    AuthTokenNotFound auth_token_not_found = 7;
+    AuthTokenNotAuthorized auth_token_not_authorized = 8;
+    EmptyMessage error_uploading = 10;
+    EmptyMessage error_syncing = 11;
+  }
+}

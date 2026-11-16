@@ -89,6 +89,11 @@ esac
 OUTPUT_PARENT="$(dirname "$OUTPUT_DIR")"
 OUTPUT_BASENAME="$(basename "$OUTPUT_DIR")"
 TEMP_DIR="$(mktemp -d "$OUTPUT_PARENT/.${OUTPUT_BASENAME}.tmp.XXXXXX")"
+# 新格式 bundle 不再携带 service 定义：先把现有产物带入临时目录，
+# 让提取器保留 service 段，同时保留本次未重新生成的包文件。
+if [[ -d "$OUTPUT_DIR" ]]; then
+  cp "$OUTPUT_DIR"/*.proto "$TEMP_DIR"/ 2>/dev/null || true
+fi
 BACKUP_DIR=""
 
 cleanup() {

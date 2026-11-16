@@ -205,3 +205,28 @@ func TestDebugProjectPathsUsesOnlyExplicitWorkspaceKeys(t *testing.T) {
 		t.Fatalf("paths = %#v, want %#v", paths, want)
 	}
 }
+
+func TestSummarizeDebugArtifactPayloadKeepsCodexAffinityObservability(t *testing.T) {
+	summary := summarizeDebugArtifactPayload(map[string]any{
+		"codex_affinity_profile":  "full",
+		"codex_affinity_injected": true,
+		"cache_read_tokens":       int64(42),
+		"cache_read_present":      true,
+		"body":                    map[string]any{"secret": "must-not-leak"},
+	})
+	if summary["codex_affinity_profile"] != "full" || summary["codex_affinity_injected"] != true {
+		t.Fatalf("affinity observability fields = %#v", summary)
+	}
+	if summary["cache_read_present"] != true {
+		t.Fatalf("cache_read_present = %#v", summary["cache_read_present"])
+	}
+	if summary["cache_read_tokens"] != int64(42) {
+		t.Fatalf("cache_read_tokens = %#v", summary["cache_read_tokens"])
+	}
+	if summary["body_omitted"] != true {
+		t.Fatalf("body must be omitted: %#v", summary)
+	}
+	if _, ok := summary["body"]; ok {
+		t.Fatalf("body leaked into summary: %#v", summary)
+	}
+}

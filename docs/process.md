@@ -7,6 +7,104 @@
 
 ## 一、待完成的内容
 
+### 协议提取器新描述符适配（2026-11-13；本地同步链通过，verified-partial）
+
+**授权与范围**：用户确认按推荐方案实施；只读本机 Cursor 3.29.15 默认 `cursor-always-local/dist/main.js`，支持紧凑 message/enum 描述符，保留既有 service，并同批生成 Go/Connect 代码。不修改 Cursor.app，不替换或重启运行中的应用，不访问真实账号，不提交或推送。
+
+**实现**：`proto/ext_tool/extractor.go` 支持 `static $()` 描述符、继承/常量包名、枚举工厂、依赖索引、嵌套、optional/repeated/map/oneof；严格模式对非法引用、未知标量与缺失包名失败。同步脚本先把既有 proto 复制到隔离临时目录，提取器按 package 保留旧 service，移除引用已删除本地类型的 RPC 并输出诊断。原未在默认 bundle 中重新生成的 package 保留原快照，不声称已更新。
+
+**上游删除类型的兼容处理**：独立 `proto/agent_v1_compat.proto` 保留历史会话/摘要类型，`proto/aiserver_v1_compat.proto` 保留现有仓库控制面处理使用的旧类型；字段从原快照保持不变，`build/Taskfile.yml` 将两文件纳入生成，自动提取文件不混入手工类型。prompt 继续使用生成类型解析，未保留重复手写解析器。`RequestedModel` 删除字段 8 后，由 `protocol.IsLegacyVariantStringRepresentation` 读取 protobuf unknown fields，接入选模、推理强度、子模型和调试摘要，防止旧客户端回归。
+
+**有效证据**：
+- `PATH="/Users/yaogj/go/bin:$PATH" task -t build/Taskfile.yml sync:proto`：成功；6200 messages、676 enums（含旧格式）、21630/21630 字段、skipped=0、unresolved=0、placeholders=0；531 个空消息有明确诊断，不等于解析失败。最终产物 agent/aiserver 各含 1/21 个 service：bundle 可识别 10 个 service，其余按旧快照保留；`NetworkService`/`IsConnectedRequest` 改由 compat 手工维护。日志 `/tmp/cursor-proto-sync-final.log`（临时证据，非持久依赖）。
+- `task -t build/Taskfile.yml check:proto`：根协议与提取快照一致；现有脚本只核对两个自动生成文件，无需修改 compat 排除逻辑。
+- `go build ./...`：成功；出现 macOS 14.0 对象链接目标 11.0 的 linker warning，未修改平台构建配置。
+- `go test ./proto/ext_tool ./internal/backend/agent/protocol ./internal/backend/agent/prompt ./internal/backend/forwarder ./internal/backend/server/upstream -count=1`：全部通过。恢复 prompt 原生成类型解析后再次执行提取器/protocol/prompt 测试通过。
+- `go vet ./proto/ext_tool ./internal/backend/agent/protocol ./internal/backend/agent/prompt ./internal/backend/forwarder ./internal/backend/server/upstream`：通过；最终诊断计数补丁后再次对 extractor/protocol/forwarder 执行 vet 通过。
+- 永久语义测试 `TestCompactExtractionPreservesServicesAndGeneratesFields` 覆盖 bundle→提取入口→输出字段/保留 streaming RPC/移除悬空 RPC；既有新旧格式解析测试通过。旧 variant 模型 ID 测试先 RED（错误返回带 `:high` 的原串），兼容读取后 GREEN；子模型参数快照回归通过。修改 Go 文件已 gofmt。
+
+**状态与缺口**：能力链已打通至本地生成、编译和相关测试，delivery_status=verified-partial；未安装/实机验证生成协议后的应用，未验证其他新格式分片、旧版实机或跨平台（test/env gap）。service 采用「bundle 同名优先、旧快照缺失保留、compat 承载手工服务」，旧快照中被 bundle 丢弃的方法判断为上游删除但未用真实服务端验证（data gap）；compat 类型只用于现有历史/控制面行为，不证明上游仍支持该接口。诊断中的 `fields N/N` 仅统计紧凑描述符字段，旧格式字段沿用既有口径不计数。第二阶段的原生布局表示合同和控制面 404 产品策略尚未批准，保持原阻塞/待决状态，不包含在本次交付。
+
+**review 复核与修复（2026-11-13）**：
+
+- **字段解析**：独立只读脚本按 webpack 模块重建「描述符 → 字段表」，与生成文件逐项比对编号、名称、optional/repeated、oneof（按编号排序，忽略书写顺序）。agent 600 个、aiserver 5101 个同名消息 **0 差异**；覆盖生成文件中能从描述符匹配的全部消息。真实 bundle 的字段条目形态为 3 或 4 个 token（21630 条中 20030/1600），无修饰符与 oneof 同现，无 `=jsonName` 形式，map 100 个全部识别。
+- **类型引用**：同模块依赖引用 agent 725 个 **0 mismatch**；aiserver 4420 个中 70 个为跨包类型复制到当前包后使用短名（既有 `copiedTypes` 机制，旧产物同样如此），其余一致。复核脚本未解析的 120/103 项系其自身 class body 扫描限制，抽样确认生成类型正确（`SmartModeApproval`、`OutputLocation` 等）。
+- **缺失类型分类**：agent 100 个缺失中 97 个不在新 bundle（上游删除），3 个为上游嵌套改顶层或换包（`ConversationSummary` 在 aiserver、`ImageProto`/`ImageProto.Dimension` 在 aiserver，均已生成到对应包）；aiserver 366 个缺失中 360 个不在 bundle，6 个为父类型删除后子类型提升为顶层（`File`、`FileDiff`、`PullRequestReference`、`IRange` 等已生成）。没有「能从新格式描述符解析却漏生成」的类型。
+- **枚举**：同名枚举值差异全部为上游新增/删除值（如 `SubscriptionSource` 新增 LINEAR/ORIGIN/FACTORY、`AgentMode` 移除 PROJECT 并新增 CUSTOM）；值名前缀规则与 `QT` flag 一致。compat 类型字段与旧快照逐项一致，含 `RepositoryStatusResponse` oneof 编号与 `ConversationTurnStructure` oneof。
+- **修复 1（手工服务丢失）**：sync 会以 `from_extensions` 覆盖根 proto；HEAD 根 `proto/aiserver_v1.proto` 中手工补充的 `IsConnectedRequest`、`IsConnectedResponse` 与 `NetworkService` 因此丢失（HEAD 根 proto 与 `from_extensions` 本已不同步）。已在 `proto/aiserver_v1_compat.proto` 补 `IsConnectedRequest` 与 `NetworkService`，生成后 `gen/aiserverv1/aiserverv1connect` 重新含 `NetworkServiceClient/Handler`；控制面 mock 路由不受影响。
+- **修复 2（旧模型 ID 语义）**：`readRequestedModelID` 初次改用 `SplitN` 改变了旧实现的最后一个冒号语义（多冒号与冒号开头边界）；恢复 `LastIndex` 并新增边界回归（`model:high`→`model`、`a:b:c`→`a:b`、`:high`→`:high`），保持与旧客户端兼容行为一致。
+- **service 合并策略**：bundle 中存在的同名 service 优先，旧快照块仅在 bundle 缺失时保留；旧快照中 bundle 未包含的方法（`DashboardService` Crew 系列 14 个、`BackgroundComposerService` 2 个）不再保留。依据是 bundle 的对应 service 定义存在且包含大量更新方法，判断为上游删除；未用真实服务端验证（data gap），已记录。
+- **复核后有效证据**：重跑 `sync:proto`（诊断同上）、`check:proto`、`go build ./...`、受影响包 test 与 vet、`gofmt -l`、`git diff --check` 均通过；新增 service 生成与旧模型 ID 边界测试通过。
+
+#### 实施前只读探针（历史记录）
+
+负责人：主会话。输入为本机 Cursor 3.29.15（`/Applications/Cursor.app`）扩展 bundle，只读；未修改仓库产物、未运行全量 `sync:proto`、未改生成器代码。目的是判断第二阶段第一项的可行性与设计约束，不代表已适配。
+
+**格式规格（已核实）**：新格式为紧凑描述符，每个类型形如 `class X extends Base{static $(){return["TypeName|1 field TYPE[mod]|...", ...deps]}}`，包名由 `static $p(){return"<pkg>."}` 经继承链提供；枚举由 `(0,<ns>.QT)(proto3, pkg, "Name", [[no,"NAME"],...], flag)` 创建，`flag=1` 时注册值名带枚举名前缀，省略时按值名去前缀。字段条目语法（以 `|` 分隔，空格分词）：`序号 名称 类型[?|*] [oneof名|=jsonName]`；类型为标量码（protobuf `TYPE_*`，已观察到 1/2/3/4/5/8/9/12/13/17）、`#N`（引用 deps 第 N 项，函数为 message、否则 enum）、`#N?`/`#N*`（optional/repeated）或 `K,V`（map，如 `9,#0`）。嵌套类型用 `Parent.Child`；oneof 组名出现在第四段（样本中 `result/params/message/...`）。
+
+**覆盖率（`extensions/cursor-always-local/dist/main.js`，sync 脚本默认输入）**：紧凑描述符 6200 个、枚举 638 个、字段 21630 个、类型引用 6066 个；按模块内符号索引后，本地引用 5932、跨模块符号引用 134、**未解析 0**。全部类型码落在 protobuf 标量范围内，map 键仅 string/int32/int64。探针脚本为 `/tmp/probe-newdesc.py`（一次性只读，不入库）。
+
+**现状差距（已核实）**：现有提取器只识别 `this.typeName` + `newFieldList` 和 transpiled 赋值两种旧格式；对 `cursor-always-local/dist/254.js` 运行 `go run ./proto/ext_tool` 输出 `诊断汇总: fields 0/0` 并 `Validation failed: no generated proto files found`，即对新格式文件**零产出**。3.29.15 中 9 个新格式文件共 18934 个类型；同文件旧格式仅剩 379 个类型，说明已基本全面迁移。
+
+**服务定义缺口（已核实）**：新格式 bundle 中不存在 `serviceName` 赋值，服务信息不再随 bundle 提供；而现有同步产物 `proto/agent_v1.proto`（1 个 service）与 `proto/aiserver_v1.proto`（21 个 service）包含服务定义。全量重新生成会丢失服务段，必须明确保留策略。
+
+**设计约束**：可复用现有 `Message`/`Enum`/`Field` 结构与生成器（已支持 optional/repeated/map/嵌套/oneof）；需新增紧凑描述符解析与新式符号索引（class 变量名、`QT` 枚举变量、连续声明），并把 `#N` 映射为现有 resolver 可解析的符号表达式。严格模式应对未解析 `#N`、越界下标、未知标量码、缺失包名直接失败，不静默跳过。
+
+**结论**：适配可行且本地符号可完全解析；主要待决项是服务定义保留方式、输出范围（仅默认输入文件）与 `gen/` 代码是否同批重新生成。未获确认前不进入生成器实现。
+
+### managed-codex-cache-verification 覆盖矩阵与实施（2026-11-13；V1+V2 完成，verified-partial）
+
+负责人：主会话。2026-11-13 用户确认排期：本项为第一阶段，V3 最初暂缓，随后获授权使用已导入账号并完成，结果见下；Anthropic 订阅集成因官方条款禁止第三方应用提供 Claude.ai 登录、收集/存储/中转 Claude.ai 凭据而暂缓。本项不改路由、轮换语义与 profile 默认值；评审修复未追加真实账号请求。
+
+**实施前覆盖矩阵（分母为待办列出的 7 项要求；下方实施与实验记录给出补齐结果）**：
+
+| 要求 | 现有证据 | 结论 | 本轮动作 |
+|---|---|---|---|
+| fake upstream | `TestCLICatalogIDsApplyRuntimeCredentialsToSyntheticManagedProviders`（catalog→router→adapter→httptest）、`TestOpenAIManagedCodexResponsesHeadersAndWhitelist`（adapter→httptest）、`subscriptionauth/protocol_test.go`（fixture + `http.Response`） | 已覆盖 | 无 |
+| adapter HTTP retry | `retry_test.go`（401 不重试、5xx 重试、预算）、`openai_stream_test.go`（pre-event EOF 重试、半帧不拼接） | 已覆盖传输层 | 补与 affinity 组合的断言 |
+| 401 同账号刷新 | `TestRouterManagedCodexRetriesUnauthorizedOnce`（router→HTTP、仅刷新一次、token 切换）、`TestResolveAfterUnauthorizedForcesCodexRefresh`、`TestCodexRefreshSingleFlightAndWriteback` | 部分覆盖 | 缺 HTTP 层 affinity 稳定性断言 |
+| quota 账号轮换 | `TestRouterManagedCodexRotatesOnQuotaError`、`TestRouterManagedGrokRotatesOnQuotaError`、`TestCodexMultiAccountMigrationManagementAndQuotaRotation` | 部分覆盖 | 缺 HTTP 层 affinity 分区变化断言 |
+| override/custom header 契约 | `TestManagedCodexReservedHeadersOverrideCustomValues`、`TestOpenAIManagedCodexResponsesHeadersAndWhitelist`、`TestFilterCodexResponsesBodyWhitelist` | 已覆盖单次请求 | 补轮换后组合 |
+| 脱敏缓存观测 | `cache_read_tokens` 已进入 debug 摘要白名单（`debug_recorder.go`）、usage_store、historymetrics；无 profile/注入标记 | 部分覆盖 | 增加 profile 与注入存在性（不含派生值） |
+| control/prompt_key/full A/B 门禁 | 无 | 缺口 | V3，待真实账号 |
+
+**范围调整**：原待办中的"脱敏缓存观测"经核对并非缺 `cache_read_tokens` 字段，而是缺"本次请求用了哪一档 profile、是否实际注入"的可归因标记；A/B 在无 profile 标记时只能按运行时间段区分，混跑无法归因。本轮按此调整实现范围，不重复记录已有缓存 token 字段。
+
+**实施（2026-11-13）**：
+
+- V1 契约层：新增 `internal/backend/agent/model/codex_affinity_http_test.go`，从 `router.Stream` 经真实 `OpenAIAdapter` HTTP 请求到 httptest 上游，覆盖两类组合：① 401 后同账号刷新，第二次请求的 `prompt_cache_key`/`session-id`/`thread-id`/`x-client-request-id` 保持稳定且 Authorization 换成新 token；② quota 换号后 affinity 分区改变、`ChatGPT-Account-Id` 切换，且 custom header 不能覆盖保留 header。测试辅助 `stubCredentialResolver` 增加 `affinityKey` 与 `CodexAffinityKey()`，默认 profile 为 control，不影响既有测试。
+- V2 观测层：`StreamRequest` 新增 `CodexAffinityProfile`（仅枚举，不含派生值）；`attachCodexAffinity` 记录归一化档位，非 codex 来源清空；`buildLLMSummaryPayload` 增加 `codex_affinity_profile`/`codex_affinity_injected`；`debug_recorder.summarizeDebugArtifactPayload` 白名单同步。新增 `codex_affinity_observability_test.go` 与 forwarder 摘要测试，断言派生值不进入观测、body 仍被省略。
+- 变异验证：临时将 profile 恒定为 control，两条新 HTTP 测试均 RED（`.go:105`/`.go:158`）；恢复后 PASS，`git diff --stat internal/backend/agent/model/codex_affinity.go` 无输出，确认测试能捕获回归且实现无残留改动。
+
+**验证证据**：`go test ./internal/backend/agent/model ./internal/subscriptionauth -count=1` 通过（6.022s / 0.552s）；`go test ./internal/backend/forwarder -count=1` 通过（73.627s）；`go test -race ./internal/backend/agent/model -run 'CodexAffinity|ManagedCodex' -count=1` 通过（1.621s）；`go vet ./internal/backend/agent/model ./internal/backend/forwarder` 与 `gofmt -l` 无输出。
+
+**缺口**：本轮未改路由/轮换语义与 profile 默认值，跨平台未验收；V3 真实 A/B 结果见下。
+
+**V3 真实上游 A/B（2026-11-13，用户授权使用本机已导入的 Codex 账号）**：
+
+- 探针：`internal/backend/agent/model/cache_ab_manual_test.go`，`//go:build manualcacheab`，默认不编译；运行命令 `CACHE_AB_CONFIRM=1 go test -tags manualcacheab ./internal/backend/agent/model -run TestManualCodexCacheAB -v -count=1`。只读使用 `SubscriptionAuthRootPath` 的账号，串行、间隔 3–15 秒、不打印 token 或请求正文。
+- 设计：三档 profile（control / prompt_key / full）各 2 次同前缀请求，观察第二次的 `cache_read_tokens`；共三轮，第二轮使用约 2800–3500 input tokens 的长前缀并把间隔延长到 15 秒，第三轮使用不同前缀并反转档位顺序，以排除前缀内容与顺序效应。
+- 数据（`cache_read`，单位 token）：
+
+| 轮次 | control | prompt_key | full |
+|---|---|---|---|
+| 第一轮（prefix≈1214） | 0 / 0 | 0 / 0 | 0 / 0 |
+| 第二轮（prefix≈2800–3500，顺序 control→full） | 0 / **2688** | 0 / 0 | 0 / 0 |
+| 第三轮（不同前缀，顺序 full→control） | 0 / 0 | 0 / 0 | 0 / 0 |
+
+- 结论：18 次真实请求中，`prompt_key`/`full` 共 12 次全部 `cache_read=0`；control 档仅第二轮第二次出现一次自动前缀缓存命中，第三轮顺序反转后不可复现。**不能宣称 `prompt_cache_key` 或保留 header 带来了缓存收益**；默认 profile 继续保持 control，字段接线与脱敏观测保留用于后续判断。该负结果与待办原意一致——字段接线不等于性能收益。
+- 限制：单一账号（ChatGPT Plus）、单一模型（`gpt-6-sol`）、单一时段、每档 2 次样本；无法排除上游缓存策略的时段性或按账号变化。若要继续，需要更多样本与不同账号/模型，但每轮会消耗订阅额度，暂不扩大。
+- 账号副作用：18 次请求使 remaining 55%→41%、used 45%→59%；`last_refresh` 在测试后显示为零值。核查写回路径（`refreshCodex` 与 `RefreshAccountUsage` 均保留 `LastRefresh`）未定位成因，不归因于测试或运行实例写回；`needsRefresh` 对零值返回 false，当时 `auth_required=false`，但这不能证明未来刷新行为不受影响。仅记录为观察项，未改代码。
+- 状态：V1+V2+V3 均完成，整体 `verified-partial`（跨平台与更多样本未验收）。
+
+**第一阶段评审与修复（2026-11-13）**：
+
+- 发现并修复观测接线缺口：`cache_read_tokens=0` 原本无法区分“上游明确返回零”与“未提供缓存字段”。向 OpenAI 两种 endpoint 与 Anthropic 的流式成功/失败摘要透传 `cache_read_present`，同步 debug 摘要白名单；尚未进入流解析的错误路径不提供该字段。新增 router→adapter→HTTP fixture→summary 语义测试验证零值/缺失两条路径，forwarder 白名单测试先 RED（字段为 nil）后 GREEN。
+- 手动 A/B 探针请求失败原先只 Log 后继续，可能全部失败仍 PASS，且原始错误可能带正文；改为 `t.Errorf` 标记失败并用结构化脱敏错误摘要。不重跑真实账号实验；已编译探针并确认未设置确认变量时 SKIP。
+- 修正过期 V3 授权状态及 `last_refresh` 的未经证实归因；该观察仍为未知原因，不作为无风险结论。log-analyzer 的 `allowedFields`/`summaryFields` 只处理顶层字段、不展开 `payload_summary`，因此没有错误地向其中添加嵌套摘要键。
+- 修复后验证：`go test ./internal/backend/agent/model ./internal/subscriptionauth -count=1` PASS（6.205s / 1.471s）；`go test ./internal/backend/forwarder -count=1` PASS（72.465s）；定向 `go test -race ./internal/backend/agent/model -run 'CodexAffinity|ManagedCodex' -count=1` PASS（1.695s）；`go vet ./internal/backend/agent/model ./internal/backend/forwarder` PASS；`go test -tags manualcacheab ./internal/backend/agent/model -run '^TestManualCodexCacheAB$' -count=1 -v` 编译成功、SKIP（未授权触发新请求）。
+- 当前能力：契约和脱敏观测具备本机测试证据，真实上游实验得到有限样本负结果；未证实缓存收益，默认 control 不变。保留 test gap（跨平台、更多账号/模型/时段样本）与 data gap（`last_refresh` 零值成因），整体仍为 `verified-partial`。
+
 ### Cursor 3.29.15 BidiAppend 二进制载荷修复与 404 分析（2026-11-12）
 
 负责人：主会话。基线 `2849e49`；用户授权创建并使用 `fix/bidi-append-binary-encoding-3.29.15`，随后明确授权本机应用维护窗口。未 commit/push、未修改发布版本、未发布安装包。

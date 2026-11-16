@@ -54,12 +54,13 @@ func TestSubagentModelParameterSnapshotsAreIndependent(t *testing.T) {
 	original := []*agentv1.RequestedModel_ModelParameterValue{
 		first, {Id: "reasoning", Value: "low"}, {Id: "", Value: ""}, nil,
 	}
+	model := &agentv1.RequestedModel{
+		ModelId: "child-model", MaxMode: true, BuiltInModel: true, Parameters: original,
+	}
+	model.ProtoReflect().SetUnknown([]byte{0x40, 0x01}) // 旧版 variant 标识。
 	parsed := parseSubagentModelOverrides([]*agentv1.SubagentModelOverride{{
 		SubagentType: "explore",
-		Selection: &agentv1.SubagentModelOverride_Model{Model: &agentv1.RequestedModel{
-			ModelId: "child-model", MaxMode: true, BuiltInModel: true, IsVariantStringRepresentation: true,
-			Parameters: original,
-		}},
+		Selection:    &agentv1.SubagentModelOverride_Model{Model: model},
 	}}).Overrides
 	selection := parsed["explore"]
 	if selection.ParameterCount != len(original) || len(selection.Parameters) != len(original) || !selection.MaxMode || !selection.BuiltInModel || !selection.IsVariantStringRepresentation {

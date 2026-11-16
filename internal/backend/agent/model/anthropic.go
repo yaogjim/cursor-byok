@@ -436,7 +436,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		}
 		req.StreamDiagnostics.RecordClose(streamErr)
 		finishedAt = time.Now().UTC()
-		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr))
+		recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, streamErr, cacheReadPresent))
 		return WrapFallbackSafetyError(streamErr, req.FallbackSafety)
 	}
 	flushThinkingCompleted := func() error {
@@ -769,7 +769,7 @@ func (adapter *AnthropicAdapter) streamOnce(ctx context.Context, req StreamReque
 		return fail(err)
 	}
 	finishedAt = time.Now().UTC()
-	recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil))
+	recordLLMSummaryArtifact(req, buildLLMSummaryPayload(req, "anthropic", currentModel, startedAt, firstEventAt, finishedAt, finishReason, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, nil, cacheReadPresent))
 	return nil
 }
 

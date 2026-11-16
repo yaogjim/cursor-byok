@@ -13,7 +13,14 @@
 - [completed] `cursor-control-plane-404-analysis`（仅分析）：插件/MCP 查询命中本地未登录 404 兜底；插件查询后注册控制面路由覆盖早期 mock。Analytics Batch 未注册。旧 Cursor 3.15.19 已有同型 404，未作为本次二进制修复扩项处理。
 - [completed] `bidi-runtime-coverage`（2026-11-12 实机样本，verified-partial）：用户完成四项操作后只读核对会话级 debug 记录（trace 分片在 13:26 轮转中被回收）。取消 2 次均产生 provider/model_call canceled（downstream_published=false、chunk_count=0）；恢复 2 次在同会话以新 run_request 成功完成并带回工具结果；子任务 1 次 `subagent_dispatched`（tool=Task、exec_kind=subagent、parent 关联齐全），子会话 3 次模型调用完成；run/cancel/heartbeat/exec_result/exec_control/kv 全部 accepted 且 `payload_source=binary`，无 decode/intent 错误。边界：父子会话无显式绑定字段、父侧 Task 结果与 tool_call_id 未逐字段核对；prewarm/interaction_response/resume_action 未出现。详细证据见 `docs/process.md`。
 - [pending] `cursor-control-plane-404-followup`（用户已同意后续处理，策略未批准）：插件/MCP 查询在控制面未登录时的产品语义（空列表 / 显式不可用 / 保持 404）尚未决定；`AnalyticsService/Batch` 若本地接收须先核实响应契约再最小无操作响应。不改以 mock 200 假装插件或注册表可用；不与 Bidi 修复混合提交。
-- 缺口：本机 3.29.15 已覆盖普通回答、工具回传、取消、同会话恢复、子任务及主要消息类型；prewarm/interaction_response 未出现，父子显式绑定与上下文内容级无损未逐项核对；协议提取器尚不支持新描述符格式（feature gap），更早版本实机与跨平台未验收（test/env gap）。后续若适配提取器须单独确认范围；404 修复策略见上述 pending（product-decision gap）。整体保持 `verified-partial`。
+- 缺口：本机 3.29.15 已覆盖普通回答、工具回传、取消、同会话恢复、子任务及主要消息类型；prewarm/interaction_response 未出现，父子显式绑定与上下文内容级无损未逐项核对；协议提取器已按确认范围支持默认 bundle 紧凑描述符并通过本地同步/编译/相关测试（见下项），重新生成后的应用、更早版本实机与跨平台未验收（test/env gap）；404 修复策略见上述 pending（product-decision gap）。整体保持 `verified-partial`。
+
+### 协议提取器新描述符适配（2026-11-13；第二阶段第一项）
+
+- [completed] `compact-descriptor-extractor`：负责人主会话；用户批准默认 main.js 输入、新格式 message/enum、旧 service 按类型引用过滤保留、同批生成 gen。完成解析、隔离目录 service 保留、自动快照同步与独立 compat proto 接线；旧模型字段 8 通过 unknown-field 读取保留原语义。验收：完整 `sync:proto` 成功，21630/21630 字段、unresolved/placeholders=0；`go build ./...`、extractor/protocol/prompt/forwarder/upstream 测试与相关 vet 通过，快照检查、gofmt、diff 检查通过。永久入口语义测试覆盖字段输出与 service 保留/悬空 RPC 移除。详细证据及 linker warning 只记录在 `docs/process.md` 同名章节。
+- [completed] `compact-descriptor-extractor-review`（2026-11-13）：独立只读脚本全量比对生成字段与 bundle 描述符——agent 600、aiserver 5101 个消息 0 差异；类型引用同模块 0 mismatch；缺失类型分类确认无「可解析却漏生成」，枚举差异均为上游演进。修复 review 发现的两项回归：① sync 覆盖根 proto 导致手工 `IsConnectedRequest`/`NetworkService` 丢失，改由 `aiserver_v1_compat.proto` 承载并验证 connect 生成；② `readRequestedModelID` 恢复旧 `LastIndex` 多冒号/前导冒号语义并加边界回归。复核后重跑 sync/check/build/受影响 test 与 vet 全部通过。详细证据与 service 合并策略缺口见 `docs/process.md`。
+- delivery_status=verified-partial：本地生成链已打通；service 合并策略依赖「bundle 同名优先」的判断未用真实服务端验证（data gap），生成后应用实机/其他分片/旧版/跨平台（test/env gap）未验收。未部署、重启、请求真实账号或 commit/push。
+- 第二阶段其余两项仍沿用原任务：`same-turn-native-layout-contract` 需表示合同重新评审，`cursor-control-plane-404-followup` 需产品语义确认；本次没有修改其行为。
 
 ### 三项正确性修复（2026-10-27；本地验证收口，verified-partial）
 
@@ -496,9 +503,14 @@
 
 ### 📋 Pending Work (当前执行队列)
 
+> **2026-11-13 用户确认排期**：第一阶段 `managed-codex-cache-verification`（V1 契约层 + V2 脱敏观测 + V3 真实 A/B；V3 已获授权并完成，未证实缓存收益）；第二阶段：协议提取器新描述符适配、`same-turn-native-layout-contract` 解阻、控制面 404 策略；第三阶段：其余项。
+>
+> **Anthropic 订阅深度集成（暂缓）**：官方 Claude Code 法律与合规页面明文禁止第三方应用提供 Claude.ai 登录，或收集、存储、中转 Claude.ai 凭据与会话 token，并保留不经通知的执法权。原「订阅账号池」形态不合规，不实现伪装官方客户端的 UA/header；后续只考虑 Anthropic API Key/兼容 API 路径或官方开放的第三方授权。
+
 - [completed] `rule-storage-hardening`：Rule 目录/文件私有权限、symlink 与路径逃逸拒绝、唯一临时文件原子替换、容量上限以及 Rule/docs index reconciliation 已实现并通过定向、race、vet 与 Windows 交叉构建验证；Windows 实机 ACL 行为仍归最终发布门禁。
 - [completed] `managed-codex-cache-affinity`：在继续剥离 `previous_response_id` 的前提下，已实现稳定账号隔离的 HMAC 域分离、私密安装密钥、`prompt_cache_key` 与三个保留 header 注入，以及 control/prompt_key/full profile；fake upstream、脱敏缓存观测和收益 A/B 作为独立后续工作，不把字段接线宣称为性能收益。
-- [pending] `managed-codex-cache-verification`：补 fake upstream、adapter HTTP retry、401 同账号刷新、quota 账号轮换、override/custom header 契约、脱敏缓存观测和 control/prompt/full 同负载 A/B 门禁。
+- [completed] `managed-codex-cache-verification`：2026-11-13 完成 V1 契约层与 V2 脱敏观测。覆盖矩阵见 `docs/process.md`；新增 HTTP 层端到端断言（401 同账号刷新保持 affinity、quota 换号改变 affinity、轮换后 custom header 不覆盖保留 header），新增 `codex_affinity_profile`/`codex_affinity_injected` 脱敏观测并接入 debug 摘要白名单；临时变异验证确认新测试能捕获回归（变异后 RED，恢复后 PASS，实现文件无残留 diff）。验证：`go test ./internal/backend/agent/model ./internal/subscriptionauth -count=1`、`go test ./internal/backend/forwarder -count=1`、定向 `-race`、`go vet`、`gofmt -l` 均通过。评审修复：补齐 `cache_read_present` 从流式解析到摘要白名单的透传及零值/缺失调用链测试；手动探针失败改为测试失败并脱敏错误，未追加真实请求；修复后相关测试、race、vet 通过，探针编译且默认 SKIP，详细证据见 `docs/process.md`。delivery_status=verified-partial（真实 A/B 已完成见下项；跨平台未验收）。
+- [completed] `managed-codex-cache-ab`（2026-11-13 真实账号实测，负结果）：18 次真实 Codex 请求（`gpt-6-sol` / ChatGPT Plus，串行、限速），control 档仅在第二轮出现一次自动前缀缓存命中（`cache_read=2688`），顺序反转后不可复现；`prompt_key`/`full` 共 12 次全部 `cache_read=0`。结论：不宣称亲和字段带来缓存收益；默认 profile 保持 control，字段接线与脱敏观测保留用于后续判断。账号额度 remaining 55%→41%。实验设计与数据见 `docs/process.md`；复现探针为 `internal/backend/agent/model/cache_ab_manual_test.go`（`manualcacheab` build tag，默认不编译）。
 - [pending] `rule-offline-journal-design`：P0 完成后设计显式 opt-in 的 Rule 离线 journal、本地镜像、回放幂等、冲突恢复和跨来源内容去重；默认不得上传 Rule 正文。
 - [pending] `model-display-grouping`：仅增强官方模型、静态 BYOK、Codex 与 Grok 的模型列表展示分组，不改现有路由、凭据和子代理主链路。
 - [pending] `investigation-case-library`：持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验

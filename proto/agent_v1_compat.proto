@@ -1,0 +1,39 @@
+// 本文件保留 Cursor 3.29.15 协议快照中已删除、但本仓库历史数据解码仍依赖的
+// agent.v1 类型。它们不再随扩展 bundle 提供，因此不参与 sync:proto 自动生成。
+// 只允许删除或迁移到现有替代类型，不应继续扩展。
+syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "cursor/gen/agentv1;agentv1";
+
+message AgentConversationTurnStructure {
+  bytes user_message = 1;
+  repeated bytes steps = 2;
+  optional string request_id = 3;
+  optional string encrypted_model = 4;
+  optional uint32 dynamic_tool_count = 5;
+}
+
+message ConversationSummary {
+  string summary = 1;
+}
+
+message ConversationSummaryArchive {
+  repeated bytes summarized_messages = 1;
+  string summary = 2;
+  uint32 window_tail = 3;
+  bytes summary_message = 4;
+}
+
+message ConversationTurnStructure {
+  oneof turn {
+    AgentConversationTurnStructure agent_conversation_turn = 1;
+    ShellConversationTurnStructure shell_conversation_turn = 2;
+  }
+}
+
+message ShellConversationTurnStructure {
+  bytes shell_command = 1;
+  bytes shell_output = 2;
+}

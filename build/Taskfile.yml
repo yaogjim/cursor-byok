@@ -57,7 +57,7 @@ tasks:
         msg: "未检测到 protoc-gen-connect-go，请先安装。"
     cmds:
       - rm -rf ./gen/agentv1 ./gen/aiserverv1
-      - protoc -I ./proto{{if eq OS "darwin"}} -I /opt/homebrew/include{{else if eq OS "linux"}} -I /usr/include{{end}} --go_out=. --go_opt=module=cursor --connect-go_out=. --connect-go_opt=module=cursor ./proto/agent_v1.proto ./proto/aiserver_v1.proto
+      - protoc -I ./proto{{if eq OS "darwin"}} -I /opt/homebrew/include{{else if eq OS "linux"}} -I /usr/include{{end}} --go_out=. --go_opt=module=cursor --connect-go_out=. --connect-go_opt=module=cursor ./proto/agent_v1.proto ./proto/aiserver_v1.proto ./proto/agent_v1_compat.proto ./proto/aiserver_v1_compat.proto
       - gofmt -w ./gen
 
   go:mod:tidy:

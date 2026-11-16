@@ -116,7 +116,7 @@ var (
 	shorthandTRe         = regexp.MustCompile(`(?:^|[,\{])\s*T\s*(?:[,\}])`)
 	oneofNameRe          = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	fieldNameRe          = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	placeholderRe        = regexp.MustCompile(`^\s*(optional\s+|repeated\s+)?[A-Za-z_][A-Za-z0-9_.<>]*\s+(field_\d+|unknown(?:_[A-Za-z0-9_]+)?)\s*=\s*\d+\s*;`)
+	placeholderRe        = regexp.MustCompile(`^\s*(optional\s+|repeated\s+)?[A-Za-z_][A-Za-z0-9_.<>]*\s+(field_\d+|unknown(?:_field)?(?:_\d+)?)\s*=\s*\d+\s*;`)
 	varAliasRe           = regexp.MustCompile(`\b(?:let|const|var)\s+([\w$]+)\s*=\s*([\w$]+)\s*(?:[,;])`)
 	webpackExportBlockRe = regexp.MustCompile(`[\w$]+\.d\(\s*[\w$]+\s*,\s*\{`)
 	webpackExportEntryRe = regexp.MustCompile(`(?:^|[,\{])\s*([\w$]+)\s*:\s*\(\s*\)\s*=>\s*([\w$]+)`)
@@ -577,6 +577,10 @@ func (resolver *TypeResolver) ResolveTypeName(ref string, contextPos int, contex
 		if typeName, ok := resolveBySymbol(first, false); ok {
 			return typeName, true
 		}
+		// 压缩 bundle 常以 protobuf runtime 模块属性引用 well-known 类型（如 r.Empty）。
+		if compactGoogleTypes[last] {
+			return "google.protobuf." + last, true
+		}
 	}
 
 	return "", false
@@ -601,7 +605,7 @@ func absInt(value int) int {
 	return value
 }
 
-var moduleStartRe = regexp.MustCompile(`(?:^|,)\s*(\d+)\s*:\s*(?:function\s*\(\s*[\w$,\s]*\s*\)|\(\s*[\w$,\s]*\s*\)\s*=>)\s*\{`)
+var moduleStartRe = regexp.MustCompile(`(?:^|[,{])\s*(\d+)\s*(?::\s*(?:function\s*\(\s*[\w$,\s]*\s*\)|\(\s*[\w$,\s]*\s*\)\s*=>)|\(\s*[\w$,\s]*\s*\))\s*\{`)
 
 func buildModuleStarts(text string) []int {
 	matches := moduleStartRe.FindAllStringSubmatchIndex(text, -1)
@@ -679,6 +683,21 @@ func ExtractProtos(inputFile, outputDir string) {
 	messages := extractMessages(text, moduleStarts)
 	enums := extractEnums(text, moduleStarts)
 	services := extractServices(text, moduleStarts)
+
+	// 新版紧凑描述符（static $()）与旧格式可能同时存在；同名类型以新格式为准，
+	// 因为新格式携带完整字段与包名继承信息。
+	compactMessages, compactEnums, compactErr := extractCompactTypes(text, moduleStarts)
+	if compactErr != nil {
+		fmt.Fprintf(os.Stderr, "紧凑描述符解析失败: %v\n", compactErr)
+		if strictExtractionValidation {
+			printDiagnosticsSummary(activeDiagnostics)
+			os.Exit(1)
+		}
+	} else {
+		messages = mergeCompactMessages(compactMessages, messages)
+		enums = mergeCompactEnums(compactEnums, enums)
+	}
+
 	for _, msg := range messages {
 		if len(msg.Fields) == 0 {
 			activeDiagnostics.emptyMessages = append(activeDiagnostics.emptyMessages, msg.TypeName)
@@ -689,7 +708,8 @@ func ExtractProtos(inputFile, outputDir string) {
 	resolver.moduleImports = buildModuleImportIndex(text, moduleStarts)
 
 	// Generate proto files
-	generateProtos(messages, enums, services, resolver, outputDir)
+	preservedServices := loadPreservedServiceBlocks(outputDir)
+	generateProtos(messages, enums, services, resolver, outputDir, preservedServices)
 
 	validateErr := validateGeneratedProtos(outputDir, activeDiagnostics)
 
@@ -935,6 +955,446 @@ func extractMessages(text string, moduleStarts []int) []Message {
 	}
 
 	return messages
+}
+
+// compactClassDef 描述一个新版紧凑描述符 class（static $() / static $p()）。
+type compactClassDef struct {
+	varName     string
+	extends     string
+	pos         int
+	moduleStart int
+	pkgLiteral  string
+	pkgVar      string
+	descriptor  string
+	deps        []string
+}
+
+var (
+	compactClassRe       = regexp.MustCompile(`class\s+([\w$]+)\s+extends\s+([\w$.]+)\s*\{`)
+	compactPkgLiteralRe  = regexp.MustCompile(`static\s+\$p\s*\(\s*\)\s*\{\s*return\s*"([^"]*)"\s*;?\s*\}`)
+	compactPkgVarRe      = regexp.MustCompile(`static\s+\$p\s*\(\s*\)\s*\{\s*return\s+([\w$]+)\s*;?\s*\}`)
+	compactDescriptorRe  = regexp.MustCompile(`static\s+\$\s*\(\s*\)\s*\{\s*return\s*\[\s*"([^"]*)"([^\]]*)\]\s*;?\s*\}`)
+	compactEnumRe        = regexp.MustCompile(`\(\s*0\s*,\s*[\w$]+\.[\w$]+\s*\)\s*\(\s*[\w$]+\.proto3\s*,\s*([^,]+?)\s*,\s*"([\w.$]+)"\s*,\s*\[\[(.*?)\]\]\s*(?:,\s*([^)]*?))?\s*\)`)
+	compactStringConstRe = regexp.MustCompile(`(?:const|var|let)\s+([\w$]+)\s*=\s*"([^"]*)"\s*[,;]`)
+	compactAssignConstRe = regexp.MustCompile(`(?:^|[,;])\s*([\w$]+)\s*=\s*"([^"]*)"`)
+	compactTupleConstRe  = regexp.MustCompile(`(?:^|[,;])\s*([\w$]+)\s*=\s*\(([^()]*)\)`)
+	compactQuotedRe      = regexp.MustCompile(`"([^"]*)"`)
+	compactEnumValueRe   = regexp.MustCompile(`(-?\d+)\s*,\s*"([^"]+)"`)
+	compactGoogleTypes   = map[string]bool{
+		"Any": true, "Api": true, "BoolValue": true, "BytesValue": true, "DoubleValue": true,
+		"Duration": true, "Empty": true, "Enum": true, "EnumValue": true, "Field": true,
+		"FieldMask": true, "FloatValue": true, "Int32Value": true, "Int64Value": true,
+		"ListValue": true, "Method": true, "Mixin": true, "NullValue": true, "Option": true,
+		"SourceContext": true, "StringValue": true, "Struct": true, "Syntax": true,
+		"Timestamp": true, "Type": true, "UInt32Value": true, "UInt64Value": true, "Value": true,
+	}
+)
+
+// extractCompactTypes 解析 Cursor 新版紧凑描述符格式：
+//
+//	class X extends Base{static $p(){return"<pkg>."}
+//	  static $(){return["TypeName|1 field TYPE|...", dep0, dep1]}}
+//
+// 包名沿 extends 继承链解析；#N 引用 deps[N]，由本地符号表判定 message/enum。
+func extractCompactTypes(text string, moduleStarts []int) ([]Message, []Enum, error) {
+	consts := compactStringConsts(text, moduleStarts)
+	classes := collectCompactClasses(text, moduleStarts)
+	enums, enumVars, err := collectCompactEnums(text, moduleStarts, consts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	kindsByModule := make(map[int]map[string]string)
+	setKind := func(moduleStart int, symbol, kind string) {
+		if kindsByModule[moduleStart] == nil {
+			kindsByModule[moduleStart] = make(map[string]string)
+		}
+		kindsByModule[moduleStart][symbol] = kind
+	}
+	for _, cls := range classes {
+		setKind(cls.moduleStart, cls.varName, "message")
+	}
+	for moduleStart, symbols := range enumVars {
+		for symbol := range symbols {
+			setKind(moduleStart, symbol, "enum")
+		}
+	}
+
+	seenMessages := make(map[string]bool)
+	var messages []Message
+	for _, cls := range classes {
+		if strings.TrimSpace(cls.descriptor) == "" {
+			continue
+		}
+		pkgLiteral, err := resolveCompactPackage(classes, consts, cls.moduleStart, cls.varName, 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		pkg := strings.TrimSuffix(pkgLiteral, ".")
+		headerParts := strings.Split(cls.descriptor, "|")
+		shortName := strings.TrimSpace(headerParts[0])
+		if shortName == "" {
+			return nil, nil, fmt.Errorf("compact descriptor missing type name (var %s)", cls.varName)
+		}
+		typeName := pkg + "." + shortName
+		if seenMessages[typeName] {
+			continue
+		}
+		kinds := kindsByModule[cls.moduleStart]
+		fields := make([]Field, 0, len(headerParts)-1)
+		for _, entry := range headerParts[1:] {
+			field, err := parseCompactField(entry, cls.deps, kinds)
+			if err != nil {
+				activeDiagnostics.addSkippedField(entry, err)
+				return nil, nil, fmt.Errorf("%s: %w", typeName, err)
+			}
+			activeDiagnostics.addParsedField()
+			fields = append(fields, field)
+		}
+		parsePkg, parseShort := parseTypeName(typeName)
+		messages = append(messages, Message{
+			TypeName:     typeName,
+			VarName:      cls.varName,
+			InternalName: cls.varName,
+			Fields:       fields,
+			Package:      parsePkg,
+			ShortName:    parseShort,
+			Pos:          cls.pos,
+			ModuleStart:  cls.moduleStart,
+		})
+		seenMessages[typeName] = true
+	}
+
+	return messages, enums, nil
+}
+
+func mergeCompactMessages(compact, legacy []Message) []Message {
+	seen := make(map[string]bool, len(compact))
+	merged := make([]Message, 0, len(compact)+len(legacy))
+	for _, msg := range append(append([]Message{}, compact...), legacy...) {
+		if seen[msg.TypeName] {
+			continue
+		}
+		seen[msg.TypeName] = true
+		merged = append(merged, msg)
+	}
+	return merged
+}
+
+func mergeCompactEnums(compact, legacy []Enum) []Enum {
+	seen := make(map[string]bool, len(compact))
+	merged := make([]Enum, 0, len(compact)+len(legacy))
+	for _, enum := range append(append([]Enum{}, compact...), legacy...) {
+		if seen[enum.TypeName] {
+			continue
+		}
+		seen[enum.TypeName] = true
+		merged = append(merged, enum)
+	}
+	return merged
+}
+
+func compactStringConsts(text string, moduleStarts []int) map[int]map[string]string {
+	consts := make(map[int]map[string]string)
+	record := func(name, value string, pos int) {
+		moduleStart := moduleStartForPos(moduleStarts, pos)
+		if consts[moduleStart] == nil {
+			consts[moduleStart] = make(map[string]string)
+		}
+		if _, exists := consts[moduleStart][name]; !exists {
+			consts[moduleStart][name] = value
+		}
+	}
+	for _, match := range compactStringConstRe.FindAllStringSubmatchIndex(text, -1) {
+		record(text[match[2]:match[3]], text[match[4]:match[5]], match[0])
+	}
+	// 压缩后的连续声明：}}},y1="anyrun.v1.";...
+	for _, match := range compactAssignConstRe.FindAllStringSubmatchIndex(text, -1) {
+		record(text[match[2]:match[3]], text[match[4]:match[5]], match[0])
+	}
+	// 逗号表达式声明：Snr=(r.MethodKind.Unary,r.MethodKind.Unary,"aiserver.v1.") 取最后一个字符串
+	for _, match := range compactTupleConstRe.FindAllStringSubmatchIndex(text, -1) {
+		expr := text[match[4]:match[5]]
+		quoted := compactQuotedRe.FindAllStringSubmatch(expr, -1)
+		if len(quoted) == 0 {
+			continue
+		}
+		record(text[match[2]:match[3]], quoted[len(quoted)-1][1], match[0])
+	}
+	return consts
+}
+
+func collectCompactClasses(text string, moduleStarts []int) []compactClassDef {
+	var classes []compactClassDef
+	for _, match := range compactClassRe.FindAllStringSubmatchIndex(text, -1) {
+		bodyStart := match[1] - 1
+		bodyEnd := findClassEnd(text, bodyStart)
+		if bodyEnd == -1 {
+			continue
+		}
+		body := text[bodyStart:bodyEnd]
+		cls := compactClassDef{
+			varName:     text[match[2]:match[3]],
+			extends:     text[match[4]:match[5]],
+			pos:         match[0],
+			moduleStart: moduleStartForPos(moduleStarts, match[0]),
+		}
+		// 只接受直接声明在本类体内的 static $p，避免继承类的包名串用。
+		if pkgMatch := compactPkgLiteralRe.FindStringSubmatch(body); pkgMatch != nil {
+			cls.pkgLiteral = pkgMatch[1]
+		} else if pkgVarMatch := compactPkgVarRe.FindStringSubmatch(body); pkgVarMatch != nil {
+			cls.pkgVar = pkgVarMatch[1]
+		}
+		if descMatch := compactDescriptorRe.FindStringSubmatch(body); descMatch != nil {
+			cls.descriptor = descMatch[1]
+			for _, dep := range strings.Split(descMatch[2], ",") {
+				if dep = strings.TrimSpace(dep); dep != "" {
+					cls.deps = append(cls.deps, dep)
+				}
+			}
+		}
+		classes = append(classes, cls)
+	}
+	return classes
+}
+
+func resolveCompactPackage(classes []compactClassDef, consts map[int]map[string]string, moduleStart int, varName string, depth int) (string, error) {
+	if depth > 16 {
+		return "", fmt.Errorf("compact package inheritance too deep at %s", varName)
+	}
+	for i := range classes {
+		cls := &classes[i]
+		if cls.moduleStart != moduleStart || cls.varName != varName {
+			continue
+		}
+		if cls.pkgLiteral != "" {
+			return cls.pkgLiteral, nil
+		}
+		if cls.pkgVar != "" {
+			if pkg, ok := consts[moduleStart][cls.pkgVar]; ok {
+				return pkg, nil
+			}
+			return "", fmt.Errorf("compact package variable %q unresolved for %s", cls.pkgVar, varName)
+		}
+		return resolveCompactPackage(classes, consts, moduleStart, cls.extends, depth+1)
+	}
+	return "", fmt.Errorf("compact package inheritance unresolved for %s", varName)
+}
+
+func collectCompactEnums(text string, moduleStarts []int, consts map[int]map[string]string) ([]Enum, map[int]map[string]bool, error) {
+	var enums []Enum
+	enumVars := make(map[int]map[string]bool)
+	seen := make(map[string]bool)
+	for _, match := range compactEnumRe.FindAllStringSubmatchIndex(text, -1) {
+		pkgExpr := strings.TrimSpace(text[match[2]:match[3]])
+		enumName := text[match[4]:match[5]]
+		valuesText := text[match[6]:match[7]]
+		flag := ""
+		if match[8] >= 0 {
+			flag = strings.TrimSpace(text[match[8]:match[9]])
+		}
+		moduleStart := moduleStartForPos(moduleStarts, match[0])
+		pkg, err := resolveCompactPkgExpr(pkgExpr, consts, moduleStart)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compact enum %s: %w", enumName, err)
+		}
+		pkg = strings.TrimSuffix(pkg, ".")
+		typeName := pkg + "." + enumName
+		// 枚举可能以逗号表达式赋值（如 $sr=(proto3,...,QT(...))），向左回溯赋值目标。
+		target := compactAssignTargetBefore(text, match[0])
+		if target != "" {
+			if enumVars[moduleStart] == nil {
+				enumVars[moduleStart] = make(map[string]bool)
+			}
+			enumVars[moduleStart][target] = true
+		}
+		if seen[typeName] {
+			continue
+		}
+		var values []EnumValue
+		for _, valueMatch := range compactEnumValueRe.FindAllStringSubmatch(valuesText, -1) {
+			no, err := strconv.Atoi(valueMatch[1])
+			if err != nil {
+				return nil, nil, fmt.Errorf("compact enum %s: invalid value number %q", typeName, valueMatch[1])
+			}
+			values = append(values, EnumValue{No: no, Name: compactEnumValueName(enumName, valueMatch[2], flag)})
+		}
+		if len(values) == 0 {
+			return nil, nil, fmt.Errorf("compact enum %s: no values", typeName)
+		}
+		parsePkg, shortName := parseTypeName(typeName)
+		enums = append(enums, Enum{
+			TypeName:    typeName,
+			VarName:     target,
+			Values:      values,
+			Package:     parsePkg,
+			ShortName:   shortName,
+			Pos:         match[0],
+			ModuleStart: moduleStart,
+		})
+		seen[typeName] = true
+	}
+	return enums, enumVars, nil
+}
+
+// compactAssignTargetBefore 从调用起点向左回溯最近的赋值目标（支持逗号表达式包裹）。
+func compactAssignTargetBefore(text string, pos int) string {
+	limit := pos - 400
+	if limit < 0 {
+		limit = 0
+	}
+	for i := pos - 1; i >= limit; i-- {
+		switch text[i] {
+		case ';', '{', '}', '[', ']':
+			return ""
+		case '=':
+			if i > 0 && (text[i-1] == '=' || text[i-1] == '!' || text[i-1] == '<' || text[i-1] == '>') {
+				continue
+			}
+			j := i - 1
+			for j >= 0 && (text[j] == ' ' || text[j] == '\t') {
+				j--
+			}
+			end := j + 1
+			for j >= 0 && (isCompactIdentChar(text[j])) {
+				j--
+			}
+			return text[j+1 : end]
+		}
+	}
+	return ""
+}
+
+func isCompactIdentChar(ch byte) bool {
+	return ch == '_' || ch == '$' || ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z'
+}
+
+func resolveCompactPkgExpr(expr string, consts map[int]map[string]string, moduleStart int) (string, error) {
+	expr = strings.TrimSpace(expr)
+	if strings.HasPrefix(expr, `"`) && strings.HasSuffix(expr, `"`) && len(expr) >= 2 {
+		return expr[1 : len(expr)-1], nil
+	}
+	if pkg, ok := consts[moduleStart][expr]; ok {
+		return pkg, nil
+	}
+	return "", fmt.Errorf("package expression %q unresolved", expr)
+}
+
+// compactEnumValueName 复刻 protobuf-es 枚举工厂的值名规则：
+// flag=1 时注册名带枚举名前缀；flag 省略时优先去掉该前缀。
+func compactEnumValueName(enumName, raw, flag string) string {
+	shortName := enumName
+	if idx := strings.LastIndex(enumName, "."); idx >= 0 {
+		shortName = enumName[idx+1:]
+	}
+	prefix := strings.ToUpper(screamingSnake(shortName)) + "_"
+	switch flag {
+	case "1":
+		return prefix + raw
+	case "", "void 0", "undefined":
+		lowerPrefix := strings.ToLower(prefix)
+		if strings.HasPrefix(raw, lowerPrefix) {
+			rest := raw[len(lowerPrefix):]
+			if rest != "" && (rest[0] < '0' || rest[0] > '9') {
+				return rest
+			}
+		}
+		return raw
+	default:
+		return raw
+	}
+}
+
+func screamingSnake(name string) string {
+	var sb strings.Builder
+	for i, r := range name {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			sb.WriteByte('_')
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+func parseCompactField(entry string, deps []string, kinds map[string]string) (Field, error) {
+	tokens := strings.Fields(entry)
+	if len(tokens) < 3 {
+		return Field{}, fmt.Errorf("invalid compact field entry %q", entry)
+	}
+	no, err := strconv.Atoi(tokens[0])
+	if err != nil || no <= 0 {
+		return Field{}, fmt.Errorf("invalid compact field number %q", tokens[0])
+	}
+	field := Field{No: no, Name: tokens[1]}
+	spec := tokens[2]
+	modifier := ""
+	if len(tokens) > 3 {
+		modifier = tokens[3]
+	}
+	if strings.HasSuffix(spec, "?") {
+		spec, modifier = spec[:len(spec)-1], "?"
+	} else if strings.HasSuffix(spec, "*") {
+		spec, modifier = spec[:len(spec)-1], "*"
+	}
+	switch modifier {
+	case "?":
+		field.Opt = true
+	case "*":
+		field.Repeated = true
+	case "":
+	default:
+		field.Oneof = modifier
+	}
+
+	if keyText, valueText, ok := strings.Cut(spec, ","); ok {
+		key, err := strconv.Atoi(keyText)
+		if err != nil || key <= 0 {
+			return Field{}, fmt.Errorf("invalid compact map key %q", keyText)
+		}
+		valueKind, valueT, err := compactValueType(valueText, deps, kinds)
+		if err != nil {
+			return Field{}, err
+		}
+		field.Kind = "map"
+		field.MapKey = key
+		field.MapValueKind = valueKind
+		field.MapValueT = valueT
+		return field, nil
+	}
+
+	kind, valueT, err := compactValueType(spec, deps, kinds)
+	if err != nil {
+		return Field{}, err
+	}
+	field.Kind = kind
+	field.T = valueT
+	return field, nil
+}
+
+func compactValueType(token string, deps []string, kinds map[string]string) (string, any, error) {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(token, "#") {
+		index, err := strconv.Atoi(strings.TrimPrefix(token, "#"))
+		if err != nil || index < 0 || index >= len(deps) {
+			return "", nil, fmt.Errorf("compact reference %q out of range (deps=%d)", token, len(deps))
+		}
+		dep := deps[index]
+		kind := kinds[dep]
+		if kind == "" {
+			// 跨模块符号（如 n.Type）无法从本模块判定：已知 google.protobuf 类型直接映射，
+			// 其余按 message 处理，交由 resolver 校验。
+			if idx := strings.Index(dep, "."); idx > 0 && compactGoogleTypes[dep[idx+1:]] {
+				return "message", "google.protobuf." + dep[idx+1:], nil
+			}
+			kind = "message"
+		}
+		return kind, dep, nil
+	}
+	code, err := strconv.Atoi(token)
+	if err != nil || scalarTypes[code] == "" {
+		return "", nil, fmt.Errorf("unknown compact scalar type %q", token)
+	}
+	return "scalar", code, nil
 }
 
 // findClassEnd finds the matching closing brace for a class definition
@@ -1247,7 +1707,7 @@ func extractEnumValues(text string, start int) []EnumValue {
 	return values
 }
 
-func generateProtos(messages []Message, enums []Enum, services []Service, resolver *TypeResolver, outputDir string) {
+func generateProtos(messages []Message, enums []Enum, services []Service, resolver *TypeResolver, outputDir string, preservedServices map[string][]string) {
 	os.MkdirAll(outputDir, 0755)
 
 	// Group by package
@@ -1305,7 +1765,7 @@ func generateProtos(messages []Message, enums []Enum, services []Service, resolv
 
 		// Copy all external types referenced by this package
 		augmentedPkg := copyAllExternalTypes(pkgName, pkg, resolver, allMessages, allEnums)
-		generateProtoFile(pkgName, augmentedPkg.messages, augmentedPkg.enums, pkg.services, resolver, outputDir)
+		generateProtoFile(pkgName, augmentedPkg.messages, augmentedPkg.enums, pkg.services, resolver, outputDir, preservedServices[pkgName])
 	}
 }
 
@@ -1579,7 +2039,81 @@ func collectImports(currentPkg string, messages []Message, services []Service, r
 	return imports
 }
 
-func generateProtoFile(pkgName string, messages []Message, enums []Enum, services []Service, resolver *TypeResolver, outputDir string) {
+var (
+	serviceBlockRe  = regexp.MustCompile(`service\s+(\w+)\s*\{`)
+	serviceRPCTypes = regexp.MustCompile(`rpc\s+\w+\s*\(\s*(?:stream\s+)?([\w.]+)\s*\)\s*returns\s*\(\s*(?:stream\s+)?([\w.]+)\s*\)`)
+	protoPackageRe  = regexp.MustCompile(`(?m)^package\s+([\w.]+)\s*;`)
+)
+
+// loadPreservedServiceBlocks 读取输出目录中既有 proto 的 service 段，按 package 归档。
+// 新格式 bundle 已不携带 service 信息，这是唯一的保留来源。
+func loadPreservedServiceBlocks(dir string) map[string][]string {
+	preserved := make(map[string][]string)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return preserved
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".proto") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		text := string(body)
+		pkgMatch := protoPackageRe.FindStringSubmatch(text)
+		if pkgMatch == nil {
+			continue
+		}
+		for _, loc := range serviceBlockRe.FindAllStringSubmatchIndex(text, -1) {
+			end := findMatchingBrace(text, loc[1]-1)
+			if end == -1 {
+				continue
+			}
+			preserved[pkgMatch[1]] = append(preserved[pkgMatch[1]], text[loc[0]:end])
+		}
+	}
+	return preserved
+}
+
+func serviceBlockName(block string) string {
+	match := serviceBlockRe.FindStringSubmatch(block)
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
+// filterServiceBlockMethods 移除引用了已不存在类型的方法，并返回被移除的引用。
+// 上游删除类型后旧产物中的 service 会悬空；保留其余方法比整段丢弃更保守。
+func filterServiceBlockMethods(serviceName, block string, localTypes map[string]bool) (string, []string) {
+	lines := strings.Split(block, "\n")
+	kept := make([]string, 0, len(lines))
+	var missing []string
+	for _, line := range lines {
+		match := serviceRPCTypes.FindStringSubmatch(line)
+		if match == nil {
+			kept = append(kept, line)
+			continue
+		}
+		bad := ""
+		for _, typeRef := range []string{match[1], match[2]} {
+			if !strings.Contains(typeRef, ".") && !localTypes[typeRef] {
+				bad = typeRef
+				break
+			}
+		}
+		if bad != "" {
+			missing = append(missing, serviceName+"."+bad)
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n"), missing
+}
+
+func generateProtoFile(pkgName string, messages []Message, enums []Enum, services []Service, resolver *TypeResolver, outputDir string, preservedServices []string) {
 	// First, collect all cross-package imports
 	imports := collectImports(pkgName, messages, services, resolver)
 
@@ -1648,6 +2182,40 @@ func generateProtoFile(pkgName string, messages []Message, enums []Enum, service
 			}
 		}
 		sb.WriteString("}\n\n")
+	}
+
+	// 新版 bundle 不再提供 service 定义；从旧产物保留缺失的服务段，并校验其类型仍存在。
+	if len(preservedServices) > 0 {
+		existing := make(map[string]bool, len(services))
+		for _, svc := range services {
+			existing[svc.ShortName] = true
+		}
+		localTypes := make(map[string]bool)
+		for _, msg := range messages {
+			localTypes[msg.ShortName] = true
+		}
+		for _, enum := range enums {
+			localTypes[enum.ShortName] = true
+		}
+		for name := range copiedTypes[pkgName] {
+			localTypes[name] = true
+		}
+		for _, block := range preservedServices {
+			name := serviceBlockName(block)
+			if name == "" || existing[name] {
+				continue
+			}
+			filtered, missing := filterServiceBlockMethods(name, block, localTypes)
+			for _, ref := range missing {
+				fmt.Fprintf(os.Stderr, "保留 service %s 跳过引用已移除类型 %s 的方法\n", name, ref)
+			}
+			if strings.TrimSpace(filtered) == "" {
+				continue
+			}
+			sb.WriteString(strings.TrimRight(filtered, "\n"))
+			sb.WriteString("\n\n")
+			existing[name] = true
+		}
 	}
 
 	// Write to file - single flat directory

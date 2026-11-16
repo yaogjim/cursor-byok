@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"cursor/gen/agentv1"
+	protocol "cursor/internal/backend/agent/protocol"
 	"cursor/internal/observability"
 )
 
@@ -883,7 +884,7 @@ func requestedModelPayload(model *agentv1.RequestedModel) map[string]any {
 		"model_id":                         strings.TrimSpace(model.GetModelId()),
 		"max_mode":                         model.GetMaxMode(),
 		"built_in_model":                   model.GetBuiltInModel(),
-		"is_variant_string_representation": model.GetIsVariantStringRepresentation(),
+		"is_variant_string_representation": protocol.IsLegacyVariantStringRepresentation(model),
 		"parameters":                       parameters,
 	}
 }
@@ -913,7 +914,10 @@ func summarizeDebugArtifactPayload(payload map[string]any) map[string]any {
 		"input_tokens",
 		"output_tokens",
 		"cache_read_tokens",
+		"cache_read_present",
 		"cache_write_tokens",
+		"codex_affinity_profile",
+		"codex_affinity_injected",
 		"prompt_tokens_total",
 		"request_tokens_total",
 		"error",

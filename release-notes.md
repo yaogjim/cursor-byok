@@ -1,27 +1,30 @@
-# cursor-byok v1.90.1
+# cursor-byok v1.91.0
 
-本版本修复 Cursor 3.29.15 的 `BidiAppend` 二进制载荷兼容问题：新版客户端默认把 Agent 上行消息放进 `data_binary`，旧实现只读 `data`（hex），合法请求被当成空消息拒绝。修复不改变历史持久格式、旧 hex 上行行为与既有错误语义。
+本版本适配 Cursor 新版协议描述符格式，让协议提取器可以继续从本地 Cursor bundle 生成 Go/Connect 代码；同时补齐 managed Codex 缓存亲和的契约层与脱敏观测，并对真实上游做了一轮缓存 A/B 实测（结果为负）。
 
-`v1.90.0` 标签因 Git 托管 macOS 构建机标签 `macos-14` 停用而未产出发布包，本版本改用 `macos-15` 构建并以 `v1.90.1` 重新发布，产品代码与 `v1.90.0` 完全一致。
+## 协议提取器适配新版描述符
 
-## 兼容 Cursor 3.29.15 的 BidiAppend 二进制载荷
+- Cursor 3.29.15 的扩展 bundle 改用紧凑描述符（`static $(){return["TypeName|字段..."]}`）而非旧版反射描述符，原提取器无法解析，导致无法再生成协议代码。现支持紧凑 message/enum 描述符、继承与常量包名、枚举工厂、依赖索引、嵌套类型、optional/repeated/map/oneof；严格模式下非法引用、未知标量与缺失包名会使同步失败而不是静默产出错误类型。
+- 同步仍保留既有 service 定义：按 package 从旧快照复制后，移除引用了已删除本地类型的 RPC 并输出诊断；bundle 中存在的同名 service 优先，bundle 缺失时保留旧快照。
+- 新增独立的 `proto/agent_v1_compat.proto` 与 `proto/aiserver_v1_compat.proto` 承载上游已删除、但本仓现有会话/历史与控制面逻辑仍在使用的类型，不与自动提取产物混写。`build/Taskfile.yml` 的 protoc 调用已把两个 compat 文件纳入生成。
+- `RequestedModel` 删除字段 8（变体字符串表示标记）后，改为从 protobuf unknown fields 读取，选模、推理强度、子模型与调试摘要行为保持与旧客户端一致。
 
-- 新增统一字节解码头 `ReadAppendPayload`：`data_binary` 非空时优先使用，否则按旧 `data` hex 解码；空载荷、非法 hex 与 protobuf 解码失败沿用修改前的错误语义，不放宽失败判定。
-- `BidiAppend` 处理、客户端消息分流路由与 `cursor-proxy-debugger` 共用同一解码头，避免三处各自判断编码造成行为分叉。
-- 两字段同时出现时以 `data_binary` 为准（修改前路由层临时实现以 hex 为准）。3.29.15 客户端按开关二选一发送、不双发，该差异当前无实际输入触发；规则已写入系统架构 §D2.2。
-- 3.29.15 之前版本、以及 3.29.15 打开 `bidi_append_binary_encoding_disabled` 时的旧 hex 上行保持修改前行为，两种编码都可正常处理。
-- 诊断记录只增加载荷来源与长度（`payload_source`、`payload_bytes`），不落盘未知二进制原文。
+## managed Codex 缓存亲和：契约与观测
+
+- 新增 HTTP 层端到端断言：401 后同账号刷新时 `prompt_cache_key`、`session-id`、`thread-id`、`x-client-request-id` 保持稳定且 Authorization 换成新 token；quota 换号后亲和分区改变、`ChatGPT-Account-Id` 切换，且自定义 header 不能覆盖保留 header。
+- 新增 `codex_affinity_profile` 与 `codex_affinity_injected` 两项脱敏观测，仅记录档位枚举与是否注入，不含派生值；同时向 OpenAI 两种 endpoint 与 Anthropic 的流式摘要透传 `cache_read_present`，用于区分「上游明确返回零」与「未提供缓存字段」。
+- 真实上游 A/B：18 次请求（单一账号、单一模型、串行限速）中，`prompt_key`/`full` 两档共 12 次 `cache_read=0`；`control` 档仅一次出现自动前缀缓存命中，顺序反转后不可复现。**不宣称亲和字段带来缓存收益**，默认档位保持 `control`。
 
 ## 明确限制
 
-- 协议提取器尚不支持 Cursor 新版描述符格式（`static $(){return["TypeName|..."]}`），本版本未做适配，直接全量 `sync:proto` 会覆盖现有产物，因此未执行。
-- 更早版本 Cursor 的实机回归未执行（本机已升级到 3.29.15），也未做跨平台实机验收；旧版本兼容结论来自与修改前实现等价的合成契约测试，不外推为实机通过。
-- 控制面未登录时插件/MCP 查询返回 404 的问题属独立议题，策略尚未决定，本版本未改动。
-- updater 安装机制仍未设计完成，本版本未改动。
+- 生成的协议代码只通过本地同步、编译与相关测试验证；未安装并实机运行重新生成后的应用，其他新格式分片、旧版 Cursor 实机与跨平台均未验收。
+- service 合并策略依赖「bundle 同名优先」的判断，旧快照中 bundle 未包含的方法被视为上游删除，但没有用真实服务端验证。
+- compat 类型只用于维持现有历史会话与控制面行为，不证明上游仍支持对应接口。
+- 缓存 A/B 为单一账号、单一模型、单一时段的有限样本；无法排除上游缓存策略的时段性或按账号差异。实验使该订阅账号 remaining 由 55% 降至 41%。
+- 控制面未登录时插件/MCP 查询返回 404 的策略、同回合原生布局表示合同均未在本版本处理；updater 安装机制仍未设计。
 
 ## 验证边界
 
-- 先行回归在原实现下复现 `unsupported client message kind`，修复后通过；覆盖二进制载荷上行、二进制载荷路由、Host 的 gzip/hex/binary 三种合约以及调试器对新旧两种编码的解码断言。
-- `go test ./internal/backend ...`、`go test ./cursor-proxy-debugger`、定向 race/vet、gofmt 与 `git diff --check` 通过，详细命令与退出码见 `docs/process.md`。
-- 维护窗口内替换本机应用后，用户确认普通对话正常回答问题，日志确认工具执行结果回传与模型续答；取消、同会话恢复与子任务路径按只读 debug 记录核对，整体仍为 `verified-partial`。
-- 本机未执行打包编译（本次仅版本元数据与发布说明变更）；macOS、Windows、Linux 安装包由远端 CI 构建。
+- 协议同步：6200 个 message、676 个 enum、21630/21630 字段，unresolved 与 placeholders 均为 0；`check:proto` 确认根协议与提取快照一致。
+- `go build ./...`、`go test ./proto/ext_tool ./internal/backend/agent/protocol ./internal/backend/agent/prompt ./internal/backend/forwarder ./internal/backend/server/upstream`、`go test ./internal/backend/agent/model ./internal/subscriptionauth`、定向 `-race`、`go vet`、`gofmt -l` 与 `git diff --check` 通过；详细命令、退出码与复核结论见 `docs/process.md`。
+- 本机执行 macOS 宿主平台 `task build` 生成安装包；Windows 与 Linux 安装包由远端 CI 构建。

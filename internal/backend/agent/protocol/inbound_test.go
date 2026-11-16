@@ -104,18 +104,38 @@ func TestReadRequestedModelID(t *testing.T) {
 
 	t.Run("variant string keeps model prefix", func(t *testing.T) {
 		t.Parallel()
+		model := &agentv1.RequestedModel{ModelId: "abcdef0123456789:high"}
+		// 旧版字段 8 在新快照中作为 unknown field 保留。
+		model.ProtoReflect().SetUnknown([]byte{0x40, 0x01})
 		got := ReadRequestedModelID(&agentv1.AgentClientMessage{
 			Message: &agentv1.AgentClientMessage_RunRequest{
 				RunRequest: &agentv1.AgentRunRequest{
-					RequestedModel: &agentv1.RequestedModel{
-						ModelId:                       "abcdef0123456789:high",
-						IsVariantStringRepresentation: true,
-					},
+					RequestedModel: model,
 				},
 			},
 		})
 		if got != "abcdef0123456789" {
 			t.Fatalf("got %q", got)
+		}
+	})
+
+	t.Run("variant string keeps legacy last-colon semantics", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct{ raw, want string }{
+			{raw: "model:high", want: "model"},
+			{raw: "a:b:c", want: "a:b"},
+			{raw: ":high", want: ":high"},
+		} {
+			model := &agentv1.RequestedModel{ModelId: tc.raw}
+			model.ProtoReflect().SetUnknown([]byte{0x40, 0x01})
+			got := ReadRequestedModelID(&agentv1.AgentClientMessage{
+				Message: &agentv1.AgentClientMessage_RunRequest{
+					RunRequest: &agentv1.AgentRunRequest{RequestedModel: model},
+				},
+			})
+			if got != tc.want {
+				t.Fatalf("raw %q: got %q, want %q", tc.raw, got, tc.want)
+			}
 		}
 	})
 

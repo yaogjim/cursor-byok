@@ -82,7 +82,7 @@ func parseSubagentModelOverrides(items []*agentv1.SubagentModelOverride) parsedS
 				ParameterCount:                len(model.GetParameters()),
 				Parameters:                    model.GetParameters(),
 				BuiltInModel:                  model.GetBuiltInModel(),
-				IsVariantStringRepresentation: model.GetIsVariantStringRepresentation(),
+				IsVariantStringRepresentation: protocol.IsLegacyVariantStringRepresentation(model),
 			}).Clone()
 		case *agentv1.SubagentModelOverride_Inherit:
 			parsed.Overrides[subagentType] = runtimecore.SubagentModelOverrideSelection{
@@ -3408,7 +3408,7 @@ func extractRequestedModelIDFromRequestedModel(model *agentv1.RequestedModel) st
 	if model == nil {
 		return ""
 	}
-	if model.GetIsVariantStringRepresentation() {
+	if protocol.IsLegacyVariantStringRepresentation(model) {
 		modelID, _ := splitRuntimeThinkingEffortVariantString(model.GetModelId())
 		return modelID
 	}
@@ -3440,7 +3440,7 @@ func extractRuntimeThinkingEffortFromRequestedModel(model *agentv1.RequestedMode
 			return effort
 		}
 	}
-	if model.GetIsVariantStringRepresentation() {
+	if protocol.IsLegacyVariantStringRepresentation(model) {
 		if _, effort := splitRuntimeThinkingEffortVariantString(model.GetModelId()); effort != "" {
 			return effort
 		}

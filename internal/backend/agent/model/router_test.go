@@ -625,6 +625,7 @@ type stubCredentialResolver struct {
 	quotaCalls  []string
 	quotaErr    error
 	resolveSeq  []subscriptionauth.Credential
+	affinityKey []byte
 }
 
 func (stub *stubCredentialResolver) Resolve(context.Context, subscriptionauth.CredentialSource) (subscriptionauth.Credential, error) {
@@ -673,6 +674,13 @@ func (stub *stubCredentialResolver) MarkQuotaExhausted(_ context.Context, creden
 
 func (stub *stubCredentialResolver) RefreshUsage(context.Context, subscriptionauth.ProviderKind) (subscriptionauth.UsageSnapshot, error) {
 	return subscriptionauth.UsageSnapshot{}, nil
+}
+
+func (stub *stubCredentialResolver) CodexAffinityKey() ([]byte, error) {
+	if len(stub.affinityKey) == 0 {
+		return nil, errors.New("affinity key unavailable")
+	}
+	return stub.affinityKey, nil
 }
 
 func TestRouterStaticChannelKeepsConfiguredAPIKey(t *testing.T) {

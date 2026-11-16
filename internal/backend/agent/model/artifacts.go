@@ -79,6 +79,7 @@ func buildLLMSummaryPayload(
 	cacheReadTokens int64,
 	cacheWriteTokens int64,
 	err error,
+	cacheReadPresent ...bool,
 ) map[string]any {
 	finished := finishedAt
 	if finished.IsZero() {
@@ -86,7 +87,7 @@ func buildLLMSummaryPayload(
 	}
 	promptTokensTotal := inputTokens + cacheReadTokens + cacheWriteTokens
 	requestTokensTotal := promptTokensTotal + outputTokens
-	return map[string]any{
+	payload := map[string]any{
 		"provider":             strings.TrimSpace(provider),
 		"model":                strings.TrimSpace(model),
 		"started_at":           normalizeModelArtifactTime(startedAt),
@@ -103,6 +104,14 @@ func buildLLMSummaryPayload(
 		"ttft_ms":              computeTTFTMS(startedAt, firstEventAt),
 		"duration_ms":          computeDurationMS(startedAt, finished),
 	}
+	if len(cacheReadPresent) > 0 {
+		payload["cache_read_present"] = cacheReadPresent[0]
+	}
+	if profile := strings.TrimSpace(req.CodexAffinityProfile); profile != "" {
+		payload["codex_affinity_profile"] = profile
+		payload["codex_affinity_injected"] = req.CodexAffinity != (CodexAffinity{})
+	}
+	return payload
 }
 
 // appendLLMResponseArtifact 只记录响应分块大小；Provider 原始响应正文不得进入工件或观测日志。

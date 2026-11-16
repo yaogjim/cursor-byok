@@ -127,6 +127,7 @@ func (router *Router) applyRuntimeCredentials(ctx context.Context, req StreamReq
 	if !source.Managed() {
 		req.StableAccountID = false
 		req.CodexAffinity = CodexAffinity{}
+		req.CodexAffinityProfile = ""
 		return req, nil
 	}
 	if router == nil || router.credentials == nil {

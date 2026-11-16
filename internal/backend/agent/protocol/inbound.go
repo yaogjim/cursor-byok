@@ -11,6 +11,7 @@ import (
 	"cursor/gen/aiserverv1"
 	"cursor/internal/backend/agent/core"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -72,15 +73,46 @@ func readRequestedModelID(model *agentv1.RequestedModel) string {
 	if raw == "" {
 		return ""
 	}
-	if model.GetIsVariantStringRepresentation() {
+	if IsLegacyVariantStringRepresentation(model) {
 		if index := strings.LastIndex(raw, ":"); index > 0 {
-			prefix := strings.TrimSpace(raw[:index])
-			if prefix != "" {
+			if prefix := strings.TrimSpace(raw[:index]); prefix != "" {
 				return prefix
 			}
 		}
 	}
 	return raw
+}
+
+// IsLegacyVariantStringRepresentation 读取旧客户端的 RequestedModel 字段 8。
+// 新快照删除了该字段；protobuf 解码仍将其保存在 unknown fields 中。
+func IsLegacyVariantStringRepresentation(model *agentv1.RequestedModel) bool {
+	if model == nil {
+		return false
+	}
+	raw := model.ProtoReflect().GetUnknown()
+	var enabled bool
+	for len(raw) > 0 {
+		num, typ, n := protowire.ConsumeTag(raw)
+		if n < 0 {
+			return false
+		}
+		raw = raw[n:]
+		if num == 8 && typ == protowire.VarintType {
+			value, m := protowire.ConsumeVarint(raw)
+			if m < 0 {
+				return false
+			}
+			enabled = value != 0
+			raw = raw[m:]
+			continue
+		}
+		m := protowire.ConsumeFieldValue(num, typ, raw)
+		if m < 0 {
+			return false
+		}
+		raw = raw[m:]
+	}
+	return enabled
 }
 
 func firstNonEmpty(values ...string) string {
