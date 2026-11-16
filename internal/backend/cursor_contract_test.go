@@ -179,7 +179,8 @@ func TestHostAgentModelSwitchNudgeForwardsOfficial(t *testing.T) {
 		want int
 	}{
 		{metadataPath, officialAuth, http.StatusNoContent},
-		{metadataPath, "Bearer " + legacyruntime.LocalRelayToken, http.StatusNotFound},
+		// §19.7：本地中继身份改为空确认，不再 404；官方身份转发语义不变。
+		{metadataPath, "Bearer " + legacyruntime.LocalRelayToken, http.StatusOK},
 		{"/agent.v1.AgentService/UnknownProcedure", officialAuth, http.StatusNotFound},
 	} {
 		request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader("metadata-payload"))

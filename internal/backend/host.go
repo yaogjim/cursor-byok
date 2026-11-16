@@ -706,6 +706,9 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 	bidiRoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalBidiHandler)
 	runSSERoute := upstream.AgentRouteAction(routeDeps, host.agentSessions, agentModule.LocalRunSSE)
 	agentServicePassthrough := upstream.AgentRouteAction(routeDeps, host.agentSessions, http.NotFoundHandler())
+	// §19.7：本地中继身份下的元数据更新返回空确认；官方身份仍走 routeOfficialAgentControl 转发官方。
+	agentServiceMetadataPassthrough := upstream.AgentRouteAction(routeDeps, host.agentSessions,
+		upstream.EmptyProtoHTTPHandler(routeDeps, upstream.CompatRouteConfig{Name: "agent_conversation_metadata"}))
 
 	host.mux = server.New(
 		server.Use(
@@ -808,8 +811,8 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		server.POST("/agent.v1.AgentService/UpdateConversationMetadata",
 			server.Name("agent_conversation_metadata"),
 			server.HTTP(),
-			server.Local(agentServicePassthrough),
-			server.Upstream(agentServicePassthrough),
+			server.Local(agentServiceMetadataPassthrough),
+			server.Upstream(agentServiceMetadataPassthrough),
 		),
 		server.POST("/aiserver.v1.AiService/GetDefaultModel",
 			server.Name("default_model"),
@@ -822,6 +825,12 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 			server.ConnectUnary(),
 			server.Local(defaultModelNudge),
 			server.Upstream(defaultModelNudge),
+		),
+		server.POST("/aiserver.v1.AnalyticsService/Batch",
+			server.Name("analytics_batch"),
+			server.ConnectUnary(),
+			server.Local(upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "analytics_batch"})),
+			server.Upstream(upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "analytics_batch"})),
 		),
 		server.POST("/aiserver.v1.AnalyticsService/BootstrapStatsig",
 			server.Name("bootstrap_statsig"),
@@ -921,6 +930,12 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		uploadServiceProcedure(forwarder.UploadServiceGetDocProcedure, "upload_get_doc", server.ConnectUnary(), agentModule),
 		uploadServiceProcedure(forwarder.UploadServiceGetPagesProcedure, "upload_get_pages", server.ConnectUnary(), agentModule),
 		uploadServiceProcedure(forwarder.UploadServiceUploadedStatusProcedure, "upload_uploaded_status", server.ConnectUnary(), agentModule),
+		// §19.7：提交分析遥测本地接收后丢弃，不持久化、不转发。
+		server.POST("/aiserver.v1.AiService/ReportCommitAiAnalytics",
+			server.Name("ai_report_commit_ai_analytics"),
+			server.ConnectUnary(),
+			server.Local(upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "ai_report_commit_ai_analytics"})),
+		),
 		server.Any("/aiserver.v1.AiService/*",
 			server.Name("ai_service"),
 			server.HTTP(),
@@ -1031,16 +1046,6 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 				MockBuilder:   upstream.EmptyMockBuilder,
 			})),
 		),
-		server.POST("/aiserver.v1.DashboardService/GetEffectiveUserPlugins",
-			server.Name("dashboard_get_effective_user_plugins"),
-			server.ConnectUnary(),
-			server.Local(upstream.MockProtoAction(routeDeps, upstream.CompatRouteConfig{
-				Name:          "dashboard_get_effective_user_plugins",
-				StatusCode:    http.StatusOK,
-				MockProtoType: "aiserver.v1.GetEffectiveUserPluginsResponse",
-				MockBuilder:   upstream.EmptyMockBuilder,
-			})),
-		),
 		server.POST("/aiserver.v1.DashboardService/RegisterMarketplaceAndPlugins",
 			server.Name("dashboard_register_marketplace_and_plugins"),
 			server.ConnectUnary(),
@@ -1115,7 +1120,8 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/AddMcpServersFromPlugin", "dashboard_add_mcp_servers_from_plugin", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/BatchGetPluginMcpConfig", "dashboard_batch_get_plugin_mcp_config", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/GetAvailableMcpServers", "dashboard_get_available_mcp_servers", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
-		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/GetEffectiveUserPlugins", "dashboard_get_effective_user_plugins", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
+		cursorControlPlaneProcedureWithFallback("/aiserver.v1.DashboardService/GetEffectiveUserPlugins", "dashboard_get_effective_user_plugins", server.ConnectUnary(), host.controlPlaneAuth, routeDeps,
+			upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "dashboard_get_effective_user_plugins"})),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/GetPlugin", "dashboard_get_plugin", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/GetPluginMcpConfig", "dashboard_get_plugin_mcp_config", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/InstallUserPlugin", "dashboard_install_user_plugin", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
@@ -1128,7 +1134,14 @@ func (host *Host) rebuildLocked(cfg serverconfig.Config) error {
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/ResolvePluginsByRef", "dashboard_resolve_plugins_by_ref", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/UninstallUserPlugin", "dashboard_uninstall_user_plugin", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
 		cursorControlPlaneProcedure("/aiserver.v1.DashboardService/UpdateUserPluginInstall", "dashboard_update_user_plugin_install", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
-		cursorControlPlaneProcedure("/aiserver.v1.MCPRegistryService/GetKnownServers", "mcp_registry_get_known_servers", server.ConnectUnary(), host.controlPlaneAuth, routeDeps),
+		cursorControlPlaneProcedureWithFallback("/aiserver.v1.MCPRegistryService/GetKnownServers", "mcp_registry_get_known_servers", server.ConnectUnary(), host.controlPlaneAuth, routeDeps,
+			upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "mcp_registry_get_known_servers"})),
+		// §19.7：本地模式未接入官方 SCM，任意身份返回未连接；不区分身份、不外发。
+		server.POST("/aiserver.v1.DashboardService/GetScmConnectionStatus",
+			server.Name("dashboard_scm_connection_status"),
+			server.ConnectUnary(),
+			server.Local(upstream.EmptyProtoAction(routeDeps, upstream.CompatRouteConfig{Name: "dashboard_scm_connection_status"})),
+		),
 		server.Any("/aiserver.v1.DashboardService/*",
 			server.Name("dashboard"),
 			server.HTTP(),

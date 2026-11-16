@@ -133,6 +133,28 @@ func MockAuthEmailAction(deps Dependencies, cfg CompatRouteConfig) server.Handle
 	}
 }
 
+// EmptyProtoAction 返回零字段 protobuf；用于空集合和无操作确认，不访问上游。
+func EmptyProtoAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
+	return func(ctx *server.Context) error {
+		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
+		if err != nil {
+			return err
+		}
+		return writeMockProtoResponse(reqCtx, route, nil)
+	}
+}
+
+// EmptyProtoHTTPHandler 是 EmptyProtoAction 的 http.Handler 形式，供既有 http.Handler
+// 分流（如 AgentRouteAction）复用同一零字段响应编码，不访问上游。
+func EmptyProtoHTTPHandler(deps Dependencies, cfg CompatRouteConfig) http.Handler {
+	action := EmptyProtoAction(deps, cfg)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := action(&server.Context{Writer: writer, Request: request}); err != nil {
+			http.Error(writer, "local empty response unavailable", http.StatusInternalServerError)
+		}
+	})
+}
+
 func MockProtoAction(deps Dependencies, cfg CompatRouteConfig) server.HandlerFunc {
 	return func(ctx *server.Context) error {
 		reqCtx, route, err := newCompatRouteObjects(ctx, deps, cfg)
