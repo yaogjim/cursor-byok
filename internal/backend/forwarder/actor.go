@@ -604,6 +604,9 @@ func applyProviderTerminalErrorStats(stats *ProviderStreamStats, err error) {
 		return
 	}
 	stats.ErrorCategory = firstNonEmpty(modeladapter.ClassifyProviderError(err), "not_recorded")
+	if code := safeProviderErrorCode(err); code != "" {
+		stats.ProviderErrorCode = code
+	}
 	if httpStatus := providerHTTPStatusFromError(err); httpStatus != "" {
 		stats.HTTPStatus = httpStatus
 	}
@@ -685,7 +688,28 @@ func applyProviderStreamDiagnostics(stats *ProviderStreamStats, diagnostics *mod
 	if stats.TransportOutcome == "" {
 		stats.TransportOutcome = modeladapter.TransportOutcomeStarted
 	}
+	if code := safeProviderErrorCode(err); code != "" {
+		stats.ProviderErrorCode = code
+	}
 	finalizeProviderPartialBoundary(stats, checkpointCommitted)
+}
+
+// safeProviderErrorCode 只保留长度受限、已清洗的上游错误码；
+// 原始错误正文可能含账号信息，不能直接进入观测。
+func safeProviderErrorCode(err error) string {
+	var httpErr *modeladapter.HTTPStatusError
+	if !errors.As(err, &httpErr) || httpErr == nil {
+		return ""
+	}
+	code := strings.TrimSpace(audit.SanitizeMetadataText(strings.TrimSpace(httpErr.Code)))
+	if code == "" {
+		return ""
+	}
+	const maxProviderErrorCodeBytes = 64
+	if len(code) > maxProviderErrorCodeBytes {
+		code = code[:maxProviderErrorCodeBytes]
+	}
+	return code
 }
 
 func finalizeProviderPartialBoundary(stats *ProviderStreamStats, checkpointCommitted bool) {
@@ -755,6 +779,10 @@ func providerRetryObservation(err error, stats ProviderStreamStats) (retryable s
 	}
 	var httpErr *modeladapter.HTTPStatusError
 	if errors.As(err, &httpErr) && httpErr != nil && httpErr.StatusCode > 0 {
+		// 额度耗尽不是限流：同 key 重试无意义，观测必须与内部策略一致。
+		if httpErr.QuotaExhausted {
+			return "false", modeladapter.FailureCauseQuotaExhausted, modeladapter.FailureCauseQuotaExhausted
+		}
 		eligible, retryReason, retrySuppression := modeladapter.HTTPRetryObservation(httpErr.StatusCode)
 		if eligible {
 			return "true", retryReason, retrySuppression
@@ -818,6 +846,7 @@ func providerTerminalFields(modelCallID string, stats ProviderStreamStats) map[s
 		"error_category": firstNonEmpty(stats.ErrorCategory, "not_recorded"), "error_summary": safeProviderErrorSummary(stats),
 		"provider_error_summary":      firstNonEmpty(stats.ProviderErrorSummary, "not_recorded"),
 		"provider_error_summary_type": firstNonEmpty(stats.ProviderErrorSummaryType, "not_recorded"),
+		"provider_error_code":         firstNonEmpty(stats.ProviderErrorCode, "not_recorded"),
 	}
 	if continuedFrom := strings.TrimSpace(stats.ContinuedFromModelCallID); continuedFrom != "" {
 		fields["continued_from_model_call_id"] = continuedFrom

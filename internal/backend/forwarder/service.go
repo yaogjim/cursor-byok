@@ -28,6 +28,7 @@ import (
 	promptengine "cursor/internal/backend/agent/prompt"
 	protocol "cursor/internal/backend/agent/protocol"
 	"cursor/internal/observability"
+	"cursor/internal/requestlog"
 	"cursor/internal/subscriptionauth"
 )
 
@@ -253,6 +254,7 @@ type Service struct {
 	store                    *ConversationFileStore
 	contentBlobs             *ContentBlobStore
 	usageStore               *UsageFileStore
+	requestIndex             *requestlog.Store
 	codebaseIndexStore       *CodebaseIndexStore
 	docsIndexStore           *DocsIndexStore
 	rules                    *UserRuleStore
@@ -301,6 +303,7 @@ func NewServiceWithCredentials(historyRoot string, resolver modeladapter.Channel
 		store:              store,
 		contentBlobs:       contentBlobs,
 		usageStore:         NewUsageFileStore(historyRoot),
+		requestIndex:       requestlog.NewStore(historyRoot, requestIndexRetention),
 		codebaseIndexStore: NewCodebaseIndexStore(appdata.CodebaseIndexRootPath()),
 		docsIndexStore:     NewDocsIndexStore(appdata.DocsIndexRootPath()),
 		rules:              rules,
@@ -1617,6 +1620,7 @@ func (service *Service) driveProvider(stream *ActiveStream) error {
 	stream.ProviderPublishedToolArgs = false
 	stream.ProviderFinishReason = ""
 	stream.ProviderUsage = turnUsageSnapshot{}
+	stream.CurrentProviderPurpose = purposeChat
 	stream.ProviderStreamStats = ProviderStreamStats{
 		Provider:                 "unknown",
 		Model:                    firstNonEmpty(strings.TrimSpace(stream.ModelName), strings.TrimSpace(stream.ModelID), "unknown"),
@@ -4281,6 +4285,9 @@ func runSSEAdditionalInfo(event StreamEvent) map[string]string {
 
 // buildRunSSEProviderError 构造 provider 专用的 RunSSE 错误包。
 func buildRunSSEProviderError(event StreamEvent) error {
+	if strings.EqualFold(strings.TrimSpace(event.TerminalErrorCategory), modeladapter.ProviderErrorQuotaExhausted) {
+		return buildRunSSEQuotaExhaustedError(event)
+	}
 	cause := errors.New(firstNonEmpty(strings.TrimSpace(event.TerminalErrorMessage), "provider_error"))
 	return buildRunSSEStructuredErrorWithDetail(
 		connect.CodeUnavailable,
@@ -4290,6 +4297,22 @@ func buildRunSSEProviderError(event StreamEvent) error {
 		aiserverv1.ErrorDetails_ERROR_PROVIDER_ERROR,
 		false,
 		terminalEventRetryable(event),
+		runSSEAdditionalInfo(event),
+	)
+}
+
+// buildRunSSEQuotaExhaustedError 使用固定文案说明额度耗尽，避免透传上游正文，
+// 同时给出用户可执行的下一步。
+func buildRunSSEQuotaExhaustedError(event StreamEvent) error {
+	const detail = "The upstream provider reports its quota or billing is unavailable for this channel. Check the account balance for this API key, then retry."
+	return buildRunSSEStructuredErrorWithDetail(
+		connect.CodeUnavailable,
+		"Provider Quota Exhausted",
+		detail,
+		errors.New(detail),
+		aiserverv1.ErrorDetails_ERROR_PROVIDER_ERROR,
+		false,
+		false,
 		runSSEAdditionalInfo(event),
 	)
 }

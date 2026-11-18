@@ -2314,6 +2314,7 @@ func (service *Service) generateCompactionSummaryAttempt(ctx context.Context, st
 		RunID:          stream.RequestID,
 		ModelCallID:    modelCallID,
 		ModelID:        stream.ModelID,
+		Purpose:        purposeSummary,
 		ThinkingEffort: "disabled",
 		Mode:           agentv1.AgentMode_AGENT_MODE_AGENT,
 		Messages:       messages,

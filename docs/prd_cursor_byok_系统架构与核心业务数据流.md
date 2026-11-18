@@ -2474,6 +2474,88 @@ Design Readiness=approved（仅本切片，用户已确认）。需求：Cursor 
 
 问题"大请求上传超时" → 本节替代方案分析 → `task/todo.md` 的暂缓项 `provider-image-downsample-deferred`。执行证据继续只写入 `docs/process.md`；本节不产生代码改动。
 
+## 19.9 provider 配额错误分类与终态文案（2026-11-16，Design Readiness=approved 仅限本切片）
+
+### 1. 问题（已核实）
+
+- 2026-11-16 的 Cursor 报错为 `Server Error server_5xx status=503`；本地日志显示同一请求先 429（`rate_limited`）后 503（`server_5xx`），最终以第二次状态作为终态。
+- `ClassifyHTTPStatus` 只按 HTTP 状态码分类；上游 `error.code` 虽已被 `extractJSONErrorCode` 解析（`http_error.go`），但仅用于上下文溢出判定。额度类错误因此无法表达。
+- 网关自行构造 `ERROR_PROVIDER_ERROR`：title 固定 `Server Error`，detail 取 `error_summary`，`provider_error` 终态默认 `isRetryable=false`。Cursor 只投影这些字段，不自行判断。
+- 同一样本在 8 分钟后用同一 key、同一中转站成功返回，因此该次失败不是额度耗尽；但"额度耗尽时无法正确提示"这一实现缺口成立。
+
+### 2. 合同
+
+- **识别**：只认稳定白名单 `code`/`type`：`insufficient_quota`、`quota_exceeded`、`insufficient_balance`、`billing_hard_limit_reached`、`billing_not_active`、`account_deactivated`。正文短语（中英文余额/配额提示）仅在 429/402/403 上兜底；5xx 不据此判定，避免把服务故障误读为额度问题。
+- **分类**：新增 `ProviderErrorQuotaExhausted` / `FailureCauseQuotaExhausted`。同 key 不可重试（`Retryable=false`），仍允许切换渠道（`Switchable=true`），因为备用渠道可能使用不同账号或额度。
+- **下行**：终态 `provider_error` 且分类为 `quota_exhausted` 时，title 为 `Provider Quota Exhausted`，detail 使用网关固定可行动文案，不透传上游正文或内部摘要；`isRetryable=false`。
+- **观测**：provider terminal 事件新增 `provider_error_code`（清洗后、上限 64 字节），使"限流"与"额度"可区分。
+- **不变**：普通 429 仍为 `rate_limited` 且同渠道重试；重试主链、fallback 预算、HTTP 状态分类、430/401/403 现有语义不变。
+
+### 3. 边界与缺口
+
+- 非终态 429 的响应体不落盘；若重试后最终错误变为 503（如本次样本），首个配额信号会丢失。本轮未改重试主链。
+- 未实现"配额类 429 跳过同渠道重试"，因为需要在重试判定前预读并回填响应体，属于核心路径改动，收益仅为节省一次请求。
+- 本切片不引入渠道健康探测或余额查询，不在后台主动请求上游账号。
+
+## 19.10 桌面壳设置项：登录启动、关闭后继续运行、Dock 图标与清空全部日志（2026-11-16，Design Readiness=approved）
+
+需求来源：系统设置页三处 `is-planned inert` 占位（`frontend/src/views/SettingsView.vue:166-184`、`:338-346`），以及用户 2026-11-16 追加的 macOS Dock 图标显示。四项归为同一交付组，但可独立实施；不新增依赖、不新建通用系统功能框架。
+
+### 1. 已核实事实
+
+- **Dock 当前被两层配置隐藏**：`build/darwin/Info.plist:25-26` 为 `LSUIElement=true`；`internal/app/runner.go:152` 为 `ActivationPolicyAccessory`。应用因此不出现在 Dock、Cmd+Tab 和顶部应用菜单。
+- **托盘与关闭行为已存在**：`internal/app/runner.go:281-300` 创建托盘菜单（显示/隐藏窗口、退出）；`:262-265` 的 `WindowClosing` 钩子固定执行 `window.Hide(); e.Cancel()`。当前"关闭窗口后继续运行"实际上已生效。
+- **框架内置运行时 Dock 切换**：Wails `v3.0.0-alpha.74` 的 `pkg/services/dock` 在 Darwin 通过 `setActivationPolicy` 提供 `ShowAppIcon()/HideAppIcon()`；项目当前无任何引用。Linux 为 no-op 桩，Windows 为任务栏徽标服务。该能力位于现有依赖树内。
+- **启动策略可一次设定**：`application_darwin.go:299-302` 在 `ApplicationDidFinishLaunching` 中按 `Mac.ActivationPolicy` 设置并随后激活应用，因此"启动即显示 Dock"无需先隐藏再显示。
+- **Dock 点击恢复事件存在，但框架内置恢复未生效**：`events_common_darwin.go:22-31` 注册了 `ApplicationShouldHandleReopen` 处理器；2026-11-16 探针中事件确实到达，但隐藏窗口未恢复，自行调用 `window.Show(); window.Focus()` 后才生效（证据见 `docs/process.md`「桌面壳功能可逆探针」）。正式实现必须自行处理该事件。
+- **配置层无窗口/系统行为段**：`internal/backend/server/config/types.go:209-226` 仅有 Appearance/Advertising/Updates 等；`internal/app/runner.go:383-391` 已有 `user-config:changed` 处理 Appearance/Advertising 的现成模式。
+- **日志清理已有安全基础**：`internal/client/service.go:266` → `internal/observability/storage.go:523` 的 `CleanupAllClosedSessions` 串行执行、与预算/轮转共享锁、保护活跃应用日志与诊断分片；`internal/logsink/rotating.go` 的 `RotatingFile` 持有写锁与文件句柄。
+
+### 2. 已确认的产品决策
+
+- 四项范围与分组：①登录时启动；②关闭窗口后继续在后台运行（取代原"最小化到系统托盘"文案与语义）；③macOS Dock 图标显示；④立即清空全部日志。
+- Dock 图标默认**关闭**（保持当前无 Dock 行为）。
+- 登录时启动默认**关闭**；用户主动开启后才注册系统登录项；仅在 macOS 13+ 提供该项，低于 13 隐藏并说明版本要求，不回退到 LaunchAgent。
+- 启动时是否隐藏主窗口由独立开关 `hideWindowOnStartup` 控制（默认关闭），不依赖识别登录启动来源；登录启动与手动启动遵循同一规则。
+- 设置页的登录启动开关状态以系统实际注册状态为准；`RequiresApproval` 时提示用户到系统设置批准，不只回显配置值。
+- Dock 设置项**仅在 macOS 显示**；Windows/Linux 不呈现该开关。
+- 关闭窗口后继续运行默认保持**开启**，与当前行为一致，升级不改变既有习惯。
+- 登录启动与手动启动遵循同一窗口显隐规则：由 `hideWindowOnStartup`（默认关闭）决定，不识别启动来源。
+- "立即清空全部日志"仅删除本应用管理的日志内容，不删除配置、证书、凭据或业务历史；不可恢复，需二次确认。
+- 四项均不新增第三方依赖；托盘项与 Dock 项允许同时开启，互不替代。
+
+### 3. 合同概要（待闭合项已标注）
+
+- **Dock**：启动时按配置选择 `ActivationPolicy`；运行时切换走 `user-config:changed` → dock service；自行处理 `ApplicationShouldHandleReopen` 并显式 `Show().Focus()`；窗口 `Hide()/Show()` 为异步，状态判断不得依赖调用后的同步返回值。Dock 隐藏时托盘必须可用。dock service 仅在 Go 侧持有，不注册为前端绑定服务。
+- **关闭行为矩阵**：继续运行=开时关闭按钮隐藏窗口；=关时走完整退出收尾。Dock 是否显示不改变退出语义。Dock 开且继续运行开时，Dock 与托盘都可恢复窗口。
+- **登录启动**：定义为当前用户登录时启动，非系统级服务；关闭开关只取消后续登录启动，不退出当前应用；开关状态须反映系统实际注册结果，不能只回显配置值。macOS 候选机制（原生登录项 vs 用户级 LaunchAgent）**尚未核实**在当前 adhoc 签名、手写 Info.plist 与 DMG 安装路径下的可用性。
+- **清空全部日志**：用户已确认清空范围**包含当前活跃会话**。执行顺序固定为：控制器串行入口 → 取出并置空 `recorder`/`appLog` 指针（新写入立即丢弃）→ 同步关闭旧 recorder（排空队列、写 closed manifest）与应用日志 writer → 在预算锁下删除全部受管内容（manifest 已知的 trace 会话目录、受管 `app-*.log` 分片、受管 `diagnostics-*.jsonl` 分片；未知格式目录、非受管文件与符号链接一律保留）→ 按当前采集设置重建 trace 会话与应用日志 writer。旧 writer 在 10s 内未被确认停止时**不删除任何内容**并恢复采集，返回中止错误；部分项删除失败计入 `FailedItems` 并继续；清空后采集恢复失败以 `LastError=collector_restart_failed` 报告。禁止前端递归删除目录；清空期间业务代理不停；不得把部分成功或采集未恢复报告为全部成功。
+
+### 4. 事实缺口与未决决策
+
+- Dock 运行时切换：**已验证**（macOS 14.6.1、adhoc、`LSUIElement=true`、`/tmp` bundle）：`activationPolicy` 1→0→1，`lsappinfo` type `UIElement`→`Foreground`；正式实现必须自行处理 reopen。
+- SMAppService 注册：**已验证可注册**（同一环境）：`register=1 status=Enabled(1)`，`unregister=1`，无残留。未验证真实注销/登录启动、`/Applications` 安装路径与 DMG 直接运行场景。
+- macOS 13 以下不支持 SMAppService：已确认仅在 macOS 13+ 提供登录启动，低于 13 隐藏该项并说明版本要求，不引入 LaunchAgent 回退。
+- 登录启动与手动启动的区分：**已取消该前提**。启动时是否隐藏窗口改为独立开关 `hideWindowOnStartup`，不依赖启动来源识别。
+- 清空全部日志的范围：**已确认包含活跃会话**；“清空后立即重建会话、页面显示新会话”已作为合同的一部分。
+
+### 5. 实现锚点（源码级，2026-11-16）
+
+- 配置：`DesktopConfig{exitOnWindowClose, showDockIcon, hideWindowOnStartup}`，默认全 false，见 `internal/backend/server/config/types.go`。
+- 关闭与退出：`internal/app/window_close.go`、`internal/app/runner.go` 的 `WindowClosing` 钩子与幂等退出入口。
+- Dock：`internal/app/dock_icon.go` 与平台实现。
+- 登录启动：`internal/loginitem/`（SMAppService）；桥接 `WindowService.GetPlatform/GetLoginItemStatus/SetLoginItemEnabled`。
+- 清空日志：`internal/observability/clear.go`（`ClearStoredLogs`、`Controller.ClearAllLogs`）；`internal/client/service.go:ClearAllLogs` 在没有采集控制器时退化为纯磁盘清理；桥接 `ProxyService.ClearAllLogs`；设置页“立即清空全部日志”。
+
+### 6. 验证要求
+
+- Dock：真实安装包上切换开关，确认图标出现/消失、点击图标可恢复隐藏窗口、Cmd+Tab 与菜单栏状态符合预期。
+- 关闭行为：窗口隐藏后真实 Cursor 请求仍可完成；继续运行关闭时完整退出且代理收尾执行。
+- 登录启动：必须提供真实注销/登录后的启动证据，不能以注册成功或注册文件存在替代；覆盖 `/Applications` 安装路径与 DMG 直接运行场景。
+- 清空日志：持续写入中执行清空、清空后继续写入、部分失败、无越界删除，均需运行证据。
+
+四项已进入实现，源码级验证见 `docs/process.md`；真机验收仍未完成，完成状态以 `task/todo.md` 和运行证据为准。
+
 ## 20. DESIGN-CORRECTNESS-REPAIR-20261026：摘要、MCP 与 Gateway 最小修复
 
 Design Readiness=approved（用户通过计划审批确认）；实现与验收状态仅见 task/todo.md 和 docs/process.md。以下为批准合同，不代表已实现。

@@ -36,12 +36,18 @@ import {
   downloadAvailableUpdate,
   exportUserConfig as exportUserConfigFile,
   getAppVersion,
+  getPlatform,
+  getLoginItemStatus,
+  setLoginItemEnabled,
   getHomeMetricsSummary,
   getHomeMetricsReport,
+  listRequests,
+  listRequestFilterOptions,
   resetHomeMetricsSummary,
   getLogCaptureStatus,
   getModelAdapterTestResults,
   cleanupClosedLogSessions,
+  clearAllLogs,
   installReadyUpdate,
   getProxyState,
   importUserConfig as importUserConfigFile,
@@ -726,6 +732,11 @@ function normalizeConfig(source) {
     advertising: {
       enabled: asBoolean(advertising.enabled),
     },
+    desktop: {
+      exitOnWindowClose: asBoolean(raw.desktop?.exitOnWindowClose),
+      showDockIcon: asBoolean(raw.desktop?.showDockIcon),
+      hideWindowOnStartup: asBoolean(raw.desktop?.hideWindowOnStartup),
+    },
     updates: {
       checkOnStartup: asBoolean(updates.checkOnStartup),
     },
@@ -751,6 +762,7 @@ function serializeConfigPayload(normalized) {
     homeMetrics: normalized.homeMetrics,
     appearance: normalized.appearance,
     advertising: normalized.advertising,
+    desktop: normalized.desktop,
     updates: normalized.updates,
     subagentReschedule: normalized.subagentReschedule,
     lastAgentModelHash: normalized.lastAgentModelHash,
@@ -783,6 +795,11 @@ function buildConfigPayloadFromState(source = appState) {
     },
     appearance: preferences.appearance,
     advertising: preferences.advertising,
+    desktop: {
+      exitOnWindowClose: asBoolean(source.exitOnWindowClose),
+      showDockIcon: asBoolean(source.showDockIcon),
+      hideWindowOnStartup: asBoolean(source.hideWindowOnStartup),
+    },
     updates: preferences.updates,
     subagentReschedule: buildSubagentRescheduleConfigFromState(source),
     lastAgentModelHash: source.lastAgentModelHash,
@@ -834,6 +851,9 @@ function snapshotSettingsSection(source = appState) {
     observabilityMaxDiskMB: Number(source.observabilityMaxDiskMB) || 0,
     appearanceTheme: normalizeTheme(source.appearanceTheme),
     advertisingEnabled: Boolean(source.advertisingEnabled),
+    exitOnWindowClose: Boolean(source.exitOnWindowClose),
+    showDockIcon: Boolean(source.showDockIcon),
+    hideWindowOnStartup: Boolean(source.hideWindowOnStartup),
     updateCheckOnStartup: Boolean(source.updateCheckOnStartup),
     subagentRescheduleEnabled: Boolean(source.subagentRescheduleEnabled),
     outboundProxy: normalizeOutboundProxy(source.outboundProxy),
@@ -884,6 +904,9 @@ function applyConfigSectionSnapshot(scope, raw) {
     appState.observabilityMaxDiskMB = Number(parsed.observabilityMaxDiskMB) || 0;
     appState.appearanceTheme = normalizeTheme(parsed.appearanceTheme);
     appState.advertisingEnabled = Boolean(parsed.advertisingEnabled);
+    appState.exitOnWindowClose = Boolean(parsed.exitOnWindowClose);
+    appState.showDockIcon = Boolean(parsed.showDockIcon);
+    appState.hideWindowOnStartup = Boolean(parsed.hideWindowOnStartup);
     appState.updateCheckOnStartup = Boolean(parsed.updateCheckOnStartup);
     appState.subagentRescheduleEnabled = Boolean(parsed.subagentRescheduleEnabled);
     appState.outboundProxy = normalizeOutboundProxy(parsed.outboundProxy);
@@ -1000,6 +1023,9 @@ function applyConfigToState(config, { modelAdaptersOnly = false, savedScope = ""
   appState.includeCacheWriteInHitRate = normalized.homeMetrics.includeCacheWriteInHitRate;
   appState.appearanceTheme = normalized.appearance.theme;
   appState.advertisingEnabled = normalized.advertising.enabled;
+  appState.exitOnWindowClose = normalized.desktop.exitOnWindowClose;
+  appState.showDockIcon = normalized.desktop.showDockIcon;
+  appState.hideWindowOnStartup = normalized.desktop.hideWindowOnStartup;
   appState.updateCheckOnStartup = normalized.updates.checkOnStartup;
   appState.subagentRescheduleEnabled = normalized.subagentReschedule.enabled;
   appState.gatewayEnabled = normalized.gateway.enabled;
@@ -1359,6 +1385,12 @@ export const appState = reactive({
   appearanceTheme: cachedConfig.appearance.theme,
   effectiveAppearanceTheme: resolveEffectiveTheme(cachedConfig.appearance.theme, false),
   advertisingEnabled: cachedConfig.advertising.enabled,
+  exitOnWindowClose: cachedConfig.desktop.exitOnWindowClose,
+  showDockIcon: cachedConfig.desktop.showDockIcon,
+  hideWindowOnStartup: cachedConfig.desktop.hideWindowOnStartup,
+  platform: "",
+  loginItemStatus: "",
+  loginItemBusy: false,
   updateCheckOnStartup: cachedConfig.updates.checkOnStartup,
   subagentRescheduleEnabled: cachedConfig.subagentReschedule.enabled,
   outboundProxy: normalizeOutboundProxy(cachedConfig.outboundProxy),
@@ -1411,6 +1443,7 @@ export const appState = reactive({
   },
   logCaptureLoading: false,
   logCleanupRunning: false,
+  logClearRunning: false,
   lastAgentModelHash: cachedConfig.lastAgentModelHash,
   gatewayEnabled: cachedConfig.gateway.enabled,
   gatewayListenAddr: cachedConfig.gateway.listenAddr,
@@ -1427,6 +1460,28 @@ export const appState = reactive({
   homeMetricsReport: createEmptyHomeMetricsReport(DEFAULT_HOME_METRICS_RANGE),
   homeMetricsReportLoading: false,
   homeMetricsReportError: "",
+  requestListRange: "today",
+  requestListProvider: "",
+  requestListModel: "",
+  requestListStatus: "",
+  requestListPage: 1,
+  requestListPageSize: 50,
+  requestListResult: {
+    items: [],
+    total: 0,
+    page: 1,
+    pageSize: 50,
+    summary: {
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    },
+  },
+  requestListOptions: { providers: [], models: [] },
+  requestListLoading: false,
+  requestListError: "",
 
   updateState: "idle",
   updateMandatory: false,
@@ -1826,6 +1881,29 @@ export async function runModelAdapterTest(adapter) {
   return startModelAdapterTest(adapter);
 }
 
+export async function refreshLoginItemStatus() {
+  try {
+    appState.loginItemStatus = await getLoginItemStatus();
+  } catch (_error) {
+    appState.loginItemStatus = "unsupported";
+  }
+}
+
+export async function setLaunchAtLogin(enabled) {
+  if (appState.loginItemBusy) {
+    return { ok: false, error: "登录项操作正在进行，请稍后再试" };
+  }
+  appState.loginItemBusy = true;
+  try {
+    appState.loginItemStatus = await setLoginItemEnabled(enabled);
+    return { ok: true, error: "" };
+  } catch (error) {
+    return { ok: false, error: toUserError(error) };
+  } finally {
+    appState.loginItemBusy = false;
+  }
+}
+
 export async function persistUserConfig() {
   const currentConfig = await loadPersistedUserConfig();
   return persistConfigPayload({
@@ -1844,6 +1922,11 @@ export async function persistUserConfig() {
     },
     advertising: {
       enabled: asBoolean(appState.advertisingEnabled),
+    },
+    desktop: {
+      exitOnWindowClose: asBoolean(appState.exitOnWindowClose),
+      showDockIcon: asBoolean(appState.showDockIcon),
+      hideWindowOnStartup: asBoolean(appState.hideWindowOnStartup),
     },
     updates: {
       checkOnStartup: asBoolean(appState.updateCheckOnStartup),
@@ -2153,6 +2236,40 @@ export async function clearClosedLogSessions() {
   }
 }
 
+export async function clearAllManagedLogs() {
+  if (appState.logClearRunning) {
+    return { ok: false, error: "日志清空正在进行" };
+  }
+  appState.logClearRunning = true;
+  try {
+    const raw = await clearAllLogs();
+    await syncLogCaptureStatus();
+    return {
+      ok: true,
+      error: "",
+      removedSessions: Math.max(0, Math.round(asNumber(raw?.removedSessions ?? raw?.removed_sessions))),
+      removedShards: Math.max(0, Math.round(asNumber(raw?.removedShards ?? raw?.removed_shards))),
+      freedBytes: Math.max(0, Math.round(asNumber(raw?.freedBytes ?? raw?.freed_bytes))),
+      failedItems: Math.max(0, Math.round(asNumber(raw?.failedItems ?? raw?.failed_items))),
+      collecting: Boolean(raw?.collecting),
+      lastError: asString(raw?.lastError ?? raw?.last_error),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: toUserError(error),
+      removedSessions: 0,
+      removedShards: 0,
+      freedBytes: 0,
+      failedItems: 0,
+      collecting: false,
+      lastError: "",
+    };
+  } finally {
+    appState.logClearRunning = false;
+  }
+}
+
 export async function syncServiceState() {
   const state = await getProxyState();
   applyProxyState(state);
@@ -2202,6 +2319,125 @@ export async function syncHomeMetricsReport(range = appState.homeMetricsRange) {
   } finally {
     appState.homeMetricsReportLoading = false;
   }
+}
+
+function numberOrZero(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function normalizeRequestListRow(row) {
+  const source = row && typeof row === "object" ? row : {};
+  const hitRate = source.cacheHitRate;
+  return {
+    at: asString(source.at),
+    requestId: asString(source.requestId),
+    conversationId: asString(source.conversationId),
+    modelCallId: asString(source.modelCallId),
+    requestModel: asString(source.requestModel),
+    provider: asString(source.provider),
+    model: asString(source.model),
+    inputTokens: numberOrZero(source.inputTokens),
+    outputTokens: numberOrZero(source.outputTokens),
+    cacheReadTokens: numberOrZero(source.cacheReadTokens),
+    cacheWriteTokens: numberOrZero(source.cacheWriteTokens),
+    cacheHitRate: typeof hitRate === "number" && Number.isFinite(hitRate) ? hitRate : null,
+    ttftMs: numberOrZero(source.ttftMs),
+    durationMs: numberOrZero(source.durationMs),
+    statusCode: numberOrZero(source.statusCode),
+    errorCategory: asString(source.errorCategory),
+    status: asString(source.status),
+  };
+}
+
+function normalizeRequestListResult(result) {
+  const source = result && typeof result === "object" ? result : {};
+  const summary = source.summary && typeof source.summary === "object" ? source.summary : {};
+  const items = Array.isArray(source.items) ? source.items.map(normalizeRequestListRow) : [];
+  return {
+    items,
+    total: numberOrZero(source.total),
+    page: Math.max(1, Math.trunc(numberOrZero(source.page)) || 1),
+    pageSize: Math.max(1, Math.trunc(numberOrZero(source.pageSize)) || appState.requestListPageSize),
+    summary: {
+      requests: numberOrZero(summary.requests),
+      inputTokens: numberOrZero(summary.inputTokens),
+      outputTokens: numberOrZero(summary.outputTokens),
+      cacheReadTokens: numberOrZero(summary.cacheReadTokens),
+      cacheWriteTokens: numberOrZero(summary.cacheWriteTokens),
+    },
+  };
+}
+
+// 快速切换筛选会并发发起查询；用序号丢弃过期响应，避免旧结果覆盖新结果或提前结束 loading。
+let requestListSeq = 0;
+
+export async function syncRequestList() {
+  requestListSeq += 1;
+  const seq = requestListSeq;
+  appState.requestListLoading = true;
+  appState.requestListError = "";
+  try {
+    const result = normalizeRequestListResult(await listRequests({
+      range: appState.requestListRange,
+      provider: appState.requestListProvider,
+      model: appState.requestListModel,
+      status: appState.requestListStatus,
+      page: appState.requestListPage,
+      pageSize: appState.requestListPageSize,
+    }));
+    if (seq !== requestListSeq) {
+      return { ok: true, error: "", stale: true, result: appState.requestListResult };
+    }
+    appState.requestListResult = result;
+    appState.requestListLoading = false;
+    return { ok: true, error: "", result };
+  } catch (error) {
+    if (seq !== requestListSeq) {
+      return { ok: false, error: "", stale: true, result: appState.requestListResult };
+    }
+    appState.requestListError = toUserError(error);
+    appState.requestListLoading = false;
+    return { ok: false, error: appState.requestListError, result: appState.requestListResult };
+  }
+}
+
+export async function syncRequestListFilterOptions() {
+  try {
+    const options = await listRequestFilterOptions(appState.requestListRange);
+    const source = options && typeof options === "object" ? options : {};
+    appState.requestListOptions = {
+      providers: Array.isArray(source.providers) ? source.providers.map(asString).filter(Boolean) : [],
+      models: Array.isArray(source.models) ? source.models.map(asString).filter(Boolean) : [],
+    };
+  } catch (_error) {
+    appState.requestListOptions = { providers: [], models: [] };
+  }
+}
+
+// 任一筛选条件变化都回到第一页，避免停留在越界页看到空列表。
+export async function updateRequestListFilters(patch = {}) {
+  const source = patch && typeof patch === "object" ? patch : {};
+  if ("range" in source) {
+    appState.requestListRange = asString(source.range) || appState.requestListRange;
+  }
+  if ("provider" in source) {
+    appState.requestListProvider = asString(source.provider);
+  }
+  if ("model" in source) {
+    appState.requestListModel = asString(source.model);
+  }
+  if ("status" in source) {
+    appState.requestListStatus = asString(source.status);
+  }
+  appState.requestListPage = 1;
+  await syncRequestListFilterOptions();
+  return syncRequestList();
+}
+
+export async function setRequestListPage(page) {
+  appState.requestListPage = Math.max(1, Math.trunc(Number(page)) || 1);
+  return syncRequestList();
 }
 
 export async function resetHomeMetrics() {
@@ -2478,6 +2714,12 @@ export async function bootstrapAppState() {
   } catch (_error) {
     appState.appVersion = "";
   }
+  try {
+    appState.platform = await getPlatform();
+  } catch (_error) {
+    appState.platform = "";
+  }
+  await refreshLoginItemStatus();
   await syncServiceState().catch(() => {});
   await syncHomeMetricsReport().catch(() => {});
 }

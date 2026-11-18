@@ -74,6 +74,7 @@ func streamDiagnosticFieldKeys() []string {
 		"stream_recovery_attempts",
 		"provider_error_summary",
 		"provider_error_summary_type",
+		"provider_error_code",
 	}
 }
 

@@ -78,6 +78,9 @@ type LogCaptureStatus = client.LogCaptureStatus
 // LogCleanupResult 定义已关闭采集 session 的清理结果。
 type LogCleanupResult = client.LogCleanupResult
 
+// LogClearResult 定义立即清空全部日志的结果。
+type LogClearResult = client.LogClearResult
+
 // ProxyService 定义了当前模块中的 ProxyService 类型。
 type ProxyService struct {
 	// core 表示当前声明中的 core。
@@ -278,6 +281,11 @@ func (s *ProxyService) GetLogCaptureStatus() LogCaptureStatus {
 
 func (s *ProxyService) CleanupClosedLogSessions() (LogCleanupResult, error) {
 	return s.core.CleanupClosedLogSessions()
+}
+
+// ClearAllLogs 立即清空全部受管日志（含活跃会话）并重建采集会话。
+func (s *ProxyService) ClearAllLogs() (LogClearResult, error) {
+	return s.core.ClearAllLogs()
 }
 
 // FetchModelAdapterModels 用于从模型服务读取可用模型列表。

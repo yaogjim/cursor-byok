@@ -126,6 +126,16 @@ type AdvertisingConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
+// DesktopConfig 描述桌面壳的窗口与后台行为。
+// ExitOnWindowClose 默认 false，表示关闭窗口后隐藏到后台继续运行。
+// ShowDockIcon 默认 false，仅 macOS 生效，表示在 Dock 中显示应用图标。
+// HideWindowOnStartup 默认 false，表示启动时隐藏主窗口，仅保留托盘入口。
+type DesktopConfig struct {
+	ExitOnWindowClose   bool `json:"exitOnWindowClose" yaml:"exitOnWindowClose"`
+	ShowDockIcon        bool `json:"showDockIcon" yaml:"showDockIcon"`
+	HideWindowOnStartup bool `json:"hideWindowOnStartup" yaml:"hideWindowOnStartup"`
+}
+
 type UpdatesConfig struct {
 	CheckOnStartup bool `json:"checkOnStartup" yaml:"checkOnStartup"`
 }
@@ -216,6 +226,7 @@ type Config struct {
 	HomeMetrics        HomeMetricsConfig        `json:"homeMetrics" yaml:"homeMetrics"`
 	Appearance         AppearanceConfig         `json:"appearance" yaml:"appearance"`
 	Advertising        AdvertisingConfig        `json:"advertising" yaml:"advertising"`
+	Desktop            DesktopConfig            `json:"desktop" yaml:"desktop"`
 	Updates            UpdatesConfig            `json:"updates" yaml:"updates"`
 	LastAgentModelHash string                   `json:"lastAgentModelHash" yaml:"lastAgentModelHash"`
 	Gateway            GatewayConfig            `json:"gateway" yaml:"gateway"`
@@ -243,6 +254,11 @@ func DefaultConfig() Config {
 		},
 		Advertising: AdvertisingConfig{
 			Enabled: false,
+		},
+		Desktop: DesktopConfig{
+			ExitOnWindowClose:   false,
+			ShowDockIcon:        false,
+			HideWindowOnStartup: false,
 		},
 		Updates: UpdatesConfig{
 			CheckOnStartup: false,
@@ -275,6 +291,9 @@ func normalizeConfig(input Config, previousAdapters []ModelAdapterConfig) (Confi
 	output.HomeMetrics.IncludeCacheWriteInHitRate = input.HomeMetrics.IncludeCacheWriteInHitRate
 	output.Appearance.Theme = appearance.Normalize(input.Appearance.Theme)
 	output.Advertising.Enabled = input.Advertising.Enabled
+	output.Desktop.ExitOnWindowClose = input.Desktop.ExitOnWindowClose
+	output.Desktop.ShowDockIcon = input.Desktop.ShowDockIcon
+	output.Desktop.HideWindowOnStartup = input.Desktop.HideWindowOnStartup
 	output.Updates.CheckOnStartup = input.Updates.CheckOnStartup
 	output.Routing.Mode = normalizeRoutingMode(input.Routing.Mode)
 	if output.Routing.Mode == "" {

@@ -20,8 +20,10 @@ const (
 	// 配置层没有对应项；取与现有 canary 检查同量级的保守包级上限，避免无界编码体进入发送路径。
 	maxEncodedRequestBodyBytes = 32 << 20
 
-	ProviderErrorStatus4xx         = "status_4xx"
-	ProviderErrorRateLimited       = "rate_limited"
+	ProviderErrorStatus4xx   = "status_4xx"
+	ProviderErrorRateLimited = "rate_limited"
+	// ProviderErrorQuotaExhausted 表示上游账号额度或计费不可用；同 key 重试无意义，换渠道仍可能有额度。
+	ProviderErrorQuotaExhausted    = "quota_exhausted"
 	ProviderErrorServer5xx         = "server_5xx"
 	ProviderErrorTransport         = "transport"
 	ProviderErrorContextCanceled   = "context_canceled"
@@ -55,6 +57,8 @@ type HTTPStatusError struct {
 	RetrySummary      string
 	RetryAfterPresent bool
 	NilResponse       bool
+	// QuotaExhausted 表示上游明确告知额度/计费不可用，而不是普通限流或服务过载。
+	QuotaExhausted bool
 }
 
 func (err *HTTPStatusError) Error() string {
@@ -95,6 +99,9 @@ func (err *HTTPStatusError) Unwrap() error {
 func (err *HTTPStatusError) Category() string {
 	if err == nil {
 		return ""
+	}
+	if err.QuotaExhausted {
+		return ProviderErrorQuotaExhausted
 	}
 	return ClassifyHTTPStatus(err.StatusCode)
 }
@@ -369,6 +376,7 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 	}
 	rawBody := string(limitedBody)
 	statusError.Code = extractJSONErrorCode(rawBody)
+	statusError.QuotaExhausted = quotaExhaustedSignal(resp.StatusCode, rawBody)
 	var payload struct {
 		Error struct {
 			Param string `json:"param"`
@@ -387,7 +395,63 @@ func buildHTTPStatusError(prefix string, resp *http.Response) error {
 const (
 	overflowErrorCodeContextLengthExceeded = "context_length_exceeded"
 	overflowErrorCodeModelContextWindow    = "model_context_window_exceeded"
+
+	// quotaErrorCode* 是各 provider 常见的额度类稳定编码。
+	quotaErrorCodeInsufficientQuota   = "insufficient_quota"
+	quotaErrorCodeQuotaExceeded       = "quota_exceeded"
+	quotaErrorCodeInsufficientBalance = "insufficient_balance"
+	quotaErrorCodeBillingHardLimit    = "billing_hard_limit_reached"
+	quotaErrorCodeBillingNotActive    = "billing_not_active"
+	quotaErrorCodeAccountDeactivated  = "account_deactivated"
 )
+
+// quotaExhaustedSignal 只认稳定 code/type 白名单；正文短语仅在 429/402/403 上兜底，
+// 避免 5xx 转发他人错误时把服务故障误判成额度问题。
+func quotaExhaustedSignal(status int, rawBody string) bool {
+	if isQuotaExhaustedCode(extractJSONErrorCode(rawBody)) || isQuotaExhaustedCode(extractJSONErrorTypeHint(rawBody)) {
+		return true
+	}
+	switch status {
+	case http.StatusTooManyRequests, http.StatusPaymentRequired, http.StatusForbidden:
+	default:
+		return false
+	}
+	normalized := strings.ToLower(rawBody)
+	for _, phrase := range []string{
+		"insufficient quota", "insufficient_quota", "insufficient balance",
+		"quota exceeded", "quota_exceeded", "billing hard limit",
+		"exceeded your current quota", "credit balance is too low",
+		"余额不足", "额度不足", "配额不足", "超出配额", "欠费",
+	} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func isQuotaExhaustedCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case quotaErrorCodeInsufficientQuota, quotaErrorCodeQuotaExceeded, quotaErrorCodeInsufficientBalance,
+		quotaErrorCodeBillingHardLimit, quotaErrorCodeBillingNotActive, quotaErrorCodeAccountDeactivated:
+		return true
+	default:
+		return false
+	}
+}
+
+// extractJSONErrorTypeHint 只取 error.type；OpenAI 兼容错误常把额度原因放在 type 而非 code。
+func extractJSONErrorTypeHint(raw string) string {
+	var payload struct {
+		Error struct {
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Error.Type)
+}
 
 // IsContextOverflowError 判断可信 provider 溢出错误。
 // HTTP 400/413 需要溢出 code 或已知溢出 message；HTTP 200 协议失败只认明确溢出 code。

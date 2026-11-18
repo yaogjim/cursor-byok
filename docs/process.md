@@ -7,6 +7,120 @@
 
 ## 一、待完成的内容
 
+### v1.94.0 发布（2026-11-17；提交待推送）
+
+- 版本来源：`build/config.yml` 的 `info.version` 由 1.93.0 升至 1.94.0；`wails3 task common:update:build-assets` 生成 `build/darwin/Info.plist`、`Info.dev.plist`、`build/windows/info.json`、`wails_tools.nsh`、`wails.exe.manifest`、`build/linux/nfpm/nfpm.yaml`，回读版本均为 1.94.0。
+- `release-notes.md` 重写为 1.94.0 内容：使用分析请求列表、桌面壳四项设置、provider 配额错误分类、basic 模式运行时错误文本,并列出明确的验收缺口。
+- 本次未编译：未传 `--build`,未重新构建本机 DMG;三平台安装包由 tag 触发的 CI 构建。
+- 已知缺口不因发布改变：桌面四项功能与请求列表仍为真机/浏览器未验收,配额分类缺少真实 quota 样本,详见上文各任务小节。
+
+### 使用分析请求列表（2026-11-17；wired-not-verified）
+
+- 需求与范围（用户确认）：在总览页「使用分析」增加请求列表，作为「趋势 / 活跃度」之外的第三个视图；只新增输入/输出/缓存 token 读取。明确不做：费用、Agent 身份识别、用途筛选、搜索、导出 CSV、自动刷新、时区切换。时间范围保留：今天 / 24 小时 / 7 天 / 30 天；索引保留 30 天。
+- 放置判断：放总览页而非设置页。理由是该列表与首页「LLM 调用 / Token / 缓存命中率」是同一份数据的逐次下钻；设置页「会话与日志」管的是采集开关、目录与清理，属于运维视角。
+- 数据源决策（已核实）：`logs/traces/<session>/events.jsonl` 按会话轮转并会被配额回收（本机样本出现 `dropped_events=1383`），单独作为列表数据源会出现请求随时间消失。因此另建只追加索引 `history/requests/requests-YYYYMMDD.jsonl`，与 `usage.json` 同根目录，每天一个分片，写入前删除超出保留期的分片。
+- 写入点：`recordTurnUsageSnapshot`（`token_usage.go`）是主对话、压缩、溢出恢复、流续传的统一收口，覆盖 `completed` / `provider_error` / `partial`。新增 `ProviderRequest.Purpose`（`chat`/`summary`）与 `ActiveStream.CurrentProviderPurpose` 区分用途，摘要调用不进入索引。索引写入失败只记日志，不返回错误，不影响会话与 usage 落盘。
+- 字段口径：`InputTokens` 为非缓存输入（OpenAI 适配器已减 `cachedTokens`；Anthropic 原生语义即排除缓存读取），缓存命中率沿用首页默认口径 `缓存读取 /（缓存读取 + 非缓存输入）`；耗时取 provider 观测边界（`StreamDuration` 优先）；首字耗时取首个 provider 事件相对 provider 起点；HTTP 状态解析失败记 0。
+- 验证证据：
+  - `go test ./internal/requestlog/ -count=1 -race`：11 项通过（字段落盘、空 `model_call_id` 忽略、跨分片倒序、四种范围窗口、本地 0 点边界、供应商/模型/失败筛选、分页切片与汇总覆盖全量、坏行跳过、过期分片清理、8×20 并发追加无丢失）。
+  - `go test ./internal/backend/forwarder/ -count=1`：72.6s 全包通过；新增 4 项（主调用落行、`provider_error` 带 429 与 `rate_limit`、摘要调用跳过、索引目录被占用时主链路仍返回 nil）。
+  - `go test ./internal/bridge/ -count=1`：4 项新增通过（分页与汇总、失败筛选、无索引空结果、筛选项来自当前窗口）。
+  - `go build ./...`、`go vet ./internal/backend/... ./internal/requestlog/` 通过，仅剩既有 macOS 链接版本警告（19 条 `ld: warning`，与本次改动无关）。
+  - `wails3 generate bindings` 重新生成 `frontend/bindings`（新增 `ListRequests`、`ListRequestFilterOptions`）；`npm run build` 通过。
+  - 独立小程序（模块内临时目录）验证真实读写链路：分页 `[m0 m1]`/`[m2 m3]`、`failed` 只命中 429 行、`Distinct` 返回 `[openai]` 与 `[deepseek-flash group/smartdk]`、单分片写入。
+- 过程中修正的问题：① 窗口结束边界最初用 `now+1h` 规避排除，改为结束含入的明确语义；② 测试夹具漏设 `CurrentProviderPurpose`，与生产 pass 起点不一致，按 `service.go` 的初始化补齐而非放宽生产判定；③ 耗时断言原写 5000ms，实际按 provider 观测边界为 4500ms，已把口径写进测试注释。
+- 性能保障（用户要求「查询不能拖慢主线路的服务，不能卡住界面」）：
+  - 写路径：`Append` 原先每次持锁做 `os.ReadDir` 清理扫描（实测约 0.122ms/次，且随分片数量变化）。改为 `maybePruneLocked`：每个本地日期至多调度一次，且把真正删除放进后台 goroutine（`pruneBusy`/`pruneDone` 去重与等待），主链路收口只做一次日期比较。`WaitPrune()` 仅供应用关闭与测试等待清理落地。
+  - 查询路径：`List`/`Distinct` 改用 `shardsSince(start)` 只读窗口起点之后的分片（「今天」不再扫 30 天历史）；`readShard` 改为回调式 `scanShard` 单遍扫描，并受 `maxScanRecords=200_000` 上限约束，倒序读分片保证截断发生在最旧行、首页仍是最新记录。查询全程不持写锁，与 `Append` 无锁竞争。
+  - 界面侧：`syncRequestList` 加入请求序号，快速切换筛选时丢弃过期响应，不会让旧结果覆盖新结果或提前结束 loading；`Home.vue` 不再在 `onMounted` 无条件拉取筛选项，改为切到「请求」视图时加载。修正分页按钮事件链（`RequestListPanel` 发 `previous-page`/`next-page`，经 `HomeAnalyticsPanel` 透传为 `request-previous-page`/`request-next-page`，删除无人处理的 `page-change`/`request-page-change` 空转链路）。
+  - 新增测试：`contention_test.go` 3 项（并发 List 不阻塞 Append、2000 行历史下 100 次追加 <2s、同一天清理至多一次）；`store_test.go` 补 2 项（窗口外旧分片不被读取且不进入汇总、单次扫描行数被 `maxScanRecords` 截断且首页保留最新行）。
+  - 回归：`go test ./internal/requestlog/ -count=1 -race` 通过（16 项）；`go test ./internal/requestlog/ ./internal/bridge/ ./internal/backend/forwarder/ -count=1` 三包通过；`go vet` 上述三包通过；`cd frontend && npm run build` 通过。竞态与事件链属前端状态修复，未做浏览器级验证（test gap）。
+- 缺口（test/env gap）：未在真实应用界面验收。本机运行实例为 1.93.0，替换应用会中断用户正在进行的 Cursor 会话，需维护窗口授权。本机 `history/requests` 尚无数据（需功能首次运行后产生）。
+- 未做：commit、push、构建安装包、替换或重启应用。
+
+### basic 模式运行时错误文本修复（2026-11-17；accepted）
+
+- 范围：按 `~/getspec-audit/byok-error-logging-spec.md` 修复错误诊断丢失，不修 resume 500，不改日志模式默认值及会话导入逻辑。
+- 根因与改动：`LogRuntime` 已传递 `error`，但 `debugRecorder.recordCapture` 白名单未包含该键，basic/full 都会丢弃。现补入 `error`，保留 `error_category` / `error_summary` 原名与语义；在 `appendJSONL` 公共边界对顶层 `error` / `err` / `cause` 文本先脱敏，再按 2000 个 Unicode 字符截断，追加 `... (truncated, total N bytes)`（N 为脱敏后、截断前字节数），使 debug 文件与 trace 使用同一有界文本。basic/full 的 payload 省略规则保持不变，无新增开关。
+- 调用点检查：`service.go` 的 dispatch 及其他运行时错误共用上述入口；当前运行时错误调用使用 `error`，未发现需要额外接线的 `err` / `cause` 调用。`checkpoint_blobs.go:recordCheckpointSkip` 已传 `error_summary`，该键原已在 basic 白名单，无需改名或改导入逻辑。
+- 回归：新增 `debug_recorder_error_test.go` 覆盖 basic/full 保留错误、长中文错误截断及凭据脱敏、短文本不变；更新既有 attempt policy 测试的 `error` 预期，prompt/task_args/result/transcript 继续不得进入事件字段。`go test ./internal/backend/forwarder/ -count=1` 通过（71.8s）；`go build ./...`、`go vet ./internal/backend/forwarder/` 通过，相关文件 `gofmt -l` 无输出。
+- 真实入口证据：配置已恢复 `observability.mode=basic`。原指定 resume 请求本次返回 `OK`，未复现历史 500；改用包含无效 SHA-256 prefetched blob 的受控 `run_request` 触发真实 BidiAppend→dispatch 错误路径（不需要模型调用）。trace 会话 `20261117T102212.223097000Z-14106054e4b9` 的 `events.jsonl` 中出现 1 条 `dispatch_error`，`status=error`、`error_category=runtime_error`、`semantic_outcome=failed`，`fields.error` 非空，内容为 prefetched blob SHA-256 校验失败，`fields.kind=run`。
+- 当前状态：本次“basic 可见错误文本”修复验收通过；原 resume 500 的原因与修复不在本次范围，且当前未复现。四项桌面功能的交互验收仍单独待办。未 git commit / push，保持工作区修改态。
+- 安装实例复验（2026-11-17T10:56Z）：对 `/Applications/cursor-byok.app`（1.93.0，PID 53924，`observability.mode=basic`）重新发送无效 SHA-256 prefetched blob 的 `run_request`，BidiAppend 返回 `internal: prefetched blob 0000…0000 failed SHA-256 validation`；trace 会话 `20261117T105317.827770000Z-5df7924ef53c` 的 `events.jsonl` 记录一条 `dispatch_error`（`status=error`、`error_category=runtime_error`、`semantic_outcome=failed`），`fields.error` 为该错误文本、`fields.kind=run`。安装包二进制同时含有截断标记字符串，确认运行版本已包含本次改动。截断与脱敏仍由单元测试覆盖，未在真机构造超长错误。
+
+### 桌面壳切片 4：清空全部日志（2026-11-16；wired-not-verified）
+
+- 已确认决策：清空范围**包含当前活跃会话**；清空后按当前采集设置立即重建会话，页面显示新会话。
+- 勘察结论（保留为背景）：现有“清理日志”只删已关闭内容，保护活跃分片与未关闭会话，不能复用；`closeRecorderBounded` 超时返回 nil 不代表 writer 已停止，不能作为删除依据。
+- 实现：`internal/observability/clear.go` 新增 `ClearStoredLogs`（删除受管内容）与 `Controller.ClearAllLogs`（编排写入者停止→删除→重建）。顺序为：置空 `recorder`/`appLog` 指针阻断新写入 → 同步关闭旧 recorder（排空队列、写 closed manifest）与应用日志 writer → 预算锁下删除已知 manifest 的 trace 会话目录（**含活跃会话**）、受管 app 分片与 diagnostics 分片 → 重建会话与 app 日志 writer。旧 writer 在 10s 内未确认停止则中止删除并恢复采集；未知格式会话、非受管文件、符号链接和 `project.key` 一律保留；部分删除失败计入 `FailedItems` 并继续；采集重建失败以 `LastError=collector_restart_failed` 报告。清空期间业务代理不停。
+- 接线：`internal/client/service.go:ClearAllLogs`（有采集控制器时走控制器，否则退化为纯磁盘清理）、`internal/bridge/proxy.go:ClearAllLogs`、`clientApi.clearAllLogs`、`appState.clearAllManagedLogs`；设置页占位移除 `is-planned inert`，增加二次确认与结果提示（部分失败、采集未恢复分别提示）。新增文案已补 en-US/ja-JP/ru-RU。
+- 验证：`internal/observability/clear_test.go` 3 条（受管内容删除与未知内容保留、活跃会话清空后重建并继续写入、off 模式不重建会话）先编译失败后转绿；`internal/observability` 全包、`internal/client`、`internal/bridge` 测试通过；`go build ./...`、bindings 生成、`build:frontend` 通过；`gofmt`/`go vet` 无输出。另将 `CleanupAllClosedSessions` 的目录校验提取为 `validateLogDirs` 复用，结构重构前后相关测试保持绿色。
+- 切片 4 缺口（env gap）：**真机未验收**——运行实例仍为 1.92.0 且不能停止，未验证真实日志目录上的清空、清空期间/之后的 Cursor 请求是否持续、页面新会话展示、超时中止与部分失败路径。当前状态 `wired-not-verified`。
+- 未提交、未构建 DMG、未替换运行实例。
+
+### 桌面壳 v1.93.0 构建（2026-11-16；已产出 DMG，未安装）
+
+- 版本：`build/config.yml` 1.92.0 → 1.93.0；`wails3 task common:update:build-assets` 更新 `build/darwin`、`build/windows`、`build/linux` 资产，`Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion` 回读为 1.93.0；`release-notes.md` 改写为本版本内容。
+- 构建：`task build` 成功，产出 `bin/macos-arm64.dmg`（25 MB，SHA-256 `08acbd55de568466c830d0c022eeb0a47b10ee718da74d52997f68212fd68fcc`）。
+- 产物校验（只读挂载）：DMG 内 `cursor-byok.app` 的 `Info.plist` 版本 1.93.0、`LSUIElement=1`、`Signature=adhoc`、`Identifier=com.cursor.wuxianxubei`；二进制内嵌 `1.93.0` 字符串；校验后已 detach。
+- 运行实例未受影响：PID 70313（`/Applications/cursor-byok.app`，1.92.0）持续运行，`127.0.0.1:18080`/`18090` 仍由其监听；未安装新包、未停止或替换实例。
+
+### 桌面壳切片 3：登录启动与启动隐藏（2026-11-16；wired-not-verified）
+
+- 方向调整：取消“登录启动默认隐藏窗口”前提，新增独立配置 `desktop.hideWindowOnStartup`（默认 false），启动窗口 `Hidden` 按此设置；登录启动不依赖识别启动来源。
+- 登录项：新增 `internal/loginitem` 包，Darwin 用 SMAppService `mainAppService` 查询状态、注册、注销；非 macOS 返回 `unsupported`。`SetEnabled` 对已处于目标状态的操作幂等。**系统状态是唯一真值**，不写入应用配置，避免“配置 true 但系统未注册”的双真值。
+- 桥接：`WindowService.GetLoginItemStatus()` 与 `SetLoginItemEnabled(enabled) (string, error)`；前端设置页仅 macOS 渲染，即时调用并刷新为系统返回状态；`requires_approval` 时开关显示为已开启并提示到系统设置批准；`unsupported` 时禁用并提示需要 macOS 13+。
+- 配置：`DesktopConfig` 新增 `HideWindowOnStartup`，归一化与系统设置保存均覆盖；前端加载/缓存/脏检查/负载接入。
+- 验证：`internal/loginitem/loginitem_test.go` 2 条先失败后转绿；`desktop_test.go` 扩展默认值/归一化/持久化；`go build ./...`、bindings 生成、前端构建、`loginitem/config/app/bridge` 测试通过；新增文案已补 en-US/ja-JP/ru-RU。
+- 缺口（env gap）：**真实注销/登录启动未验收**；系统设置关闭登录项后的应用内状态同步、`/Applications` 安装路径、DMG 直接运行、macOS 13 以下不支持提示、`hideWindowOnStartup` 真机行为均未验证。当前状态 `wired-not-verified`。
+- 未提交、未构建 DMG、未替换运行实例。
+
+### 桌面壳切片 2：macOS Dock 图标（2026-11-16；wired-not-verified）
+
+- 配置：`DesktopConfig` 新增 `showDockIcon`（默认 `false`）；`normalizeConfig` 保留，`SaveSystemSettings` 随 Desktop 段整体保存。
+- 壳层：`internal/app/dock_icon.go` 提供 `startupActivationPolicy`、`applyDockIcon`、`handleDockReopen`；`dock_icon_darwin.go` 持有 `dock.New()`，非 darwin 返回 nil，避免非 macOS 构建引入 dock 依赖。启动时按配置选择 `Regular/Accessory`；运行时经 `user-config:changed` 切换；`ApplicationShouldHandleReopen` 显式 `Show().Focus()`（探针已证明框架内置恢复未生效）。
+- 平台可见性：`WindowService.GetPlatform()` 返回 `runtime.GOOS`，前端存入 `appState.platform`，Dock 开关仅 `darwin` 渲染。
+- 验证：配置测试扩展默认值/归一化/持久化；`internal/app/dock_icon_test.go` 3 条先失败后转绿；`go build ./...`、bindings 生成、前端构建与 `app/config/bridge` 测试通过。新增文案已补 en-US/ja-JP/ru-RU。
+- 缺口：**真机未验收**（env gap）——未验证启动即显示 Dock（探针只验证运行时切换）、运行时切换、点击 Dock 恢复隐藏窗口、Cmd+Tab 与菜单栏表现；未在运行实例中目视确认平台条件渲染。当前状态 `wired-not-verified`。
+- 未提交、未构建 DMG、未替换运行实例。
+
+### 桌面壳切片 1：关闭窗口后继续运行（2026-11-16；wired-not-verified）
+
+- 配置：新增 `desktop.exitOnWindowClose`（`internal/backend/server/config/types.go`），默认 `false` 表示关闭窗口后隐藏并继续运行；`normalizeConfig` 保留该字段，`SaveSystemSettings` 合并该段。选择反向语义是为了让零值等于原有行为，旧配置无需迁移；前端开关显示为"关闭窗口后继续运行"（`!exitOnWindowClose`）。
+- 壳层：`internal/app/window_close.go` 提供 `handleWindowClose` 与 `runQuitFrom`；`runner.go` 的 `WindowClosing` 钩子按配置隐藏窗口或调用完整退出，托盘"退出"与关闭窗口共用 `quitInProgress` 幂等入口，避免退出过程中再次触发关闭钩子。新增 `ShutdownInitiatorWindowClose = "window_close"`。
+- 前端：`appState.exitOnWindowClose` 接入配置加载、缓存、脏检查、负载构造与设置页 `Switch`；原"最小化到系统托盘"占位改名为"关闭窗口后继续运行"。
+- 验证：`internal/backend/server/config/desktop_test.go` 3 条（默认值、归一化、系统设置持久化）先编译失败后转绿；`internal/app/window_close_test.go` 2 条先失败后转绿；`go build ./...` 成功；`task common:generate:bindings` 与 `task common:build:frontend` 成功。`gofmt` 对本次新增文件无差异；`types.go` 仍有既有常量对齐偏差，未在本次处理。
+- 缺口：**真机未验收**（env gap）——运行实例仍是 1.92.0 且按约束不能停止，未验证关闭按钮在两种配置下的实际行为、代理请求是否继续、退出收尾是否执行；前端开关未在运行实例中目视确认。源码与单测不能替代该验收，当前切片状态为 `wired-not-verified`。
+- 未提交、未构建 DMG、未替换运行实例。
+
+### 桌面壳功能可逆探针（2026-11-16；Dock 切换与 SMAppService 注册事实闭合）
+
+- 目的：在实施前闭合系统架构 §19.10 的两个阻塞事实——`LSUIElement=true` 的 adhoc 应用能否运行时显示 Dock 图标；当前打包方式能否注册 macOS 登录项。
+- 方法：临时 Wails 探针 app（`build/probes/dockprobe`，用完即删），手写 Info.plist 与项目一致（`LSUIElement=true`、adhoc 签名、`LSMinimumSystemVersion=10.15`），独立 bundleID `com.cursorbyok.dockprobe`；不启动 proxy、不监听业务端口、不触碰运行中实例。探针按 `Accessory → ShowAppIcon → Hide → reopen → HideAppIcon` 时序执行，外部脚本分阶段 `screencapture` 并用 `lsappinfo` 采样。
+- **Dock 切换结果（verified，限本机 macOS 14.6.1 / adhoc / `/tmp` bundle）**：`[NSApp activationPolicy]` 由 `1`（Accessory）变为 `0`（Regular），`HideAppIcon` 后回到 `1`；`lsappinfo` 的 type 同步由 `UIElement` 变为 `Foreground`。运行日志：`started policy=1` / `regular policy=0` / `accessory policy=1`。
+- **Dock 点击恢复（探针发现，改变原假设）**：第一次探针未自行处理 reopen 时，框架内置 `ApplicationShouldHandleReopen` 处理器收到事件但窗口仍为 `visible=false`；第二次在自定义监听器中显式 `window.Show(); window.Focus()` 后 500ms 为 `visible=true`。因此正式实现**不能依赖框架内置恢复**，必须自行处理该事件。
+- **SMAppService 注册（verified，限本机 macOS 14.6.1 / adhoc / `/tmp` bundle）**：`[SMAppService mainAppService] registerAndReturnError:` 返回成功、`status=SMAppServiceStatusEnabled(1)`，随即 `unregisterAndReturnError:` 返回成功；探针日志 `register=1 status=1 err= unregister=1 err=`，`~/Library/LaunchAgents` 无残留文件。
+- 限制：**未验证真实注销/登录启动**，不能凭注册成功宣称“登录启动可用”；未验证 `/Applications` 安装路径与从 DMG 直接运行（App Translocation）场景；SMAppService 需 macOS 13+，低版本策略未定；窗口 `Hide()/Show()` 为异步（`Hide()` 后立即 `IsVisible()` 仍为 true），正式实现不能依赖同步返回值判断。
+- 截图未捕捉到 Dock 图标（Dock 配置为右侧、未出现在全屏截图中，原因未查明），故截图不作为视觉证据；本节证据为 activationPolicy 与 `lsappinfo` type 的变化。
+- 清理：探针 app、源码目录与临时截图已删除；SMAppService 已注销。未修改正式代码、未提交、未构建或替换运行实例。
+
+### macOS 配额提示版本本地构建（2026-11-16；1.92.0 arm64）
+
+- `PATH="$HOME/go/bin:$PATH" task build` 成功；构建注入版本与包内 CFBundleShortVersionString 均为 1.92.0。产物 `bin/macos-arm64.dmg`，26,055,952 bytes。
+- `hdiutil verify` 为 VALID；只读挂载确认 Mach-O arm64，`codesign --verify --deep --strict` 通过、Signature=adhoc。核验后卸载本次挂载卷，未启动包内应用。
+- SHA-256：`950d9734178809c79c4fcaa1fda61655d02134898ceb17d63f13c6c310d045d1`。
+- 本地打包核验通过；未安装、未替换运行实例、未提交或发布，未做 Developer ID/notarization。配额分类与文案仍缺真实 Cursor 验收，不能以构建成功替代功能验收；前述“本次未重建 DMG”是实现检查点状态，由本记录更新。
+- 注：`bin/macos-arm64.dmg` 此后已被 1.93.0 构建覆盖（见「桌面壳 v1.93.0 构建」）。
+
+### provider 配额错误分类与可行动文案（2026-11-16；verified-partial）
+
+- 触发：Cursor 报 `server_5xx status=503`，用户怀疑余额耗尽。本地日志核实为上游 429 → 503，两次尝试均无候选渠道可切；8 分钟后同 key 正常返回，故本次不是额度耗尽，但"额度耗尽无法正确提示"仍是真实实现缺口。
+- 根因：分类只看 HTTP 状态码；上游 `error.code` 已解析但只用于溢出判定；网关 title/detail 固定，`provider_error` 终态硬编码不可重试。
+- 改动：新增 `quota_exhausted` 分类，白名单识别 code/type（429/402/403 才用正文短语兜底，5xx 不判）；同 key 不重试但允许换渠道；终态使用固定可行动文案且不透传上游正文；terminal 事件新增 `provider_error_code`。
+- 验证：model 侧 6 条与 forwarder 侧 4 条测试覆盖 code/type/正文命中、普通 429 不误判、5xx 不猜额度、摘要不泄漏、分类到终态文案的串联；全部测试先经历编译失败（RED）后转绿。`go test ./internal/backend/...` 通过，`go build ./...` 成功，`git diff --check` 通过。
+- 缺口：test/data gap——没有真实 quota 响应样本，分类命中率未经运行验证；非终态 429 的 code 仍不落盘，重试后变 503 时首因会丢失（未改重试主链）。env gap——本次未重新构建 DMG，安装版仍是旧逻辑。
+- 合同见系统架构 §19.9；代码未提交。
+
 ### macOS 本地构建（2026-11-15；1.91.0 arm64）
 
 - 用户要求记录降采样替代路线并暂缓，随后构建 macOS；分析保存于系统架构 §19.8，未授权实施降采样。更正此前分析：513 KiB/s 来自未经独立验证的服务器处理时间假设，不是实测速率；新增缩放依赖是否必要也未核实，不作为既定事实。

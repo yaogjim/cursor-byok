@@ -5,6 +5,25 @@
 
 ## 当前焦点
 
+### v1.94.0 发布（2026-11-17）
+
+- 版本：`build/config.yml` 1.93.0 → 1.94.0；`wails3 task common:update:build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.94.0）；`release-notes.md` 按本版本内容重写。1.93.0 未单独发布，其桌面壳四项功能与 1.94.0 新内容合并进本次发布。
+- 随本次提交的内容：桌面壳四项设置项（切片 1–4 与配套测试）、使用分析请求列表（`internal/requestlog` 等）、provider 配额错误分类、basic 模式运行时错误文本、`docs/design_log_analyzer_case_library.md` 设计稿及 task/process 记录。
+- 本地未编译：本次未传 `--build`，未重新构建 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
+- 未做：真机验收四项桌面功能与请求列表界面；配额分类真实样本验证。缺口状态沿用各任务记录，不因发布提升为已验证。
+
+### 使用分析请求列表（2026-11-17；wired-not-verified）
+
+- 负责人：主会话。范围经用户确认：只做请求列表与输入/输出/缓存 token；费用、Agent 身份识别、用途筛选、搜索、导出 CSV、自动刷新、时区切换都不做；时间范围保留（今天/24 小时/7 天/30 天）；索引保留 30 天。
+- 数据源决策：不复用会被配额回收的 `logs/traces` 分片，另建只追加索引 `history/requests/requests-YYYYMMDD.jsonl`（每天一个分片，写入时清理超过 30 天的分片），避免列表随日志回收而丢失。
+- [completed] `request-index-store`（包级）：新增 `internal/requestlog`，提供 `Append`/`List`/`Distinct`；`go test -race` 11 项通过（含并发追加、坏行跳过、分片清理、本地 0 点边界）。
+- [completed] `request-index-write`（主链路打点）：`ProviderRequest.Purpose` 区分 chat/summary，`ActiveStream.CurrentProviderPurpose` 在 provider pass 起点复位；`recordTurnUsageSnapshot` 写索引，摘要调用跳过，写入失败只记日志。4 项测试通过；`forwarder` 全包回归通过（72.6s）。
+- [completed] `request-list-bridge`：`MetricsService.ListRequests` / `ListRequestFilterOptions`，缓存命中率沿用首页默认口径（`InputTokens` 已是非缓存输入）。4 项测试通过。
+- [completed] `request-list-ui`：`RequestListPanel.vue` 作为使用分析第三个视图（趋势/活跃度/请求），含范围、供应商、模型、状态筛选与分页；`npm run build` 通过。
+- [completed] `request-list-performance`（用户追加要求：查询不拖慢主链路、不卡界面）：写路径清理降为每天一次异步执行；查询按窗口只读所需分片并受 20 万行扫描上限约束；前端加请求序号防竞态、切到请求视图才拉筛选项，并修正分页事件链。新增 5 项测试，三包回归、`go vet`、`npm run build` 通过（前端竞态/事件链为 test gap，未做浏览器验证）。证据见 `docs/process.md` 同名章节。
+- 缺口（test/env gap）：**未在真实应用界面验收**。本机运行实例仍为 1.93.0，替换应用会中断用户正在使用的 Cursor 会话，需用户批准维护窗口后再做浏览器级验证。索引在本机尚无真实数据（功能首次运行后才会生成）。
+- 未做：commit、push、构建安装包、替换/重启应用。
+
 ### Cursor 3.29.15 BidiAppend 二进制载荷修复（2026-11-12；真实主链路 verified-partial）
 
 - 负责人：主会话；基线 `2849e49`，用户授权分支 `fix/bidi-append-binary-encoding-3.29.15` 及本机维护窗口；2026-11-12 经用户 `/ship --push --release` 确认升级到 1.90.0 并发布。
@@ -515,7 +534,7 @@
 - [completed] `managed-codex-cache-ab`（2026-11-13 真实账号实测，负结果）：18 次真实 Codex 请求（`gpt-6-sol` / ChatGPT Plus，串行、限速），control 档仅在第二轮出现一次自动前缀缓存命中（`cache_read=2688`），顺序反转后不可复现；`prompt_key`/`full` 共 12 次全部 `cache_read=0`。结论：不宣称亲和字段带来缓存收益；默认 profile 保持 control，字段接线与脱敏观测保留用于后续判断。账号额度 remaining 55%→41%。实验设计与数据见 `docs/process.md`；复现探针为 `internal/backend/agent/model/cache_ab_manual_test.go`（`manualcacheab` build tag，默认不编译）。
 - [pending] `rule-offline-journal-design`：P0 完成后设计显式 opt-in 的 Rule 离线 journal、本地镜像、回放幂等、冲突恢复和跨来源内容去重；默认不得上传 Rule 正文。
 - [pending] `model-display-grouping`：仅增强官方模型、静态 BYOK、Codex 与 Grok 的模型列表展示分组，不改现有路由、凭据和子代理主链路。
-- [pending] `investigation-case-library`：持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验
+- [in_progress] `investigation-case-library`（设计已出，Design Readiness=review-required）：持久调查案例库、脱敏证据快照、状态机、版本关联和修复后复验。设计见 `docs/design_log_analyzer_case_library.md`；四项待确认（状态集、证据粒度、复验判定、是否含 GUI）。仅限 `tools/log-analyzer`，不改主应用与 Cursor 客户端；与主应用当前未提交改动无交集。
 - [pending] `ai-evidence-bundle`：外部 AI 调查包导出、结构化分析结果导入和不可信日志数据边界
 - [pending] `client-analyzer-launcher`：客户端日志采集区接入跨平台分析器检测、启动按钮和未安装引导
 - [pending] `distribution-verification`：分析器独立发布、客户端归档隔离及跨版本/跨模块/跨平台验证证据
@@ -601,6 +620,57 @@ DELIVERY_STATUS: verified-partial
 - 已实现：`RecordWroteRequest(at, err)` 成功才记录完成时间；失败只存稳定分类，原始错误文本不落盘。分类经 stream diagnostics → stats → provider terminal 事件字段 `wrote_request_err`，并加入观测白名单。
 - 验证：model 侧三条测试经历编译失败（RED）后转绿；forwarder 侧两条字段测试为实现后补写、首次即通过（不构成 RED-GREEN）。backend 全量回归与 `go build ./...` 通过；详见 process 同名小节。
 - 下一步：构建并安装新版本后，用一次会超时的真实大请求确认 `wrote_request_err` 与 `wrote_request_at` 的互斥关系和分类命中；据此校准 `providerRequestUploadBytesPerSecond`。尚无真实失败样本，分类覆盖未经运行验证。
+
+## provider 配额错误分类与可行动文案（2026-11-16）
+
+TASK_ID: provider-quota-error-classification
+STATUS: in_progress
+OWNER: 当前会话
+DELIVERY_STATUS: verified-partial
+
+- 目标：额度耗尽不再显示成 `server_5xx`，而是独立分类并给出用户可执行的提示；普通限流与 5xx 语义不变。
+- 已实现：白名单识别上游 code/type（429/402/403 才用正文短语兜底，5xx 不判）；同 key 不重试但允许换渠道；终态固定文案不透传上游正文；terminal 事件新增 `provider_error_code`。
+- 合同见系统架构 §19.9，执行证据见 process 同名小节。
+- 下一步：用真实 quota 响应或余额耗尽的渠道验证分类命中与 Cursor 文案。可选后续：配额 429 跳过同渠道重试（需改重试主链）、非终态 429 记录 code（需预读响应体）。本次未重新构建 DMG。
+
+## 桌面壳设置项：登录启动、关闭后继续运行、Dock 图标、清空全部日志（2026-11-16）
+
+TASK_ID: desktop-shell-settings-20261116
+STATUS: in_progress
+OWNER: 当前会话
+DELIVERY_STATUS: wired-not-verified（切片 1–4）
+
+- 范围：设置页四处禁用占位真实化——①登录时启动；②关闭窗口后继续在后台运行（原"最小化到系统托盘"）；③macOS Dock 图标显示；④立即清空全部日志。四项可独立实施，不新增依赖、不建通用框架。
+- 已确认：Dock 默认关闭且仅 macOS 显示；继续运行默认开启；登录启动默认关闭且默认隐藏窗口；清空范围仅限本应用管理的日志，需二次确认；托盘与 Dock 允许同时开启。
+- 已确认（2026-11-16）：清空全部日志范围**包含当前活跃会话**，清空后按当前采集设置立即重建会话。
+- 合同与事实锚点见系统架构 §19.10（Design Readiness=approved）。
+- 探针已完成（2026-11-16，证据见 process「桌面壳功能可逆探针」）：`LSUIElement=true` + adhoc 下 `activationPolicy` 1→0→1、`lsappinfo` type `UIElement`→`Foreground`；SMAppService `register=1 status=Enabled`、`unregister=1` 且无残留。
+- 探针修正一个原假设：框架内置 `ApplicationShouldHandleReopen` 在探针中未恢复隐藏窗口，正式实现必须自行 `Show().Focus()`；`Hide()/Show()` 异步，不能依赖同步返回值。
+- 剩余事实缺口：真实注销/登录启动、`/Applications` 安装路径与 DMG 直接运行（App Translocation）未验证；登录启动与手动启动如何区分以决定是否隐藏窗口未验证。
+- 已确认：登录启动仅在 macOS 13+ 提供，低于 13 隐藏并说明版本要求，不回退 LaunchAgent。
+- 已确认（2026-11-16 调整）：启动时是否隐藏窗口改为独立开关 `hideWindowOnStartup`（默认关闭），不区分登录启动与手动启动，取消原“登录启动默认隐藏窗口”前提。
+- 切片 1（关闭窗口后继续运行，2026-11-16）：配置新增 `desktop.exitOnWindowClose`（默认 false = 继续运行，零值兼容旧配置）；`WindowClosing` 按配置隐藏窗口或走完整退出；托盘退出与新增的 `window_close` initiator 共用幂等退出入口；设置页开关已启用。配置 3 条与壳层 2 条测试均先 RED 后转绿，`go build ./...`、bindings 生成与 `build:frontend` 通过；详见 process「桌面壳切片 1」。
+- 切片 1 缺口：真机未验收——运行实例仍为 1.92.0 且不能停止，需安装新构建后验证"开：关闭隐藏且代理继续；关：关闭退出且代理收尾"；前端开关的实际渲染未在运行实例中查看。
+- 切片 2（macOS Dock 图标，2026-11-16）：配置新增 `desktop.showDockIcon`（默认 false，仅 macOS 生效）；启动策略按配置选择 `Regular/Accessory`；运行时经 `user-config:changed` 调用 dock service；自行处理 `ApplicationShouldHandleReopen` 并 `Show().Focus()`；新增 `WindowService.GetPlatform()` 供前端仅 macOS 渲染开关。配置与壳层测试先 RED 后转绿，bindings、前端构建与相关包测试通过；详见 process「桌面壳切片 2」。
+- 切片 2 缺口：真机未验收——未在运行实例中验证启动即显示 Dock、运行时切换、点击 Dock 恢复隐藏窗口、Cmd+Tab/菜单栏表现；`LSUIElement` 启动策略由 Wails 设置，探针只验证了运行时切换。
+- 切片 3（登录启动与启动隐藏，2026-11-16）：新增 `internal/loginitem` 包封装 SMAppService（状态/注册/注销，非 macOS 返回 unsupported）；`WindowService.GetLoginItemStatus/SetLoginItemEnabled` 以系统状态为真值，不写入配置；设置页登录启动开关仅 macOS 显示、即时生效并显示 `requires_approval` 提示；新增配置 `desktop.hideWindowOnStartup`（默认 false），启动窗口 `Hidden` 按此设置。配置与 loginitem 测试先 RED 后转绿，bindings、前端构建、`go build ./...` 与相关包测试通过；详见 process「桌面壳切片 3」。
+- 切片 3 缺口：真实注销/登录启动、系统设置关闭后的状态同步、`/Applications` 与 DMG 路径、macOS 13 以下不支持提示、`hideWindowOnStartup` 均为真机未验收。
+- 切片 4（立即清空全部日志，2026-11-16）：`internal/observability/clear.go` 新增 `ClearStoredLogs` 与 `Controller.ClearAllLogs`——置空写入者指针 → 同步关闭旧 recorder 与 app 日志 writer → 删除全部受管内容（含活跃 trace 会话、app/诊断分片）→ 按当前设置重建会话；旧 writer 10s 内未停止则中止删除并恢复采集；未知格式、非受管文件、符号链接保留；部分失败与采集重建失败分别以 `FailedItems`、`LastError=collector_restart_failed` 报告。接线 client/bridge/前端，设置页移除占位并加入二次确认与结果提示。3 条新增测试先 RED 后转绿，observability/client/bridge 测试、`go build ./...`、bindings、前端构建通过；详见 process「桌面壳切片 4」。
+- 切片 4 缺口：**真机未验收**（env gap）——未验证真实日志目录清空、清空后 Cursor 请求继续、页面新会话展示、超时中止与部分失败路径。
+- 版本与构建（2026-11-16）：`build/config.yml` 升至 1.93.0 并更新构建资产，`task build` 产出 `bin/macos-arm64.dmg`（校验：Info.plist 与二进制均为 1.93.0、adhoc 签名、`LSUIElement=1`）；运行实例 1.92.0 未停止、未替换，`18080`/`18090` 持续监听。
+- 下一步：安装 `bin/macos-arm64.dmg`（需用户明确授权，会替换当前运行实例）后统一执行切片 1–4 真机验收（关闭行为、Dock、登录启动、清空日志）；验收证据写入 process，通过后将 DELIVERY_STATUS 提升为 `verified-partial` 或 `accepted`。当前全部改动未提交。
+
+## basic 模式运行时错误文本（2026-11-17）
+
+TASK_ID: basic-runtime-error-text-20261117
+STATUS: completed
+OWNER: 当前会话
+DELIVERY_STATUS: accepted
+
+- 按用户指定 spec 补 `debugRecorder` 白名单的 `error`；公共写入边界统一脱敏并限制为 2000 字符加截断标记，不改既有 error_category/error_summary、payload 省略规则、日志默认模式或导入逻辑。
+- basic/full 错误字段、长文本截断与脱敏、短文本保持的回归及 forwarder 全包测试通过，build/vet/格式检查通过；配置已恢复 basic，并从真实 BidiAppend 受控失败请求的落盘 `dispatch_error` 验证 `fields.error` 非空。详细命令、trace 会话与覆盖边界唯一记录于 process「basic 模式运行时错误文本修复」。
+- 指定 resume 本次返回 OK，未复现原 500；不据此声称修复 resume。未 commit/push。
+- 安装实例复验（2026-11-17T10:56Z，basic 模式）：`/Applications` 1.93.0 实例对受控 run_request 落盘 `dispatch_error` 且 `fields.error` 为真实错误文本；证据见 process 同名小节末尾。
 
 ## 暂缓事项（不计入活动任务）
 

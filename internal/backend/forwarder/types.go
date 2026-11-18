@@ -192,32 +192,34 @@ type ActiveStream struct {
 	ProviderPublishedToolArgs                   bool
 	ProviderFinishReason                        string
 	ProviderUsage                               turnUsageSnapshot
-	ProviderStreamStats                         ProviderStreamStats
-	ProviderStreamDiagnostics                   *modeladapter.StreamDiagnostics
-	ProviderTerminalRecorded                    bool
-	FinalizedModelCallIDs                       map[string]struct{}
-	ProviderTerminalToolInvocation              bool
-	StreamSource                                string
-	TurnProviderStartedAt                       time.Time
-	ContinuationIndex                           int
-	ContinuedFromModelCallID                    string
-	ContinuationSpawned                         bool
-	ContinuationParentText                      string
-	ContinuationParentReasoning                 string
-	ContinuationOverlapWindow                   int
-	ContinuationOverlapResolved                 bool
-	ContinuationOverlapMismatch                 bool
-	ContinuationRemainderText                   string
-	ContinuationRemainderReasoning              string
-	ContinuationNewVisibleBytes                 int
-	ContinuationDeadline                        time.Time
-	ContinuationAbortReason                     string
-	PendingCompaction                           *PendingCompaction
-	OverflowRecoveryAttempted                   bool
-	PendingCheckpointBlobWrites                 map[uint32]string
-	ConfirmedCheckpointBlobs                    map[string]struct{}
-	NextCheckpointBlobRequestID                 uint32
-	PendingCheckpoint                           *pendingCheckpointPublish
+	// CurrentProviderPurpose 标记当前 provider pass 的业务用途，用于请求列表过滤。
+	CurrentProviderPurpose         providerPurpose
+	ProviderStreamStats            ProviderStreamStats
+	ProviderStreamDiagnostics      *modeladapter.StreamDiagnostics
+	ProviderTerminalRecorded       bool
+	FinalizedModelCallIDs          map[string]struct{}
+	ProviderTerminalToolInvocation bool
+	StreamSource                   string
+	TurnProviderStartedAt          time.Time
+	ContinuationIndex              int
+	ContinuedFromModelCallID       string
+	ContinuationSpawned            bool
+	ContinuationParentText         string
+	ContinuationParentReasoning    string
+	ContinuationOverlapWindow      int
+	ContinuationOverlapResolved    bool
+	ContinuationOverlapMismatch    bool
+	ContinuationRemainderText      string
+	ContinuationRemainderReasoning string
+	ContinuationNewVisibleBytes    int
+	ContinuationDeadline           time.Time
+	ContinuationAbortReason        string
+	PendingCompaction              *PendingCompaction
+	OverflowRecoveryAttempted      bool
+	PendingCheckpointBlobWrites    map[uint32]string
+	ConfirmedCheckpointBlobs       map[string]struct{}
+	NextCheckpointBlobRequestID    uint32
+	PendingCheckpoint              *pendingCheckpointPublish
 
 	Backlog                     []StreamEvent
 	Subscribers                 map[string]*StreamSubscriber
@@ -375,6 +377,7 @@ type ProviderStreamStats struct {
 	WroteRequestAt           time.Time
 	WroteRequestMS           int64
 	WroteRequestErr          string
+	ProviderErrorCode        string
 	FirstResponseByteAt      time.Time
 	FirstResponseByteMS      int64
 	LastByteAt               time.Time
@@ -400,12 +403,28 @@ type ProviderStreamStats struct {
 	ContinuationIndex        int
 }
 
+// providerPurpose 标识一次上游模型调用的业务用途。
+// 只有主对话调用（purposeChat）进入请求列表；摘要、提交信息等内部调用不进入，
+// 避免把内部调用混进用户可见的请求列表。
+type providerPurpose string
+
+const (
+	purposeChat    providerPurpose = "chat"
+	purposeSummary providerPurpose = "summary"
+)
+
+func (purpose providerPurpose) requestIndexEligible() bool {
+	return strings.TrimSpace(string(purpose)) == string(purposeChat)
+}
+
 type ProviderRequest struct {
-	RequestID           string
-	ConversationID      string
-	RunID               string
-	ModelCallID         string
-	ModelID             string
+	RequestID      string
+	ConversationID string
+	RunID          string
+	ModelCallID    string
+	ModelID        string
+	// Purpose 为空时按主对话调用处理。
+	Purpose             providerPurpose
 	Mode                agentv1.AgentMode
 	ThinkingEffort      string
 	Messages            []modeladapter.Message

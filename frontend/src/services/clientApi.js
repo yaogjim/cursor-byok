@@ -17,6 +17,9 @@ import {
   CheckForUpdates,
   DownloadAvailableUpdate,
   GetAppVersion,
+  GetPlatform,
+  GetLoginItemStatus,
+  SetLoginItemEnabled,
   InstallReadyUpdate,
   OpenConfigWindow,
   OpenHistoryWindow,
@@ -155,6 +158,18 @@ export function getHomeMetricsReport(range) {
   );
 }
 
+export function listRequests(query) {
+  return withApiLogging("ListRequests", () =>
+    Call.ByName(`${METRICS_SERVICE_NAME}.ListRequests`, query),
+  );
+}
+
+export function listRequestFilterOptions(range) {
+  return withApiLogging("ListRequestFilterOptions", () =>
+    Call.ByName(`${METRICS_SERVICE_NAME}.ListRequestFilterOptions`, range),
+  );
+}
+
 export function resetHomeMetricsSummary() {
   return withApiLogging("ResetHomeMetricsSummary", () =>
     Call.ByName(`${METRICS_SERVICE_NAME}.ResetHomeMetricsSummary`),
@@ -225,6 +240,12 @@ export function cleanupClosedLogSessions() {
   );
 }
 
+export function clearAllLogs() {
+  return withApiLogging("ClearAllLogs", () =>
+    Call.ByName(`${PROXY_SERVICE_NAME}.ClearAllLogs`),
+  );
+}
+
 export function openLogsDirectory() {
   return withApiLogging("OpenHistoryWindow", () => OpenHistoryWindow());
 }
@@ -235,6 +256,18 @@ export function openConfigWindow() {
 
 export function getAppVersion() {
   return withApiLogging("GetAppVersion", () => GetAppVersion());
+}
+
+export function getPlatform() {
+  return withApiLogging("GetPlatform", () => GetPlatform());
+}
+
+export function getLoginItemStatus() {
+  return withApiLogging("GetLoginItemStatus", () => GetLoginItemStatus());
+}
+
+export function setLoginItemEnabled(enabled) {
+  return withApiLogging("SetLoginItemEnabled", () => SetLoginItemEnabled(enabled));
 }
 
 export function checkForUpdates() {

@@ -4,6 +4,7 @@ import (
 	"cursor/internal/appearance"
 	"cursor/internal/buildinfo"
 	"cursor/internal/client"
+	"cursor/internal/loginitem"
 	"cursor/internal/updater"
 	"fmt"
 	"os"
@@ -69,6 +70,24 @@ func (s *WindowService) SetUpdater(manager *updater.Manager) {
 // GetAppVersion 返回当前应用版本号。
 func (s *WindowService) GetAppVersion() string {
 	return buildinfo.CurrentVersion()
+}
+
+// GetPlatform 返回当前操作系统标识，供前端按平台展示桌面设置项。
+func (s *WindowService) GetPlatform() string {
+	return goruntime.GOOS
+}
+
+// GetLoginItemStatus 返回登录项的系统实际状态。
+func (s *WindowService) GetLoginItemStatus() string {
+	return string(loginitem.CurrentStatus())
+}
+
+// SetLoginItemEnabled 注册或注销登录项，并返回操作后的系统状态。
+func (s *WindowService) SetLoginItemEnabled(enabled bool) (string, error) {
+	if err := loginitem.SetEnabled(enabled); err != nil {
+		return string(loginitem.CurrentStatus()), err
+	}
+	return string(loginitem.CurrentStatus()), nil
 }
 
 // CheckForUpdates 触发一次手动检查更新。

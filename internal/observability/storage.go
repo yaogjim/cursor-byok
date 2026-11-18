@@ -520,6 +520,22 @@ type CleanupResult struct {
 
 var cleanupAllClosedSessionsMu sync.Mutex
 
+// validateLogDirs rejects a logs root or traces directory that is not a real
+// directory. Symlinked roots are refused so cleanup never follows a link out of
+// the managed tree.
+func validateLogDirs(root string) error {
+	for _, dir := range []string{root, filepath.Join(root, tracesDirname)} {
+		info, statErr := os.Lstat(dir)
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			return fmt.Errorf("拒绝清理非真实日志目录: %s", dir)
+		}
+	}
+	return nil
+}
+
 func CleanupAllClosedSessions(root string) (CleanupResult, error) {
 	root = strings.TrimSpace(root)
 	if root == "" {
@@ -540,14 +556,8 @@ func CleanupAllClosedSessions(root string) (CleanupResult, error) {
 		defer budget.mu.Unlock()
 		defer func() { budget.usageKnown = false }()
 	}
-	for _, dir := range []string{root, filepath.Join(root, tracesDirname)} {
-		info, statErr := os.Lstat(dir)
-		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-			return CleanupResult{}, statErr
-		}
-		if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
-			return CleanupResult{}, fmt.Errorf("拒绝清理非真实日志目录: %s", dir)
-		}
+	if err := validateLogDirs(root); err != nil {
+		return CleanupResult{}, err
 	}
 	tracesRoot := filepath.Join(root, tracesDirname)
 	entries, err := os.ReadDir(tracesRoot)

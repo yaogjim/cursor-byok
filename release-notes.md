@@ -1,46 +1,60 @@
-# cursor-byok v1.92.0
+# cursor-byok v1.94.0
 
-本版本把用户附图纳入 provider 请求字节预算以缓解大请求上传超时,补齐上传失败诊断与请求体组成观测;同时包含自 v1.90.1 以来未随版本发布的协议提取器适配、Codex 缓存亲和观测、原生归档排除同回合固定输入、控制面未登录空响应与 README 文案更新。
+本版本包含三部分:设置页四项占位功能落地(登录时启动、关闭窗口后继续运行、macOS Dock 图标、立即清空全部日志)、使用分析新增请求列表视图、以及 provider 配额错误与运行时错误文本的诊断改进。
 
-## 用户附图请求字节预算
+## 使用分析请求列表
 
-- 原图片预算仅裁剪 `role=tool` 的历史工具图,历史轮的用户附图虽计入请求估算但不会被裁剪,仍可能导致大请求上传超时。现按确认规则补齐:先占位旧工具图,再逐张占位历史轮用户图;当前轮及轮次未知的用户图不裁剪、不去重。
-- 占位保留用户文本,其余图片不连带删除;用户图占位提示需要时请用户重新附图。预算为软限制,仍超出时继续发送并记录 `over_budget` / `over_budget_bytes` / `user_omitted`,不新增拒绝策略。
-- 历史投影从 `HistoryEntry.TurnSeq` 注入仅内存 `Message.SourceTurnSeq`,`driveProvider` 传递当前 turnSeq;预算在请求副本上执行,不改 canonical history。
+- 总览页「使用分析」新增第三个视图「请求」,逐条列出每次模型调用的输入、输出与缓存 token;时间范围支持今天 / 24 小时 / 7 天 / 30 天,可按供应商、模型、状态筛选并翻页。
+- 数据源为独立只追加索引 `history/requests/requests-YYYYMMDD.jsonl`,不依赖会被配额回收的 trace 分片,因此请求记录不会随日志回收消失;索引保留 30 天,过期分片按本地日期异步清理。
+- 摘要类调用不进入索引;索引写入失败只记日志,不影响会话与 usage 落盘。查询按时间窗口只读所需分片并受扫描行数上限约束,前端用请求序号丢弃过期响应,快速切换筛选不会出现旧结果覆盖或界面卡住。
+- 缓存命中率沿用首页口径(缓存读取 /(缓存读取 + 非缓存输入));耗时为 provider 观测边界,首字耗时取首个 provider 事件相对 provider 起点。
+- 本版本不含费用、Agent 身份识别、用途筛选、搜索、CSV 导出、自动刷新与时区切换。
 
-## provider 上传失败诊断
+## 登录时启动
 
-- `httptrace.WroteRequestInfo` 的 `Err` 此前被丢弃,`connect timeout` 无法区分「请求体上传失败」与「上传完成但等首包超时」。现 `RecordWroteRequest(at, err)` 仅在成功时记录完成时间,失败只保存稳定分类(`broken_pipe` / `reset` / `deadline` / `canceled` / `timeout` / `unknown`),原始错误文本不落盘。
-- 分类经 stream diagnostics 输出到 provider terminal 事件的 `wrote_request_err` 字段,并加入观测白名单;修复 httptrace 与 attempt context 绑定顺序导致的追踪丢失。
-- 新增 `request_composition` 请求体组成统计(总字节、消息/工具/指令字节、消息数、图片数与字节、最大消息字节),用于定位超大请求,不含正文内容。
-- 终端错误摘要区分传输错误(`transport error (no HTTP response)`)与无状态错误,`LivenessTimeout` 按阶段标注 `(no response headers)` / `(no model output)`。
+- 设置页"登录时启动"开关直接注册/注销 macOS 登录项(SMAppService `mainAppService`),默认关闭;开关状态以系统实际注册结果为准,不写入应用配置,避免"配置为开但系统未注册"的双真值。
+- `RequiresApproval` 时开关显示为已开启并提示到"系统设置 › 通用 › 登录项"批准;仅 macOS 13+ 提供该项,低于 13 隐藏并说明版本要求,不回退到 LaunchAgent。
+- 启动时是否隐藏主窗口改为独立开关"启动时隐藏主窗口"(默认关闭),不识别启动来源,登录启动与手动启动遵循同一规则。
 
-## 协议提取器适配新版描述符(自 v1.91.0 累积)
+## 关闭窗口后继续运行
 
-- Cursor 3.29.15 的扩展 bundle 改用紧凑描述符(`static $(){return["TypeName|字段..."]}`)而非旧版反射描述符,原提取器无法解析。现支持紧凑 message/enum 描述符、继承与常量包名、枚举工厂、依赖索引、嵌套类型、optional/repeated/map/oneof;严格模式下非法引用、未知标量与缺失包名会使同步失败而不是静默产出错误类型。
-- 新增独立的 `proto/agent_v1_compat.proto` 与 `proto/aiserver_v1_compat.proto` 承载上游已删除、但本仓现有逻辑仍在使用的类型;`RequestedModel` 删除字段 8 后改从 unknown fields 读取,保持旧客户端语义。
+- 原"最小化到系统托盘"占位改为"关闭窗口后继续运行",默认开启(与既有行为一致);关闭时隐藏窗口且代理继续运行,关闭该开关后关闭按钮走完整退出收尾。
+- 托盘退出与关闭窗口共用幂等退出入口,退出过程中重复触发不会重复执行收尾。
 
-## managed Codex 缓存亲和:契约与观测(自 v1.91.0 累积)
+## macOS Dock 图标
 
-- 新增 HTTP 层端到端断言:401 后同账号刷新保持 `prompt_cache_key`、`session-id`、`thread-id`、`x-client-request-id` 稳定;quota 换号后亲和分区改变且自定义 header 不能覆盖保留 header。
-- 新增 `codex_affinity_profile` 与 `codex_affinity_injected` 脱敏观测;OpenAI 两种 endpoint 与 Anthropic 流式摘要透传 `cache_read_present`。
-- 真实上游 A/B:18 次请求中 `prompt_key`/`full` 两档共 12 次 `cache_read=0`,`control` 档仅一次命中且不可复现。**不宣称亲和字段带来缓存收益**,默认档位保持 `control`。
+- 新增"在 Dock 中显示图标"开关,默认关闭(保持原有 `LSUIElement` 无 Dock 行为),仅 macOS 显示;启动时按配置选择 `Regular`/`Accessory` 激活策略,运行时切换即时生效。
+- 点击 Dock 图标会恢复隐藏窗口并聚焦;托盘与 Dock 可同时开启,互不替代。
 
-## forwarder 原生归档与控制面空响应(自 v1.91.0 累积)
+## 立即清空全部日志
 
-- 原生归档移除同回合固定输入拒绝门禁:`summarized_messages` 仅排除 layout PinnedInputs,当前回合输入只由 ROOT 承载。
-- 未登录独立控制面账号时 GetEffectiveUserPlugins/GetKnownServers 返回 200 空集合;已登录仍转发官方;Analytics Batch 本地接收后丢弃并返回空响应;GetScmConnectionStatus 任意身份返回 `connected=false`;NameTab 依 name 字段语义保持 404。
-- README 改写开源初衷;AccessView 中 Anthropic 客户端提示文案调整。
+- 设置页新增"清空全部",二次确认后立即删除全部受管日志,不受保留策略影响:所有采集会话(含当前活跃会话)、`app-*.log` 应用日志分片与 `diagnostics-*.jsonl` 诊断分片。
+- 执行顺序由日志组件协调:先阻断新写入并同步关闭旧写入者,确认停止后删除,再按当前采集设置立即重建会话;清空期间代理业务不中断。
+- 旧写入者在 10 秒内未确认停止时中止清空并恢复采集,不删除任何文件;未知格式会话、非受管文件、符号链接与配置/凭据/业务数据一律保留;部分删除失败显示"部分失败",采集未能恢复时明确提示检查采集设置。
+
+## provider 配额错误分类
+
+- 上游额度耗尽不再显示为 `server_5xx`,而是独立分类 `quota_exhausted` 并给出用户可执行的提示;普通限流与 5xx 语义不变。
+- 识别范围为白名单 code/type,仅在 429/402/403 时用正文短语兜底,5xx 不做额度猜测;同一 key 不重试但允许换渠道。终态使用固定文案且不透传上游正文;terminal 事件新增 `provider_error_code` 字段。
+
+## 运行时错误文本可见性
+
+- basic 日志模式此前会丢弃运行时错误文本:白名单缺少 `error` 键。现补入该键,并在公共 JSONL 写入边界对顶层 `error` / `err` / `cause` 统一脱敏后截断到 2000 个 Unicode 字符,追加 `... (truncated, total N bytes)`。
+- `error_category` / `error_summary` 原名与语义保持不变,payload 省略规则与日志默认模式不变,无新增开关。
 
 ## 明确限制
 
-- 用户附图预算:裁剪策略基于占位而非降采样,当前大图仍超预算时可能超时;`providerRequestUploadBytesPerSecond` 为保守假设(256 KiB/s),尚无真实失败样本校准;未做真实 Cursor 大请求重放验收。
-- 上传失败诊断:分类命中率未经运行验证;`wrote_request_err` 只出现在 provider terminal 事件。
-- 协议生成的代码只通过本地同步、编译与相关测试验证;未安装并实机运行重新生成后的应用。
-- 缓存 A/B 为单一账号、单一模型、单一时段的有限样本,无法排除上游缓存策略的时段性或按账号差异。
-- updater 安装机制仍未设计。
+- 桌面四项功能的真机验收尚未完成:当前仅通过源码级测试、编译、bindings 生成与前端构建验证;关闭行为、Dock 图标、真实注销后登录启动、真实日志目录清空均需在新安装包上验证。
+- 登录启动的真实注销/登录启动、`/Applications` 安装路径与 DMG 直接运行(含 App Translocation)场景未验证;macOS 13 以下只隐藏开关并提示版本要求,不在旧系统上提供替代机制。
+- Dock 点击恢复窗口依赖自行处理的 `ApplicationShouldHandleReopen`;启动即显示 Dock 仅由激活策略保证,未在安装包中目视确认 Cmd+Tab 与菜单栏表现。
+- 清空日志的超时中止与部分失败路径未有运行证据;`FailedItems` 为受管项计数,不区分具体失败原因。
+- 请求列表未在真实应用界面与浏览器中验收;本机索引尚无真实数据,前端竞态与事件链修复为 test gap。
+- 配额分类没有真实 quota 响应样本,分类命中率未经运行验证;非终态 429 的 code 仍不落盘,重试后变 503 时首因会丢失。
 
 ## 验证边界
 
-- `go test ./internal/backend/...` 全部通过;`go build ./...` 成功(链接器提示部分对象 macOS 14.0 高于目标 11.0);`go vet`、`gofmt -l`(除既有 `internal/backend/server/config/types.go` 偏差外)与 `git diff --check` 通过;详细命令与结论见 `docs/process.md`。
-- 本机 macOS arm64 曾执行 `task build` 产出 DMG(基于 1.91.0 工作区);本版本 macOS、Windows、Linux 安装包由远端 CI 构建并随 Release 发布。
+- 新增测试覆盖:请求索引存储 16 条(含并发、跨分片、窗口边界、扫描上限)、`bridge` 请求列表 4 条、`forwarder` 请求索引打点 4 条;桌面壳 `config` 3 条、`app` 壳层 5 条、`loginitem` 2 条、`observability` 清空 3 条;quota 分类 model 侧 6 条与 forwarder 侧 4 条;basic 错误文本 3 条。均先 RED 后 GREEN。
+- `internal/requestlog`、`bridge`、`forwarder`、`backend/server/config`、`app`、`loginitem`、`observability`、`client` 包测试通过;`go build ./...`、`go vet`、`gofmt -l` 通过(链接器仍提示部分对象 macOS 14.0 高于目标 11.0),bindings 生成与前端构建通过,`git diff --check` 通过。
+- 已在本机通过受控 `run_request`(无效 SHA-256 prefetched blob)在安装实例上确认 basic 模式 trace 落盘 `dispatch_error` 且 `fields.error` 为真实错误文本。
+- macOS、Windows、Linux 安装包由远端 CI 构建并随 Release 发布,本地未重新构建 DMG。
+- 详细命令、trace 会话与覆盖边界见 `docs/process.md`。

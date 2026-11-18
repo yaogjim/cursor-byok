@@ -36,10 +36,11 @@ const (
 	ShutdownReasonAppQuit     = "app_quit"
 	ShutdownReasonServiceStop = "service_stop"
 
-	ShutdownInitiatorTray       = "tray"
-	ShutdownInitiatorOnShutdown = "on_shutdown"
-	ShutdownInitiatorStopProxy  = "stop_proxy"
-	ShutdownInitiatorStartFail  = "start_fail"
+	ShutdownInitiatorTray        = "tray"
+	ShutdownInitiatorOnShutdown  = "on_shutdown"
+	ShutdownInitiatorStopProxy   = "stop_proxy"
+	ShutdownInitiatorStartFail   = "start_fail"
+	ShutdownInitiatorWindowClose = "window_close"
 
 	ShutdownOutcomeDrained        = "drained"
 	ShutdownOutcomeCanceled       = "canceled"

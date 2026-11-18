@@ -13,12 +13,14 @@ import (
 )
 
 const (
-	FailureCauseHTTP500           = "http_500"
-	FailureCauseHTTP502           = "http_502"
-	FailureCauseHTTP503           = "http_503"
-	FailureCauseHTTP504           = "http_504"
-	FailureCauseHTTP524           = "http_524"
-	FailureCauseHTTP429           = "http_429"
+	FailureCauseHTTP500 = "http_500"
+	FailureCauseHTTP502 = "http_502"
+	FailureCauseHTTP503 = "http_503"
+	FailureCauseHTTP504 = "http_504"
+	FailureCauseHTTP524 = "http_524"
+	FailureCauseHTTP429 = "http_429"
+	// FailureCauseQuotaExhausted 表示上游额度/计费不可用，与普通限流分开。
+	FailureCauseQuotaExhausted    = "quota_exhausted"
 	FailureCauseHTTP401           = "http_401"
 	FailureCauseHTTP403           = "http_403"
 	FailureCauseHTTP4xx           = "http_4xx"
@@ -115,6 +117,16 @@ func classifyTypedProviderFailure(err error) (ProviderFailure, bool) {
 
 	var httpErr *HTTPStatusError
 	if errors.As(err, &httpErr) && httpErr != nil {
+		if httpErr.QuotaExhausted {
+			return ProviderFailure{
+				Category:   ProviderErrorQuotaExhausted,
+				Cause:      FailureCauseQuotaExhausted,
+				Phase:      LivenessPhaseHTTP,
+				Status:     httpErr.StatusCode,
+				Retryable:  false,
+				Switchable: true,
+			}, true
+		}
 		failure := classifyHTTPStatusFailure(httpErr.StatusCode)
 		failure.Status = httpErr.StatusCode
 		return failure, true

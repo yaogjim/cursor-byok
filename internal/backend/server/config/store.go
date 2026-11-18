@@ -250,6 +250,7 @@ func (store *Store) SaveSystemSettings(_ context.Context, cfg Config) (Config, e
 	merged.Observability = cfg.Observability
 	merged.Appearance = cfg.Appearance
 	merged.Advertising = cfg.Advertising
+	merged.Desktop = cfg.Desktop
 	merged.Updates = cfg.Updates
 	merged.SubagentReschedule = cfg.SubagentReschedule
 	merged.OutboundProxy = cfg.OutboundProxy

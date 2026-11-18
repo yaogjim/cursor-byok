@@ -446,6 +446,7 @@ func (service *Service) recordTurnUsageSnapshot(stream *ActiveStream, conversati
 		if err := service.usageStore.UpsertEvent(usageFileEvent{
 			EventID:          usageEventID(requestID, effectiveModelCallID),
 			Kind:             usageEventKindProvider,
+			Status:           strings.TrimSpace(status),
 			At:               lastEventAt,
 			InputTokens:      usage.InputTokens,
 			OutputTokens:     usage.OutputTokens,
@@ -456,6 +457,8 @@ func (service *Service) recordTurnUsageSnapshot(stream *ActiveStream, conversati
 			return err
 		}
 	}
+	// 请求列表索引独立于 usage 汇总：写入失败只降级列表，不影响会话与统计落盘。
+	service.recordRequestIndex(stream, requestID, effectiveModelCallID, status, usage, lastEventAt)
 	if strings.TrimSpace(conversationID) != "" {
 		_, err := service.updateConversationMetaAndCheckpoint(stream, conversationID, func(item *ConversationFile) error {
 			if item == nil {

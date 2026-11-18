@@ -129,6 +129,19 @@ type LogCleanupResult struct {
 	FreedBytes      int64 `json:"freedBytes"`
 }
 
+// LogClearResult 描述一次"立即清空全部日志"的结果。FailedItems 表示未能删除的
+// 受管项数量，用于区分部分成功；Collecting 表示清空后采集是否已恢复。
+type LogClearResult struct {
+	RemovedSessions int    `json:"removedSessions"`
+	RemovedShards   int    `json:"removedShards"`
+	FreedBytes      int64  `json:"freedBytes"`
+	FailedItems     int    `json:"failedItems"`
+	NewSessionID    string `json:"newSessionId,omitempty"`
+	NewSessionPath  string `json:"newSessionPath,omitempty"`
+	Collecting      bool   `json:"collecting"`
+	LastError       string `json:"lastError,omitempty"`
+}
+
 // NewProxyService 用于处理与 NewProxyService 相关的逻辑。
 func NewProxyService(proxy *mitm.ProxyServer, certManager *certs.Manager, caCertPEM []byte) *ProxyService {
 	if err := appdata.EnsureAssistantHome(); err != nil {
@@ -275,6 +288,33 @@ func (s *ProxyService) CleanupClosedLogSessions() (LogCleanupResult, error) {
 		RemovedSessions: result.RemovedSessions,
 		FreedBytes:      result.FreedBytes,
 	}, nil
+}
+
+// ClearAllLogs 清空全部受管日志，包括当前活跃会话，并在采集开启时立即重建新会话。
+// 没有可用的链路采集控制器时退化为纯磁盘清理，避免清空入口静默失效。
+func (s *ProxyService) ClearAllLogs() (LogClearResult, error) {
+	if s == nil {
+		return LogClearResult{}, nil
+	}
+	if host := s.backendHost; host != nil && host.Observability() != nil {
+		result, err := host.Observability().ClearAllLogs()
+		return logClearResultFromObservability(result), err
+	}
+	result, err := observability.ClearStoredLogs(s.logsRoot)
+	return logClearResultFromObservability(result), err
+}
+
+func logClearResultFromObservability(result observability.ClearResult) LogClearResult {
+	return LogClearResult{
+		RemovedSessions: result.RemovedSessions,
+		RemovedShards:   result.RemovedShards,
+		FreedBytes:      result.FreedBytes,
+		FailedItems:     result.FailedItems,
+		NewSessionID:    result.NewSessionID,
+		NewSessionPath:  result.NewSessionPath,
+		Collecting:      result.Collecting,
+		LastError:       result.LastError,
+	}
 }
 
 func (s *ProxyService) waitForBackend(ctx context.Context) error {

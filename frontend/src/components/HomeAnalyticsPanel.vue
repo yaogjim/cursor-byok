@@ -1,5 +1,6 @@
 <script setup>
 import HomeTrendChart from "@/components/charts/HomeTrendChart.vue";
+import RequestListPanel from "@/components/RequestListPanel.vue";
 import {
   activityLevel,
   buildActivityCells,
@@ -19,11 +20,41 @@ const props = defineProps({
   error: { type: String, default: "" },
   activityLoading: { type: Boolean, default: false },
   activityError: { type: String, default: "" },
+  requestList: { type: Object, default: () => ({}) },
+  requestOptions: { type: Object, default: () => ({ providers: [], models: [] }) },
+  requestRange: { type: String, default: "today" },
+  requestProvider: { type: String, default: "" },
+  requestModel: { type: String, default: "" },
+  requestStatus: { type: String, default: "" },
+  requestLoading: { type: Boolean, default: false },
+  requestError: { type: String, default: "" },
 });
 
-const emit = defineEmits(["retry", "retry-activity", "range-change", "view-change"]);
+const emit = defineEmits([
+  "retry",
+  "retry-activity",
+  "range-change",
+  "view-change",
+  "request-range-change",
+  "request-provider-change",
+  "request-model-change",
+  "request-status-change",
+  "request-previous-page",
+  "request-next-page",
+  "request-retry",
+]);
 
 const rangeOptions = HOME_METRICS_RANGE_OPTIONS;
+const isRequestView = computed(() => props.view === "requests");
+const panelTitle = computed(() => {
+  if (props.view === "activity") {
+    return "近 52 周活跃度";
+  }
+  if (props.view === "requests") {
+    return "请求明细";
+  }
+  return "Token 使用趋势";
+});
 const granularityLabel = computed(() => (props.report?.granularity === "hour" ? "按小时" : "按日"));
 const trendEmpty = computed(() => isTrendEmpty(props.report));
 const activityEmpty = computed(() => isActivityEmpty(props.activityDaily));
@@ -81,7 +112,7 @@ function heatClass(value) {
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <div class="flex flex-wrap items-center gap-2">
-          <h3 class="card-title">{{ view === "activity" ? "近 52 周活跃度" : "Token 使用趋势" }}</h3>
+          <h3 class="card-title">{{ panelTitle }}</h3>
           <span
             v-if="view === 'trend'"
             class="status-pill is-info"
@@ -89,10 +120,10 @@ function heatClass(value) {
             {{ granularityLabel }}
           </span>
         </div>
-        <div class="page-sub !mt-0">{{ metaText }}</div>
+        <div v-if="!isRequestView" class="page-sub !mt-0">{{ metaText }}</div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <div class="seg" role="group" aria-label="时间范围">
+        <div v-if="!isRequestView" class="seg" role="group" aria-label="时间范围">
           <button
             v-for="item in rangeOptions"
             :key="item.value"
@@ -118,11 +149,37 @@ function heatClass(value) {
           >
             活跃度
           </button>
+          <button
+            type="button"
+            :class="view === 'requests' ? 'is-on' : ''"
+            @click="emit('view-change', 'requests')"
+          >
+            请求
+          </button>
         </div>
       </div>
     </div>
 
-    <div v-if="view === 'trend'">
+    <RequestListPanel
+      v-if="isRequestView"
+      :result="requestList"
+      :options="requestOptions"
+      :range="requestRange"
+      :provider="requestProvider"
+      :model="requestModel"
+      :status="requestStatus"
+      :loading="requestLoading"
+      :error="requestError"
+      @range-change="emit('request-range-change', $event)"
+      @provider-change="emit('request-provider-change', $event)"
+      @model-change="emit('request-model-change', $event)"
+      @status-change="emit('request-status-change', $event)"
+      @retry="emit('request-retry')"
+      @previous-page="emit('request-previous-page')"
+      @next-page="emit('request-next-page')"
+    />
+
+    <div v-else-if="view === 'trend'">
       <div
         v-if="error"
         class="mt-3 flex items-center justify-between gap-3 rounded border border-[var(--color-error-border)] bg-[var(--color-error-bg)] px-3 py-2 text-xs text-[var(--color-error-text)]"

@@ -9,12 +9,15 @@ import { useMessage } from "@/composables/useMessage";
 import { showModal } from "@/composables/useModal";
 import {
   appState,
+  clearAllManagedLogs,
   clearClosedLogSessions,
   configSectionDirty,
   configSectionStatusText,
   openLocalLogsDirectory,
   persistScopedUserConfig,
+  refreshLoginItemStatus,
   reloadUserConfig,
+  setLaunchAtLogin,
   syncLogCaptureStatus,
   THEME_OPTIONS,
   toUserError,
@@ -46,6 +49,26 @@ const settingsSaveLabel = computed(() => {
 function showActionError(title, error) {
   const detail = String(error || "服务错误").trim() || "服务错误";
   message(`${title}：${detail}`);
+}
+
+const loginItemEnabled = computed(() => (
+  appState.loginItemStatus === "enabled" || appState.loginItemStatus === "requires_approval"
+));
+const loginItemDescription = computed(() => {
+  if (appState.loginItemStatus === "unsupported") {
+    return "需要 macOS 13 或更高版本";
+  }
+  if (appState.loginItemStatus === "requires_approval") {
+    return "已注册，但需要在系统设置 › 通用 › 登录项中允许";
+  }
+  return "登录当前用户后自动启动应用；状态以系统登录项为准";
+});
+
+async function handleLoginItemChange(enabled) {
+  const result = await setLaunchAtLogin(enabled);
+  if (!result.ok) {
+    showActionError("登录项设置失败", result.error);
+  }
 }
 
 async function handleSaveConfig() {
@@ -86,6 +109,38 @@ function formatBytes(value) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+async function handleClearAllLogs() {
+  const confirmed = await showModal({
+    title: "清空全部日志",
+    content: "将立即删除全部日志文件，包括当前正在采集的会话与已关闭会话，且不可恢复；清空后日志采集会立即开始新的会话。配置、凭据和业务历史不受影响。",
+    confirmText: "确认清空",
+  });
+  if (!confirmed) {
+    return;
+  }
+  const result = await clearAllManagedLogs();
+  if (!result.ok) {
+    await showActionError("清空失败", result.error);
+    return;
+  }
+  const lines = [
+    `已释放 ${formatBytes(result.freedBytes)}，删除 ${result.removedSessions} 个采集会话和 ${result.removedShards} 个日志文件。`,
+  ];
+  if (result.failedItems > 0) {
+    lines.push(`有 ${result.failedItems} 项日志未能删除，请稍后重试。`);
+  }
+  if (result.lastError === "collector_restart_failed") {
+    lines.push("日志采集未能恢复，请检查采集设置后重试。");
+  } else if (result.collecting) {
+    lines.push("日志采集已开始新的会话。");
+  }
+  await showModal({
+    title: result.failedItems > 0 ? "清空完成（部分失败）" : "清空完成",
+    content: lines.join("\n"),
+    showCancel: false,
+  });
+}
+
 async function handleClearClosedSessions() {
   const confirmed = await showModal({
     title: "清理日志",
@@ -111,6 +166,7 @@ onMounted(async () => {
   await Promise.all([
     reloadUserConfig().catch(() => {}),
     syncLogCaptureStatus().catch(() => {}),
+    refreshLoginItemStatus(),
   ]);
 });
 </script>
@@ -163,23 +219,57 @@ onMounted(async () => {
         <div class="grid2" style="column-gap: 32px">
           <div>
             <div class="setting-t" style="margin-bottom: 4px">启动与窗口</div>
-            <div class="setting-row is-planned" inert>
+            <div v-if="appState.platform === 'darwin'" class="setting-row">
               <div class="setting-l">
-                <div class="setting-t text-[var(--color-text-muted)]">
-                  开机自启动 <span class="badge-soon">计划中</span>
-                </div>
-                <div class="setting-s">登录系统后自动启动 Cursor 助手服务</div>
+                <div class="setting-t">登录时启动</div>
+                <div class="setting-s">{{ loginItemDescription }}</div>
               </div>
-              <button type="button" class="relative inline-flex h-[22px] w-[40px] shrink-0 rounded-full bg-[var(--color-border-strong)] opacity-55" disabled aria-label="开机自启动，计划中" />
+              <Switch
+                standalone
+                label="登录时启动"
+                :enabled="loginItemEnabled"
+                :disabled="appState.loginItemBusy || appState.loginItemStatus === 'unsupported'"
+                @change="handleLoginItemChange"
+              />
             </div>
-            <div class="setting-row is-planned" inert>
+            <div class="setting-row">
               <div class="setting-l">
-                <div class="setting-t text-[var(--color-text-muted)]">
-                  最小化到系统托盘 <span class="badge-soon">计划中</span>
-                </div>
-                <div class="setting-s">关闭窗口时保持服务在后台运行</div>
+                <div class="setting-t">关闭窗口后继续运行</div>
+                <div class="setting-s">关闭窗口时隐藏到托盘并保持代理运行；关闭此项后，关闭窗口将退出应用</div>
               </div>
-              <button type="button" class="relative inline-flex h-[22px] w-[40px] shrink-0 rounded-full bg-[var(--color-border-strong)] opacity-55" disabled aria-label="最小化到系统托盘，计划中" />
+              <Switch
+                standalone
+                label="关闭窗口后继续运行"
+                :enabled="!appState.exitOnWindowClose"
+                :disabled="appState.configSaving"
+                @change="appState.exitOnWindowClose = !$event"
+              />
+            </div>
+            <div v-if="appState.platform === 'darwin'" class="setting-row">
+              <div class="setting-l">
+                <div class="setting-t">在 Dock 中显示图标</div>
+                <div class="setting-s">开启后在 Dock 和 Cmd+Tab 中显示应用；点击 Dock 图标可恢复隐藏的窗口</div>
+              </div>
+              <Switch
+                standalone
+                label="在 Dock 中显示图标"
+                :enabled="appState.showDockIcon"
+                :disabled="appState.configSaving"
+                @change="appState.showDockIcon = $event"
+              />
+            </div>
+            <div class="setting-row">
+              <div class="setting-l">
+                <div class="setting-t">启动时隐藏主窗口</div>
+                <div class="setting-s">启动后只保留托盘入口；可从托盘或 Dock 恢复窗口</div>
+              </div>
+              <Switch
+                standalone
+                label="启动时隐藏主窗口"
+                :enabled="appState.hideWindowOnStartup"
+                :disabled="appState.configSaving"
+                @change="appState.hideWindowOnStartup = $event"
+              />
             </div>
           </div>
           <div>
@@ -335,14 +425,19 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div class="setting-row is-planned" inert>
+        <div class="setting-row">
           <div class="setting-l">
-            <div class="setting-t text-[var(--color-text-muted)]">
-              立即清空全部日志 <span class="badge-soon">计划中</span>
-            </div>
-            <div class="setting-s">不受保留策略影响，立即删除所有日志文件</div>
+            <div class="setting-t text-[var(--color-text-muted)]">立即清空全部日志</div>
+            <div class="setting-s">不受保留策略影响，立即删除所有日志，包括当前采集会话；清空后立即开始新会话</div>
           </div>
-          <Button variant="default" class="btn-sm" disabled>清空全部</Button>
+          <Button
+            variant="default"
+            class="btn-sm btn-risk"
+            :disabled="appState.logClearRunning"
+            @click="handleClearAllLogs"
+          >
+            {{ appState.logClearRunning ? "清空中..." : "清空全部" }}
+          </Button>
         </div>
       </div>
       <div class="config-action-bar">

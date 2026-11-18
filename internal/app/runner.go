@@ -12,10 +12,12 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"cursor/internal/ads"
 	"cursor/internal/appdata"
+	"cursor/internal/backend"
 	serverconfig "cursor/internal/backend/server/config"
 	"cursor/internal/buildinfo"
 	"cursor/internal/cursor"
@@ -128,6 +130,7 @@ func Run(resources EmbeddedResources) error {
 		},
 	})
 	adService := bridge.NewAdService(adCore)
+	dockIcon := newDockIconController()
 	var updateManager *updater.Manager
 
 	var mainWindow *application.WebviewWindow
@@ -149,7 +152,7 @@ func Run(resources EmbeddedResources) error {
 			AdditionalBrowserArgs: windowsAdditionalBrowserArgs(),
 		},
 		Mac: application.MacOptions{
-			ActivationPolicy: application.ActivationPolicyAccessory,
+			ActivationPolicy: startupActivationPolicy(startupConfig.Desktop.ShowDockIcon),
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 		OnShutdown: func() {
@@ -167,6 +170,16 @@ func Run(resources EmbeddedResources) error {
 			},
 		},
 	})
+
+	exitOnWindowClose := &atomic.Bool{}
+	exitOnWindowClose.Store(startupConfig.Desktop.ExitOnWindowClose)
+	quitInProgress := &atomic.Bool{}
+	quitApp := func(initiator string) {
+		if quitInProgress.Swap(true) {
+			return
+		}
+		runQuitFrom(proxyService, initiator, app.Quit)
+	}
 
 	refreshAdAssetBaseURL := func() bool {
 		state := proxyService.GetState()
@@ -229,7 +242,7 @@ func Run(resources EmbeddedResources) error {
 		DisableResize:       false,
 		Frameless:           goruntime.GOOS == "windows",
 		URL:                 "/",
-		Hidden:              false,
+		Hidden:              startupConfig.Desktop.HideWindowOnStartup,
 		HideOnEscape:        false,
 		MinimiseButtonState: application.ButtonEnabled,
 		MaximiseButtonState: application.ButtonEnabled,
@@ -260,11 +273,25 @@ func Run(resources EmbeddedResources) error {
 	window := mainWindow
 	windowService.SetMainWindow(window)
 	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		window.Hide()
+		if quitInProgress.Load() {
+			return
+		}
 		e.Cancel()
+		handleWindowClose(exitOnWindowClose.Load(), func() {
+			window.Hide()
+		}, func() {
+			quitApp(backend.ShutdownInitiatorWindowClose)
+		})
 	})
 	window.RegisterHook(events.Common.WindowFocus, func(e *application.WindowEvent) {
 		refreshAdAsync()
+	})
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+		handleDockReopen(window.IsVisible(), func() {
+			window.Show()
+		}, func() {
+			window.Focus()
+		})
 	})
 
 	showMainWindow := func() {
@@ -296,7 +323,7 @@ func Run(resources EmbeddedResources) error {
 	})
 	menu.AddSeparator()
 	quitItem := menu.Add("退出").OnClick(func(ctx *application.Context) {
-		runTrayQuit(proxyService, app.Quit)
+		quitApp(backend.ShutdownInitiatorTray)
 	})
 
 	var currentLocale = "zh-CN"
@@ -382,6 +409,8 @@ func Run(resources EmbeddedResources) error {
 	})
 	app.Event.On("user-config:changed", func(event *application.CustomEvent) {
 		if cfg, ok := event.Data.(serverconfig.Config); ok {
+			exitOnWindowClose.Store(cfg.Desktop.ExitOnWindowClose)
+			applyDockIcon(dockIcon, cfg.Desktop.ShowDockIcon)
 			windowService.SetAppearanceTheme(cfg.Appearance.Theme)
 			adCore.SetEnabled(cfg.Advertising.Enabled)
 			refreshAdRuntime()
@@ -462,15 +491,6 @@ func runAutoStartProxy(start func() error) error {
 		logger.Errorf("自动启动服务失败: %v", err)
 	}
 	return err
-}
-
-func runTrayQuit(proxy quitShutdown, quit func()) {
-	if proxy != nil {
-		proxy.ShutdownForQuitFrom("tray")
-	}
-	if quit != nil {
-		quit()
-	}
 }
 
 func runOnShutdown(proxy quitShutdown) {

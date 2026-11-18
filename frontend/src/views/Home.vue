@@ -12,12 +12,15 @@ import {
   appViewState,
   configSectionDirty,
   resetHomeMetrics,
+  setRequestListPage,
   startGateway,
   startService,
   stopGateway,
   stopService,
   syncHomeMetricsReport,
+  syncRequestList,
   toUserError,
+  updateRequestListFilters,
 } from "@/state/appState";
 import { normalizeHomeMetricsReport } from "@/state/homeMetrics";
 import { DEFAULT_GATEWAY_LISTEN_ADDR, countPublishedGatewayModels } from "@/state/configProjection";
@@ -163,6 +166,52 @@ async function handleRangeChange(range) {
 
 async function handleRetryAnalytics() {
   await syncHomeMetricsReport();
+}
+
+function requestFailureMessage(result) {
+  if (!result || result.ok) {
+    return;
+  }
+  showActionError("加载请求列表失败", result.error);
+}
+
+async function loadRequestList() {
+  requestFailureMessage(await syncRequestList());
+}
+
+async function loadRequestListWithOptions() {
+  requestFailureMessage(await updateRequestListFilters({}));
+}
+
+async function handleRequestRangeChange(range) {
+  requestFailureMessage(await updateRequestListFilters({ range }));
+}
+
+async function handleRequestProviderChange(provider) {
+  requestFailureMessage(await updateRequestListFilters({ provider }));
+}
+
+async function handleRequestModelChange(model) {
+  requestFailureMessage(await updateRequestListFilters({ model }));
+}
+
+async function handleRequestStatusChange(status) {
+  requestFailureMessage(await updateRequestListFilters({ status }));
+}
+
+async function handleRequestPreviousPage() {
+  requestFailureMessage(await setRequestListPage(Number(appState.requestListResult?.page || 1) - 1));
+}
+
+async function handleRequestNextPage() {
+  requestFailureMessage(await setRequestListPage(Number(appState.requestListResult?.page || 1) + 1));
+}
+
+async function handleAnalyticsViewChange(view) {
+  analyticsView.value = view;
+  if (view === "requests") {
+    await loadRequestListWithOptions();
+  }
 }
 
 async function handleResetMetrics() {
@@ -400,8 +449,23 @@ onBeforeUnmount(() => {
           :error="appState.homeMetricsReportError"
           :activity-loading="activityLoading"
           :activity-error="activityError"
+          :request-list="appState.requestListResult"
+          :request-options="appState.requestListOptions"
+          :request-range="appState.requestListRange"
+          :request-provider="appState.requestListProvider"
+          :request-model="appState.requestListModel"
+          :request-status="appState.requestListStatus"
+          :request-loading="appState.requestListLoading"
+          :request-error="appState.requestListError"
           @range-change="handleRangeChange"
-          @view-change="analyticsView = $event"
+          @view-change="handleAnalyticsViewChange"
+          @request-range-change="handleRequestRangeChange"
+          @request-provider-change="handleRequestProviderChange"
+          @request-model-change="handleRequestModelChange"
+          @request-status-change="handleRequestStatusChange"
+          @request-previous-page="handleRequestPreviousPage"
+        @request-next-page="handleRequestNextPage"
+          @request-retry="loadRequestList"
           @retry="handleRetryAnalytics"
           @retry-activity="loadActivityDaily"
         />
