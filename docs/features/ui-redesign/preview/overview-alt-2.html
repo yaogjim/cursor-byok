@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备选 · 总览（连接为主）</title>
+<style>
+  :root{--paper:#f6f5f1;--ink:#14150f;--ink2:#4b4d45;--ink3:#83857a;--line:#d9d7cd;--lsoft:#e6e4db;--accent:#1c6b47;--warn:#8a5a12;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;--num:"SF Mono",ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:13px;-webkit-font-smoothing:antialiased}
+  .header{display:flex;align-items:flex-end;gap:28px;padding:22px 40px 0;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding-bottom:13px}
+  .mark{width:26px;height:26px;border-radius:6px;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .brand b{font-size:14px}.brand span{font-size:11px;color:var(--ink3);font-family:var(--num)}
+  .tabs{display:flex;gap:26px;margin-left:20px}
+  .tab{padding-bottom:13px;font-size:13.5px;color:var(--ink3)}
+  .tab.on{color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink);margin-bottom:-1px}
+  .hr{margin-left:auto;padding-bottom:13px;display:flex;gap:16px;font-size:11.5px;color:var(--ink3)}
+
+  .body{padding:34px 40px 44px;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:48px}
+  .hero .k{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+  .hero h1{font-size:40px;line-height:1.18;letter-spacing:-.035em;font-weight:650;margin-top:10px}
+  .hero h1 span{font-family:var(--num);font-weight:600;letter-spacing:-.04em}
+  .hero .last{margin-top:10px;font-size:12.5px;color:var(--ink3)}
+  .hero .last b{font-family:var(--num);color:var(--ink2);font-weight:500}
+
+  .links{margin-top:30px;display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-top:1px solid var(--line)}
+  .lk{padding:16px 18px 16px 0;border-bottom:1px solid var(--lsoft);border-right:1px solid var(--lsoft)}
+  .lk:nth-child(3n){border-right:0}
+  .lk .n{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .lk .n i{width:6px;height:6px;border-radius:50%;background:var(--ink3)}
+  .lk .n i.ok{background:var(--accent)}
+  .lk .a{margin-top:6px;font-family:var(--num);font-size:11px;color:var(--ink2)}
+  .lk .s{margin-top:4px;font-size:11px;color:var(--ink3)}
+  .lk .act{margin-top:10px;font-size:11.5px;color:var(--ink2);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+
+  .strip{margin-top:32px;display:flex;align-items:baseline;gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .strip div{padding:14px 26px 14px 0;margin-right:26px;border-right:1px solid var(--lsoft)}
+  .strip div:last-child{border-right:0}
+  .strip small{display:block;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);margin-bottom:5px}
+  .strip b{font-family:var(--num);font-size:17px;font-weight:600}
+  .strip em{font-style:normal;font-size:10.5px;color:var(--ink3);margin-left:3px}
+
+  .chart{margin-top:34px}
+  .chart .cap{display:flex;align-items:baseline;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink3);margin-bottom:12px}
+  .chart .cap .r{margin-left:auto;display:flex;gap:14px;text-transform:none;letter-spacing:0;font-size:11px}
+  .chart .cap .r span{color:var(--ink3)}.chart .cap .r .on{color:var(--ink);font-weight:600}
+  .legend{display:flex;gap:16px;font-size:10.5px;color:var(--ink2);margin-top:10px}
+  .legend s{text-decoration:none;display:flex;align-items:center;gap:5px}
+  .legend b{width:12px;height:2px}
+
+  .side{border-left:1px solid var(--line);padding-left:26px}
+  .side h3{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink3);margin-bottom:12px}
+  .quota{margin-bottom:26px}
+  .q{display:flex;justify-content:space-between;font-size:11.5px;padding:6px 0;color:var(--ink2)}
+  .q b{font-family:var(--num);font-weight:500;color:var(--ink)}
+  .bar{height:3px;background:var(--lsoft);border-radius:2px;margin:8px 0 4px;overflow:hidden}
+  .bar i{display:block;height:3px;background:var(--ink2);border-radius:2px}
+  .side .tip{font-size:11.5px;line-height:1.8;color:var(--ink3);border-top:1px solid var(--lsoft);padding-top:14px}
+  .side .tip b{color:var(--ink2);font-weight:600}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+  <div class="tabs"><div class="tab on">总览</div><div class="tab">接入 1</div><div class="tab">模型 37</div><div class="tab">设置</div></div>
+  <div class="hr"><span>10:26:30</span><span>刷新</span></div>
+</div>
+
+<div class="body">
+  <div class="hero">
+    <div class="k">当前状态</div>
+    <h1>Cursor 正在用你的模型<br>运行，<span>已经连续可用 3 天</span>。</h1>
+    <div class="last">最近一次请求 <b>2 分钟前</b> · 今日 0 次失败 · 配置无未保存更改</div>
+
+    <div class="links">
+      <div class="lk"><div class="n"><i class="ok"></i>Cursor 代理</div><div class="a">127.0.0.1:18090</div><div class="s">运行中 · 深度集成</div><div class="act">停止服务</div></div>
+      <div class="lk"><div class="n"><i></i>共享入口</div><div class="a">127.0.0.1:18091</div><div class="s">未启用 · 无客户端连接</div><div class="act">去启用</div></div>
+      <div class="lk"><div class="n"><i class="ok"></i>订阅账号</div><div class="a">Codex · Grok</div><div class="s">2 个已授权 · 今日用量 18%</div><div class="act">刷新用量</div></div>
+    </div>
+
+    <div class="strip">
+      <div><small>对话轮次</small><b>4</b></div>
+      <div><small>LLM 调用</small><b>68</b><em>次</em></div>
+      <div><small>Token</small><b>3.9</b><em>M</em></div>
+      <div><small>缓存命中</small><b>92.22</b><em>%</em></div>
+      <div><small>会话价值</small><b>$4.59</b></div>
+    </div>
+
+    <div class="chart">
+      <div class="cap">今日流量<span class="r"><span class="on">趋势</span><span>活跃度</span><span>请求</span></span></div>
+      <svg width="100%" height="200" viewBox="0 0 700 200" preserveAspectRatio="none">
+        <g stroke="#e6e4db"><line x1="0" y1="160" x2="700" y2="160"/><line x1="0" y1="105" x2="700" y2="105"/><line x1="0" y1="50" x2="700" y2="50"/></g>
+        <path d="M0,158 L35,156 L70,154 L105,150 L140,156 L175,148 L210,140 L245,130 L280,136 L315,122 L350,110 L385,86 L420,54 L455,78 L490,130 L525,148 L560,154 L595,150 L630,144 L665,140 L700,136" fill="none" stroke="#1c6b47" stroke-width="1.8"/>
+        <path d="M0,158 L35,156 L70,154 L105,150 L140,156 L175,148 L210,140 L245,130 L280,136 L315,122 L350,110 L385,86 L420,54 L455,78 L490,130 L525,148 L560,154 L595,150 L630,144 L665,140 L700,136 L700,160 L0,160 Z" fill="#1c6b47" opacity=".07"/>
+        <path d="M0,164 L35,163 L70,161 L105,159 L140,161 L175,155 L210,147 L245,139 L280,143 L315,133 L350,123 L385,105 L420,81 L455,99 L490,139 L525,155 L560,159 L595,157 L630,153 L665,151 L700,149" fill="none" stroke="#8a5a12" stroke-width="1.2"/>
+      </svg>
+      <div class="legend"><s><b style="background:#1c6b47"></b>输入 token</s><s><b style="background:#8a5a12"></b>输出 token</s></div>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="quota">
+      <h3>订阅用量</h3>
+      <div class="q"><span>Codex（5 小时窗口）</span><b>18%</b></div>
+      <div class="bar"><i style="width:18%"></i></div>
+      <div class="q"><span>Grok（周额度）</span><b>6%</b></div>
+      <div class="bar"><i style="width:6%"></i></div>
+      <div class="q"><span>下次重置</span><b>15:40</b></div>
+    </div>
+    <div class="tip">
+      <b>缓存替您省了 $3.74。</b><br>
+      保持同一段系统提示与文档前缀不动，命中率还能再提高；频繁改动前缀会让缓存失效。
+    </div>
+  </div>
+</div>
+</body>
+</html>

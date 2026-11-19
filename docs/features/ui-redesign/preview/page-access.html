@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 接入中心</title>
+<style>
+  :root {
+    --paper: #f6f5f1; --ink: #14150f; --ink-2: #4b4d45; --ink-3: #83857a;
+    --line: #d9d7cd; --line-soft: #e6e4db; --accent: #1c6b47; --accent-soft: #e6efe7;
+    --warn: #8a5a12; --err: #a33b2e;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 13px; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; }
+
+  .header { display: flex; align-items: flex-end; gap: 28px; padding: 24px 40px 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; }
+  .mark { width: 26px; height: 26px; border-radius: 6px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .brand b { font-size: 14px; letter-spacing: -.01em; }
+  .brand span { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+  .tabs { display: flex; gap: 26px; margin-left: 20px; }
+  .tab { padding: 0 0 13px; font-size: 13.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 6px; }
+  .tab small { font-family: var(--num); font-size: 10px; }
+  .tab.on { color: var(--ink); font-weight: 600; position: relative; }
+  .tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 16px; padding-bottom: 14px; }
+  .sync { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+  .link { font-size: 12px; color: var(--ink-2); cursor: pointer; }
+  .link:hover { color: var(--ink); }
+
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 272px minmax(0, 1fr) 240px; }
+  .master { border-right: 1px solid var(--line); padding: 22px 0 22px 40px; overflow: hidden; }
+  .master h2 { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+  .client { display: flex; align-items: center; gap: 11px; padding: 13px 14px 13px 0; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+  .client.on { background: linear-gradient(90deg, transparent, rgba(28,107,71,.05)); border-bottom-color: transparent; box-shadow: inset 2px 0 0 var(--ink); padding-left: 12px; margin-left: -12px; }
+  .client.disabled { opacity: .45; cursor: default; }
+  .avatar-sm { width: 28px; height: 28px; border-radius: 7px; background: #eceae2; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--ink-2); flex: 0 0 28px; }
+  .client.on .avatar-sm { background: var(--ink); color: var(--paper); }
+  .c-name { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .c-name i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+  .c-name i.ok { background: var(--accent); }
+  .c-meta { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; font-family: var(--num); }
+
+  .detail { padding: 24px 34px 20px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .d-head { display: flex; align-items: baseline; gap: 12px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+  .d-head h1 { font-size: 20px; letter-spacing: -.02em; }
+  .d-head .st { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 3px; background: #eceae2; color: var(--ink-3); }
+  .d-head .st.ok { background: var(--accent-soft); color: var(--accent); }
+  .d-sub { font-size: 11.5px; color: var(--ink-3); margin-left: auto; font-family: var(--num); }
+
+  .section { padding: 20px 0; border-bottom: 1px solid var(--line-soft); }
+  .section:last-of-type { border-bottom: 0; }
+  .sec-title { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; }
+  .row { display: flex; align-items: center; gap: 16px; padding: 10px 0; }
+  .row .l { width: 160px; flex: 0 0 160px; }
+  .row .l b { font-size: 12.5px; font-weight: 600; display: block; }
+  .row .l span { font-size: 10.5px; color: var(--ink-3); line-height: 1.5; display: block; margin-top: 2px; }
+  .row .c { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
+  .input { height: 32px; border: 1px solid var(--line); background: #fbfaf7; border-radius: 7px; padding: 0 10px; font-family: var(--num); font-size: 11.5px; display: inline-flex; align-items: center; color: var(--ink); min-width: 220px; }
+  .btn { height: 30px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink-2); font-size: 12px; font-family: var(--font); cursor: pointer; }
+  .btn:hover { color: var(--ink); border-color: #bfbcae; }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 600; }
+  .btn.primary:hover { background: #2c2e26; }
+  .btn.text { border: 0; padding: 0 4px; height: auto; }
+  .switch { width: 34px; height: 20px; border-radius: 20px; background: #d5d3c8; position: relative; flex: 0 0 34px; }
+  .switch.on { background: var(--accent); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+  .switch.on::after { left: 16px; }
+  .hint { font-size: 10.5px; color: var(--ink-3); font-family: var(--num); }
+
+  .models { border-top: 1px solid var(--line-soft); }
+  .mrow { display: grid; grid-template-columns: 1fr 1fr 60px; gap: 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line-soft); }
+  .mrow.head { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--line); }
+  .mrow .alias { font-size: 12px; }
+  .mrow .pub { font-family: var(--num); font-size: 10.5px; color: var(--ink-2); }
+  .mrow .flag { font-size: 10px; color: var(--accent); }
+  .more { padding-top: 10px; font-size: 11.5px; color: var(--ink-3); font-family: var(--num); }
+
+  .foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px; }
+  .foot .status { font-size: 11.5px; color: var(--warn); }
+  .foot .sp { flex: 1; }
+
+  .aside { border-left: 1px solid var(--line); padding: 24px 24px; display: flex; flex-direction: column; gap: 20px; }
+  .aside h3 { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+  .aside .kv { display: flex; justify-content: space-between; font-size: 11.5px; padding: 5px 0; color: var(--ink-2); }
+  .aside .kv b { font-family: var(--num); font-weight: 500; color: var(--ink); }
+  .aside .note { font-size: 11.5px; line-height: 1.75; color: var(--ink-3); }
+  .aside blockquote { border-left: 2px solid var(--line); padding-left: 10px; font-size: 11.5px; line-height: 1.7; color: var(--ink-2); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+    <div class="tabs">
+      <div class="tab">总览</div>
+      <div class="tab on">接入 <small>1</small></div>
+      <div class="tab">模型 <small>37</small></div>
+      <div class="tab">设置</div>
+    </div>
+    <div class="head-right">
+      <span class="sync">状态更新 10:26:30</span>
+      <span class="link">刷新状态</span>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="master">
+      <h2>接入方式</h2>
+      <div class="client on">
+        <div class="avatar-sm">G</div>
+        <div>
+          <div class="c-name"><i></i>共享入口</div>
+          <div class="c-meta">Gateway · 未启用</div>
+        </div>
+      </div>
+      <div class="client">
+        <div class="avatar-sm">C</div>
+        <div>
+          <div class="c-name"><i class="ok"></i>Cursor</div>
+          <div class="c-meta">深度集成 · 运行中</div>
+        </div>
+      </div>
+      <div class="client">
+        <div class="avatar-sm">X</div>
+        <div>
+          <div class="c-name"><i></i>Codex</div>
+          <div class="c-meta">ChatGPT 订阅授权</div>
+        </div>
+      </div>
+      <div class="client">
+        <div class="avatar-sm">G</div>
+        <div>
+          <div class="c-name"><i></i>Grok</div>
+          <div class="c-meta">xAI 订阅授权</div>
+        </div>
+      </div>
+      <div class="client disabled">
+        <div class="avatar-sm">A</div>
+        <div>
+          <div class="c-name"><i></i>Anthropic</div>
+          <div class="c-meta">封神 · 不支持</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail">
+      <div class="d-head">
+        <h1>共享入口</h1>
+        <span class="st">未启用</span>
+        <span class="d-sub">127.0.0.1:18091 · 公开 13 个模型</span>
+      </div>
+
+      <div class="section">
+        <div class="row">
+          <div class="l"><b>启用共享入口</b><span>关闭后不监听任何端口</span></div>
+          <div class="c"><div class="switch"></div><span class="hint">修改后需要保存并启动</span></div>
+        </div>
+        <div class="row">
+          <div class="l"><b>监听地址</b><span>仅本机可访问</span></div>
+          <div class="c"><span class="input">127.0.0.1:18091</span></div>
+        </div>
+        <div class="row">
+          <div class="l"><b>Base URL</b><span>外部客户端填写这个地址</span></div>
+          <div class="c"><span class="input">http://127.0.0.1:18091/v1</span><button class="btn text">复制</button></div>
+        </div>
+        <div class="row">
+          <div class="l"><b>访问令牌</b><span>已生成，仅可复制或轮换</span></div>
+          <div class="c"><span class="input">sk-••••••••••••••••••••</span><button class="btn text">复制</button><button class="btn text">轮换</button></div>
+        </div>
+      </div>
+
+      <div class="section" style="padding-top:16px">
+        <div class="sec-title">公开模型 · 13 个</div>
+        <div class="models">
+          <div class="mrow head"><div>别名 / 上游 ID</div><div>对外模型 ID</div><div></div></div>
+          <div class="mrow"><div class="alias">Claude Opus 4.7</div><div class="pub">claude-opus-4.7</div><div class="flag">公开</div></div>
+          <div class="mrow"><div class="alias">Claude Sonnet 4.5</div><div class="pub">claude-sonnet-4.5</div><div class="flag">公开</div></div>
+          <div class="mrow"><div class="alias">GPT-5.1</div><div class="pub">gpt-5.1</div><div class="flag">公开</div></div>
+          <div class="mrow"><div class="alias">Gemini 3 Pro</div><div class="pub">gemini-3-pro</div><div class="flag">公开</div></div>
+        </div>
+        <div class="more">还有 9 个公开模型，在模型页统一管理</div>
+      </div>
+
+      <div class="foot">
+        <button class="btn primary">保存配置</button>
+        <button class="btn">测试入口</button>
+        <span class="status">有未保存的更改</span>
+        <span class="sp"></span>
+        <button class="btn text">重新加载</button>
+      </div>
+    </div>
+
+    <div class="aside">
+      <div>
+        <h3>为什么需要共享入口</h3>
+        <div class="note">Cursor 之外的客户端（Codex CLI、其他编辑器）通过这个 HTTP 地址复用同一批上游模型，不必各自配置密钥。</div>
+      </div>
+      <div>
+        <h3>给客户端的配置</h3>
+        <div class="kv"><span>Base URL</span><b>…:18091/v1</b></div>
+        <div class="kv"><span>API Key</span><b>已生成</b></div>
+        <div class="kv"><span>公开模型</span><b>13</b></div>
+      </div>
+      <blockquote>轮换令牌会让旧令牌立即失效，正在使用它的客户端需要更新配置。</blockquote>
+    </div>
+  </div>
+</body>
+</html>

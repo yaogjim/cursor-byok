@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备选 · 设置（单列文档）</title>
+<style>
+  :root{--paper:#f6f5f1;--ink:#14150f;--ink2:#4b4d45;--ink3:#83857a;--line:#d9d7cd;--lsoft:#e6e4db;--accent:#1c6b47;--warn:#8a5a12;--err:#a33b2e;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;--num:"SF Mono",ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:13px;-webkit-font-smoothing:antialiased}
+  .header{display:flex;align-items:flex-end;gap:28px;padding:22px 40px 0;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding-bottom:13px}
+  .mark{width:26px;height:26px;border-radius:6px;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .brand b{font-size:14px}.brand span{font-size:11px;color:var(--ink3);font-family:var(--num)}
+  .tabs{display:flex;gap:26px;margin-left:20px}
+  .tab{padding-bottom:13px;font-size:13.5px;color:var(--ink3)}
+  .tab.on{color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink);margin-bottom:-1px}
+  .hr{margin-left:auto;padding-bottom:13px;font-size:11.5px;color:var(--ink3)}
+
+  .wrap{max-width:760px;margin:0 auto;padding:44px 40px 64px;display:grid;grid-template-columns:56px minmax(0,1fr);gap:0 22px}
+  .idx{position:sticky;top:20px;align-self:start;font-size:10.5px;color:var(--ink3);line-height:2.6;letter-spacing:.05em}
+  .idx a{display:block;color:var(--ink3);text-decoration:none}
+  .idx a.on{color:var(--ink);font-weight:600}
+  .doc h1{font-size:26px;letter-spacing:-.025em;font-weight:650}
+  .doc .lead{font-size:12.5px;color:var(--ink3);line-height:1.8;margin-top:8px}
+
+  section{margin-top:42px;scroll-margin-top:20px}
+  section > h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);padding-bottom:10px;border-bottom:1px solid var(--ink)}
+  .item{display:flex;align-items:flex-start;gap:26px;padding:16px 0;border-bottom:1px solid var(--lsoft)}
+  .it{flex:1;min-width:0}
+  .it b{font-size:12.5px;font-weight:600;display:block}
+  .it p{font-size:11.5px;color:var(--ink3);line-height:1.75;margin-top:3px;max-width:42ch}
+  .ctl{flex:0 0 auto;padding-top:1px}
+  .sw{width:34px;height:20px;border-radius:20px;background:#d5d3c8;position:relative}
+  .sw.on{background:var(--accent)}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+  .sw.on::after{left:16px}
+  .sel{height:30px;border:1px solid var(--line);background:#fbfaf7;border-radius:7px;padding:0 26px 0 10px;font-size:12px;display:inline-flex;align-items:center;position:relative;min-width:120px}
+  .sel::after{content:"";position:absolute;right:10px;top:12px;width:5px;height:5px;border-right:1.4px solid var(--ink3);border-bottom:1.4px solid var(--ink3);transform:rotate(45deg)}
+  .txt{height:30px;border:1px solid var(--line);background:#fbfaf7;border-radius:7px;padding:0 10px;display:inline-flex;align-items:center;font-family:var(--num);font-size:11px;min-width:200px;color:var(--ink2)}
+  .off{opacity:.5}
+  .why{font-size:10.5px;color:var(--ink3);margin-top:4px}
+  .danger{font-size:11.5px;color:var(--err);border:1px solid #dcc3bd;border-radius:7px;padding:5px 10px;background:transparent;cursor:pointer}
+  .path{font-family:var(--num);font-size:10.5px;color:var(--ink3);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+  <div class="tabs"><div class="tab">总览</div><div class="tab">接入</div><div class="tab">模型 37</div><div class="tab on">设置</div></div>
+  <div class="hr">状态更新 10:26:30</div>
+</div>
+
+<div class="wrap">
+  <div class="idx">
+    <a class="on">01</a><a>02</a><a>03</a><a>04</a>
+  </div>
+  <div class="doc">
+    <h1>设置</h1>
+    <div class="lead">所有设置按主题排列在一页里，修改立即生效。</div>
+
+    <section>
+      <h2>01 · 外观与语言</h2>
+      <div class="item"><div class="it"><b>界面语言</b><p>切换后立即生效，无需重启。</p></div><div class="ctl"><div class="sel">简体中文</div></div></div>
+      <div class="item"><div class="it"><b>界面主题</b><p>跟随系统时，随 macOS 外观在亮色与暗色间切换。</p></div><div class="ctl"><div class="sel">跟随系统</div></div></div>
+    </section>
+
+    <section>
+      <h2>02 · 启动与窗口</h2>
+      <div class="item"><div class="it"><b>登录时启动</b></div><div class="ctl"><div class="sw on"></div></div></div>
+      <div class="item"><div class="it"><b>关闭窗口后继续运行</b><p>代理和共享入口保持监听，可以从菜单栏重新打开窗口。</p></div><div class="ctl"><div class="sw on"></div></div></div>
+      <div class="item"><div class="it"><b>在 Dock 中显示图标</b></div><div class="ctl"><div class="sw on"></div></div></div>
+      <div class="item"><div class="it"><b>启动时隐藏主窗口</b><p>适合开机自启，只在需要时手动打开。</p></div><div class="ctl"><div class="sw"></div></div></div>
+    </section>
+
+    <section>
+      <h2>03 · 网络与请求</h2>
+      <div class="item"><div class="it"><b>只读任务中断后由新子代理重启</b><p>只读任务因超时被中断时，自动启动新的子代理继续，而不是直接失败。</p></div><div class="ctl"><div class="sw off"></div><div class="why">等待验证数据接入后开放</div></div></div>
+      <div class="item"><div class="it"><b>自定义出站代理</b><p>所有上游请求经过指定代理发出。</p></div><div class="ctl"><div class="sw"></div></div></div>
+      <div class="item"><div class="it"><b>代理地址</b></div><div class="ctl"><div class="txt">http://127.0.0.1:7890</div></div></div>
+      <div class="item off"><div class="it"><b>跳过 SSL 验证</b><p>仅在自签证书环境下使用，会降低安全性。</p></div><div class="ctl"><div class="sw"></div><div class="why">计划中</div></div></div>
+    </section>
+
+    <section>
+      <h2>04 · 数据与恢复</h2>
+      <div class="item"><div class="it"><b>日志</b><p>本机保留最近 7 天，最多 200 MB。位置见下方路径。</p><div class="path">~/Library/Application Support/CursorHelper/logs</div></div><div class="ctl"><button class="danger">清空日志</button></div></div>
+      <div class="item"><div class="it"><b>重置所有设置</b><p>不影响模型配置和接入账号授权，只恢复上面这些开关的默认值。</p></div><div class="ctl"><button class="danger">重置设置</button></div></div>
+    </section>
+  </div>
+</div>
+</body>
+</html>

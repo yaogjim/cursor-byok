@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 A · Ledger 深色控制台</title>
+<style>
+  :root {
+    --bg: #0e0f11;
+    --panel: #15171a;
+    --panel-2: #191c20;
+    --line: #24272c;
+    --line-soft: #1d2024;
+    --text: #e9ecef;
+    --text-2: #a6adb8;
+    --text-3: #6f7783;
+    --mint: #3ee08f;
+    --mint-dim: rgba(62, 224, 143, .14);
+    --blue: #6aa8ff;
+    --amber: #f2b544;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font);
+    font-size: 13px; -webkit-font-smoothing: antialiased;
+    display: flex; overflow: hidden;
+  }
+  .rail {
+    width: 60px; flex: 0 0 60px; border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; align-items: center; padding: 16px 0 14px;
+    background: #0b0c0e;
+  }
+  .logo {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--mint); color: #06231a; font-weight: 800; font-size: 15px;
+    letter-spacing: -.03em; margin-bottom: 22px;
+  }
+  .rail-btn {
+    width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center;
+    color: var(--text-3); margin-bottom: 4px; position: relative; cursor: pointer;
+  }
+  .rail-btn svg { width: 18px; height: 18px; }
+  .rail-btn.on { color: var(--text); background: var(--panel-2); }
+  .rail-btn.on::before {
+    content: ""; position: absolute; left: -11px; top: 10px; bottom: 10px;
+    width: 2px; border-radius: 2px; background: var(--mint);
+  }
+  .rail-btn .badge {
+    position: absolute; top: 3px; right: 3px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 2px #0b0c0e;
+  }
+  .rail-sp { flex: 1; }
+
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    height: 52px; flex: 0 0 52px; display: flex; align-items: center;
+    padding: 0 22px; border-bottom: 1px solid var(--line-soft); gap: 14px;
+  }
+  .topbar h1 { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+  .topbar h1 span { color: var(--text-3); font-weight: 500; margin-left: 8px; }
+  .live { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-2); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 3px var(--mint-dim); }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  .ghost {
+    height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: transparent; color: var(--text-2); font-size: 12px; font-family: var(--font);
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  }
+  .ghost:hover { color: var(--text); border-color: #33373d; }
+  .clock { font-family: var(--num); font-size: 11px; color: var(--text-3); margin-right: 6px; }
+
+  .content { flex: 1; overflow: hidden; display: grid; grid-template-columns: minmax(0,1fr) 296px; }
+  .col-main { padding: 20px 22px 16px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .col-side { border-left: 1px solid var(--line-soft); padding: 20px 18px; display: flex; flex-direction: column; gap: 20px; }
+
+  /* endpoints strip: no boxes, only hairlines */
+  .endpoints { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); padding-bottom: 18px; }
+  .ep { flex: 1; min-width: 0; display: flex; gap: 12px; align-items: flex-start; }
+  .ep + .ep { padding-left: 22px; border-left: 1px solid var(--line-soft); }
+  .ep-ico {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text-2); flex: 0 0 30px;
+  }
+  .ep-ico svg { width: 15px; height: 15px; }
+  .ep-name { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .state { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 20px; letter-spacing: .01em; }
+  .state.ok { color: var(--mint); background: var(--mint-dim); }
+  .state.off { color: var(--text-3); background: #1b1e22; }
+  .ep-addr { font-family: var(--num); font-size: 11px; color: var(--text-3); margin-top: 4px; letter-spacing: -.01em; }
+  .ep-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  /* KPI band */
+  .kpis { display: grid; grid-template-columns: 1.15fr 1fr 1fr 1fr 1.1fr; border-bottom: 1px solid var(--line); }
+  .kpi { padding: 0 18px 18px 0; min-width: 0; }
+  .kpi + .kpi { padding-left: 18px; border-left: 1px solid var(--line-soft); }
+  .kpi-label { font-size: 11px; color: var(--text-3); letter-spacing: .02em; margin-bottom: 10px; display: flex; align-items: center; gap: 5px; }
+  .kpi-label i { width: 3px; height: 3px; border-radius: 50%; border: 1px solid #4a505a; }
+  .kpi-value { font-family: var(--num); font-size: 27px; font-weight: 500; letter-spacing: -.035em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .kpi-value small { font-size: 12px; color: var(--text-3); letter-spacing: 0; margin-left: 3px; font-family: var(--font); }
+  .kpi-value.mint { color: var(--mint); }
+  .kpi-note { margin-top: 8px; font-size: 10.5px; color: var(--text-3); display: flex; gap: 8px; }
+  .kpi-note b { color: var(--text-2); font-family: var(--num); font-weight: 500; }
+  .kpi-ring { position: relative; display: flex; align-items: center; gap: 12px; }
+  .ring { width: 62px; height: 62px; flex: 0 0 62px; }
+  .ring text { fill: var(--text); font-family: var(--num); font-size: 13px; font-weight: 600; }
+
+  /* chart panel */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .panel-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 8px; }
+  .panel-head h2 { font-size: 12.5px; font-weight: 600; }
+  .panel-head .sub { font-family: var(--num); font-size: 10px; color: var(--text-3); margin-top: 3px; }
+  .seg {
+    display: inline-flex; background: #101214; border: 1px solid var(--line); border-radius: 7px; padding: 2px;
+    margin-left: auto;
+  }
+  .seg button {
+    height: 24px; padding: 0 10px; border: 0; background: transparent; color: var(--text-3);
+    font-size: 11.5px; font-family: var(--font); border-radius: 5px; cursor: pointer;
+  }
+  .seg button.on { background: #262a30; color: var(--text); }
+  .legend { display: flex; gap: 16px; padding: 0 16px 4px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-3); }
+  .legend i { width: 12px; height: 2px; border-radius: 2px; }
+  .chart-wrap { padding: 2px 10px 12px; }
+  svg.chart { width: 100%; height: auto; display: block; }
+
+  /* side */
+  .side-h { font-size: 11px; color: var(--text-3); letter-spacing: .04em; text-transform: uppercase; margin-bottom: 12px; display: flex; justify-content: space-between; }
+  .side-h b { color: var(--text-3); font-weight: 500; font-family: var(--num); text-transform: none; letter-spacing: 0; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 12px; }
+  .row:last-child { border-bottom: 0; }
+  .row .c { flex: 1; min-width: 0; }
+  .row .t { font-family: var(--num); font-size: 10.5px; color: var(--text-3); }
+  .row .v { font-family: var(--num); font-size: 11px; color: var(--text-2); }
+  .tag { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
+  .tag.ok { color: var(--mint); background: var(--mint-dim); }
+  .tag.err { color: #ff8f8f; background: rgba(255,120,120,.12); }
+  .meter { height: 3px; border-radius: 3px; background: #24272c; overflow: hidden; margin-top: 8px; }
+  .meter > div { height: 100%; background: var(--mint); border-radius: 3px; }
+  .side-stat { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-2); padding: 5px 0; }
+  .side-stat b { font-family: var(--num); font-weight: 500; color: var(--text); }
+</style>
+</head>
+<body>
+  <aside class="rail">
+    <div class="logo">C</div>
+    <div class="rail-btn on" title="总览">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-3H4zM14 8h6V4h-6z"/></svg>
+    </div>
+    <div class="rail-btn" title="接入"><span class="badge"></span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
+    </div>
+    <div class="rail-btn" title="模型">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>
+    </div>
+    <div class="rail-sp"></div>
+    <div class="rail-btn" title="设置">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3h-4l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h1>总览 <span>Overview</span></h1>
+      <div class="live"><i class="dot"></i>CURSOR 运行中</div>
+      <div class="topbar-right">
+        <span class="clock">更新于 10:26</span>
+        <button class="ghost">↻ 刷新</button>
+        <button class="ghost">重置</button>
+        <button class="ghost" title="检查更新" style="padding:0 8px">v1.94.0</button>
+      </div>
+    </div>
+
+    <div class="content">
+      <div class="col-main">
+        <section class="endpoints">
+          <div class="ep">
+            <div class="ep-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 17V7l8-4 8 4v10l-8 4z"/><path d="M12 3v18M4 7l8 4 8-4"/></svg></div>
+            <div>
+              <div class="ep-name">Cursor 本地代理 <span class="state ok">运行中</span></div>
+              <div class="ep-addr">127.0.0.1:18080 · backend :18090</div>
+            </div>
+            <div class="ep-actions">
+              <button class="ghost">停止</button>
+              <button class="ghost">打开 Cursor</button>
+            </div>
+          </div>
+          <div class="ep">
+            <div class="ep-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg></div>
+            <div>
+              <div class="ep-name">Gateway <span class="state off">未启用</span></div>
+              <div class="ep-addr">127.0.0.1:18091 · 公开 13 个模型</div>
+            </div>
+            <div class="ep-actions">
+              <button class="ghost">启动</button>
+              <button class="ghost">配置 →</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="kpis">
+          <div class="kpi">
+            <div class="kpi-label">缓存命中率 <i></i></div>
+            <div class="kpi-ring">
+              <svg class="ring" viewBox="0 0 62 62">
+                <circle cx="31" cy="31" r="26" fill="none" stroke="#24272c" stroke-width="5"/>
+                <circle cx="31" cy="31" r="26" fill="none" stroke="#3ee08f" stroke-width="5"
+                        stroke-linecap="round" stroke-dasharray="150.7 163.4" transform="rotate(-90 31 31)"/>
+                <text x="31" y="35" text-anchor="middle">92.2%</text>
+              </svg>
+              <div class="kpi-note" style="flex-direction:column;gap:4px;margin:0">
+                <span>默认口径</span>
+                <span>复用率 <b>88.4%</b></span>
+              </div>
+            </div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">对话轮次 <i></i></div>
+            <div class="kpi-value">4</div>
+            <div class="kpi-note"><span>有效 <b>4</b></span><span>异常 <b>0</b></span></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">LLM 调用 <i></i></div>
+            <div class="kpi-value">68</div>
+            <div class="kpi-note"><span>上游请求</span></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Token 消耗 <i></i></div>
+            <div class="kpi-value">3.9<small>M</small></div>
+            <div class="kpi-note"><span>Prompt <b>3.8M</b></span></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">价值估算 <i></i></div>
+            <div class="kpi-value mint">$4.59</div>
+            <div class="kpi-note"><span>缓存读写 <b>$1.77</b></span></div>
+          </div>
+        </section>
+
+        <section class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+          <div class="panel-head">
+            <div>
+              <h2>Token 使用趋势</h2>
+              <div class="sub">UTC · 按小时 · dataVersion 3@2026-11-19</div>
+            </div>
+            <div class="seg">
+              <button class="on">24 小时</button><button>30 天</button><button>全部</button>
+            </div>
+            <div class="seg">
+              <button class="on">趋势</button><button>活跃度</button><button>请求</button>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i style="background:#6aa8ff"></i>Prompt</span>
+            <span><i style="background:#3ee08f"></i>Output</span>
+            <span><i style="background:#f2b544"></i>Cache 写入</span>
+            <span><i style="background:#4fd1e0"></i>Cache 读取</span>
+            <span><i style="background:#b18cff;border-top:1px dashed #b18cff;height:1px"></i>命中率</span>
+          </div>
+          <div class="chart-wrap" style="flex:1">
+            <svg class="chart" id="chart" viewBox="0 0 780 230" preserveAspectRatio="none"></svg>
+          </div>
+        </section>
+      </div>
+
+      <aside class="col-side">
+        <div>
+          <div class="side-h">会话配额 <b>本周</b></div>
+          <div class="side-stat"><span>已用 Token</span><b>3.9M</b></div>
+          <div class="meter"><div style="width:39%"></div></div>
+          <div class="side-stat" style="margin-top:6px"><span>估算额度 10M</span><b>39%</b></div>
+        </div>
+
+        <div>
+          <div class="side-h">最近请求 <b>4 / 68</b></div>
+          <div class="row"><span class="tag ok">200</span><span class="c">claude-opus-4.7</span><span class="v">1.2s</span></div>
+          <div class="row"><span class="tag ok">200</span><span class="c">claude-opus-4.7</span><span class="v">0.9s</span></div>
+          <div class="row"><span class="tag ok">200</span><span class="c">gpt-5.1</span><span class="v">2.4s</span></div>
+          <div class="row"><span class="tag err">429</span><span class="c">cursor-small</span><span class="v">0.1s</span></div>
+        </div>
+
+        <div>
+          <div class="side-h">运行信息</div>
+          <div class="side-stat"><span>系统代理</span><b>已识别</b></div>
+          <div class="side-stat"><span>活跃模型</span><b>37</b></div>
+          <div class="side-stat"><span>启动时长</span><b>2h 14m</b></div>
+          <div class="side-stat"><span>出站延迟</span><b>86ms</b></div>
+        </div>
+
+        <div style="margin-top:auto">
+          <div class="side-h">提示</div>
+          <div style="font-size:11.5px;line-height:1.7;color:var(--text-3)">
+            Cursor 已通过系统代理接管。Gateway 关闭时外部客户端请求不会转发到上游。
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+<script>
+(function () {
+  // 24h token data (thousands), peak near 20:00
+  const prompt = [12, 8, 6, 5, 9, 22, 60, 120, 210, 180, 150, 210, 260, 240, 300, 340, 280, 420, 900, 1450, 920, 480, 210, 80];
+  const output = [2, 1, 1, 1, 2, 6, 18, 40, 70, 60, 52, 74, 88, 80, 96, 110, 92, 140, 280, 460, 300, 160, 70, 26];
+  const cacheW = [1, 1, 1, 0, 1, 4, 12, 26, 48, 40, 32, 45, 55, 50, 60, 72, 58, 90, 180, 300, 190, 100, 44, 16];
+  const cacheR = [6, 4, 3, 2, 5, 14, 40, 90, 160, 140, 120, 170, 210, 200, 250, 290, 240, 360, 780, 1260, 800, 420, 180, 66];
+  const hit = [55, 52, 50, 48, 56, 60, 66, 72, 78, 82, 84, 86, 88, 89, 91, 92, 92, 93, 94, 95, 94, 92, 88, 80];
+
+  const W = 780, H = 230, L = 44, R = 46, T = 10, B = 24;
+  const iw = W - L - R, ih = H - T - B;
+  const maxTok = 1600; // thousands
+  const x = i => L + (i / (prompt.length - 1)) * iw;
+  const yTok = v => T + ih - (v / maxTok) * ih;
+  const yRate = v => T + ih - (v / 100) * ih;
+
+  function path(vals, yf) {
+    return vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${yf(v).toFixed(1)}`).join('');
+  }
+  function area(vals, yf) {
+    return path(vals, yf) + `L${x(vals.length - 1).toFixed(1)},${T + ih}L${L},${T + ih}Z`;
+  }
+
+  let el = '';
+  // horizontal grid + left labels
+  [0, 400, 800, 1200, 1600].forEach(v => {
+    el += `<line x1="${L}" x2="${W - R}" y1="${yTok(v)}" y2="${yTok(v)}" stroke="#212429" stroke-width="1"/>`;
+    el += `<text x="${L - 8}" y="${yTok(v) + 3.5}" text-anchor="end" fill="#6f7783" font-size="9.5" font-family="SF Mono, monospace">${v === 0 ? '0' : v / 1000 + 'M'}</text>`;
+  });
+  // right axis rate labels
+  [0, 50, 100].forEach(v => {
+    el += `<text x="${W - R + 8}" y="${yRate(v) + 3.5}" fill="#6f7783" font-size="9.5" font-family="SF Mono, monospace">${v}%</text>`;
+  });
+  // x labels every 4h
+  ['00', '04', '08', '12', '16', '20', '24'].forEach((h, i) => {
+    const px = L + (i / 6) * iw;
+    el += `<text x="${px}" y="${H - 6}" text-anchor="middle" fill="#6f7783" font-size="9.5" font-family="SF Mono, monospace">${h}:00</text>`;
+  });
+
+  // area fills
+  el += `<path d="${area(prompt, yTok)}" fill="url(#gBlue)" />`;
+  el += `<path d="${area(cacheR, yTok)}" fill="rgba(79,209,224,.10)" />`;
+  el += `<defs><linearGradient id="gBlue" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#6aa8ff" stop-opacity=".22"/>
+    <stop offset="1" stop-color="#6aa8ff" stop-opacity="0"/>
+  </linearGradient></defs>`;
+  el += `<path d="${path(prompt, yTok)}" fill="none" stroke="#6aa8ff" stroke-width="1.6"/>`;
+  el += `<path d="${path(output, yTok)}" fill="none" stroke="#3ee08f" stroke-width="1.6"/>`;
+  el += `<path d="${path(cacheW, yTok)}" fill="none" stroke="#f2b544" stroke-width="1.2" opacity=".85"/>`;
+  el += `<path d="${path(cacheR, yTok)}" fill="none" stroke="#4fd1e0" stroke-width="1.2" opacity=".85"/>`;
+  el += `<path d="${path(hit, yRate)}" fill="none" stroke="#b18cff" stroke-width="1.3" stroke-dasharray="4 4" opacity=".9"/>`;
+
+  // peak marker
+  const pi = 19;
+  el += `<line x1="${x(pi)}" x2="${x(pi)}" y1="${T}" y2="${T + ih}" stroke="#3a3f46" stroke-dasharray="2 3"/>`;
+  el += `<circle cx="${x(pi)}" cy="${yTok(cacheR[pi])}" r="3" fill="#15171a" stroke="#4fd1e0" stroke-width="1.5"/>`;
+  const lx = x(pi) + 8, ly = yTok(cacheR[pi]) - 10;
+  el += `<rect x="${lx - 4}" y="${ly - 11}" width="118" height="30" rx="4" fill="#1d2025" stroke="#2b2f35"/>`;
+  el += `<text x="${lx}" y="${ly}" fill="#e9ecef" font-size="10" font-family="SF Mono, monospace">20:00 · 读 1.26M</text>`;
+  el += `<text x="${lx}" y="${ly + 12}" fill="#8a919c" font-size="10" font-family="SF Mono, monospace">命中 95% · 出 460K</text>`;
+
+  document.getElementById('chart').innerHTML = el;
+})();
+</script>
+</body>
+</html>

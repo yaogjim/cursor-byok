@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备选 · 模型（分组清单）</title>
+<style>
+  :root{--paper:#f6f5f1;--ink:#14150f;--ink2:#4b4d45;--ink3:#83857a;--line:#d9d7cd;--lsoft:#e6e4db;--accent:#1c6b47;--warn:#8a5a12;--err:#a33b2e;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;--num:"SF Mono",ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:13px;-webkit-font-smoothing:antialiased}
+  .header{display:flex;align-items:flex-end;gap:28px;padding:22px 40px 0;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding-bottom:13px}
+  .mark{width:26px;height:26px;border-radius:6px;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .brand b{font-size:14px}.brand span{font-size:11px;color:var(--ink3);font-family:var(--num)}
+  .tabs{display:flex;gap:26px;margin-left:20px}
+  .tab{padding-bottom:13px;font-size:13.5px;color:var(--ink3)}
+  .tab.on{color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink);margin-bottom:-1px}
+  .hr{margin-left:auto;padding-bottom:13px;font-size:11.5px;color:var(--ink3)}
+
+  .wrap{max-width:840px;margin:0 auto;padding:44px 40px 56px}
+  .kick{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+  h1{font-size:26px;letter-spacing:-.025em;margin-top:10px;font-weight:650}
+  .lead{font-size:12.5px;color:var(--ink3);line-height:1.8;margin-top:8px}
+  .lead b{color:var(--ink2)}
+  .lead b.err{color:var(--err)}
+
+  .tools{margin-top:22px;display:flex;align-items:center;gap:18px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:12px 0}
+  .f{font-size:12px;color:var(--ink3);cursor:pointer}
+  .f.on{color:var(--ink);font-weight:600}
+  .f b{font-family:var(--num);font-weight:400;font-size:10.5px;margin-left:3px}
+  .tools .sp{flex:1}
+  .tools .add{font-size:12px;font-weight:600;color:var(--ink)}
+
+  .grp{margin-top:34px}
+  .gh{display:flex;align-items:baseline;gap:10px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  .gh h2{font-size:13px;letter-spacing:.02em}
+  .gh span{font-family:var(--num);font-size:10.5px;color:var(--ink3)}
+  .gh .rt{margin-left:auto;font-size:11px;color:var(--ink3)}
+
+  .m{display:flex;align-items:center;gap:14px;padding:13px 0;border-bottom:1px solid var(--lsoft)}
+  .sw{width:30px;height:18px;border-radius:18px;background:#d5d3c8;position:relative;flex:0 0 30px}
+  .sw.on{background:var(--accent)}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff}
+  .sw.on::after{left:14px}
+  .mi{min-width:0;flex:1}
+  .mi .n{font-size:12.5px;font-weight:600}
+  .mi .n small{font-weight:400;color:var(--ink3);font-family:var(--num);font-size:10.5px;margin-left:8px}
+  .mi .d{margin-top:2px;font-size:11px;color:var(--ink3);font-family:var(--num)}
+  .st{flex:0 0 96px;font-size:11px;display:flex;align-items:center;gap:5px}
+  .st i{width:5px;height:5px;border-radius:50%;background:var(--ink3)}
+  .st.ok{color:var(--accent)}.st.ok i{background:var(--accent)}
+  .st.err{color:var(--err)}.st.err i{background:var(--err)}
+  .st.gray{color:var(--ink3)}
+  .m .go{font-size:11.5px;color:var(--ink3);flex:0 0 28px;text-align:right}
+  .m.off .mi .n,.m.off .mi .d{opacity:.45}
+  .more{margin-top:10px;font-size:11.5px;color:var(--ink3)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+  <div class="tabs"><div class="tab">总览</div><div class="tab">接入</div><div class="tab on">模型</div><div class="tab">设置</div></div>
+  <div class="hr">状态更新 10:26:30</div>
+</div>
+
+<div class="wrap">
+  <div class="kick">模型配置</div>
+  <h1>37 个模型，31 个已启用。</h1>
+  <div class="lead">按提供方分组，打开的模型会出现在 Cursor 里。<b class="err">Gemini 3 Pro 测试失败</b>，可能需要检查密钥。</div>
+
+  <div class="tools">
+    <span class="f on">全部<b>37</b></span><span class="f">Anthropic<b>12</b></span><span class="f">OpenAI<b>15</b></span><span class="f">Google<b>6</b></span><span class="f">其他<b>4</b></span>
+    <span class="sp"></span>
+    <span class="f">测试全部</span><span class="f">导入 / 导出</span><span class="add">+ 新增</span>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><h2>Anthropic</h2><span>12 个 · 全部启用</span><span class="rt">api.anthropic.com</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Opus 4.7 <small>claude-opus-4-7-20260115</small></div><div class="d">128k 上下文 · 公开</div></div><span class="st ok"><i></i>通过 1.2 s</span><span class="go">⋯</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Sonnet 4.5 <small>claude-sonnet-4-5-20250929</small></div><div class="d">128k 上下文 · 公开</div></div><span class="st ok"><i></i>通过 842 ms</span><span class="go">⋯</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Haiku 4.5 <small>claude-haiku-4-5</small></div><div class="d">64k 上下文</div></div><span class="st gray"><i></i>未测试</span><span class="go">⋯</span></div>
+    <div class="more">还有 9 个 Anthropic 模型</div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><h2>OpenAI</h2><span>15 个 · 启用 14</span><span class="rt">api.openai.com</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">GPT-5.1 <small>gpt-5.1-2026-01-08</small></div><div class="d">公开</div></div><span class="st ok"><i></i>通过 1.9 s</span><span class="go">⋯</span></div>
+    <div class="m off"><span class="sw"></span><div class="mi"><div class="n">GPT-4.1 mini <small>gpt-4.1-mini</small></div><div class="d">已停用</div></div><span class="st gray"><i></i>未测试</span><span class="go">⋯</span></div>
+    <div class="more">还有 13 个 OpenAI 模型</div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><h2>Google</h2><span>6 个 · 启用 4</span><span class="rt">generativelanguage.googleapis.com</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Gemini 3 Pro <small>gemini-3-pro-preview</small></div><div class="d">公开 · 上次错误：401 密钥无效</div></div><span class="st err"><i></i>失败</span><span class="go">⋯</span></div>
+    <div class="m off"><span class="sw"></span><div class="mi"><div class="n">Gemini 2.5 Flash <small>gemini-2.5-flash</small></div><div class="d">已停用</div></div><span class="st gray"><i></i>未测试</span><span class="go">⋯</span></div>
+    <div class="more">还有 4 个 Google 模型</div>
+  </div>
+
+  <div class="grp">
+    <div class="gh"><h2>其他</h2><span>4 个 · 启用 2</span><span class="rt">第三方端点</span></div>
+    <div class="m"><span class="sw on"></span><div class="mi"><div class="n">DeepSeek V3.2 <small>deepseek-chat</small></div><div class="d">api.deepseek.com</div></div><span class="st gray"><i></i>未测试</span><span class="go">⋯</span></div>
+    <div class="m off"><span class="sw"></span><div class="mi"><div class="n">Grok 4.1 <small>grok-4.1</small></div><div class="d">api.x.ai · 已停用</div></div><span class="st gray"><i></i>未测试</span><span class="go">⋯</span></div>
+  </div>
+</div>
+</body>
+</html>

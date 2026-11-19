@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>备选 · 接入（任务流）</title>
+<style>
+  :root{--paper:#f6f5f1;--ink:#14150f;--ink2:#4b4d45;--ink3:#83857a;--line:#d9d7cd;--lsoft:#e6e4db;--accent:#1c6b47;--warn:#8a5a12;
+    --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;--num:"SF Mono",ui-monospace,Menlo,monospace}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:13px;-webkit-font-smoothing:antialiased}
+  .header{display:flex;align-items:flex-end;gap:28px;padding:22px 40px 0;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding-bottom:13px}
+  .mark{width:26px;height:26px;border-radius:6px;background:var(--ink);color:var(--paper);display:grid;place-items:center;font-weight:700;font-size:13px}
+  .brand b{font-size:14px}.brand span{font-size:11px;color:var(--ink3);font-family:var(--num)}
+  .tabs{display:flex;gap:26px;margin-left:20px}
+  .tab{padding-bottom:13px;font-size:13.5px;color:var(--ink3)}
+  .tab.on{color:var(--ink);font-weight:600;border-bottom:2px solid var(--ink);margin-bottom:-1px}
+  .hr{margin-left:auto;padding-bottom:13px;font-size:11.5px;color:var(--ink3)}
+
+  .wrap{max-width:820px;margin:0 auto;padding:44px 40px 56px}
+  .kick{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink3)}
+  h1{font-size:26px;letter-spacing:-.025em;margin-top:10px;font-weight:650}
+  .lead{font-size:12.5px;color:var(--ink3);line-height:1.8;margin-top:8px}
+
+  .step{margin-top:38px;display:grid;grid-template-columns:38px minmax(0,1fr);gap:20px}
+  .no{font-family:var(--num);font-size:11px;color:var(--ink3);padding-top:3px}
+  .st h2{font-size:14.5px;letter-spacing:-.01em}
+  .st .h2s{font-size:11.5px;color:var(--ink3);margin-top:4px}
+  .st .bd{margin-top:16px;border-top:1px solid var(--line)}
+
+  .choice{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--lsoft);cursor:pointer}
+  .choice .rad{width:16px;height:16px;border-radius:50%;border:1.4px solid #bfbcae;flex:0 0 16px;position:relative}
+  .choice.on .rad{border-color:var(--accent)}
+  .choice.on .rad::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--accent)}
+  .choice .nm{font-weight:600;font-size:13px}
+  .choice .ds{font-size:11.5px;color:var(--ink3);margin-top:2px}
+  .choice .bdg{margin-left:auto;font-size:10.5px;color:var(--ink3);font-family:var(--num)}
+  .choice.off{opacity:.45;cursor:default}
+
+  .kv{display:flex;align-items:baseline;gap:14px;padding:11px 0;border-bottom:1px solid var(--lsoft)}
+  .kv .k{width:130px;flex:0 0 130px;font-size:12px;color:var(--ink2)}
+  .kv .v{font-family:var(--num);font-size:11.5px}
+  .kv .v.cap{font-family:var(--font);color:var(--ink3);font-size:11.5px}
+  .kv .r{margin-left:auto;display:flex;gap:14px;font-size:11.5px;color:var(--ink3)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;padding:14px 0 4px}
+  .chip{font-size:11.5px;padding:4px 10px;border:1px solid var(--line);border-radius:20px;color:var(--ink2);background:#fbfaf7}
+  .chip.on{border-color:var(--accent);color:var(--accent);background:#eef4ef}
+  .chip small{font-family:var(--num);font-size:10px;opacity:.7;margin-left:5px}
+  .step .ft{margin-top:16px;display:flex;align-items:center;gap:12px}
+  .btn{height:32px;padding:0 14px;border-radius:7px;border:1px solid var(--line);background:transparent;color:var(--ink2);font-size:12px;cursor:pointer}
+  .btn.primary{background:var(--ink);border-color:var(--ink);color:var(--paper);font-weight:600}
+  .muted{font-size:11px;color:var(--ink3)}
+  code{font-family:var(--num);font-size:11px;background:#efeee8;padding:1px 5px;border-radius:3px}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+  <div class="tabs"><div class="tab">总览</div><div class="tab on">接入</div><div class="tab">模型 37</div><div class="tab">设置</div></div>
+  <div class="hr">状态更新 10:26:30</div>
+</div>
+
+<div class="wrap">
+  <div class="kick">接入设置</div>
+  <h1>让 Cursor 用上你的模型。</h1>
+  <div class="lead">四步完成：选接入方式、确认本地服务、挑选要暴露的模型、把地址填进 Cursor。已接入的方式会记住上次选择。</div>
+
+  <div class="step">
+    <div class="no">01</div>
+    <div class="st">
+      <h2>选择接入方式</h2>
+      <div class="h2s">不同方式可以同时存在，互不影响。</div>
+      <div class="bd">
+        <div class="choice on"><span class="rad"></span><div><div class="nm">Cursor 深度集成</div><div class="ds">自动写入 Cursor 设置，无需手动复制地址</div></div><span class="bdg">当前</span></div>
+        <div class="choice"><span class="rad"></span><div><div class="nm">共享入口</div><div class="ds">给 Codex CLI 和其他编辑器用的 HTTP 地址，需要 API Key</div></div><span class="bdg">未启用</span></div>
+        <div class="choice"><span class="rad"></span><div><div class="nm">订阅账号授权</div><div class="ds">用 ChatGPT / xAI 订阅额度，而不是 API 计费</div></div><span class="bdg">2 个账号</span></div>
+        <div class="choice off"><span class="rad"></span><div><div class="nm">Anthropic 封神</div><div class="ds">当前版本不支持</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="no">02</div>
+    <div class="st">
+      <h2>确认本地服务</h2>
+      <div class="h2s">Cursor 请求会先到这里，再转发给上游模型。</div>
+      <div class="bd">
+        <div class="kv"><span class="k">代理服务</span><span class="v">127.0.0.1:18090</span><span class="r">运行中 · 已连续 3 天</span></div>
+        <div class="kv"><span class="k">后端服务</span><span class="v">127.0.0.1:18080</span><span class="r">运行中</span></div>
+        <div class="kv"><span class="k">路由模式</span><span class="v">自动选择可用模型</span><span class="r">更改</span></div>
+      </div>
+      <div class="ft"><button class="btn">停止服务</button><button class="btn">重新加载</button><span class="muted">停止后 Cursor 会临时不可用</span></div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="no">03</div>
+    <div class="st">
+      <h2>挑选要提供的模型</h2>
+      <div class="h2s">已选 13 个，Cursor 的模型列表里会出现这些名字。</div>
+      <div class="bd">
+        <div class="chips">
+          <span class="chip on">Claude Opus 4.7</span><span class="chip on">Claude Sonnet 4.5</span><span class="chip on">GPT-5.1</span>
+          <span class="chip on">Gemini 3 Pro</span><span class="chip on">DeepSeek V3.2</span><span class="chip on">Grok 4.1</span>
+          <span class="chip">Gemini 2.5 Flash</span><span class="chip">GPT-4.1 mini</span><span class="chip">+ 29 个</span>
+        </div>
+      </div>
+      <div class="ft"><span class="muted">在模型页可以调整顺序、测试和编辑单个模型。</span></div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="no">04</div>
+    <div class="st">
+      <h2>写入 Cursor 设置</h2>
+      <div class="h2s">写入后需要重启 Cursor 才会生效。</div>
+      <div class="bd">
+        <div class="kv"><span class="k">上次写入</span><span class="v">今天 09:12</span><span class="r" style="color:var(--accent)">已生效</span></div>
+        <div class="kv"><span class="k">写入内容</span><span class="v cap"><code>OpenAI Base URL</code> + <code>API Key</code> + 模型列表</span></div>
+      </div>
+      <div class="ft"><button class="btn primary">重新写入 Cursor 配置</button><button class="btn">复制配置</button></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

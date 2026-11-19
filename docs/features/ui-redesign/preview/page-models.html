@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 模型</title>
+<style>
+  :root {
+    --paper: #f6f5f1; --ink: #14150f; --ink-2: #4b4d45; --ink-3: #83857a;
+    --line: #d9d7cd; --line-soft: #e6e4db; --accent: #1c6b47; --accent-soft: #e6efe7;
+    --warn: #8a5a12; --err: #a33b2e;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 13px; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; }
+
+  .header { display: flex; align-items: flex-end; gap: 28px; padding: 24px 40px 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; }
+  .mark { width: 26px; height: 26px; border-radius: 6px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .brand b { font-size: 14px; letter-spacing: -.01em; }
+  .brand span { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+  .tabs { display: flex; gap: 26px; margin-left: 20px; }
+  .tab { padding: 0 0 13px; font-size: 13.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 6px; }
+  .tab small { font-family: var(--num); font-size: 10px; }
+  .tab.on { color: var(--ink); font-weight: 600; position: relative; }
+  .tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 16px; padding-bottom: 14px; }
+  .sync { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+
+  .main { flex: 1; min-height: 0; padding: 26px 40px 0; display: flex; flex-direction: column; }
+  .title-row { display: flex; align-items: baseline; gap: 14px; }
+  .title-row h1 { font-size: 22px; letter-spacing: -.02em; }
+  .title-row .sub { font-size: 11.5px; color: var(--ink-3); font-family: var(--num); }
+  .title-row .right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 20px; }
+  .search { flex: 0 0 300px; height: 32px; border: 1px solid var(--line); background: #fbfaf7; border-radius: 7px; padding: 0 11px; display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 12px; }
+  .search svg { flex: 0 0 12px; opacity: .55; }
+  .btn { height: 30px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink-2); font-size: 12px; font-family: var(--font); cursor: pointer; }
+  .btn:hover { color: var(--ink); border-color: #bfbcae; }
+  .btn.text { border: 0; padding: 0 4px; height: auto; }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 600; }
+  .btn.primary:hover { background: #2c2e26; }
+
+  .filters { display: flex; gap: 22px; margin-top: 20px; border-bottom: 1px solid var(--line); }
+  .filter { padding-bottom: 9px; font-size: 12.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 5px; cursor: pointer; position: relative; }
+  .filter b { font-family: var(--num); font-size: 10.5px; font-weight: 400; }
+  .filter.on { color: var(--ink); font-weight: 600; }
+  .filter.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+
+  .table { flex: 1; min-height: 0; overflow: hidden; margin-top: 4px; }
+  .thead, .trow { display: grid; grid-template-columns: 22px 34px minmax(0,1.45fr) 84px 100px minmax(0,1.15fr) 148px; gap: 12px; align-items: center; }
+  .thead { height: 32px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--line); }
+  .trow { height: 52px; border-bottom: 1px solid var(--line-soft); }
+  .trow:hover { background: rgba(20,21,15,.022); }
+  .grip { color: #c3c1b6; font-size: 11px; letter-spacing: -1px; cursor: grab; }
+  .switch { width: 32px; height: 19px; border-radius: 19px; background: #d5d3c8; position: relative; }
+  .switch.on { background: var(--accent); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+  .switch.on::after { left: 15px; }
+  .alias { font-size: 12.5px; font-weight: 600; }
+  .alias small { display: block; font-weight: 400; font-size: 10.5px; color: var(--ink-3); font-family: var(--num); margin-top: 1px; }
+  .prov { font-size: 11.5px; color: var(--ink-2); }
+  .pill { font-size: 10.5px; display: inline-flex; align-items: center; gap: 5px; }
+  .pill i { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); }
+  .pill.ok { color: var(--accent); } .pill.ok i { background: var(--accent); }
+  .pill.err { color: var(--err); } .pill.err i { background: var(--err); }
+  .pill.idle { color: var(--ink-3); }
+  .pill small { font-family: var(--num); font-size: 10px; opacity: .75; }
+  .ep { font-family: var(--num); font-size: 10.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ops { display: flex; gap: 9px; white-space: nowrap; font-size: 11.5px; color: var(--ink-3); }
+  .ops span { cursor: pointer; }
+  .ops span:hover { color: var(--ink); }
+  .ops .danger:hover { color: var(--err); }
+  .off .alias, .off .prov, .off .ep { opacity: .45; }
+
+  .foot { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; padding: 14px 0 18px; border-top: 1px solid var(--line); }
+  .foot .dirty { font-size: 11.5px; color: var(--warn); }
+  .foot .sp { flex: 1; }
+  .foot .count { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+    <div class="tabs">
+      <div class="tab">总览</div>
+      <div class="tab">接入 <small>1</small></div>
+      <div class="tab on">模型 <small>37</small></div>
+      <div class="tab">设置</div>
+    </div>
+    <div class="head-right"><span class="sync">状态更新 10:26:30</span></div>
+  </div>
+
+  <div class="main">
+    <div class="title-row">
+      <h1>模型</h1>
+      <span class="sub">37 个 · 公开 13 个</span>
+      <div class="right">
+        <button class="btn">导入</button>
+        <button class="btn">导出</button>
+        <button class="btn">测试全部</button>
+        <button class="btn primary">新增模型</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        搜索别名、上游 ID 或端点
+      </div>
+      <div class="sp" style="flex:1"></div>
+      <span style="font-size:11.5px;color:var(--ink-3)">测试结果最后一次更新 10:24</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter on">全部 <b>37</b></div>
+      <div class="filter">Anthropic <b>12</b></div>
+      <div class="filter">OpenAI <b>15</b></div>
+      <div class="filter">Google <b>6</b></div>
+      <div class="filter">其他 <b>4</b></div>
+    </div>
+
+    <div class="table">
+      <div class="thead">
+        <div></div><div></div><div>别名 / 上游 ID</div><div>提供商</div><div>测试</div><div>端点</div><div>操作</div>
+      </div>
+
+      <div class="trow">
+        <div class="grip">⋮⋮</div><div class="switch on"></div>
+        <div class="alias">Claude Opus 4.7<small>claude-opus-4-7-20260115</small></div>
+        <div class="prov">Anthropic</div>
+        <div><span class="pill ok"><i></i>通过 <small>1.2 s</small></span></div>
+        <div class="ep">api.anthropic.com/v1</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow">
+        <div class="grip">⋮⋮</div><div class="switch on"></div>
+        <div class="alias">Claude Sonnet 4.5<small>claude-sonnet-4-5-20250929</small></div>
+        <div class="prov">Anthropic</div>
+        <div><span class="pill ok"><i></i>通过 <small>842 ms</small></span></div>
+        <div class="ep">api.anthropic.com/v1</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow">
+        <div class="grip">⋮⋮</div><div class="switch on"></div>
+        <div class="alias">GPT-5.1<small>gpt-5.1-2026-01-08</small></div>
+        <div class="prov">OpenAI</div>
+        <div><span class="pill ok"><i></i>通过 <small>1.9 s</small></span></div>
+        <div class="ep">api.openai.com/v1</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow">
+        <div class="grip">⋮⋮</div><div class="switch on"></div>
+        <div class="alias">Gemini 3 Pro<small>gemini-3-pro-preview</small></div>
+        <div class="prov">Google</div>
+        <div><span class="pill err"><i></i>失败</span></div>
+        <div class="ep">generativelanguage.googleapis.com</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow">
+        <div class="grip">⋮⋮</div><div class="switch on"></div>
+        <div class="alias">DeepSeek V3.2<small>deepseek-chat</small></div>
+        <div class="prov">第三方</div>
+        <div><span class="pill idle"><i></i>未测试</span></div>
+        <div class="ep">api.deepseek.com/v1</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow off">
+        <div class="grip">⋮⋮</div><div class="switch"></div>
+        <div class="alias">Gemini 2.5 Flash<small>gemini-2.5-flash</small></div>
+        <div class="prov">Google</div>
+        <div><span class="pill idle"><i></i>未测试</span></div>
+        <div class="ep">generativelanguage.googleapis.com</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+
+      <div class="trow off">
+        <div class="grip">⋮⋮</div><div class="switch"></div>
+        <div class="alias">Grok 4.1<small>grok-4.1</small></div>
+        <div class="prov">第三方</div>
+        <div><span class="pill idle"><i></i>未测试</span></div>
+        <div class="ep">api.x.ai/v1</div>
+        <div class="ops"><span>测试</span><span>编辑</span><span>复制</span><span class="danger">删除</span></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <button class="btn primary">保存模型配置</button>
+      <span class="dirty">2 处更改未保存</span>
+      <span class="sp"></span>
+      <span class="count">已启用 31 / 37 · 失败 1</span>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 设置</title>
+<style>
+  :root {
+    --paper: #f6f5f1; --ink: #14150f; --ink-2: #4b4d45; --ink-3: #83857a;
+    --line: #d9d7cd; --line-soft: #e6e4db; --accent: #1c6b47; --accent-soft: #e6efe7;
+    --warn: #8a5a12; --err: #a33b2e;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--paper); color: var(--ink); font-family: var(--font); font-size: 13px; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden; }
+
+  .header { display: flex; align-items: flex-end; gap: 28px; padding: 24px 40px 0; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; }
+  .mark { width: 26px; height: 26px; border-radius: 6px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+  .brand b { font-size: 14px; letter-spacing: -.01em; }
+  .brand span { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+  .tabs { display: flex; gap: 26px; margin-left: 20px; }
+  .tab { padding: 0 0 13px; font-size: 13.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 6px; }
+  .tab small { font-family: var(--num); font-size: 10px; }
+  .tab.on { color: var(--ink); font-weight: 600; position: relative; }
+  .tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 16px; padding-bottom: 14px; }
+  .sync { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px minmax(0, 1fr) 220px; }
+  .nav { border-right: 1px solid var(--line); padding: 26px 0 26px 40px; }
+  .nav a { display: block; font-size: 12.5px; color: var(--ink-3); padding: 9px 0; cursor: pointer; }
+  .nav a:hover { color: var(--ink); }
+  .nav a.on { color: var(--ink); font-weight: 600; }
+  .nav .sep { height: 1px; background: var(--line-soft); margin: 10px 0; }
+  .nav .hint { font-size: 10.5px; color: var(--ink-3); line-height: 1.7; padding-top: 6px; }
+
+  .panel { padding: 26px 40px 20px; overflow: hidden; min-width: 0; }
+  .panel h1 { font-size: 20px; letter-spacing: -.02em; }
+  .panel .lead { font-size: 12px; color: var(--ink-3); margin-top: 6px; line-height: 1.7; }
+
+  .group { margin-top: 26px; }
+  .group-title { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+  .row { display: flex; align-items: center; gap: 24px; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
+  .row.disabled { opacity: .5; }
+  .row .label { flex: 1; min-width: 0; }
+  .row .label b { font-size: 12.5px; font-weight: 600; display: block; }
+  .row .label span { font-size: 11px; color: var(--ink-3); line-height: 1.65; display: block; margin-top: 3px; max-width: 46ch; }
+  .row .control { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+  .select { height: 30px; min-width: 132px; border: 1px solid var(--line); background: #fbfaf7; border-radius: 7px; padding: 0 28px 0 10px; font-size: 12px; display: inline-flex; align-items: center; justify-content: space-between; color: var(--ink); position: relative; }
+  .select::after { content: ""; position: absolute; right: 10px; top: 12px; width: 5px; height: 5px; border-right: 1.4px solid var(--ink-3); border-bottom: 1.4px solid var(--ink-3); transform: rotate(45deg); }
+  .switch { width: 34px; height: 20px; border-radius: 20px; background: #d5d3c8; position: relative; flex: 0 0 34px; }
+  .switch.on { background: var(--accent); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+  .switch.on::after { left: 16px; }
+  .tag { font-size: 10px; color: var(--ink-3); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+  .btn { height: 30px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink-2); font-size: 12px; font-family: var(--font); cursor: pointer; }
+  .btn:hover { color: var(--ink); border-color: #bfbcae; }
+  .btn.danger { color: var(--err); border-color: #dcc3bd; }
+  .btn.danger:hover { background: #f6ecea; }
+  .path { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+
+  .aside { border-left: 1px solid var(--line); padding: 26px 24px; }
+  .aside h3 { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+  .aside .kv { display: flex; justify-content: space-between; font-size: 11.5px; padding: 5px 0; color: var(--ink-2); }
+  .aside .kv b { font-family: var(--num); font-weight: 500; color: var(--ink); }
+  .aside .note { font-size: 11.5px; line-height: 1.75; color: var(--ink-3); }
+  .aside blockquote { border-left: 2px solid var(--line); padding-left: 10px; font-size: 11.5px; line-height: 1.7; color: var(--ink-2); }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+    <div class="tabs">
+      <div class="tab">总览</div>
+      <div class="tab">接入 <small>1</small></div>
+      <div class="tab">模型 <small>37</small></div>
+      <div class="tab on">设置</div>
+    </div>
+    <div class="head-right"><span class="sync">状态更新 10:26:30</span></div>
+  </div>
+
+  <div class="body">
+    <div class="nav">
+      <a class="on">基本设置</a>
+      <a>会话与日志</a>
+      <a>网络与请求</a>
+      <a>数据与恢复</a>
+      <div class="sep"></div>
+      <div class="hint">设置实时生效，关闭窗口不会丢失。</div>
+    </div>
+
+    <div class="panel">
+      <h1>基本设置</h1>
+      <div class="lead">界面语言、主题，以及应用启动时的行为。</div>
+
+      <div class="group">
+        <div class="group-title">界面</div>
+        <div class="row">
+          <div class="label"><b>界面语言</b><span>切换后立即生效，无需重启。</span></div>
+          <div class="control"><div class="select">简体中文</div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>界面主题</b><span>跟随系统时，随 macOS 外观自动切换亮色与暗色。</span></div>
+          <div class="control"><div class="select" style="min-width:110px">跟随系统</div></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">启动与窗口</div>
+        <div class="row">
+          <div class="label"><b>登录时启动</b></div>
+          <div class="control"><div class="switch on"></div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>关闭窗口后继续运行</b><span>关闭后代理与共享入口保持监听，可从菜单栏重新打开。</span></div>
+          <div class="control"><div class="switch on"></div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>在 Dock 中显示图标</b></div>
+          <div class="control"><div class="switch on"></div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>启动时隐藏主窗口</b><span>适合开机自动运行、只在需要时打开。</span></div>
+          <div class="control"><div class="switch"></div></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">内容与更新</div>
+        <div class="row disabled">
+          <div class="label"><b>广告内容</b><span>内容服务暂未接入，暂不可用。</span></div>
+          <div class="control"><div class="switch"></div><span class="tag">未接入</span></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>启动时检查客户端更新</b><span>只在启动时请求一次版本信息。</span></div>
+          <div class="control"><div class="switch on"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="aside">
+      <div>
+        <h3>设置存放位置</h3>
+        <div class="path">~/Library/Application Support/…</div>
+        <div class="note" style="margin-top:8px">与模型、接入账号授权分开保存。</div>
+      </div>
+      <div>
+        <h3>当前状态</h3>
+        <div class="kv"><span>语言</span><b>zh-CN</b></div>
+        <div class="kv"><span>主题</span><b>system</b></div>
+        <div class="kv"><span>开机自启</span><b>开启</b></div>
+      </div>
+      <blockquote>重置设置不会影响模型配置和接入账号授权，但会恢复以上所有开关的默认值。</blockquote>
+    </div>
+  </div>
+</body>
+</html>

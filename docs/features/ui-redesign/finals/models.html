@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>定稿 · 模型</title>
+<style>
+/* 方案 B · Paper 定稿令牌（宣纸 · 朱砂为默认配色）
+   两层令牌：
+     外观 [data-theme="light|dark"]  —— 纸色深浅、墨色明暗、控件底色
+     配色 [data-palette="xuanshi|nuanbai|lengbai|zhongxing"] —— 纸色色相、强调色
+   结构、字号、间距与配色无关；任何需要为某套配色单独改布局的地方，都说明设计本身没有共用同一套结构。
+   图表五色属于数据层，跨配色保持不变，只随亮暗外观切换。 */
+
+/* ---------- 基础层（与配色无关） ---------- */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  --warn: #8a5a12;
+  --err: #8e2a1e;          /* 结构色：圆点、边框 */
+  --err-text: #8e2a1e;     /* 文字色：比强调色更深 */
+  --err-soft: #f6e0d9;
+  --knob: #fff;
+  --track: color-mix(in srgb, var(--ink-3) 32%, var(--paper));
+  --btn-line-hover: color-mix(in srgb, var(--ink-3) 55%, var(--paper));
+  --primary-hover: color-mix(in srgb, var(--ink) 86%, var(--paper));
+  --surface-2: var(--line-soft);
+
+  --c-prompt: #3c5f86;
+  --c-output: #9b3c2c;
+  --c-cache-w: #a8802e;
+  --c-cache-r: #2e7d8a;
+  --c-rate: #6b5a8e;
+}
+
+/* ---------- 配色：亮色 ---------- */
+:root, [data-palette="xuanshi"] {
+  --paper: #f7f3ea; --paper-raised: #fbf8f1;
+  --ink: #1b1610; --ink-2: #4e473c; --ink-3: #8a8272;
+  --line: #e0d8c6; --line-soft: #e9e2d2;
+  --accent: #9b3c2c; --accent-soft: #f3e4de; --idle: #bdb49f;
+}
+[data-palette="nuanbai"] {
+  --paper: #f6f5f1; --paper-raised: #fbfbf9;
+  --ink: #14150f; --ink-2: #4a4c44; --ink-3: #83857a;
+  --line: #e6e4db; --line-soft: #edebe4;
+  --accent: #1c6b47; --accent-soft: #e2efe8; --idle: #b9b6aa;
+}
+[data-palette="lengbai"] {
+  --paper: #f5f6f3; --paper-raised: #fafbf9;
+  --ink: #12181a; --ink-2: #414a4a; --ink-3: #7f8a86;
+  --line: #e2e5e1; --line-soft: #eaede9;
+  --accent: #2f5d46; --accent-soft: #e0ebe5; --idle: #b4bcb6;
+}
+[data-palette="zhongxing"] {
+  --paper: #f4f4f1; --paper-raised: #fafaf8;
+  --ink: #141619; --ink-2: #44474c; --ink-3: #84888d;
+  --line: #e1e2e0; --line-soft: #eaebe9;
+  --accent: #28527a; --accent-soft: #e0e8f0; --idle: #b3b7bc;
+}
+
+/* ---------- 外观：暗色（覆盖同一组令牌，配色再覆盖一次） ---------- */
+[data-theme="dark"] {
+  --warn: #d3a44e; --err: #c0573f; --err-text: #e2765c; --err-soft: #3a1e18;
+  --knob: #e9e1d3;
+  --c-prompt: #7fa6d4; --c-output: #cf8065; --c-cache-w: #cfa958; --c-cache-r: #5fb3bd; --c-rate: #a493cd;
+}
+[data-theme="dark"], [data-theme="dark"][data-palette="xuanshi"] {
+  --paper: #15120e; --paper-raised: #1c1813;
+  --ink: #efe7d8; --ink-2: #bdb2a0; --ink-3: #83796a;
+  --line: #342d24; --line-soft: #272118;
+  --accent: #d17a5f; --accent-soft: #3a221a; --idle: #4a4238;
+}
+[data-theme="dark"][data-palette="nuanbai"] {
+  --paper: #131511; --paper-raised: #191c17;
+  --ink: #e9ece4; --ink-2: #b3b8ac; --ink-3: #7c8177;
+  --line: #2c3029; --line-soft: #232620;
+  --accent: #5fb98d; --accent-soft: #1c2f26; --idle: #454a40;
+}
+[data-theme="dark"][data-palette="lengbai"] {
+  --paper: #0f1413; --paper-raised: #161b1a;
+  --ink: #e4ece9; --ink-2: #aebbb6; --ink-3: #76837f;
+  --line: #29302e; --line-soft: #202624;
+  --accent: #63b394; --accent-soft: #172a24; --idle: #3f4846;
+}
+[data-theme="dark"][data-palette="zhongxing"] {
+  --paper: #101315; --paper-raised: #171a1d;
+  --ink: #e6ebf0; --ink-2: #b0b8bf; --ink-3: #78808a;
+  --line: #282d32; --line-soft: #1f2428;
+  --accent: #6f9fd0; --accent-soft: #16222e; --idle: #3d4348;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--font);
+  font-size: 13px; -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+
+/* 顶栏 */
+.hd { display: flex; align-items: flex-end; gap: 28px; padding: 24px 40px 0; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; }
+.mark { width: 26px; height: 26px; border-radius: 6px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.brand b { font-size: 14px; letter-spacing: -.01em; }
+.brand span { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+.tabs { display: flex; gap: 26px; margin-left: 20px; }
+.tab { padding-bottom: 13px; font-size: 13.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 6px; cursor: pointer; }
+.tab small { font-family: var(--num); font-size: 10px; }
+.tab.on { color: var(--ink); font-weight: 600; position: relative; }
+.tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+.hd-r { margin-left: auto; display: flex; align-items: center; gap: 18px; padding-bottom: 14px; }
+.sync { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+.link { font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.link:hover { color: var(--ink); }
+
+/* 通用文字与控件 */
+.kicker { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.h1 { font-size: 20px; letter-spacing: -.02em; }
+.h2 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.muted { color: var(--ink-3); font-size: 11.5px; }
+.num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+.sw { width: 34px; height: 20px; border-radius: 20px; background: var(--track); position: relative; flex: 0 0 34px; }
+.sw.on { background: var(--accent); }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.sw.on::after { left: 16px; }
+
+.btn { height: 30px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink-2); font-size: 12px; font-family: var(--font); cursor: pointer; }
+.btn:hover { color: var(--ink); border-color: var(--btn-line-hover); }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 600; }
+.btn.primary:hover { background: var(--primary-hover); }
+.btn.text { border: 0; padding: 0 4px; height: auto; }
+.btn.danger { color: var(--err-text); border-color: color-mix(in srgb, var(--err-text) 32%, var(--paper)); }
+
+.field { height: 30px; border: 1px solid var(--line); background: var(--paper-raised); border-radius: 7px; padding: 0 10px; display: inline-flex; align-items: center; font-family: var(--num); font-size: 11.5px; color: var(--ink); }
+.select { position: relative; padding-right: 26px; }
+.select::after { content: ""; position: absolute; right: 10px; top: 11px; width: 5px; height: 5px; border-right: 1.4px solid var(--ink-3); border-bottom: 1.4px solid var(--ink-3); transform: rotate(45deg); }
+
+.pill { font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 1.5px 7px; border-radius: 3px; }
+.pill.ok { background: var(--accent-soft); color: var(--accent); }
+.pill.off { background: var(--surface-2); color: var(--ink-3); }
+.pill.err { background: var(--err-soft); color: var(--err-text); }
+.st { font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+.st i { width: 5px; height: 5px; border-radius: 50%; background: var(--idle); }
+.st.ok { color: var(--accent); } .st.ok i { background: var(--accent); }
+.st.warn { color: var(--warn); } .st.warn i { background: var(--warn); }
+.st.err { color: var(--err-text); font-weight: 600; } .st.err i { background: var(--err); }
+.av { background: var(--surface-2); }
+
+</style>
+<style>
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 244px minmax(0,1fr); }
+
+  .rail { border-right: 1px solid var(--line); padding: 24px 18px 24px 28px; overflow: auto; }
+  .rail > h2 { font-size: 10.5px; letter-spacing: .12em; color: var(--ink-3); margin-bottom: 8px; }
+  .src { display: flex; gap: 11px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line-soft); cursor: pointer; position: relative; }
+  .src:last-of-type { border-bottom: 0; }
+  .av { width: 24px; height: 24px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); display: grid; place-items: center; font-size: 10.5px; font-weight: 700; flex: 0 0 24px; margin-top: 1px; }
+  .src.on .av { background: var(--ink); color: var(--paper); }
+  .src .nm { font-size: 12.5px; font-weight: 600; display: flex; align-items: baseline; gap: 6px; }
+  .src .nm b { font-family: var(--num); font-size: 10.5px; font-weight: 400; color: var(--ink-3); }
+  .src .mt { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
+  .src .mt i { width: 5px; height: 5px; border-radius: 50%; background: var(--idle); }
+  .src .mt i.ok { background: var(--accent); }
+  .src .mt i.err { background: var(--err); }
+  .src.on::before { content: ""; position: absolute; left: -12px; top: 10px; bottom: 10px; width: 2px; background: var(--ink); }
+  .rail .note { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line-soft); font-size: 10.5px; line-height: 1.7; color: var(--ink-3); }
+  .rail .note a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+
+  .main { overflow: auto; padding: 24px 32px 32px; }
+  .dh { display: flex; align-items: baseline; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+  .dh h1 { font-size: 19px; letter-spacing: -.02em; }
+  .dh .sub { margin-left: auto; font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+  .lead { font-size: 12px; color: var(--ink-3); line-height: 1.8; margin-top: 10px; }
+  .lead b { color: var(--ink-2); }
+  .lead b.err { color: var(--err); }
+
+  .tools { margin-top: 16px; display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .f { font-size: 12px; color: var(--ink-3); cursor: pointer; }
+  .f.on { color: var(--ink); font-weight: 600; }
+  .f b { font-family: var(--num); font-weight: 400; font-size: 10.5px; margin-left: 3px; }
+  .tools .sp { flex: 1; }
+  .tools .add { font-size: 12px; font-weight: 600; color: var(--ink); }
+
+  .grp { margin-top: 26px; }
+  .gh { display: flex; align-items: baseline; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid var(--line); }
+  .gh h2 { font-size: 13px; }
+  .gh span { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+  .gh .via { font-family: var(--font); font-size: 10.5px; color: var(--ink-3); }
+  .gh .rt { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+  .gh .rt a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 2px; }
+  .gh .rt.err { color: var(--err); font-weight: 600; }
+
+  .m { display: flex; align-items: center; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+  .mi { min-width: 0; flex: 1; }
+  .mi .n { font-size: 12.5px; font-weight: 600; }
+  .mi .n small { font-weight: 400; color: var(--ink-3); font-family: var(--num); font-size: 10.5px; margin-left: 8px; }
+  .mi .d { margin-top: 2px; font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+  .mi .d.err { color: var(--err); font-family: var(--font); font-weight: 600; }
+  .mi .new { font-size: 10px; color: var(--accent); margin-left: 6px; }
+  .stc { flex: 0 0 96px; }
+  .m .go { font-size: 12px; color: var(--ink-3); flex: 0 0 28px; text-align: right; cursor: pointer; }
+  .m.off .mi .n, .m.off .mi .d { opacity: .45; }
+  .more { margin-top: 9px; font-size: 11px; color: var(--ink-3); }
+
+</style>
+</head>
+<body>
+  <div class="hd">
+    <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+    <div class="tabs"><div class="tab">总览</div><div class="tab">接入</div><div class="tab on">模型</div><div class="tab">设置</div></div>
+    <div class="hd-r"><span class="sync">状态更新 10:26:30</span></div>
+  </div>
+
+  <div class="body">
+    <div class="rail">
+      <h2>来源</h2>
+      <div class="src on">
+        <div class="av">全</div>
+        <div><div class="nm">全部 <b>37</b></div><div class="mt"><i class="err"></i>1 个来源需处理</div></div>
+      </div>
+      <div class="src">
+        <div class="av">C</div>
+        <div><div class="nm">Claude 订阅 <b>12</b></div><div class="mt"><i class="ok"></i>已连接</div></div>
+      </div>
+      <div class="src">
+        <div class="av">O</div>
+        <div><div class="nm">ChatGPT 订阅 <b>15</b></div><div class="mt"><i class="ok"></i>已连接</div></div>
+      </div>
+      <div class="src">
+        <div class="av">X</div>
+        <div><div class="nm">xAI 订阅 <b>4</b></div><div class="mt"><i class="err"></i>凭据已过期</div></div>
+      </div>
+      <div class="src">
+        <div class="av">K</div>
+        <div><div class="nm">API 密钥 <b>6</b></div><div class="mt"><i></i>手动接入</div></div>
+      </div>
+      <div class="note">订阅来源在<a>接入页</a>管理；这里只调整模型本身的名字、开关与公开范围。</div>
+    </div>
+
+    <div class="main">
+      <div class="dh"><h1>全部模型</h1><span class="pill off">37 个 · 启用 31</span><span class="sub">按来源分组</span></div>
+      <div class="lead">每个模型都标出来源。订阅断开或额度用尽时，对应模型标为不可用而不是消失。<b class="err">xAI 订阅的凭据已过期</b>，4 个模型暂时不可用。</div>
+
+      <div class="tools">
+        <span class="f on">按来源</span><span class="f">按厂商</span>
+        <span class="sp"></span>
+        <span class="f">测试全部</span><span class="f">导入 / 导出</span><span class="add">+ 新增</span>
+      </div>
+
+      <div class="grp">
+        <div class="gh"><h2>Claude 订阅</h2><span>12 个 · 全部启用</span><span class="via">Anthropic 账号</span>
+          <span class="rt">今天 09:12 同步 · <a>查看变化</a></span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Opus 4.7 <small>claude-opus-4-7-20260115</small></div><div class="d">128k 上下文 · 公开</div></div><span class="stc"><span class="st ok"><i></i>通过 1.2 s</span></span><span class="go">⋯</span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Sonnet 4.5 <small>claude-sonnet-4-5-20250929</small></div><div class="d">128k 上下文 · 公开</div></div><span class="stc"><span class="st ok"><i></i>通过 842 ms</span></span><span class="go">⋯</span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Claude Haiku 4.5 <small>claude-haiku-4-5</small></div><div class="d">64k 上下文</div></div><span class="stc"><span class="st"><i></i>未测试</span></span><span class="go">⋯</span></div>
+        <div class="more">还有 9 个</div>
+      </div>
+
+      <div class="grp">
+        <div class="gh"><h2>ChatGPT 订阅</h2><span>15 个 · 启用 14</span><span class="via">OpenAI 账号</span>
+          <span class="rt">今天 09:12 同步 · <a>查看变化</a></span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">GPT-5.1 <small>gpt-5.1-2026-01-08</small></div><div class="d">公开</div></div><span class="stc"><span class="st ok"><i></i>通过 1.9 s</span></span><span class="go">⋯</span></div>
+        <div class="m off"><span class="sw"></span><div class="mi"><div class="n">GPT-4.1 mini <small>gpt-4.1-mini</small></div><div class="d">已停用</div></div><span class="stc"><span class="st"><i></i>未测试</span></span><span class="go">⋯</span></div>
+        <div class="more">还有 13 个</div>
+      </div>
+
+      <div class="grp">
+        <div class="gh"><h2>xAI 订阅</h2><span>4 个 · 启用 2</span><span class="via">xAI 账号</span>
+          <span class="rt err">凭据已过期 · <a style="color:var(--err)">去接入页重新登录</a></span></div>
+        <div class="m off"><span class="sw on"></span><div class="mi"><div class="n">Grok 4.1 <small>grok-4.1</small></div><div class="d err">来源不可用，确认前不会转发请求</div></div><span class="stc"><span class="st err"><i></i>不可用</span></span><span class="go">⋯</span></div>
+        <div class="m off"><span class="sw"></span><div class="mi"><div class="n">Grok Code Fast <small>grok-code-fast-1</small></div><div class="d">已停用</div></div><span class="stc"><span class="st"><i></i>未测试</span></span><span class="go">⋯</span></div>
+        <div class="more">还有 2 个</div>
+      </div>
+
+      <div class="grp">
+        <div class="gh"><h2>API 密钥</h2><span>6 个 · 启用 4</span><span class="via">手动接入</span>
+          <span class="rt">未设置自动同步</span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">DeepSeek V3.2 <small>deepseek-chat</small></div><div class="d">api.deepseek.com</div></div><span class="stc"><span class="st"><i></i>未测试</span></span><span class="go">⋯</span></div>
+        <div class="m"><span class="sw on"></span><div class="mi"><div class="n">Gemini 3 Pro <small>gemini-3-pro-preview</small><span class="new">新增</span></div><div class="d">今天同步发现 · 尚未测试</div></div><span class="stc"><span class="st"><i></i>未测试</span></span><span class="go">⋯</span></div>
+        <div class="more">还有 4 个</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方向 C · Console 精致卡片控制台</title>
+<style>
+  :root {
+    --bg: #f4f6f5;
+    --bg-2: #eef1f0;
+    --card: #ffffff;
+    --line: #e3e8e6;
+    --text: #121a16;
+    --text-2: #56635c;
+    --text-3: #8b968f;
+    --mint: #0f9d64;
+    --mint-soft: #e3f5ec;
+    --purple: #6b5ce7;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+    --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+    --r: 16px;
+    --shadow: 0 1px 2px rgba(16, 35, 27, .04), 0 8px 24px -12px rgba(16, 35, 27, .10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font);
+    font-size: 13px; -webkit-font-smoothing: antialiased; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  .chrome {
+    margin: 12px 12px 0; height: 52px; flex: 0 0 52px; border-radius: 14px;
+    background: rgba(255,255,255,.8); backdrop-filter: blur(20px);
+    border: 1px solid rgba(227,232,230,.9); box-shadow: var(--shadow);
+    display: flex; align-items: center; padding: 0 14px; gap: 12px;
+  }
+  .logo {
+    width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(145deg, #12b977, #0a7d50); color: #fff; font-weight: 800; font-size: 14px;
+    box-shadow: 0 2px 6px rgba(10,125,80,.3);
+  }
+  .title { font-size: 13px; font-weight: 650; letter-spacing: -.01em; margin-right: 8px; }
+  .tabs { display: flex; gap: 2px; background: var(--bg-2); padding: 3px; border-radius: 10px; }
+  .tab {
+    height: 28px; padding: 0 13px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; color: var(--text-2); cursor: pointer;
+  }
+  .tab.on { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(16,35,27,.1); }
+  .tab .n { font-family: var(--num); font-size: 10px; color: var(--text-3); background: rgba(0,0,0,.04); padding: 1px 5px; border-radius: 20px; }
+  .tab.on .n { background: var(--mint-soft); color: var(--mint); }
+  .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .sync { font-family: var(--num); font-size: 10.5px; color: var(--text-3); margin-right: 4px; }
+  .ibtn {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    border: 1px solid var(--line); background: var(--card); color: var(--text-2); cursor: pointer; font-size: 13px;
+  }
+  .ibtn:hover { color: var(--text); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(135deg,#c7e9d8,#8fd3b4); display:grid; place-items:center; font-size:11px; font-weight:700; color:#0a5238; }
+
+  .content { flex: 1; overflow: hidden; padding: 12px; display: grid; grid-template-columns: minmax(0,1fr) 288px; gap: 12px; }
+  .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+
+  .hello { padding: 18px 20px; display: flex; align-items: center; gap: 18px; }
+  .hello h2 { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+  .hello p { font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+  .chips { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 10px;
+    background: var(--bg-2); font-size: 12px; color: var(--text-2);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.15); }
+  .chip .dot.off { background: #c3cbc6; box-shadow: none; }
+  .chip .mini { font-family: var(--num); font-size: 10px; color: var(--text-3); }
+  .chip button { border: 0; background: rgba(0,0,0,.05); color: var(--text-2); font-size: 11px; padding: 3px 8px; border-radius: 6px; cursor: pointer; font-family: var(--font); }
+  .chip button:hover { background: rgba(0,0,0,.09); color: var(--text); }
+
+  .metrics { display: grid; grid-template-columns: 1.35fr 1fr 1fr 1fr; gap: 12px; }
+  .m-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; position: relative; overflow: hidden; }
+  .m-card.brand { background: linear-gradient(160deg, #0b3b28, #0e5c3c 55%, #127a50); border-color: transparent; color: #fff; }
+  .m-card.brand::after {
+    content: ""; position: absolute; right: -40px; top: -60px; width: 180px; height: 180px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(90, 240, 175, .28), transparent 65%);
+  }
+  .m-label { font-size: 11px; color: var(--text-3); display: flex; align-items: center; gap: 6px; letter-spacing: .02em; }
+  .m-card.brand .m-label { color: rgba(255,255,255,.66); }
+  .m-value { font-family: var(--num); font-size: 30px; font-weight: 500; letter-spacing: -.045em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .m-value small { font-size: 14px; color: var(--text-3); letter-spacing: 0; }
+  .m-card.brand .m-value small { color: rgba(255,255,255,.55); }
+  .m-foot { font-size: 10.5px; color: var(--text-3); font-family: var(--num); }
+  .m-card.brand .m-foot { color: rgba(255,255,255,.6); }
+  .spark { position: absolute; right: 14px; bottom: 40px; width: 84px; height: 26px; opacity: .9; }
+
+  .ring-card { display: flex; align-items: center; gap: 16px; }
+  .ring-card .ring svg { width: 84px; height: 84px; display: block; }
+  .ring-card .ring text { font-family: var(--num); font-size: 15px; font-weight: 700; fill: #fff; }
+  .ring-meta { display: flex; flex-direction: column; gap: 7px; font-size: 11px; color: rgba(255,255,255,.72); }
+  .ring-meta b { color: #fff; font-family: var(--num); font-weight: 600; }
+  .pill-white { display: inline-flex; align-items: center; gap: 5px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.18); border-radius: 20px; padding: 2px 8px; font-size: 10px; color: #fff; }
+
+  .chart-card { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px 18px 10px; }
+  .chart-top { display: flex; align-items: center; gap: 12px; }
+  .chart-top h3 { font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; }
+  .chart-top .meta { font-family: var(--num); font-size: 10px; color: var(--text-3); }
+  .seg { display: inline-flex; background: var(--bg-2); border-radius: 9px; padding: 3px; }
+  .seg button { height: 26px; padding: 0 11px; border: 0; background: transparent; border-radius: 7px; font-size: 12px; color: var(--text-2); font-family: var(--font); cursor: pointer; }
+  .seg button.on { background: var(--card); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(16,35,27,.08); }
+  .legend { display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-3); font-family: var(--num); }
+  .legend i { width: 12px; height: 2px; border-radius: 2px; }
+  .chart { flex: 1; min-height: 0; margin-top: 6px; }
+  .chart svg { width: 100%; height: 100%; display: block; }
+
+  .side-card { padding: 16px 18px; }
+  .side-card h4 { font-size: 11px; color: var(--text-3); letter-spacing: .04em; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
+  .side-card h4 b { font-family: var(--num); font-weight: 500; }
+  .quota { display: flex; align-items: center; gap: 14px; }
+  .quota svg { width: 56px; height: 56px; flex: 0 0 56px; }
+  .quota .q { font-family: var(--num); font-size: 11px; color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+  .quota .q b { color: var(--text); font-weight: 600; }
+  .req { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 11.5px; border-bottom: 1px solid var(--bg-2); }
+  .req:last-child { border-bottom: 0; }
+  .req .m { flex: 1; min-width: 0; font-family: var(--num); font-size: 10.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .req .t { font-family: var(--num); font-size: 10px; color: var(--text-3); }
+  .b { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+  .b.ok { background: var(--mint-soft); color: var(--mint); }
+  .b.err { background: #fdecea; color: #c0392b; }
+  .kv { display: flex; justify-content: space-between; font-size: 11.5px; padding: 5px 0; color: var(--text-2); }
+  .kv b { font-family: var(--num); font-weight: 500; color: var(--text); }
+  .tip { font-size: 11.5px; line-height: 1.7; color: var(--text-3); }
+  .ad {
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px;
+    background: linear-gradient(120deg, #fff7e8, #fdf0d8); border: 1px solid #f2e2bd;
+  }
+  .ad .ico { width: 26px; height: 26px; border-radius: 8px; background: #f5b544; display: grid; place-items: center; color: #5b3c00; font-weight: 800; font-size: 12px; }
+  .ad b { font-size: 12px; display: block; }
+  .ad span { font-size: 10.5px; color: #8a6d33; }
+</style>
+</head>
+<body>
+  <div class="chrome">
+    <div class="logo">C</div>
+    <div class="title">Cursor 助手</div>
+    <div class="tabs">
+      <div class="tab on">总览</div>
+      <div class="tab">接入 <span class="n">1</span></div>
+      <div class="tab">模型 <span class="n">37</span></div>
+      <div class="tab">设置</div>
+    </div>
+    <div class="right">
+      <span class="sync">10:26 更新</span>
+      <button class="ibtn" title="刷新">↻</button>
+      <div class="avatar">Y</div>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="col">
+      <div class="card hello">
+        <div>
+          <h2>下午好，今天运行得很顺利</h2>
+          <p>Cursor 代理已接管本机流量，本次会话缓存替您节省约 $3.74</p>
+        </div>
+        <div class="chips">
+          <div class="chip"><span class="dot"></span><b>Cursor</b><span class="mini">:18080</span><button>停止</button></div>
+          <div class="chip"><span class="dot off"></span><b>Gateway</b><span class="mini">:18091</span><button>启动</button></div>
+        </div>
+      </div>
+
+      <div class="metrics">
+        <div class="card m-card brand ring-card">
+          <div class="ring">
+            <svg viewBox="0 0 84 84">
+              <circle cx="42" cy="42" r="34" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="7"/>
+              <circle cx="42" cy="42" r="34" fill="none" stroke="#5cf0af" stroke-width="7" stroke-linecap="round"
+                      stroke-dasharray="197.1 213.6" transform="rotate(-90 42 42)"/>
+              <text x="42" y="47" text-anchor="middle">92.2%</text>
+            </svg>
+          </div>
+          <div class="ring-meta">
+            <span class="pill-white">缓存命中率</span>
+            <span>复用率 <b>88.4%</b></span>
+            <span>命中 <b>3.51M</b> / <b>3.80M</b></span>
+          </div>
+        </div>
+
+        <div class="card m-card">
+          <div class="m-label">对话轮次</div>
+          <div class="m-value">4</div>
+          <div class="m-foot">有效 4 · 异常 0</div>
+          <svg class="spark" viewBox="0 0 84 26" fill="none"><path d="M2 22 L14 18 L26 20 L38 12 L50 15 L62 8 L74 10 L82 6" stroke="#0f9d64" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+
+        <div class="card m-card">
+          <div class="m-label">LLM 调用</div>
+          <div class="m-value">68</div>
+          <div class="m-foot">上游请求</div>
+          <svg class="spark" viewBox="0 0 84 26" fill="none"><path d="M2 20 L14 21 L26 14 L38 17 L50 10 L62 13 L74 7 L82 9" stroke="#6b5ce7" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+
+        <div class="card m-card">
+          <div class="m-label">Token 消耗</div>
+          <div class="m-value">3.9<small>M</small></div>
+          <div class="m-foot">Prompt 3.8M · $4.59</div>
+          <svg class="spark" viewBox="0 0 84 26" fill="none"><path d="M2 23 L14 22 L26 18 L38 19 L50 14 L62 16 L74 6 L82 11" stroke="#0f9d64" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </div>
+      </div>
+
+      <div class="card chart-card">
+        <div class="chart-top">
+          <div>
+            <h3>Token 使用趋势</h3>
+            <div class="meta">按小时 · UTC · dataVersion 3@2026-11-19</div>
+          </div>
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <div class="seg"><button class="on">24 小时</button><button>30 天</button><button>全部</button></div>
+            <div class="seg"><button class="on">趋势</button><button>活跃度</button><button>请求</button></div>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i style="background:#2a63b8"></i>Prompt</span>
+          <span><i style="background:#0f9d64"></i>Output</span>
+          <span><i style="background:#d9952a"></i>Cache 写入</span>
+          <span><i style="background:#18a3b3"></i>Cache 读取</span>
+          <span><i style="background:#6b5ce7;border-top:1px dashed #6b5ce7;height:1px"></i>命中率</span>
+        </div>
+        <div class="chart"><svg id="chart" viewBox="0 0 760 200" preserveAspectRatio="none"></svg></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card side-card">
+        <h4>本周配额 <b>39%</b></h4>
+        <div class="quota">
+          <svg viewBox="0 0 56 56">
+            <circle cx="28" cy="28" r="22" fill="none" stroke="#eef1f0" stroke-width="6"/>
+            <circle cx="28" cy="28" r="22" fill="none" stroke="#0f9d64" stroke-width="6" stroke-linecap="round"
+                    stroke-dasharray="53.9 138.2" transform="rotate(-90 28 28)"/>
+          </svg>
+          <div class="q">
+            <span>已用 <b>3.9M</b> / 10M</span>
+            <span>预计耗尽 <b>3 天后</b></span>
+            <span>平均 <b>1.3M/天</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card side-card">
+        <h4>最近请求 <b>68 次</b></h4>
+        <div class="req"><span class="b ok">200</span><span class="m">claude-opus-4.7</span><span class="t">1.2s</span></div>
+        <div class="req"><span class="b ok">200</span><span class="m">claude-opus-4.7</span><span class="t">0.9s</span></div>
+        <div class="req"><span class="b ok">200</span><span class="m">gpt-5.1</span><span class="t">2.4s</span></div>
+        <div class="req"><span class="b err">429</span><span class="m">cursor-small</span><span class="t">0.1s</span></div>
+      </div>
+
+      <div class="card side-card">
+        <h4>运行信息</h4>
+        <div class="kv"><span>系统代理</span><b>已识别</b></div>
+        <div class="kv"><span>活跃模型</span><b>37</b></div>
+        <div class="kv"><span>启动时长</span><b>2h 14m</b></div>
+        <div class="kv"><span>出站延迟</span><b>86ms</b></div>
+      </div>
+
+      <div class="card side-card">
+        <h4>新手提示</h4>
+        <div class="tip">Gateway 关闭时，外部客户端的请求不会转发到上游。需要同时使用 Codex 等客户端时，启动 Gateway 即可共享同一批模型。</div>
+      </div>
+
+      <div class="ad" style="margin-top:auto">
+        <div class="ico">★</div>
+        <div><b>高级会员体验中</b><span>还剩 12 天 · 查看权益</span></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const prompt = [12, 8, 6, 5, 9, 22, 60, 120, 210, 180, 150, 210, 260, 240, 300, 340, 280, 420, 900, 1450, 920, 480, 210, 80];
+  const output = [2, 1, 1, 1, 2, 6, 18, 40, 70, 60, 52, 74, 88, 80, 96, 110, 92, 140, 280, 460, 300, 160, 70, 26];
+  const cacheW = [1, 1, 1, 0, 1, 4, 12, 26, 48, 40, 32, 45, 55, 50, 60, 72, 58, 90, 180, 300, 190, 100, 44, 16];
+  const cacheR = [6, 4, 3, 2, 5, 14, 40, 90, 160, 140, 120, 170, 210, 200, 250, 290, 240, 360, 780, 1260, 800, 420, 180, 66];
+  const hit = [55, 52, 50, 48, 56, 60, 66, 72, 78, 82, 84, 86, 88, 89, 91, 92, 92, 93, 94, 95, 94, 92, 88, 80];
+
+  const W = 760, H = 200, L = 40, R = 40, T = 8, B = 20;
+  const iw = W - L - R, ih = H - T - B;
+  const maxTok = 1600;
+  const x = i => L + (i / (prompt.length - 1)) * iw;
+  const yTok = v => T + ih - (v / maxTok) * ih;
+  const yRate = v => T + ih - (v / 100) * ih;
+  const path = (vals, yf) => vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${yf(v).toFixed(1)}`).join('');
+  const area = (vals, yf) => path(vals, yf) + `L${x(vals.length - 1).toFixed(1)},${T + ih}L${L},${T + ih}Z`;
+
+  let el = '';
+  [400, 800, 1200, 1600].forEach(v => {
+    el += `<line x1="${L}" x2="${W - R}" y1="${yTok(v)}" y2="${yTok(v)}" stroke="#eef1f0" stroke-width="1"/>`;
+    el += `<text x="${L - 8}" y="${yTok(v) + 3}" text-anchor="end" fill="#8b968f" font-size="9.5" font-family="SF Mono, monospace">${v === 0 ? '0' : v / 1000 + 'M'}</text>`;
+  });
+  [0, 50, 100].forEach(v => {
+    el += `<text x="${W - R + 8}" y="${yRate(v) + 3}" fill="#8b968f" font-size="9.5" font-family="SF Mono, monospace">${v}%</text>`;
+  });
+  ['00', '04', '08', '12', '16', '20', '24'].forEach((h, i) => {
+    const px = L + (i / 6) * iw;
+    el += `<text x="${px}" y="${H - 4}" text-anchor="middle" fill="#8b968f" font-size="9.5" font-family="SF Mono, monospace">${h}:00</text>`;
+  });
+
+  el += `<defs>
+    <linearGradient id="gB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a63b8" stop-opacity=".18"/><stop offset="1" stop-color="#2a63b8" stop-opacity="0"/></linearGradient>
+    <linearGradient id="gG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0f9d64" stop-opacity=".14"/><stop offset="1" stop-color="#0f9d64" stop-opacity="0"/></linearGradient>
+  </defs>`;
+  el += `<path d="${area(prompt, yTok)}" fill="url(#gB)"/>`;
+  el += `<path d="${area(output, yTok)}" fill="url(#gG)"/>`;
+  el += `<path d="${path(prompt, yTok)}" fill="none" stroke="#2a63b8" stroke-width="1.8" stroke-linejoin="round"/>`;
+  el += `<path d="${path(output, yTok)}" fill="none" stroke="#0f9d64" stroke-width="1.8" stroke-linejoin="round"/>`;
+  el += `<path d="${path(cacheW, yTok)}" fill="none" stroke="#d9952a" stroke-width="1.1" opacity=".8"/>`;
+  el += `<path d="${path(cacheR, yTok)}" fill="none" stroke="#18a3b3" stroke-width="1.1" opacity=".8"/>`;
+  el += `<path d="${path(hit, yRate)}" fill="none" stroke="#6b5ce7" stroke-width="1.2" stroke-dasharray="4 4" opacity=".8"/>`;
+
+  const pi = 19;
+  el += `<line x1="${x(pi)}" x2="${x(pi)}" y1="${T}" y2="${T + ih}" stroke="#dbe2de" stroke-dasharray="2 3"/>`;
+  el += `<circle cx="${x(pi)}" cy="${yTok(cacheR[pi])}" r="3.2" fill="#fff" stroke="#18a3b3" stroke-width="1.6"/>`;
+  el += `<rect x="${x(pi) + 8}" y="${yTok(cacheR[pi]) - 30}" width="128" height="34" rx="8" fill="#fff" stroke="#e3e8e6"/>`;
+  el += `<text x="${x(pi) + 16}" y="${yTok(cacheR[pi]) - 17}" fill="#121a16" font-size="10" font-family="SF Mono, monospace">20:00 · 读 1.26M</text>`;
+  el += `<text x="${x(pi) + 16}" y="${yTok(cacheR[pi]) - 5}" fill="#8b968f" font-size="10" font-family="SF Mono, monospace">命中 95% · 出 460K</text>`;
+
+  document.getElementById('chart').innerHTML = el;
+})();
+</script>
+</body>
+</html>

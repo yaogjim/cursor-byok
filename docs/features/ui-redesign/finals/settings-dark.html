@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>定稿 · 设置（暗色）</title>
+<style>
+/* 方案 B · Paper 定稿令牌（宣纸 · 朱砂为默认配色）
+   两层令牌：
+     外观 [data-theme="light|dark"]  —— 纸色深浅、墨色明暗、控件底色
+     配色 [data-palette="xuanshi|nuanbai|lengbai|zhongxing"] —— 纸色色相、强调色
+   结构、字号、间距与配色无关；任何需要为某套配色单独改布局的地方，都说明设计本身没有共用同一套结构。
+   图表五色属于数据层，跨配色保持不变，只随亮暗外观切换。 */
+
+/* ---------- 基础层（与配色无关） ---------- */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  --num: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  --warn: #8a5a12;
+  --err: #8e2a1e;          /* 结构色：圆点、边框 */
+  --err-text: #8e2a1e;     /* 文字色：比强调色更深 */
+  --err-soft: #f6e0d9;
+  --knob: #fff;
+  --track: color-mix(in srgb, var(--ink-3) 32%, var(--paper));
+  --btn-line-hover: color-mix(in srgb, var(--ink-3) 55%, var(--paper));
+  --primary-hover: color-mix(in srgb, var(--ink) 86%, var(--paper));
+  --surface-2: var(--line-soft);
+
+  --c-prompt: #3c5f86;
+  --c-output: #9b3c2c;
+  --c-cache-w: #a8802e;
+  --c-cache-r: #2e7d8a;
+  --c-rate: #6b5a8e;
+}
+
+/* ---------- 配色：亮色 ---------- */
+:root, [data-palette="xuanshi"] {
+  --paper: #f7f3ea; --paper-raised: #fbf8f1;
+  --ink: #1b1610; --ink-2: #4e473c; --ink-3: #8a8272;
+  --line: #e0d8c6; --line-soft: #e9e2d2;
+  --accent: #9b3c2c; --accent-soft: #f3e4de; --idle: #bdb49f;
+}
+[data-palette="nuanbai"] {
+  --paper: #f6f5f1; --paper-raised: #fbfbf9;
+  --ink: #14150f; --ink-2: #4a4c44; --ink-3: #83857a;
+  --line: #e6e4db; --line-soft: #edebe4;
+  --accent: #1c6b47; --accent-soft: #e2efe8; --idle: #b9b6aa;
+}
+[data-palette="lengbai"] {
+  --paper: #f5f6f3; --paper-raised: #fafbf9;
+  --ink: #12181a; --ink-2: #414a4a; --ink-3: #7f8a86;
+  --line: #e2e5e1; --line-soft: #eaede9;
+  --accent: #2f5d46; --accent-soft: #e0ebe5; --idle: #b4bcb6;
+}
+[data-palette="zhongxing"] {
+  --paper: #f4f4f1; --paper-raised: #fafaf8;
+  --ink: #141619; --ink-2: #44474c; --ink-3: #84888d;
+  --line: #e1e2e0; --line-soft: #eaebe9;
+  --accent: #28527a; --accent-soft: #e0e8f0; --idle: #b3b7bc;
+}
+
+/* ---------- 外观：暗色（覆盖同一组令牌，配色再覆盖一次） ---------- */
+[data-theme="dark"] {
+  --warn: #d3a44e; --err: #c0573f; --err-text: #e2765c; --err-soft: #3a1e18;
+  --knob: #e9e1d3;
+  --c-prompt: #7fa6d4; --c-output: #cf8065; --c-cache-w: #cfa958; --c-cache-r: #5fb3bd; --c-rate: #a493cd;
+}
+[data-theme="dark"], [data-theme="dark"][data-palette="xuanshi"] {
+  --paper: #15120e; --paper-raised: #1c1813;
+  --ink: #efe7d8; --ink-2: #bdb2a0; --ink-3: #83796a;
+  --line: #342d24; --line-soft: #272118;
+  --accent: #d17a5f; --accent-soft: #3a221a; --idle: #4a4238;
+}
+[data-theme="dark"][data-palette="nuanbai"] {
+  --paper: #131511; --paper-raised: #191c17;
+  --ink: #e9ece4; --ink-2: #b3b8ac; --ink-3: #7c8177;
+  --line: #2c3029; --line-soft: #232620;
+  --accent: #5fb98d; --accent-soft: #1c2f26; --idle: #454a40;
+}
+[data-theme="dark"][data-palette="lengbai"] {
+  --paper: #0f1413; --paper-raised: #161b1a;
+  --ink: #e4ece9; --ink-2: #aebbb6; --ink-3: #76837f;
+  --line: #29302e; --line-soft: #202624;
+  --accent: #63b394; --accent-soft: #172a24; --idle: #3f4846;
+}
+[data-theme="dark"][data-palette="zhongxing"] {
+  --paper: #101315; --paper-raised: #171a1d;
+  --ink: #e6ebf0; --ink-2: #b0b8bf; --ink-3: #78808a;
+  --line: #282d32; --line-soft: #1f2428;
+  --accent: #6f9fd0; --accent-soft: #16222e; --idle: #3d4348;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--paper); color: var(--ink); font-family: var(--font);
+  font-size: 13px; -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; }
+
+/* 顶栏 */
+.hd { display: flex; align-items: flex-end; gap: 28px; padding: 24px 40px 0; border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; }
+.mark { width: 26px; height: 26px; border-radius: 6px; background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.brand b { font-size: 14px; letter-spacing: -.01em; }
+.brand span { font-size: 11px; color: var(--ink-3); font-family: var(--num); }
+.tabs { display: flex; gap: 26px; margin-left: 20px; }
+.tab { padding-bottom: 13px; font-size: 13.5px; color: var(--ink-3); display: flex; align-items: baseline; gap: 6px; cursor: pointer; }
+.tab small { font-family: var(--num); font-size: 10px; }
+.tab.on { color: var(--ink); font-weight: 600; position: relative; }
+.tab.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--ink); }
+.hd-r { margin-left: auto; display: flex; align-items: center; gap: 18px; padding-bottom: 14px; }
+.sync { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); }
+.link { font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.link:hover { color: var(--ink); }
+
+/* 通用文字与控件 */
+.kicker { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.h1 { font-size: 20px; letter-spacing: -.02em; }
+.h2 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.muted { color: var(--ink-3); font-size: 11.5px; }
+.num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+.sw { width: 34px; height: 20px; border-radius: 20px; background: var(--track); position: relative; flex: 0 0 34px; }
+.sw.on { background: var(--accent); }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.sw.on::after { left: 16px; }
+
+.btn { height: 30px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink-2); font-size: 12px; font-family: var(--font); cursor: pointer; }
+.btn:hover { color: var(--ink); border-color: var(--btn-line-hover); }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 600; }
+.btn.primary:hover { background: var(--primary-hover); }
+.btn.text { border: 0; padding: 0 4px; height: auto; }
+.btn.danger { color: var(--err-text); border-color: color-mix(in srgb, var(--err-text) 32%, var(--paper)); }
+
+.field { height: 30px; border: 1px solid var(--line); background: var(--paper-raised); border-radius: 7px; padding: 0 10px; display: inline-flex; align-items: center; font-family: var(--num); font-size: 11.5px; color: var(--ink); }
+.select { position: relative; padding-right: 26px; }
+.select::after { content: ""; position: absolute; right: 10px; top: 11px; width: 5px; height: 5px; border-right: 1.4px solid var(--ink-3); border-bottom: 1.4px solid var(--ink-3); transform: rotate(45deg); }
+
+.pill { font-size: 10.5px; font-weight: 600; letter-spacing: .02em; padding: 1.5px 7px; border-radius: 3px; }
+.pill.ok { background: var(--accent-soft); color: var(--accent); }
+.pill.off { background: var(--surface-2); color: var(--ink-3); }
+.pill.err { background: var(--err-soft); color: var(--err-text); }
+.st { font-size: 11px; display: inline-flex; align-items: center; gap: 5px; }
+.st i { width: 5px; height: 5px; border-radius: 50%; background: var(--idle); }
+.st.ok { color: var(--accent); } .st.ok i { background: var(--accent); }
+.st.warn { color: var(--warn); } .st.warn i { background: var(--warn); }
+.st.err { color: var(--err-text); font-weight: 600; } .st.err i { background: var(--err); }
+.av { background: var(--surface-2); }
+
+
+  /* 外观切换：分段控件 */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--paper-raised); }
+  .seg-i { height: 28px; padding: 0 11px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--ink-3); font-family: var(--font); font-size: 11.5px; cursor: pointer; }
+  .seg-i:first-child { border-left: 0; }
+  .seg-i:hover { color: var(--ink); }
+  .seg-i.on { background: var(--ink); color: var(--paper); font-weight: 600; }
+
+  /* 配色选择：纸 + 强调色双色样本 */
+  .palettes { display: inline-flex; gap: 16px; }
+  .pal { display: inline-flex; flex-direction: column; align-items: center; gap: 6px; border: 0; background: transparent; padding: 0; cursor: pointer; font-family: var(--font); }
+  .pal i { width: 38px; height: 24px; border-radius: 5px; border: 1px solid var(--line); display: block; position: relative; }
+  .pal u { position: absolute; right: 4px; bottom: 4px; width: 9px; height: 9px; border-radius: 50%; display: block; }
+  .pal span { font-size: 10.5px; color: var(--ink-3); }
+  .pal:hover span { color: var(--ink-2); }
+  .pal.on span { color: var(--ink); font-weight: 600; }
+  .seg-i:focus-visible, .pal:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  .pal.on i { box-shadow: 0 0 0 1px var(--ink) inset; }
+</style>
+<style>
+  .body { height: calc(100% - 73px); display: grid; grid-template-columns: 200px minmax(0,1fr); }
+  .nav { border-right: 1px solid var(--line); padding: 28px 0 28px 40px; }
+  .nav a { display: block; font-size: 12.5px; color: var(--ink-3); padding: 9px 0; cursor: pointer; }
+  .nav a:hover { color: var(--ink); }
+  .nav a.on { color: var(--ink); font-weight: 600; }
+  .nav .hint { font-size: 10.5px; color: var(--ink-3); line-height: 1.7; padding-top: 18px; border-top: 1px solid var(--line-soft); margin-top: 12px; max-width: 140px; }
+
+  .panel { padding: 28px 48px 28px 40px; overflow: auto; }
+  .panel h1 { font-size: 20px; letter-spacing: -.02em; }
+  .panel .lead { font-size: 12px; color: var(--ink-3); margin-top: 6px; line-height: 1.7; }
+
+  .group { margin-top: 28px; }
+  .group-title { font-size: 11px; letter-spacing: .08em; color: var(--ink-3); padding-bottom: 8px; border-bottom: 1px solid var(--ink); }
+  .group-title b { font-family: var(--num); font-weight: 400; margin-right: 8px; opacity: .7; }
+  .row { display: flex; align-items: flex-start; gap: 26px; padding: 15px 0; border-bottom: 1px solid var(--line-soft); }
+  .row.disabled { opacity: .55; }
+  .label { flex: 1; min-width: 0; }
+  .label b { font-size: 12.5px; font-weight: 600; display: block; }
+  .label span { font-size: 11px; color: var(--ink-3); line-height: 1.7; display: block; margin-top: 3px; max-width: 46ch; }
+  .label .why { font-size: 10.5px; color: var(--warn); margin-top: 4px; display: block; }
+  .control { flex: 0 0 auto; padding-top: 1px; display: flex; align-items: center; gap: 10px; }
+  .path { font-family: var(--num); font-size: 10.5px; color: var(--ink-3); margin-top: 5px; display: block; }
+
+</style>
+</head>
+<body>
+  <div class="hd">
+    <div class="brand"><div class="mark">C</div><div><b>Cursor 助手</b><br><span>v1.94.0</span></div></div>
+    <div class="tabs"><div class="tab">总览</div><div class="tab">接入</div><div class="tab">模型 <small>37</small></div><div class="tab on">设置</div></div>
+    <div class="hd-r"><span class="sync">状态更新 10:26:30</span></div>
+  </div>
+
+  <div class="body">
+    <div class="nav">
+      <a class="on">基本设置</a><a>会话与日志</a><a>网络与请求</a><a>数据与恢复</a>
+      <div class="hint">设置实时生效，关闭窗口不会丢失。</div>
+    </div>
+
+    <div class="panel">
+      <h1>基本设置</h1>
+      <div class="lead">界面语言、主题，以及应用启动时的行为。</div>
+
+      <div class="group">
+        <div class="group-title"><b>01</b>外观与语言</div>
+        <div class="row">
+          <div class="label"><b>界面语言</b><span>切换后立即生效，无需重启。</span></div>
+          <div class="control"><div class="field select" style="min-width:132px">简体中文</div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>外观</b><span>跟随系统时，随 macOS 外观在亮色与暗色之间切换；选择具体一项后以这里为准。</span></div>
+          <div class="control"><div class="seg" role="group" aria-label="外观">
+            <button class="seg-i" data-theme="auto">跟随系统</button><button class="seg-i" data-theme="light">亮色</button><button class="seg-i on" data-theme="dark">暗色</button>
+          </div></div>
+        </div>
+        <div class="row">
+          <div class="label"><b>配色</b><span>只换纸色与强调色，版式、字号、留白不变；亮色与暗色各有一套对应取值。</span></div>
+          <div class="control"><div class="palettes" role="group" aria-label="配色">
+            <button class="pal on" data-palette="xuanshi"><i style="background:#f7f3ea;border-color:#e0d8c6"><u style="background:#9b3c2c"></u></i><span>宣纸 · 朱砂</span></button>
+            <button class="pal" data-palette="nuanbai"><i style="background:#f6f5f1;border-color:#e6e4db"><u style="background:#1c6b47"></u></i><span>暖白 · 墨绿</span></button>
+            <button class="pal" data-palette="lengbai"><i style="background:#f5f6f3;border-color:#e2e5e1"><u style="background:#2f5d46"></u></i><span>冷白 · 松针</span></button>
+            <button class="pal" data-palette="zhongxing"><i style="background:#f4f4f1;border-color:#e1e2e0"><u style="background:#28527a"></u></i><span>中性 · 靛蓝</span></button>
+          </div></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title"><b>02</b>启动与窗口</div>
+        <div class="row"><div class="label"><b>登录时启动</b></div><div class="control"><div class="sw on"></div></div></div>
+        <div class="row"><div class="label"><b>关闭窗口后继续运行</b><span>关闭后代理与共享入口保持监听，可从菜单栏重新打开。</span></div><div class="control"><div class="sw on"></div></div></div>
+        <div class="row"><div class="label"><b>在 Dock 中显示图标</b></div><div class="control"><div class="sw on"></div></div></div>
+        <div class="row"><div class="label"><b>启动时隐藏主窗口</b><span>适合开机自动运行、只在需要时打开。</span></div><div class="control"><div class="sw"></div></div></div>
+      </div>
+
+      <div class="group">
+        <div class="group-title"><b>03</b>内容与更新</div>
+        <div class="row disabled">
+          <div class="label"><b>广告内容</b><span>内容服务暂未接入，开关暂不可用。</span></div>
+          <div class="control"><div class="sw"></div><span class="muted" style="font-size:10.5px">未接入</span></div>
+        </div>
+        <div class="row"><div class="label"><b>启动时检查客户端更新</b><span>只在启动时请求一次版本信息。</span></div><div class="control"><div class="sw on"></div></div></div>
+      </div>
+    </div>
+  </div>
+<script>
+  const root = document.documentElement;
+  const update = () => {
+    document.querySelectorAll('.seg-i, .pal').forEach(b => b.setAttribute('aria-pressed', String(b.classList.contains('on'))));
+    const dark = root.dataset.theme === 'dark';
+    const samples = dark ? {xuanshi:['#15120e','#d17a5f'],nuanbai:['#131511','#5fb98d'],lengbai:['#0f1413','#63b394'],zhongxing:['#101315','#6f9fd0']} : {xuanshi:['#f7f3ea','#9b3c2c'],nuanbai:['#f6f5f1','#1c6b47'],lengbai:['#f5f6f3','#2f5d46'],zhongxing:['#f4f4f1','#28527a']};
+    document.querySelectorAll('.pal').forEach(b => { const [paper,accent]=samples[b.dataset.palette]; b.querySelector('i').style.background=paper; b.querySelector('u').style.background=accent; });
+  };
+  const apply = () => {
+    const sys = matchMedia('(prefers-color-scheme: dark)');
+    const seg = document.querySelector('.seg-i.on').dataset.theme;
+    root.dataset.theme = seg === 'auto' ? (sys.matches ? 'dark' : 'light') : seg;
+    update();
+  };
+  document.querySelectorAll('.seg-i').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.seg-i').forEach(x => x.classList.toggle('on', x === b));
+    apply();
+  });
+  document.querySelectorAll('.pal').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.pal').forEach(x => x.classList.toggle('on', x === b));
+    root.dataset.palette = b.dataset.palette;
+    update();
+  });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', apply);
+  apply();
+</script>
+</body>
+</html>
