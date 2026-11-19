@@ -4,6 +4,7 @@ import Card from "@/components/ui/Card.vue";
 import Input from "@/components/ui/Input.vue";
 import Switch from "@/components/ui/Switch.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import {
   appState,
@@ -18,7 +19,7 @@ import {
   testGateway,
   toUserError,
 } from "@/state/appState";
-import { DEFAULT_GATEWAY_LISTEN_ADDR, countPublishedGatewayModels, listGatewayPublicModelRows, buildGatewayPublicModelOverrides, MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH } from "@/state/configProjection";
+import { DEFAULT_GATEWAY_LISTEN_ADDR, listGatewayPublicModelRows, buildGatewayPublicModelOverrides, MAX_GATEWAY_PUBLIC_MODEL_ID_LENGTH } from "@/state/configProjection";
 import { Clipboard } from "@wailsio/runtime";
 import { computed, ref } from "vue";
 
@@ -35,9 +36,6 @@ const gatewayDisplayAddr = computed(() =>
   appState.gatewayRuntimeListenAddr || appState.gatewayListenAddr || DEFAULT_GATEWAY_LISTEN_ADDR,
 );
 const gatewayBaseURL = computed(() => `http://${gatewayDisplayAddr.value}/v1`);
-const publicModelCount = computed(() => (
-  countPublishedGatewayModels(appState.modelAdapters, appState.gatewayPublicModels)
-));
 const enabledModelCount = computed(() => publicModelRows.value.length);
 const gatewayIntentText = computed(() =>
   appState.gatewayEnabled ? "配置意图：已启用" : "配置意图：未启用",
@@ -60,10 +58,6 @@ const tokenHint = computed(() =>
     : "保存启用配置时由后端生成",
 );
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 async function copyTokenValue(token) {
   const text = String(token || "").trim();
@@ -85,7 +79,7 @@ async function handleCopyBaseURL() {
       showActionError("复制失败", "Base URL 不可用");
       return;
     }
-    message("Base URL 已复制");
+    message("Base URL 已复制", { tone: "success" });
   } catch (error) {
     showActionError("复制失败", toUserError(error));
   }
@@ -111,7 +105,7 @@ async function handleCopyToken() {
       showActionError("复制失败", "尚未生成 Gateway token");
       return;
     }
-    message("Gateway token 已复制");
+    message("Gateway token 已复制", { tone: "success" });
   } catch (error) {
     showActionError("复制失败", toUserError(error));
   }
@@ -139,7 +133,7 @@ async function handleRotateToken() {
   }
   try {
     await copyTokenValue(token);
-    message("Gateway token 已轮换并复制");
+    message("Gateway token 已轮换并复制", { tone: "success" });
   } catch (error) {
     showActionError("复制失败", `Gateway token 已轮换，但复制失败：${toUserError(error)}`);
   }
@@ -161,7 +155,7 @@ async function handleGatewayTest() {
     const modelCount = Number(outcome.result?.modelCount || 0);
     const latencyMS = Math.max(0, Number(outcome.result?.latencyMs || 0));
     gatewayTestText.value = `入口可用 · ${modelCount} 个公开模型 · ${latencyMS} ms`;
-    message("Gateway 可用");
+    message("Gateway 可用", { tone: "success" });
     return true;
   } finally {
     gatewayTestBusy.value = false;
@@ -224,7 +218,7 @@ async function handleSaveGateway() {
   }
   const ok = await persistGateway();
   if (ok) {
-    message("Gateway 配置已保存");
+    message("Gateway 配置已保存", { tone: "success" });
   }
 }
 
@@ -281,7 +275,7 @@ async function handleReloadGateway() {
               :variant="gatewayStartDisabled ? 'default' : 'primary'"
               class="btn-sm"
               :disabled="gatewayStartDisabled"
-              :title="!appState.gatewayEnabled || gatewayDirty ? '需先启用并保存配置' : ''"
+              :disabled-reason="!appState.gatewayEnabled || gatewayDirty ? '需先启用并保存配置' : ''"
               @click="handleGatewayStart"
             >
               启动 Gateway
@@ -341,7 +335,7 @@ async function handleReloadGateway() {
         <div class="setting-l">
           <div class="setting-t">公开模型</div>
           <div class="setting-s">
-            {{ enabledModelCount }} 个已启用，{{ publicModelCount }} 个公开；默认按模型名称公开，可单独改名或取消公开
+            {{ enabledModelCount }} 个已启用 · 默认按模型名称公开；留空使用默认名，填写后覆盖对外名称
           </div>
         </div>
       </div>
@@ -356,34 +350,39 @@ async function handleReloadGateway() {
       <div
         v-for="row in publicModelRows"
         :key="row.adapterID"
-        class="setting-row"
+        class="public-model-row"
       >
-        <div class="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
-          <Switch
-            standalone
-            compact
-            label="公开此模型"
-            :show-state="false"
-            :enabled="row.published"
-            :disabled="appState.configSaving"
-            @change="setPublicModelPublished(row.adapterID, $event)"
-          />
-          <div class="min-w-0">
-            <div class="truncate text-sm font-medium">{{ row.displayName || row.adapterID }}</div>
-            <Input
-              :model-value="row.publicID"
-              :disabled="appState.configSaving || !row.published"
-              placeholder="公开名称，默认使用模型名称"
-              @update:model-value="setPublicModelID(row.adapterID, $event)"
-            />
-            <div
-              v-if="row.published && row.effectiveID && row.effectiveID !== row.publicID"
-              class="mt-1 text-xs text-[var(--color-text-muted)]"
-            >
-              对外名称 {{ row.effectiveID }}
-            </div>
+        <Switch
+          standalone
+          compact
+          label="公开此模型"
+          :show-state="false"
+          :enabled="row.published"
+          :disabled="appState.configSaving"
+          @change="setPublicModelPublished(row.adapterID, $event)"
+        />
+        <div class="min-w-0">
+          <div
+            class="truncate text-sm font-medium"
+            :title="row.displayName || row.adapterID"
+          >
+            {{ row.displayName || row.adapterID }}
+          </div>
+          <div
+            v-if="row.hasCustom"
+            class="truncate text-[11px] text-[var(--color-text-muted)]"
+            :title="`对外：${row.effectiveID}`"
+          >
+            对外：{{ row.effectiveID }}
           </div>
         </div>
+        <Input
+          :model-value="row.hasCustom ? row.publicID : ''"
+          :disabled="appState.configSaving || !row.published"
+          :placeholder="`默认：${row.publicID}`"
+          :title="row.hasCustom ? row.publicID : `默认：${row.publicID}`"
+          @update:model-value="setPublicModelID(row.adapterID, $event)"
+        />
       </div>
 
       <div class="setting-row">

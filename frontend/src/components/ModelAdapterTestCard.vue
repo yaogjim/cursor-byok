@@ -16,6 +16,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  inline: {
+    type: Boolean,
+    default: false,
+  },
+  inlineSurface: {
+    type: Boolean,
+    default: false,
+  },
   showMetrics: {
     type: Boolean,
     default: false,
@@ -97,10 +105,60 @@ const summaryClass = computed(() => {
   }
   return "text-[var(--color-text-secondary)]";
 });
+
+const dotClass = computed(() => {
+  if (props.stale) {
+    return "bg-[var(--color-warning-text)]";
+  }
+  if (normalizedStatus.value === "running") {
+    return "bg-[var(--color-info-text)]";
+  }
+  if (normalizedStatus.value === "error") {
+    return "bg-[var(--color-error-text)]";
+  }
+  if (normalizedStatus.value === "success") {
+    return props.result?.tokensEstimated
+      ? "bg-[var(--color-warning-text)]"
+      : "bg-[var(--color-success-text)]";
+  }
+  return "bg-[var(--color-border-strong)]";
+});
+
+const inlineText = computed(() => {
+  if (normalizedStatus.value === "running") {
+    return "测试中...";
+  }
+  if (normalizedStatus.value === "error") {
+    return rawResponseText.value ? "失败 · 查看详情" : "失败";
+  }
+  if (normalizedStatus.value === "success") {
+    const tokens = Number(props.result?.outputTokens);
+    const tokenSuffix = Number.isFinite(tokens) && tokens > 0 ? ` · ${tokens} tokens` : "";
+    return `通过 · ${summaryText.value}${tokenSuffix}`;
+  }
+  return props.emptyText;
+});
 </script>
 
 <template>
   <div
+    v-if="inline"
+    class="flex min-w-0 items-center gap-1.5 text-[11.5px] leading-5"
+    :class="[summaryClass, inlineSurface ? ['rounded-[8px] border px-3 py-1.5', panelClass] : '']"
+  >
+    <span class="size-1.5 shrink-0 rounded-full" :class="dotClass" aria-hidden="true" />
+    <span class="min-w-0 flex-1 truncate" :title="inlineText">{{ inlineText }}</span>
+    <span
+      v-if="stale"
+      class="shrink-0 rounded-[999px] border border-[var(--color-warning-border)] px-1.5 text-[10px] font-semibold leading-4 text-[var(--color-warning-text)]"
+      title="配置已变更，请重新测试"
+    >
+      需重测
+    </span>
+    <Tooltip v-if="rawResponseText" :content="rawResponseText" copyable />
+  </div>
+  <div
+    v-else
     class="rounded-[8px] border-none"
     :class="[panelClass, compact ? 'px-2.5 py-2' : 'px-3 py-3']"
   >

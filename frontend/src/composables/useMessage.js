@@ -45,13 +45,15 @@ function showMessage(content, options = {}) {
     clearMessageTimer(messageState.current);
   }
 
+  const tone = ["success", "error", "info"].includes(options.tone) ? options.tone : "info";
   const duration = Number.isFinite(options.duration)
     ? Math.max(0, options.duration)
-    : 2400;
+    : tone === "error" ? 0 : 2400;
   const id = `message-${Date.now()}-${messageSeed += 1}`;
   const item = {
     id,
     content: normalizedContent,
+    tone,
     shownAt: Date.now(),
     timer: null,
   };

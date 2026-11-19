@@ -6,6 +6,7 @@ import Select from "@/components/ui/Select.vue";
 import Switch from "@/components/ui/Switch.vue";
 import Input from "@/components/ui/Input.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import {
   appState,
@@ -39,17 +40,10 @@ const observabilityModeOptions = [
 ];
 
 const message = useMessage();
-const settingsSaveLabel = computed(() => {
-  if (appState.configSaving) {
-    return "保存中...";
-  }
-  return settingsPanel.value === "logs" ? "保存日志设置" : "保存设置";
-});
+const settingsSaveLabel = computed(() => (
+  appState.configSaving ? "保存中..." : "保存设置"
+));
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 const loginItemEnabled = computed(() => (
   appState.loginItemStatus === "enabled" || appState.loginItemStatus === "requires_approval"
@@ -78,7 +72,7 @@ async function handleSaveConfig() {
     return;
   }
   await syncLogCaptureStatus().catch(() => {});
-  message("本页设置已保存");
+  message("本页设置已保存", { tone: "success" });
 }
 
 async function handleReloadConfig() {
@@ -203,7 +197,7 @@ onMounted(async () => {
           <div class="field">
             <span class="field-l">界面语言</span>
             <LocaleSelect wrapper-class="w-full" />
-            <span class="field-h">切换后立即应用并保存在本机</span>
+            <span class="field-h">多语言界面将在后续版本提供</span>
           </div>
           <div class="field">
             <span class="field-l">界面主题</span>
@@ -280,10 +274,9 @@ onMounted(async () => {
                 :show-state="false"
                 class="w-full"
                 label="广告内容"
-                description="关闭后不拉取广告，也不显示广告位与弹窗"
+                description="内容服务暂未接入，广告位保留但当前不拉取、不显示"
                 :enabled="appState.advertisingEnabled"
-                :disabled="appState.configSaving"
-                @change="appState.advertisingEnabled = $event"
+                disabled
               />
             </div>
             <div class="setting-row">
@@ -299,22 +292,6 @@ onMounted(async () => {
               />
             </div>
           </div>
-        </div>
-      </div>
-      <div class="config-action-bar">
-        <span
-          class="config-action-status"
-          :class="configSectionDirty.settings ? 'is-dirty' : ''"
-        >
-          {{ configSectionStatusText("settings") }}
-        </span>
-        <div class="config-action-buttons spread">
-          <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadConfig">
-            重新加载
-          </Button>
-          <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.settings" @click="handleSaveConfig">
-            {{ settingsSaveLabel }}
-          </Button>
         </div>
       </div>
     </Card>
@@ -440,22 +417,6 @@ onMounted(async () => {
           </Button>
         </div>
       </div>
-      <div class="config-action-bar">
-        <span
-          class="config-action-status"
-          :class="configSectionDirty.settings ? 'is-dirty' : ''"
-        >
-          {{ configSectionStatusText("settings") }}
-        </span>
-        <div class="config-action-buttons spread">
-          <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadConfig">
-            重新加载
-          </Button>
-          <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.settings" @click="handleSaveConfig">
-            {{ settingsSaveLabel }}
-          </Button>
-        </div>
-      </div>
     </Card>
 
     <Card v-show="settingsPanel === 'network'" :padded="false" class="compact-card min-h-0">
@@ -515,22 +476,6 @@ onMounted(async () => {
           <button type="button" class="relative inline-flex h-[22px] w-[40px] shrink-0 rounded-full bg-[var(--color-border-strong)] opacity-55" disabled aria-label="跳过 SSL 验证，计划中" />
         </div>
       </div>
-      <div class="config-action-bar">
-        <span
-          class="config-action-status"
-          :class="configSectionDirty.settings ? 'is-dirty' : ''"
-        >
-          {{ configSectionStatusText("settings") }}
-        </span>
-        <div class="config-action-buttons spread">
-          <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadConfig">
-            重新加载
-          </Button>
-          <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.settings" @click="handleSaveConfig">
-            {{ settingsSaveLabel }}
-          </Button>
-        </div>
-      </div>
     </Card>
 
     <Card v-show="settingsPanel === 'recovery'" :padded="false" class="compact-card min-h-0">
@@ -550,5 +495,22 @@ onMounted(async () => {
         </div>
       </div>
     </Card>
+
+    <div class="config-action-bar">
+      <span
+        class="config-action-status"
+        :class="configSectionDirty.settings ? 'is-dirty' : ''"
+      >
+        {{ configSectionStatusText("settings") }}
+      </span>
+      <div class="config-action-buttons spread">
+        <Button variant="text" class="btn-sm" :disabled="appState.configSaving" @click="handleReloadConfig">
+          重新加载
+        </Button>
+        <Button variant="primary" class="btn-sm" :disabled="appState.configSaving || !configSectionDirty.settings" @click="handleSaveConfig">
+          {{ settingsSaveLabel }}
+        </Button>
+      </div>
+    </div>
   </div>
 </template>

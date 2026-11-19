@@ -6,6 +6,7 @@ import Switch from "@/components/ui/Switch.vue";
 import ModelAdapterTestCard from "@/components/ModelAdapterTestCard.vue";
 import ModelEditor from "@/components/ModelEditor.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import { useConfigTransfer } from "@/composables/useConfigTransfer";
 import Sortable from "sortablejs";
@@ -116,10 +117,6 @@ watch(
   { immediate: true },
 );
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 const {
   configTransferBusy,
@@ -331,7 +328,7 @@ async function handleSavePage() {
     showActionError("保存失败", result.error);
     return;
   }
-  message("本页配置已保存");
+  message("本页配置已保存", { tone: "success" });
 }
 
 async function handleReloadPage() {
@@ -638,7 +635,7 @@ onBeforeUnmount(() => {
                   {{ adapterEndpoint(adapter) }}
                 </span>
               </div>
-              <div class="center-row flex-wrap justify-end gap-1">
+              <div class="center-row flex-nowrap justify-end gap-1">
                 <Button
                   variant="default"
                   class="btn-sm"
@@ -648,15 +645,8 @@ onBeforeUnmount(() => {
                   {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
                 </Button>
                 <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
-                <details class="model-more-menu">
-                  <summary aria-label="更多操作" title="更多操作">
-                    <span class="icon-[mdi--dots-vertical] text-[16px]" aria-hidden="true" />
-                  </summary>
-                  <div class="model-more-menu-popover">
-                    <button type="button" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</button>
-                    <button type="button" class="is-risk" :disabled="appState.configSaving || batchTesting" @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</button>
-                  </div>
-                </details>
+                <Button variant="text" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
+                <Button variant="text" class="btn-sm !text-[var(--color-error-text)]" :disabled="appState.configSaving || batchTesting" @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</Button>
               </div>
             </div>
           </div>
@@ -670,7 +660,7 @@ onBeforeUnmount(() => {
           <Card
             v-for="(adapter, index) in filteredAdapters"
             :key="adapter.id || `${adapter.baseURL}-${adapter.modelID}-${index}`"
-            class="model-sort-item group relative flex flex-col"
+            class="model-card model-sort-item group relative flex flex-col"
             :class="adapter.enabled === false ? 'opacity-55' : ''"
             :data-model-id="adapter.id"
           >
@@ -684,58 +674,60 @@ onBeforeUnmount(() => {
             >
               <span class="icon-[icon-park-outline--drag] text-[20px]" />
             </button>
-            <div class="flex flex-1 flex-col gap-3">
-              <div class="flex min-w-0 flex-1 flex-col gap-2.5">
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0 flex-1">
-                    <div class="truncate text-base font-bold text-[var(--color-text)]">{{ adapter.displayName }}</div>
-                    <div class="mt-1 truncate text-sm text-[var(--color-text-secondary)]">{{ adapter.modelID }}</div>
-                    <div v-if="adapter.type === 'openai'" class="mt-0.5 truncate text-xs text-[var(--color-text-muted)]">
-                      {{ adapter.openAIEndpoint || "/v1/responses" }}
-                    </div>
-                  </div>
-                  <div class="flex shrink-0 flex-col items-end gap-2">
-                    <Switch
-                      standalone
-                      compact
-                      label="启用模型"
-                      :show-state="false"
-                      :enabled="adapter.enabled !== false"
-                      :disabled="appState.configSaving || batchTesting"
-                      @change="setAdapterEnabled(adapter, $event)"
-                    />
-                    <span
-                      class="model-provider-chip"
-                      :style="providerStyle(adapter)"
-                    >
-                      <i aria-hidden="true" />
-                      <span>{{ modelProviderMeta(adapter).label }}</span>
-                    </span>
-                  </div>
+            <div class="model-card-body flex flex-1 flex-col gap-2.5">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-base font-bold text-[var(--color-text)]" :title="adapter.displayName">{{ adapter.displayName }}</div>
+                  <div class="mt-0.5 truncate text-[11.5px] text-[var(--color-text-muted)]" :title="adapter.modelID">{{ adapter.modelID }}</div>
                 </div>
-
-                <ModelAdapterTestCard
+                <Switch
+                  standalone
                   compact
-                  title="测试"
-                  empty-text="未测试"
-                  :result="getAdapterTestResult(adapter)"
+                  label="启用模型"
+                  :show-state="false"
+                  :enabled="adapter.enabled !== false"
+                  :disabled="appState.configSaving || batchTesting"
+                  @change="setAdapterEnabled(adapter, $event)"
                 />
               </div>
 
-              <div class="center-row shrink-0 flex-wrap justify-end gap-2 border-t border-[var(--color-border)] pt-3">
-                <Button
-                  variant="default"
-                  class="btn-sm"
-                  :disabled="appState.configSaving || batchTesting || isAdapterTesting(adapter)"
-                  @click="handleTestModelAdapter(adapter)"
+              <div class="flex min-w-0 items-center justify-between gap-2">
+                <span
+                  class="model-provider-chip"
+                  :style="providerStyle(adapter)"
                 >
-                  {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
-                </Button>
-                <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
-                <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
-                <Button variant="text" class="btn-sm" :disabled="appState.configSaving || batchTesting"
-                  @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</Button>
+                  <i aria-hidden="true" />
+                  <span>{{ modelProviderMeta(adapter).label }}</span>
+                </span>
+                <span
+                  class="truncate whitespace-nowrap rounded-[6px] bg-[var(--color-surface-muted)] px-2 py-0.5 font-mono text-[11px] text-[var(--color-text-secondary)]"
+                  :title="adapterEndpoint(adapter)"
+                >
+                  {{ adapterEndpoint(adapter) }}
+                </span>
               </div>
+
+              <ModelAdapterTestCard
+                inline
+                title="测试"
+                empty-text="未测试"
+                :result="getAdapterTestResult(adapter)"
+              />
+            </div>
+
+            <div class="model-card-foot center-row shrink-0 justify-end gap-1.5 border-t border-[var(--color-border)]">
+              <Button
+                variant="default"
+                class="btn-sm"
+                :disabled="appState.configSaving || batchTesting || isAdapterTesting(adapter)"
+                @click="handleTestModelAdapter(adapter)"
+              >
+                {{ isAdapterTesting(adapter) ? "测试中..." : "测试" }}
+              </Button>
+              <Button variant="default" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="openEditor(appState.modelAdapters.indexOf(adapter))">编辑</Button>
+              <Button variant="text" class="btn-sm" :disabled="appState.configSaving || batchTesting" @click="handleDuplicateModelAdapter(appState.modelAdapters.indexOf(adapter))">复制</Button>
+              <Button variant="text" class="btn-sm !text-[var(--color-error-text)]" :disabled="appState.configSaving || batchTesting"
+                @click="handleDeleteModelAdapter(appState.modelAdapters.indexOf(adapter))">删除</Button>
             </div>
           </Card>
         </div>
@@ -757,9 +749,10 @@ onBeforeUnmount(() => {
             重新加载
           </Button>
           <Button
+            v-if="configSectionDirty.models"
             variant="primary"
             class="btn-sm"
-            :disabled="appState.configSaving || batchTesting || configTransferBusy || !configSectionDirty.models"
+            :disabled="appState.configSaving || batchTesting || configTransferBusy"
             @click="handleSavePage"
           >
             {{ appState.configSaving ? "保存中..." : "保存模型配置" }}
@@ -773,6 +766,7 @@ onBeforeUnmount(() => {
     :open="editorOpen"
     :title="editorTitle"
     size="xl"
+    headerless
     :close-disabled="appState.configSaving"
     @close="closeEditor"
   >
@@ -781,6 +775,8 @@ onBeforeUnmount(() => {
       :key="editorSession"
       :index="editorIndex"
       :adapter="editorAdapter"
+      :title="editorTitle"
+      :close-disabled="appState.configSaving"
       @saved="handleEditorSaved"
       @close="closeEditor"
     />

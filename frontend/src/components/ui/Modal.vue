@@ -1,5 +1,7 @@
 <script setup>
 import Button from "@/components/ui/Button.vue";
+import { ref } from "vue";
+import { useDialogFocus } from "@/composables/useDialogFocus";
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -12,6 +14,13 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:visible", "confirm", "cancel"]);
+const panelRef = ref(null);
+useDialogFocus({
+  open: () => props.visible,
+  panelRef,
+  initialFocus: () => panelRef.value?.querySelector("button:not([disabled])"),
+  onEscape: handleCancel,
+});
 
 function handleConfirm() {
   emit("confirm");
@@ -39,6 +48,11 @@ function onMaskClick() {
         <Transition name="modal-content">
           <div
             v-show="visible"
+            ref="panelRef"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="title"
+            tabindex="-1"
             class="relative z-10 w-full max-w-[360px] overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-popover)]"
             @click.stop
           >

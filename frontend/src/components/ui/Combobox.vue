@@ -237,7 +237,7 @@ onBeforeUnmount(() => {
   <div class="flex w-full min-w-0 items-center gap-2">
     <div
       ref="rootRef"
-      class="flex h-9 min-w-0 flex-1 items-center rounded-[6px] border border-[#3f3f3f] bg-[#232323] transition-colors focus-within:border-[#10AD5D]"
+      class="flex h-9 min-w-0 flex-1 items-center rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface)] transition-colors focus-within:border-[#10AD5D]"
     >
       <input
         ref="inputRef"
@@ -248,7 +248,7 @@ onBeforeUnmount(() => {
         autocapitalize="none"
         autocorrect="off"
         spellcheck="false"
-        class="min-w-0 flex-1 bg-transparent px-3 text-sm text-[#e5e5e5] outline-none placeholder:text-[#7b7b7b] disabled:cursor-not-allowed disabled:opacity-60"
+        class="min-w-0 flex-1 bg-transparent px-3 text-sm text-[var(--color-text)] outline-none placeholder:text-[#7b7b7b] disabled:cursor-not-allowed disabled:opacity-60"
         :placeholder="placeholder"
         :disabled="disabled"
         :aria-label="ariaLabel || undefined"
@@ -264,7 +264,7 @@ onBeforeUnmount(() => {
       />
       <button
         type="button"
-        class="center-row h-full w-9 shrink-0 text-[#8f8f8f] outline-none transition-colors hover:text-[#d4d4d4] disabled:cursor-not-allowed disabled:opacity-60"
+        class="center-row h-full w-9 shrink-0 text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[#d4d4d4] disabled:cursor-not-allowed disabled:opacity-60"
         :disabled="disabled || loading"
         :aria-label="ariaLabel || undefined"
         :aria-expanded="isOpen"
@@ -295,7 +295,7 @@ onBeforeUnmount(() => {
         ref="menuRef"
         :id="listboxID"
         role="listbox"
-        class="fixed z-[999] overflow-y-auto rounded-[8px] border border-[#3f3f3f] bg-[#232323] p-1 shadow-[0_16px_30px_-12px_rgba(0,0,0,0.7)]"
+        class="fixed z-[999] overflow-y-auto rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] p-1 shadow-[0_16px_30px_-12px_rgba(0,0,0,0.7)]"
         :style="menuStyle"
       >
         <ul v-show="filteredOptions.length" role="presentation" class="py-1">
@@ -314,7 +314,7 @@ onBeforeUnmount(() => {
               :class="[
                 option.value === modelValue
                   ? 'bg-[#10AD5D]/15 text-[#10d06f]'
-                  : 'text-[#e5e5e5] hover:bg-[#303030]',
+                  : 'text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]',
                 activeOption === option ? 'bg-[#303030]' : '',
               ]"
               :aria-selected="option.value === modelValue"
@@ -330,7 +330,7 @@ onBeforeUnmount(() => {
             </button>
           </li>
         </ul>
-        <div v-show="!filteredOptions.length" class="px-3 py-2 text-sm text-[#8f8f8f]">{{ emptyText }}</div>
+        <div v-show="!filteredOptions.length" class="px-3 py-2 text-sm text-[var(--color-text-secondary)]">{{ emptyText }}</div>
       </div>
     </Transition>
   </Teleport>

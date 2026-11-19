@@ -11,20 +11,25 @@ const props = defineProps({
   placeholder: { type: String, default: "选择语言" },
 });
 
-const { locale, localeOptions, setLocale } = useLocale();
+const { locale, localeOptions } = useLocale();
 </script>
 
 <template>
   <div :class="wrapperClass">
-    <Select
-      :model-value="locale"
-      :options="localeOptions"
-      :border="border"
-      :aria-label="ariaLabel"
-      :button-class="buttonClass"
-      :menu-class="menuClass"
-      :placeholder="placeholder"
-      @update:model-value="setLocale"
-    />
+    <div class="flex items-center gap-2">
+      <div class="min-w-0 flex-1">
+        <Select
+          :model-value="locale"
+          :options="localeOptions"
+          :border="border"
+          :aria-label="ariaLabel"
+          :button-class="buttonClass"
+          :menu-class="menuClass"
+          :placeholder="placeholder"
+          disabled
+        />
+      </div>
+      <span class="badge-soon shrink-0">计划中</span>
+    </div>
   </div>
 </template>

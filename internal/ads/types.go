@@ -1,23 +1,19 @@
 package ads
 
 const (
-	// FetchURL 保留旧名称表示默认广告位地址。
-	FetchURL = "https://ads.leokun.cn/1"
-	// FetchURL     = "http://localhost:3000/ad.zip"
 	RoutePrefix  = "/ad"
 	EventUpdated = "ad:updated"
 )
 
+// Slot 描述一个可拉取的广告位。内容服务未接入前不配置任何远端地址；
+// 接入自定义服务器时在此注入，接口契约见
+// docs/features/ad-content-service/design.md。
 type Slot struct {
 	ID       string
 	FetchURL string
 }
 
-var Slots = []Slot{
-	{ID: "1", FetchURL: "https://ads.leokun.cn/1"},
-	{ID: "2", FetchURL: "https://ads.leokun.cn/2"},
-	{ID: "3", FetchURL: "https://ads.leokun.cn/3"},
-}
+var Slots []Slot
 
 type WindowConfig struct {
 	Width  int `json:"width" yaml:"width"`

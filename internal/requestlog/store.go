@@ -40,6 +40,7 @@ type Record struct {
 	ConversationID   string    `json:"conversation_id,omitempty"`
 	ModelCallID      string    `json:"model_call_id"`
 	RequestModel     string    `json:"request_model,omitempty"`
+	RequestModelName string    `json:"request_model_name,omitempty"`
 	Provider         string    `json:"provider,omitempty"`
 	Model            string    `json:"model,omitempty"`
 	InputTokens      int64     `json:"input_tokens"`
@@ -172,6 +173,9 @@ func (store *Store) Distinct(rangeName string) (providers []string, models []str
 				if record.RequestModel != "" {
 					modelSet[record.RequestModel] = struct{}{}
 				}
+				if record.RequestModelName != "" {
+					modelSet[record.RequestModelName] = struct{}{}
+				}
 			}
 			return scanned < maxScanRecords
 		})
@@ -277,6 +281,7 @@ func normalizeRecord(record Record) Record {
 	record.ConversationID = strings.TrimSpace(record.ConversationID)
 	record.ModelCallID = strings.TrimSpace(record.ModelCallID)
 	record.RequestModel = strings.TrimSpace(record.RequestModel)
+	record.RequestModelName = strings.TrimSpace(record.RequestModelName)
 	record.Provider = strings.TrimSpace(record.Provider)
 	record.Model = strings.TrimSpace(record.Model)
 	record.ErrorCategory = strings.TrimSpace(record.ErrorCategory)
@@ -331,12 +336,12 @@ func matchesProvider(record Record, provider string) bool {
 	return provider == "" || strings.ToLower(record.Provider) == provider
 }
 
-// matchesModel 同时匹配实际模型与请求模型，方便按客户端看到的模型名过滤。
+// matchesModel 同时匹配实际模型、请求模型与请求模型名称，方便按客户端看到的模型名过滤。
 func matchesModel(record Record, model string) bool {
 	if model == "" {
 		return true
 	}
-	return record.Model == model || record.RequestModel == model
+	return record.Model == model || record.RequestModel == model || record.RequestModelName == model
 }
 
 func matchesStatus(record Record, status string) bool {

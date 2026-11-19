@@ -1,7 +1,7 @@
 <script setup>
 import { Window } from "@wailsio/runtime";
-import LocaleSelect from "@/components/LocaleSelect.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { ACCESS_PATH, accessRouteLocation, parseAccessClient } from "@/router/access";
 import { isMainWindowPath } from "@/router";
 import {
@@ -155,10 +155,6 @@ async function handleCheckForUpdates() {
   }
 }
 
-function showActionError(title, error) {
-  const detail = String(error || "操作失败").trim() || "操作失败";
-  message(`${title}：${detail}`);
-}
 
 async function syncStateWithTimestamp() {
   await syncServiceState();
@@ -169,7 +165,7 @@ async function handleRefreshState() {
   try {
     await syncStateWithTimestamp();
   } catch (error) {
-    showActionError("刷新失败", error);
+    showActionError("刷新失败", String(error || "操作失败").trim() || "操作失败");
   }
 }
 
@@ -307,15 +303,6 @@ onUnmounted(() => {
             updateViewState.footerProgressText
           }}</span>
         </div>
-      </div>
-      <div class="ml-auto flex shrink-0 items-center gap-[8px]">
-        <LocaleSelect
-          :border="false"
-          aria-label="界面语言"
-          wrapper-class="w-auto"
-          button-class="h-[24px] bg-transparent px-1.5 text-[12px] !text-[var(--color-text-secondary)] !hover:text-[var(--color-text)]"
-          menu-class="text-[12px]"
-        />
       </div>
     </footer>
   </div>

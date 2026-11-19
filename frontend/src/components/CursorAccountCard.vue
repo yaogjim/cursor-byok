@@ -2,7 +2,7 @@
 import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
-import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import {
   disconnectCursorAccount,
@@ -14,7 +14,6 @@ import { Browser } from "@wailsio/runtime";
 import { computed, onMounted, onUnmounted, ref } from "vue";
 
 const CURSOR_ACCOUNT_CONTRIBUTOR_URL = "https://github.com/aike0210";
-const message = useMessage();
 
 defineProps({
   flush: {
@@ -77,10 +76,6 @@ const cursorAccountTitle = computed(() =>
   cursorAccountDisplayIdentifier.value || "未连接",
 );
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 async function handleOpenContributor() {
   try {

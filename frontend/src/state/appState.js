@@ -2335,6 +2335,7 @@ function normalizeRequestListRow(row) {
     conversationId: asString(source.conversationId),
     modelCallId: asString(source.modelCallId),
     requestModel: asString(source.requestModel),
+    requestModelName: asString(source.requestModelName),
     provider: asString(source.provider),
     model: asString(source.model),
     inputTokens: numberOrZero(source.inputTokens),

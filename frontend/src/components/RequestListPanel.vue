@@ -1,7 +1,15 @@
 <script setup>
 import Select from "@/components/ui/Select.vue";
 import { formatCompactInteger } from "@/utils/numberFormat";
-import { computed } from "vue";
+import {
+  formatRequestTime,
+  nextRequestSort,
+  requestDetailFields,
+  requestModelLabel,
+  requestRowKey,
+  sortRequestRows,
+} from "@/utils/requestList";
+import { computed, ref, watch } from "vue";
 
 const RANGE_OPTIONS = Object.freeze([
   { value: "today", label: "今天" },
@@ -42,6 +50,82 @@ const page = computed(() => Number(props.result?.page) || 1);
 const pageSize = computed(() => Number(props.result?.pageSize) || 50);
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 const summary = computed(() => props.result?.summary || {});
+const sort = ref(null);
+const expandedKeys = ref(new Set());
+const sortedRows = computed(() => sortRequestRows(rows.value, sort.value));
+const displayRows = computed(() => (
+  sortedRows.value.map((row, index) => ({ row, index, key: requestRowKey(row, rows.value.indexOf(row)) }))
+));
+
+watch(
+  () => [props.range, props.provider, props.model, props.status],
+  () => {
+    sort.value = null;
+    clearExpanded();
+  },
+);
+
+function sortDirection(key) {
+  return sort.value?.key === key ? sort.value.direction : "";
+}
+
+function ariaSort(key) {
+  const direction = sortDirection(key);
+  if (direction === "asc") {
+    return "ascending";
+  }
+  return direction === "desc" ? "descending" : "none";
+}
+
+function sortIconClass(key) {
+  const direction = sortDirection(key);
+  if (direction === "asc") {
+    return "icon-[mdi--arrow-up] text-[13px] text-[var(--color-primary)]";
+  }
+  if (direction === "desc") {
+    return "icon-[mdi--arrow-down] text-[13px] text-[var(--color-primary)]";
+  }
+  return "icon-[mdi--unfold-more-horizontal] text-[13px] text-[var(--color-text-faint)]";
+}
+
+function toggleSort(key) {
+  sort.value = nextRequestSort(sort.value, key);
+}
+
+function isExpanded(key) {
+  return expandedKeys.value.has(key);
+}
+
+function clearExpanded() {
+  expandedKeys.value = new Set();
+}
+
+function toggleRow(key) {
+  const next = new Set(expandedKeys.value);
+  if (next.has(key)) {
+    next.delete(key);
+  } else {
+    next.add(key);
+  }
+  expandedKeys.value = next;
+}
+
+function detailId(index) {
+  return `request-detail-${index}`;
+}
+
+function handleRowKeydown(event, key) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
+  toggleRow(key);
+}
+
+watch(page, clearExpanded);
 
 const providerOptions = computed(() => [
   { value: "", label: "全部供应商" },
@@ -55,11 +139,11 @@ const modelOptions = computed(() => [
 const summaryParts = computed(() => {
   const item = summary.value || {};
   return [
-    `${formatCompactInteger(item.requests || 0)} 个请求`,
-    `输入 ${formatCompactInteger(item.inputTokens || 0)}`,
-    `输出 ${formatCompactInteger(item.outputTokens || 0)}`,
-    `缓存读取 ${formatCompactInteger(item.cacheReadTokens || 0)}`,
-    `缓存写入 ${formatCompactInteger(item.cacheWriteTokens || 0)}`,
+    { key: "requests", prefix: "", value: formatCompactInteger(item.requests || 0), suffix: " 个请求" },
+    { key: "input", prefix: "输入 ", value: formatCompactInteger(item.inputTokens || 0), suffix: "" },
+    { key: "output", prefix: "输出 ", value: formatCompactInteger(item.outputTokens || 0), suffix: "" },
+    { key: "cacheRead", prefix: "缓存读取 ", value: formatCompactInteger(item.cacheReadTokens || 0), suffix: "" },
+    { key: "cacheWrite", prefix: "缓存写入 ", value: formatCompactInteger(item.cacheWriteTokens || 0), suffix: "" },
   ];
 });
 
@@ -69,18 +153,6 @@ function formatCompact(value) {
     return "—";
   }
   return formatCompactInteger(number);
-}
-
-function formatTime(value) {
-  const text = String(value || "");
-  if (!text) {
-    return "—";
-  }
-  const date = new Date(text);
-  if (Number.isNaN(date.getTime())) {
-    return "—";
-  }
-  return date.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
 function formatDuration(ms) {
@@ -131,7 +203,7 @@ const canNext = computed(() => page.value < pageCount.value && !props.loading);
 
 <template>
   <div>
-    <div class="flex flex-wrap items-center gap-2">
+    <div class="request-filter-bar">
       <div class="seg" role="group" aria-label="时间范围">
         <button
           v-for="item in RANGE_OPTIONS"
@@ -143,39 +215,42 @@ const canNext = computed(() => page.value < pageCount.value && !props.loading);
           {{ item.label }}
         </button>
       </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <Select
-          :model-value="provider"
-          :options="providerOptions"
-          placeholder="全部供应商"
-          button-class="min-w-[132px]"
-          @update:model-value="emit('provider-change', $event)"
-        />
-        <Select
-          :model-value="model"
-          :options="modelOptions"
-          placeholder="全部模型"
-          button-class="min-w-[132px]"
-          @update:model-value="emit('model-change', $event)"
-        />
-        <div class="seg" role="group" aria-label="状态筛选">
-          <button
-            v-for="item in STATUS_OPTIONS"
-            :key="item.value || 'all'"
-            type="button"
-            :class="status === item.value ? 'is-on' : ''"
-            @click="emit('status-change', item.value)"
-          >
-            {{ item.label }}
-          </button>
-        </div>
+      <Select
+        :model-value="provider"
+        :options="providerOptions"
+        placeholder="全部供应商"
+        button-class="request-filter-select min-w-[132px]"
+        @update:model-value="emit('provider-change', $event)"
+      />
+      <Select
+        :model-value="model"
+        :options="modelOptions"
+        placeholder="全部模型"
+        button-class="request-filter-select min-w-[132px]"
+        @update:model-value="emit('model-change', $event)"
+      />
+      <div class="seg" role="group" aria-label="状态筛选">
+        <button
+          v-for="item in STATUS_OPTIONS"
+          :key="item.value || 'all'"
+          type="button"
+          :class="status === item.value ? 'is-on' : ''"
+          @click="emit('status-change', item.value)"
+        >
+          {{ item.label }}
+        </button>
       </div>
     </div>
 
-    <div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
-      <span v-for="(part, index) in summaryParts" :key="part">
-        <span v-if="index > 0" class="mr-2 text-[var(--color-text-faint)]">·</span>
-        {{ part }}
+    <div class="request-meta">
+      <span v-for="(part, index) in summaryParts" :key="part.key" class="request-meta-item">
+        <span v-if="index > 0" class="request-meta-sep" aria-hidden="true">·</span>
+        <span v-if="part.prefix">{{ part.prefix }}</span>
+        <span class="request-meta-value">{{ part.value }}</span>
+        <span v-if="part.suffix">{{ part.suffix }}</span>
+      </span>
+      <span v-if="rows.length > 0" class="request-meta-hint">
+        本页排序，翻页保留排序，切换筛选重置
       </span>
     </div>
 
@@ -199,72 +274,132 @@ const canNext = computed(() => page.value < pageCount.value && !props.loading);
     <div v-else-if="rows.length === 0" class="mt-5 text-sm text-[var(--color-text-muted)]">
       暂无请求记录
     </div>
-    <div v-else class="mt-3 overflow-x-auto">
-      <table class="w-full min-w-[900px] border-collapse text-[12px]">
-        <thead>
-          <tr class="text-left text-[11px] font-semibold text-[var(--color-text-muted)]">
-            <th class="whitespace-nowrap px-2 py-2">时间</th>
-            <th class="whitespace-nowrap px-2 py-2">请求模型</th>
-            <th class="whitespace-nowrap px-2 py-2">供应商</th>
-            <th class="whitespace-nowrap px-2 py-2">实际模型</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">输入</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">输出</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">缓存命中率</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">首字耗时</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">耗时</th>
-            <th class="whitespace-nowrap px-2 py-2 text-right">速度</th>
-            <th class="whitespace-nowrap px-2 py-2">状态</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="row in rows"
-            :key="row.modelCallId || row.at"
-            class="border-t border-[var(--color-border)]"
-          >
-            <td class="whitespace-nowrap px-2 py-2 tabular-nums" style="font-family: var(--font-num)">
-              {{ formatTime(row.at) }}
-            </td>
-            <td class="max-w-[180px] truncate px-2 py-2" :title="row.requestModel">
-              {{ row.requestModel || "本地会话" }}
-            </td>
-            <td class="max-w-[160px] truncate px-2 py-2" :title="row.provider">
-              {{ row.provider || "—" }}
-            </td>
-            <td class="max-w-[200px] truncate px-2 py-2" :title="row.model">
-              {{ row.model || "—" }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatCompact(row.inputTokens) }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatCompact(row.outputTokens) }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatHitRate(row.cacheHitRate) }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatDuration(row.ttftMs) }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatDuration(row.durationMs) }}
-            </td>
-            <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
-              {{ formatSpeed(row) }}
-            </td>
-            <td class="whitespace-nowrap px-2 py-2">
-              <span
-                class="status-pill"
-                :class="isSuccess(row) ? 'is-ok' : 'is-err'"
-                :title="row.errorCategory || ''"
+    <div v-else class="mt-3">
+      <div class="mt-2 overflow-x-auto">
+        <table class="w-full min-w-[900px] border-collapse text-[12px]">
+          <thead>
+            <tr class="text-left text-[11px] font-semibold text-[var(--color-text-muted)]">
+              <th scope="col" class="w-[30px] px-2 py-2"><span class="sr-only">展开详情</span></th>
+              <th class="whitespace-nowrap px-2 py-2" :aria-sort="ariaSort('at')">
+                <button type="button" class="inline-flex cursor-pointer items-center gap-1 hover:text-[var(--color-text)]" @click="toggleSort('at')">
+                  时间<span :class="sortIconClass('at')" aria-hidden="true" />
+                </button>
+              </th>
+              <th class="whitespace-nowrap px-2 py-2">请求模型</th>
+              <th class="whitespace-nowrap px-2 py-2">供应商</th>
+              <th class="whitespace-nowrap px-2 py-2">实际模型</th>
+              <th class="whitespace-nowrap px-2 py-2 text-right" :aria-sort="ariaSort('inputTokens')">
+                <button type="button" class="inline-flex cursor-pointer items-center gap-1 hover:text-[var(--color-text)]" @click="toggleSort('inputTokens')">
+                  输入<span :class="sortIconClass('inputTokens')" aria-hidden="true" />
+                </button>
+              </th>
+              <th class="whitespace-nowrap px-2 py-2 text-right" :aria-sort="ariaSort('outputTokens')">
+                <button type="button" class="inline-flex cursor-pointer items-center gap-1 hover:text-[var(--color-text)]" @click="toggleSort('outputTokens')">
+                  输出<span :class="sortIconClass('outputTokens')" aria-hidden="true" />
+                </button>
+              </th>
+              <th class="whitespace-nowrap px-2 py-2 text-right">缓存命中率</th>
+              <th class="whitespace-nowrap px-2 py-2 text-right" :aria-sort="ariaSort('ttftMs')">
+                <button type="button" class="inline-flex cursor-pointer items-center gap-1 hover:text-[var(--color-text)]" @click="toggleSort('ttftMs')">
+                  首字耗时<span :class="sortIconClass('ttftMs')" aria-hidden="true" />
+                </button>
+              </th>
+              <th class="whitespace-nowrap px-2 py-2 text-right" :aria-sort="ariaSort('durationMs')">
+                <button type="button" class="inline-flex cursor-pointer items-center gap-1 hover:text-[var(--color-text)]" @click="toggleSort('durationMs')">
+                  耗时<span :class="sortIconClass('durationMs')" aria-hidden="true" />
+                </button>
+              </th>
+              <th class="whitespace-nowrap px-2 py-2 text-right">速度</th>
+              <th class="whitespace-nowrap px-2 py-2">状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template v-for="entry in displayRows" :key="`${entry.key}-${entry.index}`">
+              <tr
+                tabindex="0"
+                class="cursor-pointer border-t border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]"
+                @click="toggleRow(entry.key)"
+                @keydown="handleRowKeydown($event, entry.key)"
               >
-                <i aria-hidden="true" />
-                {{ statusLabel(row) }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                <td class="px-2 py-2">
+                  <button
+                    type="button"
+                    class="center-row size-6 shrink-0 cursor-pointer rounded-[4px] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]"
+                    :aria-expanded="isExpanded(entry.key)"
+                    :aria-controls="detailId(entry.index)"
+                    :aria-label="isExpanded(entry.key) ? '收起请求详情' : '展开请求详情'"
+                    @click.stop="toggleRow(entry.key)"
+                  >
+                    <span
+                      :class="isExpanded(entry.key) ? 'icon-[mdi--chevron-down]' : 'icon-[mdi--chevron-right]'"
+                      class="text-[16px]"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </td>
+                <td class="whitespace-nowrap px-2 py-2 tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatRequestTime(entry.row.at, range) }}
+                </td>
+                <td class="max-w-[180px] truncate px-2 py-2" :title="entry.row.requestModel">
+                  {{ requestModelLabel(entry.row) || "本地会话" }}
+                </td>
+                <td class="max-w-[160px] truncate px-2 py-2" :title="entry.row.provider">
+                  {{ entry.row.provider || "—" }}
+                </td>
+                <td class="max-w-[200px] truncate px-2 py-2" :title="entry.row.model">
+                  {{ entry.row.model || "—" }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatCompact(entry.row.inputTokens) }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatCompact(entry.row.outputTokens) }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatHitRate(entry.row.cacheHitRate) }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatDuration(entry.row.ttftMs) }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatDuration(entry.row.durationMs) }}
+                </td>
+                <td class="px-2 py-2 text-right tabular-nums" style="font-family: var(--font-num)">
+                  {{ formatSpeed(entry.row) }}
+                </td>
+                <td class="whitespace-nowrap px-2 py-2">
+                  <span
+                    class="status-pill"
+                    :class="isSuccess(entry.row) ? 'is-ok' : 'is-err'"
+                    :title="entry.row.errorCategory || ''"
+                  >
+                    <i aria-hidden="true" />
+                    {{ statusLabel(entry.row) }}
+                  </span>
+                </td>
+              </tr>
+              <tr
+                v-if="isExpanded(entry.key)"
+                :id="detailId(entry.index)"
+                class="border-t border-[var(--color-border)] bg-[var(--color-surface-muted)]"
+              >
+                <td :colspan="12" class="px-3 py-3">
+                  <dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] max-[760px]:grid-cols-1">
+                    <div
+                      v-for="field in requestDetailFields(entry.row)"
+                      :key="field.label"
+                      class="flex min-w-0 gap-2"
+                    >
+                      <dt class="shrink-0 text-[var(--color-text-muted)]">{{ field.label }}</dt>
+                      <dd class="min-w-0 break-words text-[var(--color-text)]">{{ field.value }}</dd>
+                    </div>
+                  </dl>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div v-if="rows.length > 0" class="mt-3 flex items-center justify-end gap-2 text-[11px] text-[var(--color-text-muted)]">

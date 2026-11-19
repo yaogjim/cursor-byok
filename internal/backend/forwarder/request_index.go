@@ -22,6 +22,7 @@ func (service *Service) recordRequestIndex(stream *ActiveStream, requestID strin
 	purpose := stream.CurrentProviderPurpose
 	conversationID := strings.TrimSpace(stream.ConversationID)
 	requestModel := strings.TrimSpace(stream.ModelID)
+	requestModelName := strings.TrimSpace(stream.ModelName)
 	createdAt := stream.CreatedAt
 	stats := stream.ProviderStreamStats
 	stream.mu.Unlock()
@@ -41,6 +42,7 @@ func (service *Service) recordRequestIndex(stream *ActiveStream, requestID strin
 		ConversationID:   conversationID,
 		ModelCallID:      modelCallID,
 		RequestModel:     requestModel,
+		RequestModelName: requestModelName,
 		Provider:         firstNonEmpty(usage.Provider, stats.Provider),
 		Model:            firstNonEmpty(usage.Model, stats.Model),
 		InputTokens:      usage.InputTokens,

@@ -353,3 +353,39 @@ func TestListCapsScannedRecords(t *testing.T) {
 		t.Fatalf("first page must keep newest rows: %+v", result.Items)
 	}
 }
+
+func TestRequestModelNameRoundTripAndFilter(t *testing.T) {
+	store := testStore(t)
+	record := sampleRecord(fixedNow().Add(-time.Minute), "glm-5.3")
+	record.RequestModel = "eeb727d5b08b1fb8"
+	record.RequestModelName = "glm5.3"
+	appendRecord(t, store, record)
+
+	result := listAll(t, store, Query{})
+	if len(result.Items) != 1 || result.Items[0].RequestModelName != "glm5.3" {
+		t.Fatalf("request model name = %+v, want glm5.3", result.Items)
+	}
+	if byName := listAll(t, store, Query{Model: "glm5.3"}); byName.Total != 1 {
+		t.Fatalf("filter by request model name total = %d, want 1", byName.Total)
+	}
+	if byID := listAll(t, store, Query{Model: "eeb727d5b08b1fb8"}); byID.Total != 1 {
+		t.Fatalf("filter by request model id total = %d, want 1", byID.Total)
+	}
+
+	_, models, err := store.Distinct("24h")
+	if err != nil {
+		t.Fatalf("distinct: %v", err)
+	}
+	for _, want := range []string{"eeb727d5b08b1fb8", "glm-5.3", "glm5.3"} {
+		found := false
+		for _, model := range models {
+			if model == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("models = %v, want to contain %q", models, want)
+		}
+	}
+}

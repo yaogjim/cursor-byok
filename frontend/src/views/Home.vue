@@ -4,6 +4,7 @@ import Card from "@/components/ui/Card.vue";
 import HomeMetricsCard from "@/components/HomeMetricsCard.vue";
 import HomeAnalyticsPanel from "@/components/HomeAnalyticsPanel.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import { accessRouteLocation } from "@/router/access";
 import { getAdRuntime, getHomeMetricsReport, launchCursor } from "@/services/clientApi";
@@ -105,6 +106,12 @@ const gatewayStartDisabled = computed(() =>
   || !appState.gatewayEnabled
   || configSectionDirty.gateway,
 );
+const cursorStartDisabledReason = computed(() => (
+  configSectionDirty.cursor && !appState.serviceRunning ? "请先保存 Cursor 配置" : ""
+));
+const gatewayStartDisabledReason = computed(() => (
+  !appState.gatewayEnabled || configSectionDirty.gateway ? "需先启用并保存配置" : ""
+));
 
 async function syncAdRuntimeQuietly() {
   if (!appState.advertisingEnabled) {
@@ -126,10 +133,6 @@ function handleOpenHomeAd(slotId) {
   window.dispatchEvent(new CustomEvent(OPEN_AD_EVENT, { detail: { slotId: asString(slotId) } }));
 }
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 function goAccess(client) {
   router.push(accessRouteLocation(client));
@@ -153,7 +156,7 @@ async function handleRefreshMetrics() {
   const result = await syncHomeMetricsReport();
   await loadActivityDaily();
   if (result.ok) {
-    message("刷新成功");
+    message("刷新成功", { tone: "success" });
     return;
   }
   showActionError("刷新失败", result.error);
@@ -226,7 +229,7 @@ async function handleResetMetrics() {
   const result = await resetHomeMetrics();
   await loadActivityDaily();
   if (result.ok) {
-    message("统计已重置");
+    message("统计已重置", { tone: "success" });
     return;
   }
   showActionError("重置失败", result.error);
@@ -238,7 +241,7 @@ async function handleCursorStart() {
     return;
   }
   if (result.partial) {
-    message(result.error);
+    message(result.error, { tone: "error" });
     return;
   }
   if (!result.ok) {
@@ -255,7 +258,7 @@ async function handleCursorStop() {
 
 async function handleGatewayStart() {
   if (!appState.gatewayEnabled) {
-    message("请先在接入页把 Gateway 配置为启用并保存");
+    message("需先启用并保存配置", { tone: "info" });
     return;
   }
   const result = await startGateway();
@@ -278,7 +281,7 @@ async function handleLaunchCursor() {
   launchCursorBusy.value = true;
   try {
     await launchCursor();
-    message("已请求打开 Cursor");
+    message("已请求打开 Cursor", { tone: "success" });
   } catch (error) {
     showActionError("打开 Cursor 失败", toUserError(error));
   } finally {
@@ -303,12 +306,12 @@ onBeforeUnmount(() => {
 <template>
   <div class="page-shell flex h-full min-h-0 flex-col gap-4 overflow-y-auto scroll-shadow-bottom text-[var(--color-text)]">
     <div class="grid grid-cols-2 gap-3 max-[760px]:grid-cols-1">
-      <Card :padded="false" class="flex h-full flex-col">
-        <div class="ui-card-body flex flex-1 flex-col gap-2.5">
+      <Card :padded="false" class="home-service-card flex h-full flex-col">
+        <div class="ui-card-body flex flex-1 flex-col gap-2">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h3 class="card-title">Cursor</h3>
-              <div class="card-sub">本地代理与 Backend · 深度集成</div>
+              <div class="card-sub">本地代理与 Backend</div>
             </div>
             <span
               class="status-pill"
@@ -318,7 +321,7 @@ onBeforeUnmount(() => {
               {{ appViewState.serviceStatusText }}
             </span>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-nowrap gap-2 overflow-hidden">
             <span class="mono-chip">代理 {{ cursorProxyAddr }}</span>
             <span class="mono-chip">Backend {{ cursorBackendAddr }}</span>
           </div>
@@ -347,7 +350,9 @@ onBeforeUnmount(() => {
           <Button
             v-else
             class="btn-sm"
+            :variant="cursorStartDisabled ? 'default' : 'primary'"
             :disabled="cursorStartDisabled"
+            :disabled-reason="cursorStartDisabledReason"
             @click="handleCursorStart"
           >
             {{ appState.serviceBusy ? "启动中..." : "启动服务" }}
@@ -359,12 +364,12 @@ onBeforeUnmount(() => {
         </div>
       </Card>
 
-      <Card :padded="false" class="flex h-full flex-col">
-        <div class="ui-card-body flex flex-1 flex-col gap-2.5">
+      <Card :padded="false" class="home-service-card flex h-full flex-col">
+        <div class="ui-card-body flex flex-1 flex-col gap-2">
           <div class="flex items-center justify-between gap-3">
             <div>
               <h3 class="card-title">Gateway</h3>
-              <div class="card-sub">本机 HTTP 入口 · 供外部 AI 客户端使用</div>
+              <div class="card-sub">本机 HTTP 入口 · 外部客户端</div>
             </div>
             <span
               class="status-pill"
@@ -380,7 +385,7 @@ onBeforeUnmount(() => {
               }}
             </span>
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-nowrap gap-2 overflow-hidden">
             <span class="mono-chip">{{ gatewayListenAddr }}</span>
             <span class="mono-chip">公开模型 {{ gatewayPublicModelCount }} 个</span>
           </div>
@@ -391,13 +396,7 @@ onBeforeUnmount(() => {
             {{ appState.gatewayLastError }}
           </div>
           <div
-            v-if="!appState.gatewayEnabled"
-            class="text-xs text-[var(--color-text-muted)]"
-          >
-            需先在接入页把 Gateway 配置为启用并保存
-          </div>
-          <div
-            v-else-if="configSectionDirty.gateway && !appState.gatewayRunning"
+            v-if="configSectionDirty.gateway && !appState.gatewayRunning"
             class="text-xs text-[var(--color-warning-text)]"
           >
             请先保存 Gateway 配置
@@ -415,13 +414,13 @@ onBeforeUnmount(() => {
           <Button
             v-else
             class="btn-sm"
+            :variant="gatewayStartDisabled ? 'default' : 'primary'"
             :disabled="gatewayStartDisabled"
-            :title="!appState.gatewayEnabled ? '需先在接入页把 Gateway 配置为启用并保存' : ''"
+            :disabled-reason="gatewayStartDisabledReason"
             @click="handleGatewayStart"
           >
             {{ appState.gatewayBusy ? "启动中..." : "启动 Gateway" }}
           </Button>
-          <span v-if="!appState.gatewayEnabled" class="card-sub !mt-0">未配置启用</span>
           <Button variant="text" class="btn-sm ml-auto" @click="goAccess('gateway')">
             {{ appState.gatewayEnabled ? "配置 →" : "去配置 →" }}
           </Button>

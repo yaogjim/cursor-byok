@@ -1361,7 +1361,6 @@ const projectionSource = readFileSync(path.join(frontendSrc, "state/configProjec
 const appStateSource = readFileSync(path.join(frontendSrc, "state/appState.js"), "utf8");
 const typeChangeSource = readFileSync(path.join(frontendSrc, "state/modelAdapterTypeChange.js"), "utf8");
 const editorSource = readFileSync(path.join(frontendSrc, "components/ModelEditor.vue"), "utf8");
-const adapterModalSource = readFileSync(path.join(frontendSrc, "components/ModelAdapterModal.vue"), "utf8");
 const modelConfigSource = readFileSync(path.join(frontendSrc, "views/ModelConfig.vue"), "utf8");
 const configTransferSource = readFileSync(path.join(frontendSrc, "composables/useConfigTransfer.js"), "utf8");
 const settingsRescheduleSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
@@ -1708,15 +1707,8 @@ assert(
   "ModelEditor exposes native media generation and disables incompatible adapters",
 );
 assert(
-  adapterModalSource.includes("OpenAI Responses 原生媒体生成")
-    && adapterModalSource.includes("applyOpenAIImageGenerationConstraint")
-    && adapterModalSource.includes(":disabled=\"!canEnableOpenAIImageGeneration\""),
-  "ModelAdapterModal exposes native media generation and disables incompatible adapters",
-);
-assert(
-  editorSource.includes("仅兼容的上游应开启")
-    && adapterModalSource.includes("仅兼容的上游应开启"),
-  "both editors explain that only compatible upstreams should enable native media generation",
+  editorSource.includes("仅兼容的上游应开启"),
+  "editor explains that only compatible upstreams should enable native media generation",
 );
 
 assert(editorSource.includes("formatFallbackBudgetInput"), "ModelEditor getter must hide NaN via helper");
@@ -2030,20 +2022,6 @@ assert(
   "frontend projection must not keep the 32 public model cap",
 );
 assert(isWindowsSource.includes("try {") && isWindowsSource.includes("catch {"), "standalone Vite previews must survive missing Wails platform detection");
-const configViewSource = readFileSync(path.join(frontendSrc, "views/Config.vue"), "utf8");
-assert(configViewSource.includes("GatewayCard"), "Config page must include Gateway card");
-assert(
-  configViewSource.includes("diagnosticDegraded") && configViewSource.includes("diagnosticDropped"),
-  "Config page must surface diagnostics retention degradation",
-);
-assert(
-  configViewSource.includes("quotaBlocked"),
-  "Config page must surface quota-blocked log capture",
-);
-assert(
-  configViewSource.includes("appLogDegraded") && configViewSource.includes("appLogDropped"),
-  "Config page must surface application log degradation",
-);
 
 const clientApiSource = readFileSync(path.join(frontendSrc, "services/clientApi.js"), "utf8");
 assert(clientApiSource.includes("TestGateway"), "client API must expose Gateway availability testing");
@@ -2078,6 +2056,14 @@ const unsupportedSource = readFileSync(path.join(frontendSrc, "views/Unsupported
 const subscriptionAuthSource = readFileSync(path.join(frontendSrc, "components/SubscriptionAuthPanel.vue"), "utf8");
 const globalStyleSource = readFileSync(path.join(frontendSrc, "style/global.css"), "utf8");
 const settingsSource = readFileSync(path.join(frontendSrc, "views/SettingsView.vue"), "utf8");
+assert(
+  settingsSource.includes("diagnosticDegraded") && settingsSource.includes("diagnosticDropped"),
+  "Settings page must surface diagnostics retention degradation",
+);
+assert(
+  settingsSource.includes("quotaBlocked"),
+  "Settings page must surface quota-blocked log capture",
+);
 assert(
   settingsSource.includes("appLogDegraded") && settingsSource.includes("appLogDropped"),
   "Settings page must surface application log degradation",
@@ -2214,7 +2200,7 @@ assert(!layoutSource.includes("h-[40px] w-screen"), "tab bar must not be covered
 assert(!layoutSource.includes("z-[9999]"), "leftover full-width drag overlay z-index must be gone");
 assert(layoutSource.includes("Window.Minimise"), "shell keeps Windows minimize");
 assert(layoutSource.includes("checkForAppUpdates"), "shell keeps update check");
-assert(layoutSource.includes("LocaleSelect"), "shell keeps locale select");
+assert(!layoutSource.includes("LocaleSelect"), "shell no longer renders locale select until multi-language ships");
 assert(layoutSource.includes("proxyBadgeText"), "shell keeps proxy badge");
 assert(layoutSource.includes("lastAccessClient"), "access nav remembers last client");
 assert(layoutSource.includes("accessRouteLocation"), "access nav always includes client query");
@@ -2292,7 +2278,12 @@ assert(
 );
 assert(settingsSource.includes("基本设置") && settingsSource.includes("会话与日志") && settingsSource.includes("网络与请求") && settingsSource.includes("数据与恢复"), "settings has four segmented panels");
 assert(settingsSource.includes("inert"), "planned settings controls must be inert");
-assert(settingsSource.includes("开机自启动"), "settings shows planned autostart as inert");
+assert(
+  settingsSource.includes("登录时启动")
+    && settingsSource.includes("setLaunchAtLogin")
+    && settingsSource.includes("appState.loginItemStatus"),
+  "settings wires the real launch-at-login switch",
+);
 assert(settingsSource.includes('role="group"'), "settings segmented control uses group semantics");
 assert(!settingsSource.includes('role="tablist"'), "settings must not expose incomplete tabs");
 assert(settingsSource.includes("LocaleSelect"), "language remains immediate LocaleSelect");
@@ -2411,9 +2402,7 @@ assert(!handleProxyStartRequestedFn.includes("ApplicationStarted"), "startup mus
 const shouldHandleStartRequestedFn = extractSourceFunction(appStateSource, "shouldHandleProxyStartRequested");
 assert(shouldHandleStartRequestedFn.includes("MAIN_WINDOW_NAME"), "main-window filter uses named main window");
 assert(cursorViewSource.includes("result.partial"), "CursorView surfaces partial Cursor launch success");
-const homeViewSource = readFileSync(path.join(frontendSrc, "views/Home.vue"), "utf8");
-assert(homeViewSource.includes("result.partial"), "Home surfaces partial Cursor launch success");
-assert(homeViewSource.includes("result.cancelled"), "Home does not treat restart refusal as start failure");
+assert(cursorViewSource.includes("result.cancelled"), "CursorView does not treat restart refusal as start failure");
 
 const localeDir = path.join(frontendSrc, "i18n/locales");
 const zhMessages = JSON.parse(readFileSync(path.join(localeDir, "zh-CN.json"), "utf8"));
@@ -2432,7 +2421,7 @@ const requiredLocaleSources = new Set([
   "网络与请求",
   "数据与恢复",
   "设置分组",
-  "开机自启动",
+  "登录时启动",
   "跟随系统",
   "删除模型配置",
   "确定删除「{0}」吗？删除后需要保存本页才会写入配置。",

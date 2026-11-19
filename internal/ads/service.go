@@ -340,6 +340,10 @@ func (service *Service) LoadAsset(ctx context.Context, rawPath string) (parsedAs
 	if err != nil {
 		return parsedAsset{}, "", false, err
 	}
+	// 未配置的广告位一律不提供资源，避免旧缓存继续出现在界面。
+	if !slotConfigured(slotID) {
+		return parsedAsset{}, "", false, nil
+	}
 	inspection := service.inspectSlotPackage(ctx, slotID)
 	if inspection.state != packageValid {
 		return parsedAsset{}, "", false, nil
@@ -757,6 +761,17 @@ func isKnownSlotID(value string) bool {
 	value = normalizeSlotID(value)
 	for _, slot := range Slots {
 		if normalizeSlotID(slot.ID) == value {
+			return true
+		}
+	}
+	return false
+}
+
+// slotConfigured 表示该广告位当前是否配置了远端地址；未配置时不拉取也不提供资源。
+func slotConfigured(value string) bool {
+	value = normalizeSlotID(value)
+	for _, slot := range Slots {
+		if normalizeSlotID(slot.ID) == value && strings.TrimSpace(slot.FetchURL) != "" {
 			return true
 		}
 	}

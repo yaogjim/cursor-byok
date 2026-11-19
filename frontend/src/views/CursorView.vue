@@ -4,6 +4,7 @@ import Card from "@/components/ui/Card.vue";
 import Select from "@/components/ui/Select.vue";
 import CursorAccountCard from "@/components/CursorAccountCard.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import {
   appState,
   appViewState,
@@ -32,10 +33,6 @@ const cursorProxyAddr = () =>
 const cursorBackendAddr = () =>
   appState.backendListenAddr || appState.configBackendListenAddr || "127.0.0.1:18090";
 
-function showActionError(title, error) {
-  const detail = String(error || "服务错误").trim() || "服务错误";
-  message(`${title}：${detail}`);
-}
 
 async function handleToggleService() {
   const result = await toggleService();
@@ -43,7 +40,7 @@ async function handleToggleService() {
     return;
   }
   if (result.partial) {
-    message(result.error);
+    message(result.error, { tone: "error" });
     return;
   }
   if (!result.ok) {
@@ -65,7 +62,7 @@ async function handleSavePage() {
     showActionError("保存失败", result.error);
     return;
   }
-  message("本页配置已保存");
+  message("本页配置已保存", { tone: "success" });
 }
 
 async function handleReloadPage() {
@@ -157,6 +154,7 @@ async function handleReloadPage() {
           class="btn-sm"
           :class="appState.serviceRunning ? 'btn-risk' : ''"
           :disabled="appState.serviceBusy || (configSectionDirty.cursor && !appState.serviceRunning)"
+          :disabled-reason="configSectionDirty.cursor && !appState.serviceRunning ? '请先保存 Cursor 配置' : ''"
           @click="handleToggleService"
         >
           {{ appState.serviceRunning ? "停止服务" : "启动服务" }}

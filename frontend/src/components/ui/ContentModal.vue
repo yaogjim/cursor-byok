@@ -1,5 +1,6 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, ref } from "vue";
+import { useDialogFocus } from "@/composables/useDialogFocus";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -12,12 +13,12 @@ const props = defineProps({
   closeOnBackdrop: { type: Boolean, default: true },
   closeOnEscape: { type: Boolean, default: true },
   closeDisabled: { type: Boolean, default: false },
+  headerless: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["close"]);
 const panelRef = ref(null);
 const closeButtonRef = ref(null);
-let previouslyFocusedElement = null;
 
 const panelClass = computed(() => ({
   md: "max-w-[420px]",
@@ -37,57 +38,13 @@ function handleBackdropClick() {
   }
 }
 
-function handleKeydown(event) {
-  if (event.key === "Escape" && props.open && props.closeOnEscape) {
-    requestClose();
-    return;
-  }
-  if (event.key !== "Tab" || !props.open || !panelRef.value) {
-    return;
-  }
-  const focusable = Array.from(panelRef.value.querySelectorAll(
-    "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])",
-  ));
-  if (focusable.length === 0) {
-    event.preventDefault();
-    return;
-  }
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      previouslyFocusedElement = document.activeElement;
-      document.addEventListener("keydown", handleKeydown);
-      nextTick(() => {
-        const firstField = panelRef.value?.querySelector(
-          "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
-        );
-        (firstField || closeButtonRef.value)?.focus();
-      });
-      return;
-    }
-    document.removeEventListener("keydown", handleKeydown);
-    if (previouslyFocusedElement instanceof HTMLElement && document.contains(previouslyFocusedElement)) {
-      previouslyFocusedElement.focus();
-    }
-    previouslyFocusedElement = null;
-  },
-  { immediate: true },
-);
-
-onBeforeUnmount(() => {
-  document.removeEventListener("keydown", handleKeydown);
+useDialogFocus({
+  open: () => props.open,
+  panelRef,
+  initialFocus: () => panelRef.value?.querySelector(
+    "input:not([disabled]), textarea:not([disabled]), select:not([disabled])",
+  ) || closeButtonRef.value,
+  onEscape: () => { if (props.closeOnEscape) requestClose(); },
 });
 </script>
 
@@ -108,19 +65,20 @@ onBeforeUnmount(() => {
       >
         <section
           ref="panelRef"
+          tabindex="-1"
           role="dialog"
           aria-modal="true"
           :aria-label="title || undefined"
-          class="flex w-full max-h-[660px] min-h-0 flex-col overflow-hidden rounded-[8px] border border-[#3a3a3a] bg-[#202020] shadow-[0_24px_64px_rgba(0,0,0,0.65)]"
+          class="flex w-full max-h-[660px] min-h-0 flex-col overflow-hidden rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[0_24px_64px_rgba(0,0,0,0.65)]"
           :class="panelClass"
           @click.stop
         >
-          <header class="flex h-12 shrink-0 items-center justify-between border-b border-[#343434] px-4">
-            <h2 class="min-w-0 truncate text-base font-medium text-white">{{ title }}</h2>
+          <header v-if="!headerless" class="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-4">
+            <h2 class="min-w-0 truncate text-base font-medium text-[var(--color-text)]">{{ title }}</h2>
             <button
               ref="closeButtonRef"
               type="button"
-              class="center-row w-[28px] h-[28px] justify-center size-8 shrink-0 rounded-[6px] text-[#8f8f8f] outline-none transition-colors hover:bg-[#303030] hover:text-white focus-visible:ring-2 focus-visible:ring-[#10AD5D]/40 disabled:cursor-not-allowed disabled:opacity-50"
+              class="center-row w-[28px] h-[28px] justify-center size-8 shrink-0 rounded-[6px] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] focus-visible:ring-2 focus-visible:ring-[#10AD5D]/40 disabled:cursor-not-allowed disabled:opacity-50"
               :disabled="closeDisabled"
               aria-label="关闭"
               @click="requestClose"

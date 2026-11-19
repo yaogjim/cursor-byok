@@ -111,3 +111,33 @@ func TestListRequestFilterOptionsReturnsWindowValues(t *testing.T) {
 		t.Fatalf("models = %v, want actual model and request model", options.Models)
 	}
 }
+
+func TestListRequestsCarriesRequestModelName(t *testing.T) {
+	store := requestlog.NewStore(t.TempDir(), 30*24*time.Hour)
+	record := requestlog.Record{
+		RequestID:        "req-name",
+		ModelCallID:      "call-name",
+		RequestModel:     "eeb727d5b08b1fb8",
+		RequestModelName: "glm5.3",
+		Provider:         "openai",
+		Model:            "glm-5.3",
+		Status:           "completed",
+		At:               time.Now().UTC(),
+	}
+	if err := store.Append(record); err != nil {
+		t.Fatalf("seed request index: %v", err)
+	}
+	service := NewMetricsService()
+	service.historyRoot = filepath.Dir(store.Dir())
+
+	result, err := service.ListRequests(RequestListQuery{Range: "24h", Page: 1, PageSize: 10})
+	if err != nil {
+		t.Fatalf("ListRequests() error = %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %d, want 1", len(result.Items))
+	}
+	if result.Items[0].RequestModel != "eeb727d5b08b1fb8" || result.Items[0].RequestModelName != "glm5.3" {
+		t.Fatalf("row = %+v, want request model id and name", result.Items[0])
+	}
+}

@@ -111,7 +111,8 @@ const cursorMeta = computed(() => {
 
 function selectClient(client) {
   const next = parseAccessClient(client);
-  if (next === activeClient.value) {
+  const selected = clients.value.find((item) => item.id === next);
+  if (!selected?.supported || next === activeClient.value) {
     return;
   }
   void router.replace(accessRouteLocation(next));
@@ -135,6 +136,8 @@ function selectClient(client) {
           class="access-client"
           :class="activeClient === item.id ? 'is-active' : ''"
           :aria-pressed="activeClient === item.id"
+          :disabled="!item.supported"
+          :aria-disabled="!item.supported ? 'true' : undefined"
           @click="selectClient(item.id)"
         >
           <span class="access-client-icon" :class="item.iconClass" aria-hidden="true">
@@ -152,13 +155,7 @@ function selectClient(client) {
             <span class="access-client-meta truncate">{{ item.meta }}</span>
           </span>
           <span
-            v-if="item.status === 'unsupported'"
-            class="badge-soon"
-          >
-            计划中
-          </span>
-          <span
-            v-else-if="item.status !== 'available'"
+            v-if="item.status !== 'available' && item.status !== 'unsupported'"
             class="status-pill is-dot"
             :class="{
               'is-ok': item.status === 'running',
@@ -178,9 +175,6 @@ function selectClient(client) {
             <i aria-hidden="true" />
           </span>
         </button>
-        <p class="note plain mt-2">
-          Codex 与 Grok 在各自页面管理真实订阅授权；Anthropic 暂为接入占位。
-        </p>
       </aside>
 
       <section

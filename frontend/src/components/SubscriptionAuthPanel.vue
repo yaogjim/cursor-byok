@@ -3,6 +3,7 @@ import Button from "@/components/ui/Button.vue";
 import Card from "@/components/ui/Card.vue";
 import ContentModal from "@/components/ui/ContentModal.vue";
 import { useMessage } from "@/composables/useMessage";
+import { showActionError } from "@/composables/useActionError";
 import { showModal } from "@/composables/useModal";
 import {
   activateSubscriptionAccount,
@@ -74,10 +75,6 @@ function accountActions(account) {
   return subscriptionAccountActions(account, { busy: busy.value });
 }
 
-function showActionError(title, error) {
-  lastError.value = String(error || title);
-  message(`${title}：${lastError.value}`);
-}
 
 async function loadAccounts() {
   const provider = props.provider;
@@ -99,7 +96,7 @@ async function refreshAll() {
     await loadAccounts();
     lastError.value = "";
   } catch (error) {
-    showActionError("读取订阅认证失败", toUserError(error));
+    showActionError("读取订阅认证失败", (lastError.value = toUserError(error)));
   }
 }
 
@@ -119,9 +116,9 @@ async function handleImportCodex() {
     busy.value = true;
     await importCodexAuth(path);
     await refreshAll();
-    message("已导入 Codex 认证副本，未修改原始 auth.json");
+    message("已导入 Codex 认证副本，未修改原始 auth.json", { tone: "success" });
   } catch (error) {
-    showActionError("导入失败", toUserError(error));
+    showActionError("导入失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -182,7 +179,7 @@ async function handlePreviewSub2API() {
     sub2apiSkippedCount.value = Number(preview?.skippedCount || 0);
     sub2apiOpen.value = true;
   } catch (error) {
-    showActionError("读取 sub2api 文件失败", toUserError(error));
+    showActionError("读取 sub2api 文件失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -202,9 +199,9 @@ async function handleImportSub2API() {
     const importedCount = Array.isArray(result?.accounts) ? result.accounts.length : 0;
     await refreshAll();
     resetSub2APIImport();
-    message(`已导入 ${importedCount} 个 ${isCodex.value ? "Codex" : "Grok"} 账号`);
+    message(`已导入 ${importedCount} 个 ${isCodex.value ? "Codex" : "Grok"} 账号`, { tone: "success" });
   } catch (error) {
-    showActionError("导入 sub2api 账号失败", toUserError(error));
+    showActionError("导入 sub2api 账号失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -225,9 +222,9 @@ async function handleClearCodex() {
     busy.value = true;
     await clearCodexAuth();
     await refreshAll();
-    message("已清除全部 Codex 认证副本");
+    message("已清除全部 Codex 认证副本", { tone: "success" });
   } catch (error) {
-    showActionError("清除失败", toUserError(error));
+    showActionError("清除失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -255,7 +252,7 @@ async function pollOnce() {
       deviceChallenge.value = null;
       deviceProvider.value = "";
       await refreshAll();
-      message(provider === "codex" ? "Codex 设备授权完成" : "Grok 设备授权完成");
+      message(provider === "codex" ? "Codex 设备授权完成" : "Grok 设备授权完成", { tone: "success" });
       return;
     }
     if (result?.status === "pending" || result?.status === "slow_down") {
@@ -266,13 +263,14 @@ async function pollOnce() {
     stopPolling();
     deviceChallenge.value = null;
     deviceProvider.value = "";
-    showActionError("设备授权未完成", result?.error || result?.status || "未知状态");
+    lastError.value = String(result?.error || result?.status || "未知状态");
+    showActionError("设备授权未完成", lastError.value);
     await refreshAll();
   } catch (error) {
     stopPolling();
     deviceChallenge.value = null;
     deviceProvider.value = "";
-    showActionError("轮询设备授权失败", toUserError(error));
+    showActionError("轮询设备授权失败", (lastError.value = toUserError(error)));
   }
 }
 
@@ -296,7 +294,7 @@ async function handleStartDevice(provider) {
     stopPolling();
     pollTimer = window.setTimeout(() => { void pollOnce(); }, Math.max(3, Number(challenge.interval || 5)) * 1000);
   } catch (error) {
-    showActionError("启动设备授权失败", toUserError(error));
+    showActionError("启动设备授权失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -308,7 +306,7 @@ async function handleActivate(accountID) {
     await activateSubscriptionAccount(accountID);
     await refreshAll();
   } catch (error) {
-    showActionError("激活失败", toUserError(error));
+    showActionError("激活失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -330,7 +328,7 @@ async function handleDelete(accountID) {
     await deleteSubscriptionAccount(accountID);
     await refreshAll();
   } catch (error) {
-    showActionError("删除失败", toUserError(error));
+    showActionError("删除失败", (lastError.value = toUserError(error)));
   } finally {
     busy.value = false;
   }
@@ -343,7 +341,7 @@ async function handleRefreshUsage(provider) {
     await loadAccounts();
     lastError.value = "";
   } catch (error) {
-    showActionError("刷新用量失败", toUserError(error));
+    showActionError("刷新用量失败", (lastError.value = toUserError(error)));
     try {
       await loadAccounts();
     } catch (_error) {
@@ -361,7 +359,7 @@ async function handleRefreshAccountUsage(accountID) {
     await loadAccounts();
     lastError.value = "";
   } catch (error) {
-    showActionError("刷新账号用量失败", toUserError(error));
+    showActionError("刷新账号用量失败", (lastError.value = toUserError(error)));
     try {
       await loadAccounts();
     } catch (_error) {

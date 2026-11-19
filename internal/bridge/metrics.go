@@ -49,6 +49,7 @@ type RequestListRow struct {
 	ConversationID   string   `json:"conversationId,omitempty"`
 	ModelCallID      string   `json:"modelCallId"`
 	RequestModel     string   `json:"requestModel"`
+	RequestModelName string   `json:"requestModelName"`
 	Provider         string   `json:"provider"`
 	Model            string   `json:"model"`
 	InputTokens      int64    `json:"inputTokens"`
@@ -155,6 +156,7 @@ func requestListRow(item requestlog.Record) RequestListRow {
 		ConversationID:   item.ConversationID,
 		ModelCallID:      item.ModelCallID,
 		RequestModel:     item.RequestModel,
+		RequestModelName: item.RequestModelName,
 		Provider:         item.Provider,
 		Model:            item.Model,
 		InputTokens:      item.InputTokens,

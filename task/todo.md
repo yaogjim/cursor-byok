@@ -5,6 +5,35 @@
 
 ## 当前焦点
 
+### UI 重设计落地（B · Paper + 四配色，2026-11-18；planned）
+
+TASK_ID: ui-redesign-20261118
+STATUS: planned
+OWNER: 当前会话
+DELIVERY_STATUS: planned
+
+- 设计真源：`docs/features/ui-redesign/design-analysis.md`；视觉定稿 `docs/features/ui-redesign/finals/`（四页亮/暗 + 配色对照）；实施计划 `docs/features/ui-redesign/plan.md`。
+- 用户决策（2026-11-18）：界面按定稿执行；设置页需支持外观（跟随系统/亮色/暗色）与配色（宣纸·朱砂/暖白·墨绿/冷白·松针/中性·靛蓝）独立选择；Claude 订阅排第三位且系统暂不支持。
+- 计划范围：令牌与兼容映射（P1）→ 配色配置端到端（P2）→ 外壳（P3）→ 设置（P4）→ 总览（P5）→ 模型按来源归组（P6）→ 接入（P7）→ 收口（P8）。约 12–13 人日，按阶段独立可回退。
+- 明确不做：订阅→模型自动同步（无后端能力，建议独立立项）、Claude 用量展示、新文案多语言人工翻译、模型编辑器字段逻辑。
+- 待用户确认：D1 模型页是否保留「自动同步/检查更新」入口（建议不保留）；D2 最小窗口 980 是否提到 1040（建议保持 980 + 断点）；D3 模型页是否显示 Claude 订阅空分组（建议不显示）。
+- 计划已写，尚未进入编码；未 commit/push。
+
+
+### UI 交互改造（四批，2026-11-17；in_progress）
+
+- 负责人：主控 pane（拆批/下发/独立验收）；执行 pane `ui-executor`（实施与自测）。
+- 方案真源：`docs/features/ui-interaction-refresh/plan.md`（用户已确认执行）；协作协议与批次状态见同目录 `execution.md`。
+- 用户决策：原「应用显示名 Cursor 助手 → Cursor Plus」撤销，本次不做任何改名。
+- [completed] `ui-refresh-batch-0`：清理死代码 `ModelAdapterModal.vue`、残留 `views/Config.vue`、`global.css` 主题兼容层下沉到 token 类；零视觉差异。主控独立复核：build 通过、三项 grep 无残留、8 张截图逐字节一致、token 计算样式与原映射同源。证据 `evidence/batch-0.md`。缺口：Modal/Combobox 未在实页打开截图、悬停/聚焦态未截图（test gap）；未 commit/push。
+- [completed] `ui-refresh-projection-gate`（用户决策单独修复）：投影测试自 `67c0344` 起 6 条既有失败（「开机自启动」计划项已被真实登录项取代）。断言改为校验「登录时启动」控件，`requiredLocaleSources` 同步替换；`node scripts/test-config-projection.mjs` 全绿。未改界面/产品代码。
+- [blocked] `ui-refresh-batch-1`（delivery_status=verified-partial，2026-11-18 复核修正；原记 accepted 口径过宽）：职责重整。总览删除启停按钮、改为「接入页启动」跳转（用户确认保留与「配置 →」双入口）；模型页底部保存按钮按脏态呈现（appState 未改，确认脏点本就归零）；设置页四面板共用底部保存栏、文案统一「保存设置」；语言选择器禁用 + 「计划中」，按用户决策移除页脚选择器、失真提示改为「多语言界面将在后续版本提供」。build 与投影测试全绿，主控复核 diff 与实页截图通过。缺口：真实写盘/启停、模型弹窗与脏态、登录时启动行视觉（test/env gap）。证据 `evidence/batch-1.md`。未 commit/push。
+- [blocked] `ui-refresh-batch-2`：执行 pane 已实现颜色 token/36 项对比度脚本、共享弹窗焦点能力、toast 语气与统一错误入口、全局焦点环及 Cursor/Gateway disabledReason；主控复核后已把 `useDialogFocus.js` 4 处 `.at(-1)` 改为下标以兼容 Safari 13 目标，build/投影/提示/对比度与完整键盘回归均复绿。delivery_status=verified-partial；无 Wails 后端，真实保存成功与桌面导入未验收；完整配置导入按钮缺失经主控判定 N/A，不恢复入口；主按钮 `#047857` 经用户确认保留（2026-11-18，无改动）；真实链路（成功保存、桌面导入）由用户手动验收，结果回报前保持 verified-partial。工单 `work-orders/batch-2.md`，详细证据、兼容修复与全部 message tone 分类见 `evidence/batch-2.md`。已交回主控复核，未 commit/push。
+- [completed] `ui-refresh-batch-3`：本页五列三态排序、自适应时间、行详情与 Enter/Space 已实现；翻页保持排序并清空展开，四类筛选重置。主控独立复跑 test-request-list / test-config-projection，核对 diff、截图与 Home 调用方（`RequestListPanel` 是 range-change 唯一消费方，筛选 watch 无外圈重复触发），未发现本批实现缺陷。delivery_status=verified-partial。依据与口径：行键盘路径已用真实行 Enter/Space 取证；排序按钮为原生 button，沿用全局 `:focus-visible` 与已测 `aria-sort`，不计缺口（执行 pane 未单独取得该按钮浏览器键盘证据，不冒充）；真实分页依赖 Wails 后端，与本批纯本地排序无交互，按用户暂缓，不计缺口。剩余覆盖边界：SSR 不覆盖事件交互，筛选/翻页证据来自合成状态；错误全文为已接受 data gap；真实桌面链路暂缓。详细证据 `docs/features/ui-interaction-refresh/evidence/batch-3.md`；未 commit/push。2026-11-18 用户真机截图反馈后补充：筛选工具条与摘要排版收紧（控件统一 32px/12px、摘要数字强调、排序说明并入元信息行右侧），先补 test-request-list 结构断言 RED 再实现；request-list、密度、投影、反馈、对比度与 build 通过，1024/760 无溢出，浅/深截图已核对，证据见 batch-3.md 补充节；仅展示层改动，delivery_status=verified-partial；24 小时范围现象仍未定位，未改数据层。2026-11-18 追加「请求模型显示名称」：索引新增可选 `request_model_name`（写入 `stream.ModelName`）、桥接与前端透传，列表名称优先、悬停看编号、详情保留原始编号；旧记录回落编号。Go 单测 / `go build ./...` / request-list、密度、投影、反馈、build 与 diff --check 通过，预览浅深截图已核对；尚需新构建产生真实请求验证写入（env gap），仍 verified-partial。
+- [blocked] `ui-refresh-batch-4`（实施与自测 PASS，主控复核后两处小缺陷已修复、待主控验收，delivery_status=verified-partial）：用户确认建议稿并撤销 D2。已恢复总览卡内启停与既有 dirty 门槛，公开模型三列，模型列表行内四操作，卡片 inline 状态，编辑器标题栏开关、字段分组及固定底栏。先补密度断言实际 RED，再实现转绿；build、投影、反馈、请求列表、对比度、密度测试及 diff --check 通过。浅/深主题浏览器截图已查看，覆盖总览运行/未运行、公开模型三态、列表/卡片及编辑器 Tab/Esc/焦点归还；状态来自合成注入，不代表 Wails 真实链路。复核修复：inline 失败态仅在 `rawResponseText` 存在时显示「查看详情」，stale 状态点改用 warning 色（先补断言 RED 后 GREEN）。响应式核对：1024/760 宽度下公开模型三列与四按钮操作区均无横向溢出，名称截断不压没且保留 title，未做响应式改动。实测服务卡约140px、模型行54–55px、卡片171px，近似密度尺寸交主控视觉复核。详细证据唯一记录 `docs/features/ui-interaction-refresh/evidence/batch-4.md`，截图 `frontend/.ui-refresh-evidence/batch4-after/`；无后端/字段/校验/保存作用域变更。真实启停/保存、桌面 WebView 及 inline 失败/stale 渲染仍为 test/env gap；预览进程已停止，未重启用户应用，未 commit/push；未修改 execution.md。
+- 批次 4 用户真机反馈补充（2026-11-18，verified-partial）：按确认保留启动深绿/停止红字；编辑弹窗测速压为 30px 单行，摘要与需重测标记并存；Anthropic 禁用、移除计划中与占位说明；修正选择 guard 的 computed `.value` 读取。密度/投影/反馈测试、build 与 diff --check 通过；浅深截图已查看，合成 stale 及原始返回悬停已验证，支持项 Cursor 实际切换成功。详细证据见 `evidence/batch-4.md` §7（截图 batch5 目录）。24h 空而 7d 有数据尚无确认根因，本机索引目录缺失不能解释用户所见，保留 data/env gap，未改后端/真实数据。旧 DMG 不含本次补充，未重打包；待主控与桌面验收，不标 accepted。
+- 缺口：已有浏览器预览交互证据；Wails 桌面成功保存/导入及人工视觉确认仍缺，不能用预览探针代替。本批未 commit/push。
+
 ### v1.94.0 发布（2026-11-17）
 
 - 版本：`build/config.yml` 1.93.0 → 1.94.0；`wails3 task common:update:build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.94.0）；`release-notes.md` 按本版本内容重写。1.93.0 未单独发布，其桌面壳四项功能与 1.94.0 新内容合并进本次发布。
@@ -23,6 +52,13 @@
 - [completed] `request-list-performance`（用户追加要求：查询不拖慢主链路、不卡界面）：写路径清理降为每天一次异步执行；查询按窗口只读所需分片并受 20 万行扫描上限约束；前端加请求序号防竞态、切到请求视图才拉筛选项，并修正分页事件链。新增 5 项测试，三包回归、`go vet`、`npm run build` 通过（前端竞态/事件链为 test gap，未做浏览器验证）。证据见 `docs/process.md` 同名章节。
 - 缺口（test/env gap）：**未在真实应用界面验收**。本机运行实例仍为 1.93.0，替换应用会中断用户正在使用的 Cursor 会话，需用户批准维护窗口后再做浏览器级验证。索引在本机尚无真实数据（功能首次运行后才会生成）。
 - 未做：commit、push、构建安装包、替换/重启应用。
+
+### 广告内容服务停用旧远端（2026-11-18；verified-partial）
+
+- 负责人：主会话；用户决策：不移除广告能力与显示位置，后端不再从 `ads.leokun.cn` 拉取，设置页「广告内容」灰化不可点、默认关闭，后续改从自定义服务器拉取。
+- [completed] `ads-disable-legacy-remote`：清空 `internal/ads` 硬编码广告位（`Slots` 为空），`/ad` 资源仅服务已配置广告位，旧缓存不再展示；设置页开关保留位置但 `disabled`，说明改为「内容服务暂未接入…」。新增 `service_slots_test.go`（默认无远端位、无位刷新不拉取、未配置位不出资源）与设置页结构断言，均先 RED 后 GREEN；`go test ./internal/ads ./internal/requestlog ./internal/bridge`、`go build ./...`、密度/投影/反馈/请求列表测试与 `npm run build` 通过。预览浅/深截图已核对：开关 `disabled=true`、`aria-checked=false`、opacity 0.55、cursor not-allowed，点击无响应。
+- 设计文档：`docs/features/ad-content-service/design.md`（现状链路、zip 契约、自定义服务器 slots 配置、保存覆盖约束、上报隐私、验收与回退）。未实施自定义服务器拉取与配置字段。
+- 缺口（test/env gap）：未在真实应用验证「无任何广告请求」；旧缓存文件未删除（仅停止服务与拒绝未配置位）；新构建未打包。未 commit/push。
 
 ### Cursor 3.29.15 BidiAppend 二进制载荷修复（2026-11-12；真实主链路 verified-partial）
 

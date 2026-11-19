@@ -85,6 +85,8 @@ const credentialSourceOptions = [
 const props = defineProps({
   index: { type: Number, default: -1 },
   adapter: { type: Object, default: () => createEmptyModelAdapter() },
+  title: { type: String, default: "编辑模型配置" },
+  closeDisabled: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["close", "saved"]);
@@ -274,13 +276,13 @@ async function persistDraft() {
 
   const singleCheck = validateModelAdapters([adapter], { allAdapters: appState.modelAdapters });
   if (singleCheck) {
-    message(singleCheck);
+    message(singleCheck, { tone: "error" });
     return { ok: false, error: singleCheck, adapter: null };
   }
 
   const result = await saveModelAdapterAt(editorIndex.value, adapter);
   if (!result.ok) {
-    message(result.error);
+    message(result.error, { tone: "error" });
     return { ok: false, error: result.error, adapter: null };
   }
 
@@ -564,6 +566,7 @@ const callTimeoutSecondsError = computed(() =>
   providerFallbackBudgetFieldError("callTimeoutSeconds", draft.providerFallback.callTimeoutSeconds),
 );
 const isLogicalRoutingDraft = computed(() => isLogicalRoutingAdapter(draft));
+const editorTypeLabel = computed(() => (draft.type === "anthropic" ? "Anthropic" : "OpenAI"));
 const maxConcurrentRequestsInput = computed({
   get() {
     return formatFallbackBudgetInput(draft.maxConcurrentRequests);
@@ -588,11 +591,47 @@ watch(
 
 <template>
   <div class="flex h-full flex-col text-[var(--color-text)]">
-    <div class="flex-shrink-0 p-4" v-if="localTestFailure || activeModelTestResult">
+    <header class="model-editor-header flex shrink-0 items-center justify-between gap-4 border-b border-[var(--color-border)] px-4 py-2.5">
+      <div class="min-w-0">
+        <div class="truncate text-base font-medium text-[var(--color-text)]">{{ title }}</div>
+        <div class="truncate text-[11px] text-[var(--color-text-muted)]">
+          {{ editorTypeLabel }} · {{ draft.displayName || draft.modelID || "未命名" }}
+        </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-3">
+        <div class="center-row gap-2 text-xs text-[var(--color-text-secondary)]">
+          <span>启用模型</span>
+          <Switch
+            standalone
+            compact
+            label="启用模型"
+            :show-state="false"
+            :enabled="draft.enabled !== false"
+            :disabled="appState.configSaving"
+            @change="draft.enabled = $event"
+          />
+        </div>
+        <button
+          type="button"
+          class="center-row size-8 shrink-0 rounded-[6px] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="closeDisabled"
+          aria-label="关闭"
+          @click="emit('close')"
+        >
+          <span class="icon-[mdi--close] text-[19px]"></span>
+        </button>
+      </div>
+    </header>
+    <div
+      v-if="localTestFailure || activeModelTestResult"
+      class="flex-shrink-0 px-4 pt-3"
+    >
       <ModelAdapterTestCard
+        inline
+        inline-surface
+        empty-text="未测试"
         :result="localTestFailure ? { status: 'error', error: '测试失败', summaryText: '测试失败', rawResponse: modelTestSummary } : activeModelTestResult"
         :stale="modelTestResultStale"
-        :show-metrics="true"
       />
     </div>
     <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4 scroll-shadow-bottom">
@@ -613,20 +652,11 @@ watch(
           </button>
         </div>
 
-        <Switch
-          compact
-          label="启用模型"
-          description="停用后所有入口都不可调用；保存后生效"
-          enabled-text="已启用"
-          disabled-text="已停用"
-          :enabled="draft.enabled !== false"
-          :disabled="appState.configSaving"
-          @change="draft.enabled = $event"
-        />
-
-        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <section class="flex flex-col gap-2.5">
+          <div class="model-editor-group-head">连接</div>
+          <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
           <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.baseURL" />
               <span>接口地址</span>
             </span>
@@ -640,7 +670,7 @@ watch(
           </label>
 
           <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.credentialSource" />
               <span>凭据来源</span>
             </span>
@@ -652,7 +682,7 @@ watch(
           </label>
 
           <label v-if="!isManagedCredential" class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.apiKey" />
               <span>访问密钥</span>
             </span>
@@ -668,8 +698,26 @@ watch(
             该渠道使用接入中心对应的 Codex 或 Grok 授权，并固定使用对应官方上游地址和协议端点；token 不会写入 config.yaml。
           </p>
 
+          <label v-if="draft.type === 'openai'" class="flex flex-col gap-1">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
+              <Tooltip :content="fieldTips.openAIEndpoint" />
+              <span>接口端点</span>
+            </span>
+            <Select
+              v-model="draft.openAIEndpoint"
+              :options="openAIEndpointOptions"
+              :disabled="isManagedCredential"
+            />
+          </label>
+          </div>
+        </section>
+
+        <section class="flex flex-col gap-2.5">
+          <div class="model-editor-group-head">模型</div>
+          <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+
           <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.displayName" />
               <span>显示名称</span>
             </span>
@@ -682,7 +730,7 @@ watch(
           </label>
 
           <div class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.modelID" />
               <span>模型标识</span>
             </span>
@@ -708,7 +756,7 @@ watch(
           </div>
 
           <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.contextWindowTokens" />
               <span>上下文窗口</span>
             </span>
@@ -722,7 +770,7 @@ watch(
           </label>
 
           <label v-if="draft.type === 'openai'" class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.reasoningEffort" />
               <span>推理强度</span>
             </span>
@@ -733,21 +781,7 @@ watch(
           </label>
 
           <label v-if="draft.type === 'anthropic'" class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
-              <Tooltip :content="fieldTips.anthropicMaxTokens" />
-              <span>最大输出 Token</span>
-            </span>
-            <input
-              v-model="anthropicMaxTokensInput"
-              type="text"
-              inputmode="numeric"
-              placeholder="例如：65536（留空用默认值）"
-              class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
-            />
-          </label>
-
-          <label v-if="draft.type === 'anthropic'" class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.anthropicThinkingEffort" />
               <span>思考强度</span>
             </span>
@@ -756,12 +790,14 @@ watch(
               :options="anthropicThinkingEffortOptions"
             />
           </label>
+          </div>
+        </section>
 
-        </div>
-
-        <div v-if="draft.type === 'openai'" class="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+        <section class="flex flex-col gap-2.5">
+          <div class="model-editor-group-head">高级</div>
+          <div class="grid grid-cols-1 gap-2.5 md:grid-cols-2">
+          <label v-if="draft.type === 'openai'" class="flex flex-col gap-1">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.maxCompletionTokens" />
               <span>最大输出 Token</span>
             </span>
@@ -774,22 +810,24 @@ watch(
             />
           </label>
 
-          <label class="flex flex-col gap-1">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
-              <Tooltip :content="fieldTips.openAIEndpoint" />
-              <span>接口端点</span>
+          <label v-if="draft.type === 'anthropic'" class="flex flex-col gap-1">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
+              <Tooltip :content="fieldTips.anthropicMaxTokens" />
+              <span>最大输出 Token</span>
             </span>
-            <Select
-              v-model="draft.openAIEndpoint"
-              :options="openAIEndpointOptions"
-              :disabled="isManagedCredential"
+            <input
+              v-model="anthropicMaxTokensInput"
+              type="text"
+              inputmode="numeric"
+              placeholder="例如：65536（留空用默认值）"
+              class="h-9 rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
             />
           </label>
-        </div>
+          </div>
 
         <div v-if="draft.type === 'openai'" class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.openAIExtraParams" />
               <span>额外参数 JSON</span>
             </span>
@@ -828,7 +866,7 @@ watch(
 
         <div v-if="draft.type === 'anthropic'" class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.anthropicExtraParams" />
               <span>Anthropic 额外参数 JSON</span>
             </span>
@@ -852,7 +890,7 @@ watch(
 
         <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.customHeaders" />
               <span>自定义请求头 JSON</span>
             </span>
@@ -876,7 +914,7 @@ watch(
 
         <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.outboundProxy" />
               <span>自定义出站代理</span>
             </span>
@@ -901,7 +939,7 @@ watch(
         </div>
 
         <label v-if="!isLogicalRoutingDraft" class="flex flex-col gap-1">
-          <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+          <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
             <Tooltip :content="fieldTips.maxConcurrentRequests" />
             <span>上游并发上限</span>
           </span>
@@ -922,7 +960,7 @@ watch(
 
         <div class="rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-3">
           <div class="flex items-center justify-between gap-3">
-            <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+            <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
               <Tooltip :content="fieldTips.providerFallback" />
               <span>渠道 Fallback</span>
               <span
@@ -1109,7 +1147,7 @@ watch(
         </div>
 
         <label class="flex flex-col gap-1">
-          <span class="center-row justify-start gap-1.5 text-sm text-[var(--color-text)]">
+          <span class="center-row justify-start gap-1.5 text-xs text-[var(--color-text)]">
             <Tooltip :content="fieldTips.tooltipData" />
             <span>备注</span>
           </span>
@@ -1120,17 +1158,22 @@ watch(
             class="min-h-[96px] resize-none rounded-[6px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-3 py-2 text-sm text-[var(--color-text)] outline-none focus:border-[var(--color-primary)]"
           />
         </label>
-
+        </section>
       </div>
     </div>
-    <div class="flex shrink-0 items-center justify-end gap-2 px-4 py-3">
-      <Button variant="default" :disabled="appState.configSaving" @click="handleCancel">取消</Button>
-      <Button variant="default" :disabled="isCurrentConfigTesting || appState.configSaving" @click="handleTest">
-        {{ isCurrentConfigTesting ? "测试中..." : "保存并测试" }}
-      </Button>
-      <Button variant="primary" :disabled="appState.configSaving" @click="handleSave">
-        {{ appState.configSaving ? "保存中..." : "保存" }}
-      </Button>
+    <div class="flex shrink-0 items-center gap-2 border-t border-[var(--color-border)] px-4 py-3">
+      <span class="min-w-0 truncate text-[11px] text-[var(--color-text-muted)]">
+        {{ draft.enabled !== false ? "已启用" : "已停用" }} · 保存后生效
+      </span>
+      <div class="ml-auto flex shrink-0 items-center gap-2">
+        <Button variant="default" :disabled="appState.configSaving" @click="handleCancel">取消</Button>
+        <Button variant="default" :disabled="isCurrentConfigTesting || appState.configSaving" @click="handleTest">
+          {{ isCurrentConfigTesting ? "测试中..." : "保存并测试" }}
+        </Button>
+        <Button variant="primary" :disabled="appState.configSaving" @click="handleSave">
+          {{ appState.configSaving ? "保存中..." : "保存" }}
+        </Button>
+      </div>
     </div>
   </div>
 </template>

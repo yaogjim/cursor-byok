@@ -52,7 +52,7 @@ export function useConfigTransfer({ message, showActionError }) {
       }
       busy.value = true;
       const exportedPath = await exportUserConfigToFile(path);
-      message(`配置已导出到 ${exportedPath}`);
+      message(`配置已导出到 ${exportedPath}`, { tone: "success" });
     } catch (error) {
       showActionError("导出失败", toUserError(error));
     } finally {
@@ -92,7 +92,7 @@ export function useConfigTransfer({ message, showActionError }) {
       }
 
       const imported = await importUserConfigFromFile(path);
-      message(`配置导入成功，共导入 ${imported.modelAdapters.length} 个模型`);
+      message(`配置导入成功，共导入 ${imported.modelAdapters.length} 个模型`, { tone: "success" });
     } catch (error) {
       showActionError("导入失败", toUserError(error));
     } finally {
@@ -123,7 +123,7 @@ export function useConfigTransfer({ message, showActionError }) {
         showActionError("导入失败", result.error);
         return;
       }
-      message(`模型已合并到草稿：新增 ${result.added} 个，更新 ${result.updated} 个。保存本页后才会写入配置。`);
+      message(`模型已合并到草稿：新增 ${result.added} 个，更新 ${result.updated} 个。保存本页后才会写入配置。`, { tone: "success" });
     } catch (error) {
       showActionError("导入失败", toUserError(error));
     } finally {
