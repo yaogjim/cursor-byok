@@ -5,6 +5,20 @@
 
 ## 当前焦点
 
+### Fork 导入缺失 Blob 的本机闭环（2026-11-20；新父与旧父刷新后 fork 均真机通过）
+
+TASK_ID: fork-local-blob-recovery-20261120
+STATUS: in_progress
+OWNER: 当前会话
+DELIVERY_STATUS: verified-partial
+
+- 用户已批准：先临时 full 取证；存量采用手动刷新父会话；开始实现写侧留存与读侧本机回退；重新构建安装并跑真实 fork 验收。需求锚点=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY，设计与边界=系统设计 §19.3m。
+- 交付链路：父检查点发布并本机留存 → fork 无预取导入 → 子首条消息含原历史请求模型。2026-11-20 已构建并安装 1.95.0：① 新父 `d8eef94b` 完成 1 轮后 fork，子 `ff8c2364` 导入 1 个 turn、7 条消息；② 存量未压缩父 `1a6539a9` 第 5 轮刷新后两次 fork，子 `9eb97b64` 导入 4 个 turn、`8c199c17` 导入 5 个 turn，父 5 条 user 与 5 条 assistant 文本全部逐字出现在 `8c199c17` 导入历史。全部请求完成，无 `missing imported`、无落盘失败。
+- 内部步骤：取证、RED→GREEN、写侧/读侧接线、相关包回归、构建安装与两条主路径真机验收已完成；详细证据唯一记录于 `docs/process.md`「Fork 导入缺失 Blob 的本机闭环」。
+- 剩余验收：对无法补齐的旧引用图构造 fork，确认明确报错且不以空历史请求模型。当前缺口=test gap（失败路径未真机验证），data gap（全部存量旧引用/压缩图不可保证恢复）。
+- 范围不含：GetBlob、父 ID 推断、全历史扫描、内容清理、迁移或真实历史改写；回退代码但保留已存内容。未 commit/push。
+
+
 ### UI 重设计落地（B · Paper + 四配色，2026-11-18；planned）
 
 TASK_ID: ui-redesign-20261118
@@ -33,6 +47,14 @@ DELIVERY_STATUS: planned
 - [blocked] `ui-refresh-batch-4`（实施与自测 PASS，主控复核后两处小缺陷已修复、待主控验收，delivery_status=verified-partial）：用户确认建议稿并撤销 D2。已恢复总览卡内启停与既有 dirty 门槛，公开模型三列，模型列表行内四操作，卡片 inline 状态，编辑器标题栏开关、字段分组及固定底栏。先补密度断言实际 RED，再实现转绿；build、投影、反馈、请求列表、对比度、密度测试及 diff --check 通过。浅/深主题浏览器截图已查看，覆盖总览运行/未运行、公开模型三态、列表/卡片及编辑器 Tab/Esc/焦点归还；状态来自合成注入，不代表 Wails 真实链路。复核修复：inline 失败态仅在 `rawResponseText` 存在时显示「查看详情」，stale 状态点改用 warning 色（先补断言 RED 后 GREEN）。响应式核对：1024/760 宽度下公开模型三列与四按钮操作区均无横向溢出，名称截断不压没且保留 title，未做响应式改动。实测服务卡约140px、模型行54–55px、卡片171px，近似密度尺寸交主控视觉复核。详细证据唯一记录 `docs/features/ui-interaction-refresh/evidence/batch-4.md`，截图 `frontend/.ui-refresh-evidence/batch4-after/`；无后端/字段/校验/保存作用域变更。真实启停/保存、桌面 WebView 及 inline 失败/stale 渲染仍为 test/env gap；预览进程已停止，未重启用户应用，未 commit/push；未修改 execution.md。
 - 批次 4 用户真机反馈补充（2026-11-18，verified-partial）：按确认保留启动深绿/停止红字；编辑弹窗测速压为 30px 单行，摘要与需重测标记并存；Anthropic 禁用、移除计划中与占位说明；修正选择 guard 的 computed `.value` 读取。密度/投影/反馈测试、build 与 diff --check 通过；浅深截图已查看，合成 stale 及原始返回悬停已验证，支持项 Cursor 实际切换成功。详细证据见 `evidence/batch-4.md` §7（截图 batch5 目录）。24h 空而 7d 有数据尚无确认根因，本机索引目录缺失不能解释用户所见，保留 data/env gap，未改后端/真实数据。旧 DMG 不含本次补充，未重打包；待主控与桌面验收，不标 accepted。
 - 缺口：已有浏览器预览交互证据；Wails 桌面成功保存/导入及人工视觉确认仍缺，不能用预览探针代替。本批未 commit/push。
+
+### v1.96.0 发布（2026-11-20）
+
+- 版本：`build/config.yml` 1.95.0 → 1.96.0；`wails3 update build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.96.0，无残留 1.95.0）；`release-notes.md` 按本版本内容重写。
+- 随本次提交的内容：Fork 导入缺失 Blob 的本机闭环（`checkpoint_blobs.go` 发布前留存 Blob、`imported_blobs.go` 预取优先本机回退、`projector.go` 与 `token_usage.go` 透传 resolver，新增四项回归）；系统设计 §19.3m 与 task/process 记录。
+- 验证：`go test ./internal/backend/forwarder -count=1` 通过（69.7s）、`go build ./...` 通过（仅剩既有 macOS 链接目标警告）、`node frontend/scripts/test-config-projection.mjs` 通过；`gofmt -l` 与 `git diff --check` 无输出。
+- 本地未编译：未传 `--build`，未重新构建 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
+- 未做：缺图显式失败路径的真机验证；压缩父会话与跨机器恢复不在本次范围。缺口状态沿用「Fork 导入缺失 Blob 的本机闭环」任务记录，不因发布提升为已验证。
 
 ### v1.95.0 发布（2026-11-19）
 

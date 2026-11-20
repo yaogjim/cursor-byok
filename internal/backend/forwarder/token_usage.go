@@ -45,9 +45,13 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 	if item == nil || state == nil {
 		return nil, nil
 	}
-	blobs, err := newImportedBlobStore(prefetchedBlobs)
+	prefetched, err := newImportedBlobStore(prefetchedBlobs)
 	if err != nil {
 		return nil, err
+	}
+	blobs := importedBlobSources{prefetched: prefetched}
+	if service != nil && contentBlobStoreReady(service.contentBlobs) {
+		blobs.local = contentBlobResolver{store: service.contentBlobs}
 	}
 	rootMessages, nativeRoot, err := resolveImportedRootMessages(state.GetRootPromptMessagesJson(), blobs)
 	if err != nil {
@@ -134,7 +138,7 @@ func (service *Service) importConversationState(item *ConversationFile, state *a
 
 // importedConversationStateModelEntries 在规范化前逐条绑定原生 root 原文；
 // 其余情况沿用既有整段解码与 newModelMessageEntry 过滤。
-func importedConversationStateModelEntries(state *agentv1.ConversationStateStructure, blobs importedBlobStore) ([]HistoryEntry, error) {
+func importedConversationStateModelEntries(state *agentv1.ConversationStateStructure, blobs importedBlobResolver) ([]HistoryEntry, error) {
 	if state == nil {
 		return nil, nil
 	}
@@ -212,10 +216,10 @@ func importedNativeRootEntries(rawItems [][]byte) ([]HistoryEntry, error) {
 }
 
 func importedConversationStateModelMessages(state *agentv1.ConversationStateStructure) ([]modeladapter.Message, error) {
-	return importedConversationStateModelMessagesWithBlobs(state, nil)
+	return importedConversationStateModelMessagesWithBlobs(state, emptyImportedBlobResolver{})
 }
 
-func importedConversationStateModelMessagesWithBlobs(state *agentv1.ConversationStateStructure, blobs importedBlobStore) ([]modeladapter.Message, error) {
+func importedConversationStateModelMessagesWithBlobs(state *agentv1.ConversationStateStructure, blobs importedBlobResolver) ([]modeladapter.Message, error) {
 	if state == nil {
 		return nil, nil
 	}
@@ -224,7 +228,7 @@ func importedConversationStateModelMessagesWithBlobs(state *agentv1.Conversation
 		return nil, err
 	}
 	if nativeRoot && len(rootPromptMessages) == 0 && len(state.GetTurns()) == 0 {
-		return nil, fmt.Errorf("missing prefetched root message blobs")
+		return nil, fmt.Errorf("missing imported root message blobs")
 	}
 	if len(rootPromptMessages) > 0 {
 		var decoded []promptengine.Message
@@ -263,7 +267,7 @@ func importedConversationStateModelMessagesWithBlobs(state *agentv1.Conversation
 			return nil, err
 		}
 		if turn == nil && len(turnID) > 0 {
-			return nil, fmt.Errorf("missing prefetched turn blob %x", turnID)
+			return nil, fmt.Errorf("missing imported turn blob %x", turnID)
 		}
 		turnMessages, err := importedBlobTurnMessages(turn, blobs)
 		if err != nil {
@@ -312,7 +316,7 @@ func newModelMessageEntry(turnSeq int64, requestID string, message modeladapter.
 	}, true, nil
 }
 
-func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateStructure, blobs importedBlobStore) (runtimeStateEntryPayload, bool, error) {
+func runtimeStatePayloadFromConversationState(state *agentv1.ConversationStateStructure, blobs importedBlobResolver) (runtimeStateEntryPayload, bool, error) {
 	if state == nil {
 		return runtimeStateEntryPayload{}, false, nil
 	}

@@ -50,6 +50,27 @@ type importedBlobResolver interface {
 	resolve(id []byte) ([]byte, bool)
 }
 
+// importedBlobSources 按固定顺序解析导入内容：请求预取优先，其次本地内容存储。
+// 本地存储只保存宿主自己发布过的字节，读取时仍由 ContentBlobStore 校验 SHA-256。
+type importedBlobSources struct {
+	prefetched importedBlobStore
+	local      importedBlobResolver
+}
+
+func (sources importedBlobSources) resolve(id []byte) ([]byte, bool) {
+	if data, ok := sources.prefetched.resolve(id); ok {
+		return data, true
+	}
+	if sources.local == nil {
+		return nil, false
+	}
+	return sources.local.resolve(id)
+}
+
+type emptyImportedBlobResolver struct{}
+
+func (emptyImportedBlobResolver) resolve([]byte) ([]byte, bool) { return nil, false }
+
 type importedContentNode struct {
 	ID   []byte
 	Data []byte
@@ -109,7 +130,7 @@ func collectImportedTurnGraph(turns [][]byte, blobs importedBlobResolver) ([][]b
 		if len(raw) == sha256.Size {
 			data, ok := blobs.resolve(raw)
 			if !ok {
-				return nil, nil, fmt.Errorf("missing prefetched turn blob %x", raw)
+				return nil, nil, fmt.Errorf("missing imported turn blob %x", raw)
 			}
 			turn := &agentv1.ConversationTurnStructure{}
 			if err := proto.Unmarshal(data, turn); err != nil || turn.GetTurn() == nil {
@@ -172,7 +193,7 @@ func collectNamedTurnField(raw []byte, blobs importedBlobResolver, kind string, 
 	if len(raw) == sha256.Size {
 		data, ok := blobs.resolve(raw)
 		if !ok {
-			return fmt.Errorf("missing prefetched %s blob %x", kind, raw)
+			return fmt.Errorf("missing imported %s blob %x", kind, raw)
 		}
 		if err := validate(data); err != nil {
 			return err
@@ -351,7 +372,7 @@ func collectImportedSummaryParent(raw []byte, blobs importedBlobResolver, kind s
 	if len(raw) == sha256.Size {
 		resolved, ok := blobs.resolve(raw)
 		if !ok {
-			return nil, fmt.Errorf("missing prefetched %s blob", kind)
+			return nil, fmt.Errorf("missing imported %s blob", kind)
 		}
 		data = resolved
 		id = append([]byte(nil), raw...)
@@ -402,7 +423,7 @@ func collectImportedArchiveCoreMessage(raw []byte, blobs importedBlobResolver, a
 	}
 	data, ok := blobs.resolve(raw)
 	if !ok {
-		return fmt.Errorf("missing prefetched archive core message blob %x", raw)
+		return fmt.Errorf("missing imported archive core message blob %x", raw)
 	}
 	if _, err := parseImportedNativeMessage(data); err != nil {
 		return fmt.Errorf("decode imported archive core message: %w", err)
@@ -464,7 +485,7 @@ func contentBlobStoreReady(store *ContentBlobStore) bool {
 
 // resolveImportedRootMessages 只解析内容引用，保留消息顺序及重复引用。
 // native=true 且 resolved=nil 表示所有引用均缺失，由调用者决定既有 turns 回退。
-func resolveImportedRootMessages(rawItems [][]byte, blobs importedBlobStore) (resolved [][]byte, native bool, err error) {
+func resolveImportedRootMessages(rawItems [][]byte, blobs importedBlobResolver) (resolved [][]byte, native bool, err error) {
 	hasInline := false
 	for _, raw := range rawItems {
 		if len(raw) == 0 {
@@ -495,7 +516,7 @@ func resolveImportedRootMessages(rawItems [][]byte, blobs importedBlobStore) (re
 		resolved = append(resolved, data)
 	}
 	if missing && len(resolved) > 0 {
-		return nil, true, fmt.Errorf("incomplete prefetched root message blobs")
+		return nil, true, fmt.Errorf("incomplete imported root message blobs")
 	}
 	return resolved, true, nil
 }
@@ -702,7 +723,7 @@ func decodeImportedNativeContentParts(role string, rawContent json.RawMessage) (
 
 // decodeImportedPlan 对32字节字段只按内容引用读取，不用 protobuf 解析成功掩盖缺失。
 // 非32字节旧内联沿用既有解码；未知字段拒绝只适用于新的引用正文。
-func decodeImportedPlan(raw []byte, blobs importedBlobStore) (*agentv1.ConversationPlan, error) {
+func decodeImportedPlan(raw []byte, blobs importedBlobResolver) (*agentv1.ConversationPlan, error) {
 	data := raw
 	source := "plan"
 	referenced := len(raw) == sha256.Size
@@ -710,7 +731,7 @@ func decodeImportedPlan(raw []byte, blobs importedBlobStore) (*agentv1.Conversat
 		var ok bool
 		data, ok = blobs.resolve(raw)
 		if !ok {
-			return nil, fmt.Errorf("missing prefetched plan blob")
+			return nil, fmt.Errorf("missing imported plan blob")
 		}
 		source = "plan blob"
 	}
@@ -724,7 +745,7 @@ func decodeImportedPlan(raw []byte, blobs importedBlobStore) (*agentv1.Conversat
 	return plan, nil
 }
 
-func decodeImportedTodo(raw []byte, blobs importedBlobStore) (*agentv1.TodoItem, error) {
+func decodeImportedTodo(raw []byte, blobs importedBlobResolver) (*agentv1.TodoItem, error) {
 	data := raw
 	source := "todo"
 	referenced := len(raw) == sha256.Size
@@ -732,7 +753,7 @@ func decodeImportedTodo(raw []byte, blobs importedBlobStore) (*agentv1.TodoItem,
 		var ok bool
 		data, ok = blobs.resolve(raw)
 		if !ok {
-			return nil, fmt.Errorf("missing prefetched todo blob")
+			return nil, fmt.Errorf("missing imported todo blob")
 		}
 		source = "todo blob"
 		if len(data) == 0 {
@@ -753,7 +774,7 @@ func decodeImportedTodo(raw []byte, blobs importedBlobStore) (*agentv1.TodoItem,
 	return item, nil
 }
 
-func decodeImportedTurn(raw []byte, blobs importedBlobStore) (*agentv1.ConversationTurnStructure, []byte, error) {
+func decodeImportedTurn(raw []byte, blobs importedBlobResolver) (*agentv1.ConversationTurnStructure, []byte, error) {
 	if data, ok := blobs.resolve(raw); ok {
 		turn := &agentv1.ConversationTurnStructure{}
 		if err := proto.Unmarshal(data, turn); err != nil || turn.GetTurn() == nil {
@@ -771,14 +792,14 @@ func decodeImportedTurn(raw []byte, blobs importedBlobStore) (*agentv1.Conversat
 	return nil, nil, fmt.Errorf("decode imported inline turn")
 }
 
-func decodeImportedUserMessage(raw []byte, blobs importedBlobStore) (*agentv1.UserMessage, error) {
+func decodeImportedUserMessage(raw []byte, blobs importedBlobResolver) (*agentv1.UserMessage, error) {
 	data := raw
 	if resolved, ok := blobs.resolve(raw); ok {
 		data = resolved
 	} else if len(raw) == sha256.Size {
 		candidate := &agentv1.UserMessage{}
 		if err := proto.Unmarshal(raw, candidate); err != nil || !hasKnownUserMessageContent(candidate) {
-			return nil, fmt.Errorf("missing prefetched user message blob %x", raw)
+			return nil, fmt.Errorf("missing imported user message blob %x", raw)
 		}
 		return candidate, nil
 	}
@@ -789,14 +810,14 @@ func decodeImportedUserMessage(raw []byte, blobs importedBlobStore) (*agentv1.Us
 	return message, nil
 }
 
-func decodeImportedStep(raw []byte, blobs importedBlobStore) (*agentv1.ConversationStep, error) {
+func decodeImportedStep(raw []byte, blobs importedBlobResolver) (*agentv1.ConversationStep, error) {
 	data := raw
 	if resolved, ok := blobs.resolve(raw); ok {
 		data = resolved
 	} else if len(raw) == sha256.Size {
 		candidate := &agentv1.ConversationStep{}
 		if err := proto.Unmarshal(raw, candidate); err != nil || candidate.GetMessage() == nil {
-			return nil, fmt.Errorf("missing prefetched conversation step blob %x", raw)
+			return nil, fmt.Errorf("missing imported conversation step blob %x", raw)
 		}
 		return candidate, nil
 	}
@@ -810,7 +831,7 @@ func decodeImportedStep(raw []byte, blobs importedBlobStore) (*agentv1.Conversat
 	return step, nil
 }
 
-func importedBlobTurnMessages(turn *agentv1.ConversationTurnStructure, blobs importedBlobStore) ([]modeladapter.Message, error) {
+func importedBlobTurnMessages(turn *agentv1.ConversationTurnStructure, blobs importedBlobResolver) ([]modeladapter.Message, error) {
 	if turn == nil || turn.GetAgentConversationTurn() == nil {
 		return nil, nil
 	}
@@ -840,7 +861,7 @@ func importedBlobTurnMessages(turn *agentv1.ConversationTurnStructure, blobs imp
 	return messages, nil
 }
 
-func importedTurnIDs(turns [][]byte, blobs importedBlobStore) ([][]byte, error) {
+func importedTurnIDs(turns [][]byte, blobs importedBlobResolver) ([][]byte, error) {
 	ids := make([][]byte, 0, len(turns))
 	for _, raw := range turns {
 		if len(raw) == 0 {

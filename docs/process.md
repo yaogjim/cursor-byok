@@ -7,7 +7,30 @@
 
 ## 一、待完成的内容
 
-### v1.95.0 发布（2026-11-19）
+### Fork 导入缺失 Blob 的本机闭环（2026-11-20；verified-partial）
+
+- 授权与范围：用户先批准临时 full 取证，再选择「手动刷新父会话」恢复存量，最后明确开始实现并授权重新构建安装、跑真实 fork 验收。设计合同见系统设计 §19.3m；未接线 GetBlob、未推断父 ID、未修改真实历史、未提交或发布。
+- 根因证据：真实 fork 样本未携带 `transcript_parent_conversation_id`，预取 Blob 为 0；父会话本机投影 10 个 Blob 均不在内容库。原检查点发送不落本机内容库，原导入又只读请求预取，故缺少 turn Blob 时首条消息导入失败。该事实否证「仅按父 ID 本机补齐」前提，不改变其他历史兼容专项结论。
+- 改动：`checkpoint_blobs.go` 在待发送 Blob 交给客户端前尝试 Put，失败仅记安全诊断并继续投递；`imported_blobs.go` 增加预取优先、本机回退的 resolver，`token_usage.go` 与 `projector.go` 透传；缺失错误改为 `missing imported …`。不改变 ACK 门禁或历史格式。
+- RED→GREEN：新增 `TestCheckpointPublishPersistsProjectionBlobsLocally`、`TestCheckpointPublishSurvivesLocalBlobPersistFailure`、`TestImportedConversationStateResolvesBlobsFromLocalContentStore`，以及 `TestImportedConversationStateResolvesLocalBlobsThroughBidiAppend`。后者从真实 BidiAppend HTTP 测试入口验证无预取时 provider 请求包含 imported user/assistant；属于近真实测试链，不是桌面 Cursor 验收。
+- 本轮验证：`go test ./internal/backend/forwarder -count=1` 通过（69.7s）；`go vet ./internal/backend/forwarder`、六个修改 Go 文件的 `gofmt -l` 无输出；`go build ./...` 成功（既有 macOS 链接目标警告）。临时 full 取证已恢复 basic，已清理本次新增敏感抓包与临时 probe；证据仅保留上述无正文结论，不重抓真实内容。
+- 链路状态：写侧与读侧均已接入。2026-11-20 已安装本机新构建并通过真实 Cursor 新父 fork、旧父刷新后 fork 两条主路径；缺图显式失败尚未真机验证。缺口为 test gap（上述失败路径）与 data gap（全部存量压缩/旧引用图不保证恢复）。
+- 真机验收（2026-11-20，用户在本机 Cursor 3.29.15 手动执行）：构建 `task build` 产物 `bin/macos-arm64.dmg` 版本 1.95.0；替换 `/Applications/cursor-byok.app` 后运行 PID 78488，`18080`/`18090` 监听正常，`observability.mode=basic`，应用日志记录 `应用版本：v1.95.0`。旧 1.93.0 应用备份于 `/tmp/cursor-byok-1.93.0.app`，未提交或发布。
+- 父会话证据：`d8eef94b-4bce-4cbd-a158-a4dd6b8e17b1` 于 09:54:25Z 创建并完成 1 轮；trace 记录 5 次 `checkpoint_blob_dispatch`（09:54:25.499/501、09:54:31.061/065/069），`.blobs/sha256` 同时新增 5 个文件（本地 01:54:25 两个、01:54:31 三个），数量与时间一一对应，证明本次检查点 Blob 在投递前已落本机内容库。全部 ACK 成功，无 `checkpoint_blob_local_persist` 失败事件。
+- 子会话证据：`ff8c2364-a054-4316-8923-6b42088d8c7b` 于 09:54:48Z 创建，`imported_turn_ids` 为 1，导入 7 条 `model_message`；父会话的 assistant 文本哈希与其中一条逐字节一致，父 user 文本作为子串存在于导入消息，证明导入的是父历史原文而非空图或占位。请求 `d4bca1ca-9525-4d92-8c8c-4edabcdcc09a` 完成（input=400、output=269、cache_read=13632，prompt 合计 14032，高于父请求 `ddd7ce55` 的 13376+302），随后用户以 owner abort 取消；同会话第二条请求 `3c501959-154d-4a4f-9805-5ab0d862d5fd` 完成（334/82/13696），轮次 2 落盘 assistant 文本，`current_loop_status=completed`。全量应用日志未出现 `missing imported`。
+- 旧父刷新后 fork（2026-11-20，同一安装实例）：存量父会话 `1a6539a9-a561-457a-82d6-b83a6168258d`（4 轮、无压缩）发第 5 轮 `34b6acbd-a98b-4524-80df-ea40493c8aea`，09:59:29Z 完成；该会话 trace 中 21 次 `checkpoint_blob_dispatch` 全部发送成功，内容库 337 → 360。随后两次 fork：`9eb97b64-064c-4742-b405-12188f81a03c` 导入 4 个 turn、28 条模型消息，请求 `c5ef2dfd-de98-459d-89a3-d4ebd4ae9e7b` 完成（input=4、output=69、cache_read=15168，高于父请求 `34b6acbd` 的 14720）；`8c199c17-387f-4132-88f0-84aacbb51d37` 导入 5 个 turn、35 条模型消息，请求 `36a24acd-9161-4d50-8e5c-7ece137931a5` 完成（350/89/15168）。后者中父会话 5 条 user 与 5 条 assistant 文本全部逐字出现在导入历史，前者 4 条 user 全部出现；两个子会话各记录 5 次 `checkpoint_blob_dispatch`。全量应用日志仍无 `missing imported`，内容库最终 368 个 Blob。
+- 证据边界：两轮真机验收均未开启 full 抓包，未直接记录 fork 请求的 `pre_fetched_blobs` 数量；「本机回退实际生效」由同客户端此前 fork 样本预取为 0、仅更换网关后导入成功、父内容仅在本地留存三组事实推断，不冒充直接观测。未验证缺图显式失败、跨机器恢复与压缩父会话；压缩父会话的 fork 行为仍属 data gap。
+- 下一步验收：对无法补齐的旧引用图构造 fork，确认明确报错且不以空历史请求模型。回退仅还原代码，保留内容库，不修改真实历史。
+
+### v1.96.0 发布（2026-11-20）
+
+- 版本来源：`build/config.yml` 的 `info.version` 由 1.95.0 升至 1.96.0；`wails3 update build-assets` 同步 `build/darwin/Info.plist`、`Info.dev.plist`、`build/windows/info.json`、`wails_tools.nsh`、`wails.exe.manifest`、`build/linux/nfpm/nfpm.yaml`，回读版本均为 1.96.0，`build/` 下无残留 1.95.0。
+- 随本次提交的内容：Fork 导入缺失 Blob 的本机闭环（写侧 `checkpoint_blobs.go` 发布前留存、读侧 `imported_blobs.go` 预取优先本机回退、`projector.go` 与 `token_usage.go` 透传 resolver，含四项新增回归）；系统设计 §19.3m 设计合同；`release-notes.md` 按 1.96.0 内容重写。
+- 验证：`go test ./internal/backend/forwarder -count=1` 通过（69.7s）；`go build ./...` 通过（仅剩既有 macOS 链接目标警告）；`node frontend/scripts/test-config-projection.mjs` 通过；`gofmt -l`、`git diff --check` 无输出。
+- 本次未编译：未传 `--build`，未重新构建本机 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
+- 已知缺口不因发布改变：缺图显式失败路径仍为 test gap，压缩父会话与跨机器恢复仍为 data gap，详见上文「Fork 导入缺失 Blob 的本机闭环」。
+
+### v1.95.0 发布（2026-11-19；已发布）
 
 - 版本来源：`build/config.yml` 的 `info.version` 由 1.94.0 升至 1.95.0；`wails3 update build-assets` 同步 `build/darwin/Info.plist`、`Info.dev.plist`、`build/windows/info.json`、`wails_tools.nsh`、`wails.exe.manifest`、`build/linux/nfpm/nfpm.yaml`，回读版本均为 1.95.0。
 - 随本次提交的内容：压缩摘要输出触顶识别修复（`compaction.go` 与 `compaction_append_only_test.go`）；`release-notes.md` 按 1.95.0 内容重写，覆盖已提交的 UI 交互改造四批、请求模型显示名称、广告内容服务停用旧远端与本次压缩修复。
@@ -22,7 +45,7 @@
 - `release-notes.md` 当时重写为 1.94.0 内容：使用分析请求列表、桌面壳四项设置、provider 配额错误分类、basic 模式运行时错误文本，并列出明确的验收缺口。
 - 当时未编译：未传 `--build`，未重新构建本机 DMG；三平台安装包由 tag 触发的 CI 构建。
 - 已知缺口不因发布改变：桌面四项功能与请求列表仍为真机/浏览器未验收，配额分类缺少真实 quota 样本，详见上文各任务小节。
-- 该小节保留为历史记录；当前待发布版本为 v1.95.0。
+- 该小节保留为历史记录；当前待发布版本为 v1.96.0。
 
 ### 使用分析请求列表（2026-11-17；wired-not-verified）
 

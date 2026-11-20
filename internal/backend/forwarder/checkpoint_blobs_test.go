@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1734,5 +1735,43 @@ func TestNativeCheckpointLocalArchiveChildAcknowledgementsThroughBidiAppend(t *t
 		if event.Message.GetConversationCheckpointUpdate() != nil || event.Message.GetInteractionUpdate().GetTurnEnded() != nil || event.End {
 			t.Fatalf("late ACK republished terminal state: %#v", event.Message)
 		}
+	}
+}
+
+// TestCheckpointPublishPersistsProjectionBlobsLocally 固定“发布即留存”不变量：
+// 客户端确认检查点后，宿主必须已把全部投影 Blob 写入本地内容存储，
+// 否则后续 fork 只能依赖请求预取，父会话回合会永久缺失。
+func TestCheckpointPublishPersistsProjectionBlobsLocally(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	service.contentBlobs = NewContentBlobStore(t.TempDir())
+	if err := service.queueCheckpointProjection(stream, projection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	for _, blob := range projection.Blobs {
+		data, err := service.contentBlobs.Get(blob.ID)
+		if err != nil {
+			t.Fatalf("projection blob %x was not persisted locally: %v", blob.ID, err)
+		}
+		if !bytes.Equal(data, blob.Data) {
+			t.Fatalf("local blob %x = %d bytes, want %d", blob.ID, len(data), len(blob.Data))
+		}
+	}
+}
+
+// TestCheckpointPublishSurvivesLocalBlobPersistFailure 固定降级语义：
+// 本地内容存储不可写只损失后续恢复能力，不能阻断本轮检查点发送或对话。
+func TestCheckpointPublishSurvivesLocalBlobPersistFailure(t *testing.T) {
+	service, stream, projection := testCheckpointBlobProjection(t)
+	blocker := t.TempDir() + "/not-a-directory"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service.contentBlobs = &ContentBlobStore{root: blocker}
+	if err := service.queueCheckpointProjection(stream, projection, nil); err != nil {
+		t.Fatalf("queueCheckpointProjection() error = %v", err)
+	}
+	events := readCheckpointTestEvents(t, service, stream)
+	if len(events) != len(projection.Blobs) {
+		t.Fatalf("events = %d, want %d Blob writes after persist failure", len(events), len(projection.Blobs))
 	}
 }

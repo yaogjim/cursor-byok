@@ -147,6 +147,11 @@ func (service *Service) queueCheckpointProjectionWithTerminal(stream *ActiveStre
 	stream.mu.Unlock()
 
 	for _, write := range toWrite {
+		// 发布即留存：先落本地内容存储再交给客户端。写盘失败只降级后续 fork
+		// 恢复能力，不阻断本轮对话；新流会重新发送全部投影 Blob 并再次尝试。
+		if err := service.persistCheckpointBlobLocally(write.blob); err != nil {
+			service.recordCheckpointBlobPersistFailure(stream, err)
+		}
 		if err := service.broker.Publish(stream.RequestID, StreamEvent{
 			Message: buildSetCheckpointBlobMessage(write.requestID, write.blob),
 		}); err != nil {
@@ -170,6 +175,22 @@ func (service *Service) queueCheckpointProjectionWithTerminal(stream *ActiveStre
 		"checkpoint blob write timeout",
 	)
 	return nil
+}
+
+// persistCheckpointBlobLocally 保存本轮即将发送的检查点 Blob。
+// 存储未初始化时跳过，保持不依赖历史目录的测试与旧调用路径可用。
+func (service *Service) persistCheckpointBlobLocally(blob CheckpointBlob) error {
+	if service == nil || !contentBlobStoreReady(service.contentBlobs) {
+		return nil
+	}
+	return service.contentBlobs.Put(blob.ID, blob.Data)
+}
+
+// recordCheckpointBlobPersistFailure 只记录阶段与计数，不写 Blob key 或正文。
+func (service *Service) recordCheckpointBlobPersistFailure(stream *ActiveStream, _ error) {
+	service.recordCheckpointBlobEvent(stream, "checkpoint_blob_local_persist", "error", "persist", "failed", map[string]any{
+		"blob_count": 1,
+	})
 }
 
 func (service *Service) checkpointProjectionReady(stream *ActiveStream) bool {

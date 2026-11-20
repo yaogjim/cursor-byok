@@ -2417,7 +2417,7 @@ func filterCheckpointPersistentToolReplay(messages []promptengine.Message) []pro
 	return filtered
 }
 
-func restoreImportedReplayUserMessages(messages []promptengine.Message, importedTurns [][]byte, blobs importedBlobStore) []promptengine.Message {
+func restoreImportedReplayUserMessages(messages []promptengine.Message, importedTurns [][]byte, blobs importedBlobResolver) []promptengine.Message {
 	if len(messages) == 0 || len(importedTurns) == 0 {
 		return messages
 	}

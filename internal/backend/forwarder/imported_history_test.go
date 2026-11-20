@@ -197,14 +197,14 @@ func TestImportedConversationStateFailurePreservesEntireConversation(t *testing.
 		change    func(*agentv1.ConversationStateStructure, []*agentv1.PreFetchedBlob)
 		wantError string
 	}{
-		{"missing-root", func(state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob) { blobs[0].Id = nil }, "missing prefetched turn blob"},
+		{"missing-root", func(state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob) { blobs[0].Id = nil }, "missing imported turn blob"},
 		{"corrupt-hash", func(state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob) {
 			blobs[0].Value = []byte("corrupt")
 		}, "failed SHA-256 validation"},
 		{"partial-root", func(state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob) {
 			missing := sha256.Sum256([]byte("missing root"))
 			state.RootPromptMessagesJson = append(state.RootPromptMessagesJson, missing[:])
-		}, "incomplete prefetched root message blobs"},
+		}, "incomplete imported root message blobs"},
 		{"mixed-root", func(state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob) {
 			state.RootPromptMessagesJson = append(state.RootPromptMessagesJson, []byte(`{"role":"user","content":"inline"}`))
 		}, "mixed inline and referenced root messages"},
@@ -389,9 +389,9 @@ func TestImportedStructuredFailuresStopRequestWithoutWrites(t *testing.T) {
 		blobs     []*agentv1.PreFetchedBlob
 		wantError string
 	}{
-		{name: "missing-plan", plan: missing[:], wantError: "missing prefetched plan blob"},
-		{name: "missing-todo", todos: [][]byte{missing[:]}, wantError: "missing prefetched todo blob"},
-		{name: "ambiguous-legacy-plan", plan: legacy32, wantError: "missing prefetched plan blob"},
+		{name: "missing-plan", plan: missing[:], wantError: "missing imported plan blob"},
+		{name: "missing-todo", todos: [][]byte{missing[:]}, wantError: "missing imported todo blob"},
+		{name: "ambiguous-legacy-plan", plan: legacy32, wantError: "missing imported plan blob"},
 		{name: "default-encoded-todo", todos: [][]byte{defaultTodoID[:]},
 			blobs:     []*agentv1.PreFetchedBlob{{Id: defaultTodoID[:], Value: defaultTodo}},
 			wantError: "decode imported todo blob: empty todo"},
@@ -548,6 +548,11 @@ func waitForBidiAppendActor(t *testing.T, stream *ActiveStream, errMsg string) {
 
 func nativeRootProviderRequestThroughBidiAppend(t *testing.T, state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob, wantImportedCount int) modeladapter.StreamRequest {
 	t.Helper()
+	return nativeRootProviderRequestThroughBidiAppendWithSetup(t, state, blobs, wantImportedCount, nil)
+}
+
+func nativeRootProviderRequestThroughBidiAppendWithSetup(t *testing.T, state *agentv1.ConversationStateStructure, blobs []*agentv1.PreFetchedBlob, wantImportedCount int, setup func(*Service)) modeladapter.StreamRequest {
+	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	requests := make(chan modeladapter.StreamRequest, 1)
 	providerDone := make(chan struct{})
@@ -565,6 +570,9 @@ func nativeRootProviderRequestThroughBidiAppend(t *testing.T, state *agentv1.Con
 		NewPromptCompiler(projector, NewToolCatalog(), NewReminderInjector(), nil),
 		gateway, NewStreamBroker(),
 	)
+	if setup != nil {
+		setup(service)
+	}
 	const requestID = "native-root-bidi-request"
 	observed := false
 	t.Cleanup(func() {
@@ -1137,27 +1145,27 @@ func TestImportedConversationStateStructuredFailuresPreserveConversation(t *test
 		{
 			name:      "missing-plan-blob",
 			state:     &agentv1.ConversationStateStructure{Plan: missingDigest[:]},
-			wantError: "missing prefetched plan blob",
+			wantError: "missing imported plan blob",
 		},
 		{
 			name:      "missing-todo-blob",
 			state:     &agentv1.ConversationStateStructure{Todos: [][]byte{missingDigest[:]}},
-			wantError: "missing prefetched todo blob",
+			wantError: "missing imported todo blob",
 		},
 		{
 			name:      "legacy-inline-32-plan-rejected",
 			state:     &agentv1.ConversationStateStructure{Plan: inline32Plan},
-			wantError: "missing prefetched plan blob",
+			wantError: "missing imported plan blob",
 		},
 		{
 			name:      "legacy-inline-32-todo-rejected",
 			state:     &agentv1.ConversationStateStructure{Todos: [][]byte{inline32Todo}},
-			wantError: "missing prefetched todo blob",
+			wantError: "missing imported todo blob",
 		},
 		{
 			name:      "parseable-real-hash-still-missing",
 			state:     &agentv1.ConversationStateStructure{Plan: realHashPlan[:]},
-			wantError: "missing prefetched plan blob",
+			wantError: "missing imported plan blob",
 		},
 		{
 			name:      "corrupt-plan-body",
@@ -1703,7 +1711,7 @@ func TestImportedConversationStateRejectsMissingTurnChildWithCompleteRoot(t *tes
 	if err == nil || entries != nil {
 		t.Fatal("root 齐全时缺失 step 子节点仍被接受（旧实现语义 RED）")
 	}
-	if !strings.Contains(err.Error(), "missing prefetched conversation step blob") {
+	if !strings.Contains(err.Error(), "missing imported conversation step blob") {
 		t.Fatalf("错误分类不符: %v", err)
 	}
 	assertConversationUnchanged(t, before, conversation)
@@ -1751,7 +1759,7 @@ func TestImportedConversationStateRejectsAmbiguous32UserMessageChild(t *testing.
 	if err == nil || entries != nil {
 		t.Fatal("32字节 user_message 被当成内联正文（旧实现语义 RED）")
 	}
-	if !strings.Contains(err.Error(), "missing prefetched user message blob") {
+	if !strings.Contains(err.Error(), "missing imported user message blob") {
 		t.Fatalf("错误分类不符: %v", err)
 	}
 	assertConversationUnchanged(t, before, conversation)
@@ -2050,7 +2058,7 @@ func TestImportedConversationStateTurnGraphSurvivesRewindPrefix(t *testing.T) {
 
 func TestImportedTurnGraphMissingChildStopsBidiAppendWithoutWrites(t *testing.T) {
 	graph := newTestImportedTurnGraph(t)
-	assertImportedHistoryFailureThroughBidiAppend(t, graph.state, graph.blobsWithout(graph.userID), "missing prefetched user message blob")
+	assertImportedHistoryFailureThroughBidiAppend(t, graph.state, graph.blobsWithout(graph.userID), "missing imported user message blob")
 }
 
 type testImportedSummaryGraph struct {
@@ -2302,7 +2310,7 @@ func TestImportedConversationStateRejectsNativeSummaryViolations(t *testing.T) {
 			change: func(graph *testImportedSummaryGraph) {
 				graph.blobs = graph.blobsWithout(graph.msgToolID)
 			},
-			wantError: "missing prefetched archive core message blob",
+			wantError: "missing imported archive core message blob",
 		},
 		{
 			name: "inline-archive-child",
@@ -2344,7 +2352,7 @@ func TestImportedConversationStateRejectsNativeSummaryViolations(t *testing.T) {
 				graph.state.SummaryArchive = nil
 				graph.state.SummaryArchives = nil
 			},
-			wantError: "missing prefetched summary blob",
+			wantError: "missing imported summary blob",
 		},
 		{
 			name:      "put-failure",
@@ -2401,7 +2409,7 @@ func TestImportedConversationStateDoesNotBindNativeSummaryOnInlineRoot(t *testin
 
 func TestImportedNativeSummaryMissingArchiveChildStopsBidiAppendWithoutWrites(t *testing.T) {
 	graph := newTestImportedSummaryGraph(t)
-	assertImportedHistoryFailureThroughBidiAppend(t, graph.state, graph.blobsWithout(graph.msgUserID), "missing prefetched archive core message blob")
+	assertImportedHistoryFailureThroughBidiAppend(t, graph.state, graph.blobsWithout(graph.msgUserID), "missing imported archive core message blob")
 }
 
 func TestNativeCheckpointProjectionAppendsLocalArchiveAfterImportedGraph(t *testing.T) {
@@ -2476,5 +2484,60 @@ func TestNativeCheckpointProjectionAppendsLocalArchiveAfterImportedGraph(t *test
 		if bytes.Contains(repo[string(id)], []byte("archived-only-question")) {
 			t.Fatal("root 展开了外来 archive")
 		}
+	}
+}
+
+// TestImportedConversationStateResolvesBlobsFromLocalContentStore 固定本机 fork 恢复：
+// 请求未携带 PreFetchedBlobs 时，导入必须回退到宿主本地内容存储；
+// 父会话发布过的回合/根消息 Blob 已由写侧留存，不能再报 missing prefetched。
+func TestImportedConversationStateResolvesBlobsFromLocalContentStore(t *testing.T) {
+	graph := newTestImportedTurnGraph(t)
+	local := NewContentBlobStore(t.TempDir())
+	for _, blob := range graph.blobs {
+		if err := local.Put(blob.Id, blob.Value); err != nil {
+			t.Fatalf("local Put(%x) error = %v", blob.Id, err)
+		}
+	}
+	service := &Service{contentBlobs: local}
+	conversation, err := newRuntimeConversation("fork-conversation", agentv1.AgentMode_AGENT_MODE_AGENT)
+	if err != nil {
+		t.Fatalf("newRuntimeConversation() error = %v", err)
+	}
+	entries, err := service.importConversationState(conversation, graph.state, nil)
+	if err != nil {
+		t.Fatalf("importConversationState() local fallback error = %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("importConversationState() returned no entries from local content store")
+	}
+	if len(conversation.ImportedTurnIDs) != 2 {
+		t.Fatalf("ImportedTurnIDs = %d, want 2", len(conversation.ImportedTurnIDs))
+	}
+	if string(conversation.ImportedTurnIDs[0]) != string(graph.turnID) {
+		t.Fatalf("ImportedTurnIDs[0] = %x, want %x", conversation.ImportedTurnIDs[0], graph.turnID)
+	}
+}
+
+// TestImportedConversationStateResolvesLocalBlobsThroughBidiAppend 固定真实入口闭环：
+// fork 请求不携带预取 Blob 时，BidiAppend 导入仍可从本地内容存储还原父回合，
+// 并把父历史送进模型适配器。
+func TestImportedConversationStateResolvesLocalBlobsThroughBidiAppend(t *testing.T) {
+	graph := newTestImportedTurnGraph(t)
+	state := proto.Clone(graph.state).(*agentv1.ConversationStateStructure)
+	state.RootPromptMessagesJson = nil
+	request := nativeRootProviderRequestThroughBidiAppendWithSetup(t, state, nil, 4, func(service *Service) {
+		for _, blob := range graph.blobs {
+			if err := service.contentBlobs.Put(blob.Id, blob.Value); err != nil {
+				t.Fatalf("local Put(%x) error = %v", blob.Id, err)
+			}
+		}
+	})
+	var hasUser, hasAssistant bool
+	for _, message := range request.Messages {
+		hasUser = hasUser || strings.Contains(message.Content, "imported user")
+		hasAssistant = hasAssistant || strings.Contains(message.Content, "imported assistant")
+	}
+	if !hasUser || !hasAssistant {
+		t.Fatalf("本地回退导入未进入模型输入: user=%t assistant=%t", hasUser, hasAssistant)
 	}
 }

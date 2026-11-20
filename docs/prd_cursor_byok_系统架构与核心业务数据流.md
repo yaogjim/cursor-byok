@@ -2306,6 +2306,17 @@ state.vscdb 事务内非空 accessToken 保留整组 auth，缺失/空才注入�
 - **范围与证据**：仅独立 native writer（`nativeCheckpointMessages` / `projectNativeCheckpointProjection`）及测试；默认 `ProjectCheckpointProjection` 输出不变且不经过该域。永久回归须模拟工作台展开并断言固定输入恰好一次、归档顺序保持、默认检查点与历史不变；官方服务端互操作未验证（data gap），不声称该检查点在官方服务端无损展开。
 - **回滚**：代码可回退；已写记录字段合法、旧代码可读，但输入在原始前缀中的位置语义不能恢复。
 
+### 19.3m Fork 导入缺失 Blob 的本机闭环（2026-11-20，仅限本切片）
+
+需求=PRD §17 CHECKPOINT/CONFLICT/BOUNDARY。目标链路为父会话发布检查点 → 本机保留完整引用内容 → Cursor fork 提交状态 → 子会话导入原历史 → 首条消息携带历史调用模型。用户批准本机写侧留存、读侧回退，并选择存量父会话手动刷新；不提升历史兼容专项整体 Design Readiness。
+
+- **已核实事实**：本机真实 fork 请求的 `AgentRunRequest` 未携带字段 36 `transcript_parent_conversation_id`，且 `pre_fetched_blobs` 数量为 0；这是本次样本结论，不外推所有客户端版本。原 `queueCheckpointProjectionWithTerminal` 仅发送检查点 Blob，未调用本机 `ContentBlobStore.Put`；原导入仅解析请求预取。父会话投影探针得到 10 个 Blob，本机均缺失。因此不能实施依赖父 ID 的自动重建，也不能把请求缺少预取误判为父会话历史不存在。
+- **写侧合同**：在 `checkpoint_blobs.go` 每个本次待发送 `SetBlob` 前，用原 ID/原 bytes 写入既有 `ContentBlobStore`，复用内容寻址、SHA-256 校验与原子写入，不增加索引或持久格式。写失败不阻断当前对话，仍发送 Blob，记录 `checkpoint_blob_local_persist` 失败阶段与数量，不记录正文、Blob key 或底层错误文本。未初始化存储的旧调用路径保持可用；同流已确认/待确认内容沿用原去重，新流重新尝试待发送图的留存。客户端全 ACK 后才发布检查点、原超时与降级机制不变。
+- **读侧合同**：`importConversationState` 使用统一 `importedBlobResolver`，顺序固定为请求预取 → 本机内容存储；本机读取仍校验 SHA-256。预取输入的既有校验失败不由本机内容掩盖；所有来源仍缺失或不能解析时明确失败，错误称为 `missing imported …`，不再暗示唯一来源是 prefetched。root、turn、step、用户消息、plan/todo 及摘要图沿用既有解码/完整性规则，不用空历史或猜测文本绕过；导入成功前不更新调用者元数据。
+- **存量恢复与限制**：修复生效后新发布且成功本机留存的完整图可供 fork 导入；存量父会话先发送新消息、完成新检查点发布，再重新 fork。已存在子会话能否直接重试取决于它所引用的原 ID 是否恰被补齐，不承诺刷新后所有旧 fork 自动恢复。父会话已压缩、投影变化或旧引用图无法重建时，刷新不保证补齐原图，仍明确失败；不扫描全部历史、不改真实历史、不反推父 ID。
+- **取舍与回滚**：选择复用本机内容库而非新增客户端 `GetBlob` 协议；代价是占用随内容增加，且写盘降级时无法保证后续 fork。若父发布完整图已留存而无预取导入仍失败，便证伪本切片闭环，应查具体缺失引用，不扩大为父 ID 推断。回退代码可停止新增留存/读取，本次未改变历史 schema；保留已存内容，不执行清库或迁移。跨机器恢复、GetBlob 接线、内容清理策略、官方服务端兼容均不属于本切片。
+- **验证合同**：永久回归覆盖发布原字节落盘、写失败仍投递、本机无预取导入，以及真实 BidiAppend HTTP 入口导入后模型请求含原 user/assistant；既有缺失/坏内容与导入失败保全测试随 forwarder 包回归。新父会话与旧父刷新后的 fork 均已在本机真实 Cursor 通过（内容库落盘、子会话导入与请求证据见 `docs/process.md`）；缺图显式失败仍待真机验收；实施证据与状态仅记于 `docs/process.md` 的同名小节及 `task/todo.md`。
+
 ### 19.4 子模型参数：原拟议承载方案被否证
 
 已核实链路为 `SubagentArgs.model_id` → `toSubagentExecutorArgs` → `createOrResumeSubagent` → 模型配置 → `RequestedModel`。协议没有独立 parameters/max_mode 字段；取证基线中仓库 `service.go` 的 `parseSubagentModelOverrides` 及 `core/types.go` 只保留参数数量，`bridge/exec/bridge.go` 只发送 model_id。内存参数保留的最小修复合同现见 §19.4b；它不改变客户端消费路径。
