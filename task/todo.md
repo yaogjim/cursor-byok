@@ -34,9 +34,18 @@ DELIVERY_STATUS: planned
 - 批次 4 用户真机反馈补充（2026-11-18，verified-partial）：按确认保留启动深绿/停止红字；编辑弹窗测速压为 30px 单行，摘要与需重测标记并存；Anthropic 禁用、移除计划中与占位说明；修正选择 guard 的 computed `.value` 读取。密度/投影/反馈测试、build 与 diff --check 通过；浅深截图已查看，合成 stale 及原始返回悬停已验证，支持项 Cursor 实际切换成功。详细证据见 `evidence/batch-4.md` §7（截图 batch5 目录）。24h 空而 7d 有数据尚无确认根因，本机索引目录缺失不能解释用户所见，保留 data/env gap，未改后端/真实数据。旧 DMG 不含本次补充，未重打包；待主控与桌面验收，不标 accepted。
 - 缺口：已有浏览器预览交互证据；Wails 桌面成功保存/导入及人工视觉确认仍缺，不能用预览探针代替。本批未 commit/push。
 
-### v1.94.0 发布（2026-11-17）
+### v1.95.0 发布（2026-11-19）
 
-- 版本：`build/config.yml` 1.93.0 → 1.94.0；`wails3 task common:update:build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.94.0）；`release-notes.md` 按本版本内容重写。1.93.0 未单独发布，其桌面壳四项功能与 1.94.0 新内容合并进本次发布。
+- 版本：`build/config.yml` 1.94.0 → 1.95.0；`wails3 update build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.95.0）；`release-notes.md` 按本版本内容重写。
+- 随本次提交的内容：压缩摘要输出触顶识别修复（`compaction.go` 的 `isCompactionSummaryOutputLimit` 现同时接受 Responses 的 `max_output_tokens` 与聚合网关的 `length`，新增真实 HTTP 适配器回归 `TestCompactionSummaryResponsesIncompleteLengthRetries`）；发布说明与 task/process 记录。
+- 验证：`go test ./internal/backend/forwarder -count=1`（68.4s，含新增回归）、`go build ./...`、`node frontend/scripts/test-config-projection.mjs` 通过；`gofmt -l` 与 `git diff --check` 无输出。
+- 本地未编译：未传 `--build`，未重新构建 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
+- 未做：真机验收四项桌面功能、请求列表界面与 24 小时范围现象、请求模型显示名称的真实写入；缺口状态沿用各任务记录。
+
+### v1.94.0 发布（2026-11-17；已发布）
+
+- 版本：`build/config.yml` 1.93.0 → 1.94.0；`wails3 task common:update:build-assets` 同步 `build/darwin`、`build/windows`、`build/linux` 资产（回读均为 1.94.0）；`release-notes.md` 按该版本内容重写。1.93.0 未单独发布，其桌面壳四项功能与 1.94.0 新内容合并进该次发布。
+- 结果：提交与 tag `v1.94.0` 已推送，远端 CI 成功，Release 已发布。
 - 随本次提交的内容：桌面壳四项设置项（切片 1–4 与配套测试）、使用分析请求列表（`internal/requestlog` 等）、provider 配额错误分类、basic 模式运行时错误文本、`docs/design_log_analyzer_case_library.md` 设计稿及 task/process 记录。
 - 本地未编译：本次未传 `--build`，未重新构建 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
 - 未做：真机验收四项桌面功能与请求列表界面；配额分类真实样本验证。缺口状态沿用各任务记录，不因发布提升为已验证。

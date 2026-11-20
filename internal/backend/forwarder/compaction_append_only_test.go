@@ -1931,3 +1931,53 @@ func TestCompactionSummaryRealAdapterSendsBoundedOutputBudgets(t *testing.T) {
 		}
 	}
 }
+
+// TestCompactionSummaryResponsesIncompleteLengthRetries 固定 Responses 网关以
+// chat 风格的 length 结束 response.incomplete 时，摘要仍按输出触顶恢复一次。
+func TestCompactionSummaryResponsesIncompleteLengthRetries(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		budgets []float64
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		budget, _ := body["max_output_tokens"].(float64)
+		mu.Lock()
+		budgets = append(budgets, budget)
+		attempt := len(budgets)
+		mu.Unlock()
+
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
+			_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"length\"}}}\n\n")
+			return
+		}
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"done\"}\n\n")
+		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
+	}))
+	defer server.Close()
+
+	service, stream := testOverflowRecoveryStream(t)
+	service.provider = NewProviderGateway(compactionHTTPChannelResolver{channel: &legacyruntime.ResolvedChannel{
+		ID: "http-openai-responses", Provider: "openai", Model: "gpt-test", BaseURL: server.URL,
+		APIKey: "test-key", OpenAIEndpoint: "/v1/responses",
+	}})
+	plan := &PendingCompaction{Trigger: "auto", ContextWindowSize: 130_000, ExistingSummary: "保留约束"}
+	got, err := service.generateCompactionSummary(context.Background(), stream, plan, stream.CurrentModelCallID)
+	if err != nil {
+		t.Fatalf("generateCompactionSummary() error = %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("summary = %q, want done", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(budgets, []float64{compactionSummaryOutputMaxTokens, compactionSummaryRetryMaxTokens}) {
+		t.Fatalf("摘要输出预算 = %v, want [%d %d]", budgets, compactionSummaryOutputMaxTokens, compactionSummaryRetryMaxTokens)
+	}
+}

@@ -1,60 +1,49 @@
-# cursor-byok v1.94.0
+# cursor-byok v1.95.0
 
-本版本包含三部分:设置页四项占位功能落地(登录时启动、关闭窗口后继续运行、macOS Dock 图标、立即清空全部日志)、使用分析新增请求列表视图、以及 provider 配额错误与运行时错误文本的诊断改进。
+本版本是 v1.94.0 之后的界面重做基线:四批 UI 交互改造落地、请求列表增强、广告内容服务停用旧远端,并修复压缩摘要在上游以 `length` 结束 `response.incomplete` 时未能按输出触顶重试的问题。
 
-## 使用分析请求列表
+## UI 交互改造(批次 0–4)
 
-- 总览页「使用分析」新增第三个视图「请求」,逐条列出每次模型调用的输入、输出与缓存 token;时间范围支持今天 / 24 小时 / 7 天 / 30 天,可按供应商、模型、状态筛选并翻页。
-- 数据源为独立只追加索引 `history/requests/requests-YYYYMMDD.jsonl`,不依赖会被配额回收的 trace 分片,因此请求记录不会随日志回收消失;索引保留 30 天,过期分片按本地日期异步清理。
-- 摘要类调用不进入索引;索引写入失败只记日志,不影响会话与 usage 落盘。查询按时间窗口只读所需分片并受扫描行数上限约束,前端用请求序号丢弃过期响应,快速切换筛选不会出现旧结果覆盖或界面卡住。
-- 缓存命中率沿用首页口径(缓存读取 /(缓存读取 + 非缓存输入));耗时为 provider 观测边界,首字耗时取首个 provider 事件相对 provider 起点。
-- 本版本不含费用、Agent 身份识别、用途筛选、搜索、CSV 导出、自动刷新与时区切换。
+- 清理死代码:删除 `ModelAdapterModal.vue` 与残留的 `views/Config.vue`;`global.css` 的旧主题兼容层下沉为 token 类,零视觉差异。
+- 颜色与对比度:重构全局颜色 token,新增 `scripts/check-contrast.mjs` 对 36 组前景/背景配对做对比度校验;主按钮 `#047857` 保持不变。
+- 弹窗与键盘:新增 `composables/useDialogFocus.js`,多层弹窗仅最上层响应 Escape/Tab,焦点在面板内循环并在关闭后归还;`Modal`/`ContentModal`/`Combobox` 接入该能力。实现按 Safari 13 目标写,避免使用 `.at(-1)`。
+- 反馈口径:新增 `composables/useActionError.js` 作为统一错误入口,toast 增加 `success`/`info`/`error` 语气;各视图移除各自的 `showActionError` 副本;禁用按钮通过 `disabled-reason` 说明原因。
+- 总览:服务卡压缩高度、地址 chips 单行不换行;恢复卡内启停并保留 dirty 门槛;启动按钮按可用性切换 primary/default;Gateway 未启用提示收敛到 `disabled-reason`。
+- 设置页:四个面板共用底部单一「保存设置」栏,移除各面板重复操作条;语言选择器改为禁用并提示「多语言界面将在后续版本提供」,页脚选择器移除;「登录时启动」接真实 `setLaunchAtLogin`/`appState.loginItemStatus`;「广告内容」开关保留位置但置灰不可点。
+- 使用分析请求列表:五列三态排序、自适应时间、行详情与 Enter/Space 展开;翻页保持排序并清空展开,四类筛选可重置;排序、详情、时间格式化抽到 `utils/requestList.js`;筛选工具条与摘要排版收紧(控件统一 32px/12px),1024/760 宽度无横向溢出。
+- 模型页:公开模型三列、模型列表行内四操作(测试/编辑/复制/删除,替代旧「更多操作」弹层);`ModelAdapterTestCard` 新增 inline 形态与 stale「需重测」标记;编辑弹窗标题栏开关、字段分组与固定底栏,测速展示压为单行;Anthropic 订阅入口禁用并移除「计划中」占位。
+- i18n:按静态扫描同步 `catalog.json` 与 en-US/ja-JP/ru-RU/zh-CN 文案,移除随界面调整下线的旧条目。
+- 前端测试:新增 `test-request-list.mjs`、`test-ui-density.mjs`、`test-ui-feedback.mjs`、`check-contrast.mjs`;`test-config-projection.mjs` 改为校验新版设置页、总览登录项与「外壳不再渲染语言选择器」。
 
-## 登录时启动
+## 请求模型显示名称
 
-- 设置页"登录时启动"开关直接注册/注销 macOS 登录项(SMAppService `mainAppService`),默认关闭;开关状态以系统实际注册结果为准,不写入应用配置,避免"配置为开但系统未注册"的双真值。
-- `RequiresApproval` 时开关显示为已开启并提示到"系统设置 › 通用 › 登录项"批准;仅 macOS 13+ 提供该项,低于 13 隐藏并说明版本要求,不回退到 LaunchAgent。
-- 启动时是否隐藏主窗口改为独立开关"启动时隐藏主窗口"(默认关闭),不识别启动来源,登录启动与手动启动遵循同一规则。
+- 请求索引记录新增可选 `request_model_name`,模型筛选与 `Distinct` 同时匹配实际模型、原始请求模型与显示名称。
+- 列表优先显示名称、悬停看原始编号,行详情两者都保留;旧记录回落显示编号。
 
-## 关闭窗口后继续运行
+## 广告内容服务停用旧远端
 
-- 原"最小化到系统托盘"占位改为"关闭窗口后继续运行",默认开启(与既有行为一致);关闭时隐藏窗口且代理继续运行,关闭该开关后关闭按钮走完整退出收尾。
-- 托盘退出与关闭窗口共用幂等退出入口,退出过程中重复触发不会重复执行收尾。
+- 清空硬编码广告位并删除旧远端地址常量;未配置广告位时 `LoadAsset` 直接返回空,旧缓存不再出现在界面。
+- 新增回归:默认无远端位、无位刷新不拉取、未配置位不出资源。设计文档见 `docs/features/ad-content-service/design.md`。
 
-## macOS Dock 图标
+## 压缩摘要输出触顶识别
 
-- 新增"在 Dock 中显示图标"开关,默认关闭(保持原有 `LSUIElement` 无 Dock 行为),仅 macOS 显示;启动时按配置选择 `Regular`/`Accessory` 激活策略,运行时切换即时生效。
-- 点击 Dock 图标会恢复隐藏窗口并聚焦;托盘与 Dock 可同时开启,互不替代。
+- Responses 规范以 `incomplete_details.reason=max_output_tokens` 表示输出额度耗尽,但部分聚合网关沿用 chat 风格的 `length`;此前只识别前者,导致摘要未按输出触顶扩大额度重试一次。
+- 现在 `incomplete` 终态下 `max_output_tokens` 与 `length` 均按输出触顶处理,其余终态语义不变;新增真实 HTTP 适配器回归,断言两次请求的输出预算分别为 4096 与 8192。
 
-## 立即清空全部日志
+## 文档
 
-- 设置页新增"清空全部",二次确认后立即删除全部受管日志,不受保留策略影响:所有采集会话(含当前活跃会话)、`app-*.log` 应用日志分片与 `diagnostics-*.jsonl` 诊断分片。
-- 执行顺序由日志组件协调:先阻断新写入并同步关闭旧写入者,确认停止后删除,再按当前采集设置立即重建会话;清空期间代理业务不中断。
-- 旧写入者在 10 秒内未确认停止时中止清空并恢复采集,不删除任何文件;未知格式会话、非受管文件、符号链接与配置/凭据/业务数据一律保留;部分删除失败显示"部分失败",采集未能恢复时明确提示检查采集设置。
-
-## provider 配额错误分类
-
-- 上游额度耗尽不再显示为 `server_5xx`,而是独立分类 `quota_exhausted` 并给出用户可执行的提示;普通限流与 5xx 语义不变。
-- 识别范围为白名单 code/type,仅在 429/402/403 时用正文短语兜底,5xx 不做额度猜测;同一 key 不重试但允许换渠道。终态使用固定文案且不透传上游正文;terminal 事件新增 `provider_error_code` 字段。
-
-## 运行时错误文本可见性
-
-- basic 日志模式此前会丢弃运行时错误文本:白名单缺少 `error` 键。现补入该键,并在公共 JSONL 写入边界对顶层 `error` / `err` / `cause` 统一脱敏后截断到 2000 个 Unicode 字符,追加 `... (truncated, total N bytes)`。
-- `error_category` / `error_summary` 原名与语义保持不变,payload 省略规则与日志默认模式不变,无新增开关。
+- 新增 `docs/features/ui-redesign/`(B · Paper 方案的设计分析、实施计划、四页亮/暗定稿、配色对照与预览截图索引),作为后续界面重设计的真源;本次只入库文档,不含生产代码。
 
 ## 明确限制
 
-- 桌面四项功能的真机验收尚未完成:当前仅通过源码级测试、编译、bindings 生成与前端构建验证;关闭行为、Dock 图标、真实注销后登录启动、真实日志目录清空均需在新安装包上验证。
-- 登录启动的真实注销/登录启动、`/Applications` 安装路径与 DMG 直接运行(含 App Translocation)场景未验证;macOS 13 以下只隐藏开关并提示版本要求,不在旧系统上提供替代机制。
-- Dock 点击恢复窗口依赖自行处理的 `ApplicationShouldHandleReopen`;启动即显示 Dock 仅由激活策略保证,未在安装包中目视确认 Cmd+Tab 与菜单栏表现。
-- 清空日志的超时中止与部分失败路径未有运行证据;`FailedItems` 为受管项计数,不区分具体失败原因。
-- 请求列表未在真实应用界面与浏览器中验收;本机索引尚无真实数据,前端竞态与事件链修复为 test gap。
-- 配额分类没有真实 quota 响应样本,分类命中率未经运行验证;非终态 429 的 code 仍不落盘,重试后变 503 时首因会丢失。
+- 本批界面改动以浏览器预览与静态断言为证据;真实 Wails 桌面链路下的成功保存/导入、真实启停与桌面 WebView 渲染仍属未验收范围。
+- 请求列表的「24 小时范围为空而 7 天有数据」现象未定位根因,保留为数据缺口,未改数据层。
+- 新增的请求模型显示名称需新构建产生真实请求后才能验证写入。
+- 桌面四项设置项(登录时启动、关闭窗口后继续运行、Dock 图标、清空全部日志)的真机验收沿用 v1.94.0 记录的缺口,未因本次发布改变。
+- UI 重设计稿为设计资料,尚未进入编码落地。
 
 ## 验证边界
 
-- 新增测试覆盖:请求索引存储 16 条(含并发、跨分片、窗口边界、扫描上限)、`bridge` 请求列表 4 条、`forwarder` 请求索引打点 4 条;桌面壳 `config` 3 条、`app` 壳层 5 条、`loginitem` 2 条、`observability` 清空 3 条;quota 分类 model 侧 6 条与 forwarder 侧 4 条;basic 错误文本 3 条。均先 RED 后 GREEN。
-- `internal/requestlog`、`bridge`、`forwarder`、`backend/server/config`、`app`、`loginitem`、`observability`、`client` 包测试通过;`go build ./...`、`go vet`、`gofmt -l` 通过(链接器仍提示部分对象 macOS 14.0 高于目标 11.0),bindings 生成与前端构建通过,`git diff --check` 通过。
-- 已在本机通过受控 `run_request`(无效 SHA-256 prefetched blob)在安装实例上确认 basic 模式 trace 落盘 `dispatch_error` 且 `fields.error` 为真实错误文本。
-- macOS、Windows、Linux 安装包由远端 CI 构建并随 Release 发布,本地未重新构建 DMG。
-- 详细命令、trace 会话与覆盖边界见 `docs/process.md`。
+- `go build ./...`、`go test ./internal/ads ./internal/requestlog ./internal/bridge` 与 `go test ./internal/backend/forwarder`(含新增压缩回归)通过;`go vet`、`gofmt -l`、`git diff --check` 通过。
+- `frontend` 侧 `test-config-projection`、`test-request-list`、`test-ui-density`、`test-ui-feedback`、`check-contrast` 全部通过,`npm run build` 成功。
+- macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建并随 Release 发布,本地未重新构建 DMG。

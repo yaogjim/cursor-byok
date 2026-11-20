@@ -2085,15 +2085,25 @@ func (err compactionTerminalError) TerminalCode() string {
 	return strings.TrimSpace(err.code)
 }
 
+// isCompactionSummaryOutputLimit 识别摘要输出触顶。Responses 规范使用
+// incomplete_details.reason=max_output_tokens，但部分聚合网关沿用 chat 风格的
+// length；两者都只代表输出额度耗尽，摘要可安全地扩大额度重试一次。
 func isCompactionSummaryOutputLimit(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errProviderLoopInterrupted) {
 		return false
 	}
 	var terminal *modeladapter.ProviderTerminalStatusError
-	return errors.As(err, &terminal) && terminal != nil &&
-		strings.EqualFold(strings.TrimSpace(terminal.Status), "incomplete") &&
-		(strings.EqualFold(strings.TrimSpace(terminal.Message), "max_output_tokens") ||
-			strings.EqualFold(strings.TrimSpace(terminal.Code), "max_output_tokens"))
+	if !errors.As(err, &terminal) || terminal == nil ||
+		!strings.EqualFold(strings.TrimSpace(terminal.Status), "incomplete") {
+		return false
+	}
+	for _, reason := range []string{terminal.Message, terminal.Code} {
+		switch strings.ToLower(strings.TrimSpace(reason)) {
+		case "max_output_tokens", "length":
+			return true
+		}
+	}
+	return false
 }
 
 func compactionSummaryFallbackReason(err error) string {

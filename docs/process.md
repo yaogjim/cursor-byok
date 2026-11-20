@@ -7,12 +7,22 @@
 
 ## 一、待完成的内容
 
-### v1.94.0 发布（2026-11-17；提交待推送）
+### v1.95.0 发布（2026-11-19）
+
+- 版本来源：`build/config.yml` 的 `info.version` 由 1.94.0 升至 1.95.0；`wails3 update build-assets` 同步 `build/darwin/Info.plist`、`Info.dev.plist`、`build/windows/info.json`、`wails_tools.nsh`、`wails.exe.manifest`、`build/linux/nfpm/nfpm.yaml`，回读版本均为 1.95.0。
+- 随本次提交的内容：压缩摘要输出触顶识别修复（`compaction.go` 与 `compaction_append_only_test.go`）；`release-notes.md` 按 1.95.0 内容重写，覆盖已提交的 UI 交互改造四批、请求模型显示名称、广告内容服务停用旧远端与本次压缩修复。
+- 验证：`go test ./internal/backend/forwarder -count=1` 通过（68.4s，含新增 `TestCompactionSummaryResponsesIncompleteLengthRetries`）；`go build ./...` 通过（仅剩既有 macOS 链接目标警告）；`node frontend/scripts/test-config-projection.mjs` 通过；`gofmt -l`、`git diff --check` 无输出。
+- 本次未编译：未传 `--build`，未重新构建本机 DMG；macOS、Windows、Linux 安装包由 tag 触发的远端 CI 构建。
+- 已知缺口不因发布改变：桌面四项功能、请求列表界面与 24 小时范围现象、请求模型显示名称的真实写入仍为 test/env gap，详见上文各任务小节。
+
+### v1.94.0 发布（2026-11-17；已发布）
 
 - 版本来源：`build/config.yml` 的 `info.version` 由 1.93.0 升至 1.94.0；`wails3 task common:update:build-assets` 生成 `build/darwin/Info.plist`、`Info.dev.plist`、`build/windows/info.json`、`wails_tools.nsh`、`wails.exe.manifest`、`build/linux/nfpm/nfpm.yaml`，回读版本均为 1.94.0。
-- `release-notes.md` 重写为 1.94.0 内容：使用分析请求列表、桌面壳四项设置、provider 配额错误分类、basic 模式运行时错误文本,并列出明确的验收缺口。
-- 本次未编译：未传 `--build`,未重新构建本机 DMG;三平台安装包由 tag 触发的 CI 构建。
-- 已知缺口不因发布改变：桌面四项功能与请求列表仍为真机/浏览器未验收,配额分类缺少真实 quota 样本,详见上文各任务小节。
+- 发布结果：提交与 tag `v1.94.0` 已推送，远端 CI 成功，Release 已发布（三平台 tar.gz / dmg / zip / installer.exe / deb / rpm 与 `update.json`）。
+- `release-notes.md` 当时重写为 1.94.0 内容：使用分析请求列表、桌面壳四项设置、provider 配额错误分类、basic 模式运行时错误文本，并列出明确的验收缺口。
+- 当时未编译：未传 `--build`，未重新构建本机 DMG；三平台安装包由 tag 触发的 CI 构建。
+- 已知缺口不因发布改变：桌面四项功能与请求列表仍为真机/浏览器未验收，配额分类缺少真实 quota 样本，详见上文各任务小节。
+- 该小节保留为历史记录；当前待发布版本为 v1.95.0。
 
 ### 使用分析请求列表（2026-11-17；wired-not-verified）
 
